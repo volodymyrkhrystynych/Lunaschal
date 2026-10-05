@@ -40,16 +40,19 @@ and [Watch companion identifier](https://developer.apple.com/documentation/bundl
 
 ## Hosted signing setup
 
-The [release workflow](../.github/workflows/apple-release.yml) accepts a full
-commit SHA and unique build number. That exact commit must have passed the
-Apple app workflow on a trusted push or manual run. Upload defaults to false:
+The [release workflow](../.github/workflows/apple-release.yml) accepts a unique
+build number and automatically selects the newest commit in `main` history that
+passed the Apple app workflow on a trusted push or manual run on `main`.
+If newer changes are still untested or failed, it selects the previous tested
+commit. The selected commit appears in the run summary and stays fixed through
+approval and archiving, even if `main` advances. Upload defaults to false:
 an archive/export run produces a signed IPA artifact retained for seven days.
 Choosing `upload_to_testflight` separately uploads it for App Store Connect
 processing; it does not select testers or publish an App Store release.
 
 The workflow must be present on the default branch before GitHub exposes its
 manual dispatch. Merging it and running a release remain separate authorized
-actions. No signed run has been performed yet.
+actions.
 
 Configure a GitHub environment named `apple-release`, restrict its deployment
 branches to trusted release branches, and require your review before it receives

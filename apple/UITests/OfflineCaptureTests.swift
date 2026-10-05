@@ -3,21 +3,42 @@ import UIKit
 
 final class OfflineCaptureTests: XCTestCase {
     private func tab(_ app: XCUIApplication, _ name: String) -> XCUIElement {
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            return app.tabBars.buttons[name]
+        }
         // iPad's floating tabs are exposed as cells/other elements, not a TabBar.
-        app.descendants(matching: .any).matching(identifier: name).firstMatch
+        return app.descendants(matching: .any).matching(identifier: name).firstMatch
+    }
+
+    private func selectTab(_ app: XCUIApplication, _ name: String,
+                           file: StaticString = #filePath, line: UInt = #line) {
+        let item = tab(app, name)
+        let hittable = NSPredicate(format: "exists == true AND hittable == true")
+        guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: item)],
+                            timeout: 10) == .completed else {
+            XCTFail("Tab \(name) did not become tappable", file: file, line: line)
+            return
+        }
+        // A tap during the previous navigation animation can be dropped by UIKit.
+        // Retry once only when the requested screen has not appeared.
+        for _ in 0..<2 {
+            item.tap()
+            if app.navigationBars[name].waitForExistence(timeout: 5) { return }
+        }
+        XCTFail("Tab \(name) did not open", file: file, line: line)
     }
 
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
         let app = XCUIApplication()
         app.launch()
         XCTAssertEqual(tab(app, "Draw").exists, UIDevice.current.userInterfaceIdiom == .pad)
-        tab(app, "Library").tap()
+        selectTab(app, "Library")
         XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Filter books"].exists)
         XCTAssertFalse(app.buttons["library-study_sources"].exists)
         XCTAssertFalse(app.buttons["library-papers"].exists)
         XCTAssertFalse(app.buttons["Download library over Wi-Fi"].exists)
-        tab(app, "Study").tap()
+        selectTab(app, "Study")
         let categories = [
             ("study_sources", "Documents"),
             ("papers", "Paper documents"),
@@ -31,9 +52,12 @@ final class OfflineCaptureTests: XCTestCase {
             XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
             XCTAssertTrue(app.searchFields.firstMatch.exists)
             app.navigationBars.buttons["Study"].tap()
+            XCTAssertTrue(app.buttons["library-study_sources"].waitForExistence(timeout: 5))
         }
-        tab(app, "Settings").tap()
-        app.buttons["Library downloads"].tap()
+        selectTab(app, "Settings")
+        let downloads = app.buttons["Library downloads"]
+        XCTAssertTrue(downloads.waitForExistence(timeout: 5))
+        downloads.tap()
         XCTAssertTrue(app.buttons["Download library over Wi-Fi"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Remove downloaded media"].exists)
         XCTAssertTrue(app.switches["PDF books"].exists)

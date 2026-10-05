@@ -2,10 +2,6 @@ name: Apple signed release
 on:
   workflow_dispatch:
     inputs:
-      commit:
-        description: Full 40-character commit SHA that passed Apple app CI
-        required: true
-        type: string
       build_number:
         description: Unique Apple build number (for example 1.2)
         required: true
@@ -26,30 +22,43 @@ jobs:
     outputs:
       commit: ${{ steps.verify.outputs.commit }}
     steps:
-      - name: Require a successful Apple app run for this exact commit
+      - name: Select the latest tested commit on main
         id: verify
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_COMMIT: ${{ inputs.commit }}
           BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
           python3 - <<'PY'
           import json, os, re, subprocess
-          commit = os.environ['RELEASE_COMMIT']
-          if not re.fullmatch(r'[0-9a-f]{40}', commit):
-              raise SystemExit('Provide a full lowercase commit SHA')
           if not re.fullmatch(r'[1-9][0-9]{0,3}(?:\.[0-9]{1,2}){0,2}', os.environ['BUILD_NUMBER']):
               raise SystemExit('Invalid build number')
-          endpoint = f"repos/{os.environ['GH_REPO']}/actions/workflows/apple.yml/runs?head_sha={commit}&status=success&per_page=100"
-          result = json.loads(subprocess.check_output(['gh', 'api', endpoint]))
-          trusted = [run for run in result['workflow_runs']
-                     if run['head_sha'] == commit and run['event'] in ('push', 'workflow_dispatch')
-                     and run['head_repository']['full_name'] == os.environ['GH_REPO']]
+          repo = os.environ['GH_REPO']
+          endpoint = f'repos/{repo}/actions/workflows/apple.yml/runs?branch=main&status=success&per_page=100'
+          pages = json.loads(subprocess.check_output(['gh', 'api', '--paginate', '--slurp', endpoint]))
+          trusted = {run['head_sha'] for page in pages for run in page['workflow_runs']
+                     if run['event'] in ('push', 'workflow_dispatch')
+                     and run['head_branch'] == 'main' and run['conclusion'] == 'success'
+                     and run['head_repository']['full_name'] == repo}
           if not trusted:
-              raise SystemExit('The exact commit has no successful trusted Apple app CI run')
+              raise SystemExit('No successful trusted Apple app CI run on main')
+          # Walk main's history, rather than choosing a recent rerun of older code.
+          tip = json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/commits/main']))['sha']
+          commit = None
+          page = 1
+          while commit is None:
+              history = json.loads(subprocess.check_output([
+                  'gh', 'api', f'repos/{repo}/commits?sha={tip}&per_page=100&page={page}']))
+              if not history:
+                  raise SystemExit('No tested commit remains in main history')
+              commit = next((item['sha'] for item in history if item['sha'] in trusted), None)
+              page += 1
+          if not re.fullmatch(r'[0-9a-f]{40}', commit):
+              raise SystemExit('Invalid commit returned by GitHub')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'commit={commit}\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f'Selected tested commit: [{commit}](https://github.com/{repo}/commit/{commit})\n')
           PY
   archive:
     needs: verify
