@@ -242,7 +242,7 @@ milestones.
 - [ ] Supply remaining required distribution metadata and validate App Store acceptance.
 - [ ] Configure signing certificates/profiles and App Store Connect access as secrets.
 - [x] Add an explicitly triggered signed archive/TestFlight release workflow.
-      It gates on successful Apple CI for the exact SHA, validates both distribution
+      It builds the tip of `main` (recording, not gating on, its Apple CI result), validates both distribution
       profiles, uses a temporary keychain, exports by default, and uploads only when
       explicitly selected. Signing credentials and a real signed run remain pending;
       this does not establish device installation or App Store acceptance.

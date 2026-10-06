@@ -41,11 +41,14 @@ and [Watch companion identifier](https://developer.apple.com/documentation/bundl
 ## Hosted signing setup
 
 The [release workflow](../.github/workflows/apple-release.yml) accepts a unique
-build number and automatically selects the newest commit in `main` history that
-passed the Apple app workflow on a trusted push or manual run on `main`.
-If newer changes are still untested or failed, it selects the previous tested
-commit. The selected commit appears in the run summary and stays fixed through
-approval and archiving, even if `main` advances. Upload defaults to false:
+build number and builds the tip of `main` as it is when the run starts,
+whether or not its Apple app workflow run has passed, finished or started.
+The run summary names the commit and what its Apple app CI said (`success`,
+`failure`, `in_progress`, `no run`), so an untested build is visible rather
+than prevented. The selected commit stays fixed through approval and
+archiving, even if `main` advances. (It used to fall back to the newest commit
+that had passed, which shipped the previous commit instead of a fix whose
+run had been cancelled at the time limit.) Upload defaults to false:
 an archive/export run produces a signed IPA artifact retained for seven days.
 Choosing `upload_to_testflight` separately uploads it for App Store Connect
 processing; it does not select testers or publish an App Store release.
