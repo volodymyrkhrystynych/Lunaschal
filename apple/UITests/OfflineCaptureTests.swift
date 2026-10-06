@@ -2,6 +2,17 @@ import XCTest
 import UIKit
 
 final class OfflineCaptureTests: XCTestCase {
+    /// How long to wait for the chrome (tabs, the More menu) after a launch or
+    /// a navigation. CI's simulators answer each query in seconds, so a 10 s
+    /// wait could give up after two looks; waits return as soon as they're met.
+    private let settle: TimeInterval = 30
+
+    /// `isHittable` on an element mid-transition (no frame yet) fails the test
+    /// outright with "Activation point invalid" rather than returning false.
+    private func reachable(_ element: XCUIElement) -> Bool {
+        element.exists && !element.frame.isEmpty && element.isHittable
+    }
+
     private func tab(_ app: XCUIApplication, _ name: String) -> XCUIElement {
         if UIDevice.current.userInterfaceIdiom == .phone {
             return app.tabBars.buttons[name]
@@ -10,9 +21,9 @@ final class OfflineCaptureTests: XCTestCase {
         // and each tab appears twice: firstMatch can be the copy that is never
         // hittable. Prefer the one that is, once it shows up.
         let matches = app.descendants(matching: .any).matching(identifier: name)
-        let deadline = Date().addingTimeInterval(10)
+        let deadline = Date().addingTimeInterval(settle)
         repeat {
-            if let visible = matches.allElementsBoundByIndex.first(where: { $0.isHittable }) { return visible }
+            if let visible = matches.allElementsBoundByIndex.first(where: reachable) { return visible }
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         } while Date() < deadline && matches.count > 0
         return matches.firstMatch
@@ -23,7 +34,7 @@ final class OfflineCaptureTests: XCTestCase {
         let item = tab(app, name)
         let hittable = NSPredicate(format: "exists == true AND hittable == true")
         guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: item)],
-                            timeout: 10) == .completed else {
+                            timeout: settle) == .completed else {
             XCTFail("Tab \(name) did not become tappable", file: file, line: line)
             return
         }
@@ -55,7 +66,7 @@ final class OfflineCaptureTests: XCTestCase {
         let more = tab(app, "More")
         let hittable = NSPredicate(format: "exists == true AND hittable == true")
         guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: more)],
-                            timeout: 10) == .completed else {
+                            timeout: settle) == .completed else {
             XCTFail("More did not become tappable", file: file, line: line)
             return
         }
@@ -63,14 +74,15 @@ final class OfflineCaptureTests: XCTestCase {
         // The menu stays in the tree under a pushed screen, so wait for the row
         // to be tappable, not merely present. As in selectTab, retry a tap that
         // the previous animation swallowed.
-        let reachable = XCTNSPredicateExpectation(predicate: hittable, object: row)
-        for _ in 0..<2 where !row.isHittable {
+        let rowReady = XCTNSPredicateExpectation(predicate: hittable, object: row)
+        for _ in 0..<2 where !reachable(row) {
             more.tap()
             let back = app.navigationBars.buttons["More"]
             if back.waitForExistence(timeout: 2) { back.tap() }
-            _ = XCTWaiter.wait(for: [reachable], timeout: 3)
+            _ = XCTWaiter.wait(for: [rowReady], timeout: 3)
         }
-        XCTAssertTrue(row.isHittable, "No \(name) in More", file: file, line: line)
+        if !reachable(row) { _ = XCTWaiter.wait(for: [rowReady], timeout: 5) }
+        XCTAssertTrue(reachable(row), "No \(name) in More", file: file, line: line)
         // The row turns hittable while the pop back to the menu is still
         // animating, and a tap then is dropped (seen on CI's slower iPad
         // simulator). Retry until the screen opens, as selectTab does.
