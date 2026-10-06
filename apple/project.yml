@@ -38,6 +38,10 @@ targets:
       path: Generated/Info.plist
       properties:
         CFBundleDisplayName: Lunaschal
+        # XcodeGen writes 1 / 1.0 here unless told otherwise, which silently
+        # ignored the release workflow's build number: every upload was build 1.
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -82,6 +86,10 @@ targets:
       path: Generated/Watch-Info.plist
       properties:
         CFBundleDisplayName: Lunaschal
+        # XcodeGen writes 1 / 1.0 here unless told otherwise, which silently
+        # ignored the release workflow's build number: every upload was build 1.
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         ITSAppUsesNonExemptEncryption: false
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.lunaschal.mobile

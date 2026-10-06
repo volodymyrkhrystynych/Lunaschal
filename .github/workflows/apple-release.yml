@@ -129,12 +129,15 @@ jobs:
               (root / 'installed-profiles.txt').write_text('\n'.join(installed))
           PY
       - name: Archive and export signed app
+        env:
+          BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
           xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
             -configuration Release -destination 'generic/platform=iOS' \
             -xcconfig "$SIGNING_DIR/Signing.xcconfig" \
             -archivePath "$RUNNER_TEMP/Lunaschal.xcarchive" archive
-          python3 apple/tools/check_archive.py "$RUNNER_TEMP/Lunaschal.xcarchive"
+          # Fails here, before signing and upload, if the build number was ignored.
+          python3 apple/tools/check_archive.py "$RUNNER_TEMP/Lunaschal.xcarchive" "$BUILD_NUMBER"
           xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Lunaschal.xcarchive" \
             -exportOptionsPlist "$SIGNING_DIR/ExportOptions.plist" \
             -exportPath "$RUNNER_TEMP/Lunaschal-export"

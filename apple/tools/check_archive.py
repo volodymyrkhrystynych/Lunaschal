@@ -1,10 +1,14 @@
 """Check the built device archive, including the embedded Watch bundle."""
 import pathlib
 import plistlib
+import re
 import sys
 
 
-def check_archive(root):
+def check_archive(root, build=None):
+    """`build`, when given, is the number the release asked for. Each bundle
+    must carry it, not XcodeGen's default of 1, or App Store Connect refuses
+    the upload as a duplicate only after the whole archive has been built."""
     app = root / "Products/Applications/Lunaschal.app"
     watch = app / "Watch/LunaschalWatch.app"
     versions = []
@@ -15,7 +19,12 @@ def check_archive(root):
         info = plistlib.loads((bundle / "Info.plist").read_bytes())
         if info["CFBundleIdentifier"] != identifier or info["CFBundleSupportedPlatforms"] != [platform]:
             raise ValueError("Unexpected archive bundle identity or platform")
-        versions.append((info["CFBundleShortVersionString"], info["CFBundleVersion"]))
+        version = (info["CFBundleShortVersionString"], info["CFBundleVersion"])
+        if not all(re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", part) for part in version):
+            raise ValueError(f"Archive bundle version is not numeric: {version}")
+        if build is not None and version[1] != build:
+            raise ValueError(f"Archive carries build {version[1]}, not the requested {build}")
+        versions.append(version)
         if info.get("ITSAppUsesNonExemptEncryption") is not False:
             raise ValueError("Archive is missing its exempt-encryption declaration")
         if not info.get("NSMicrophoneUsageDescription") or not (bundle / "Assets.car").is_file():
@@ -33,5 +42,5 @@ def check_archive(root):
 
 
 if __name__ == "__main__":
-    check_archive(pathlib.Path(sys.argv[1]))
+    check_archive(pathlib.Path(sys.argv[1]), sys.argv[2] if len(sys.argv) > 2 else None)
     print("Device archive contains matching phone/Watch bundles, assets, and privacy manifests.")
