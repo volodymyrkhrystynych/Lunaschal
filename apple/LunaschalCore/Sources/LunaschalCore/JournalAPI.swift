@@ -393,9 +393,12 @@ extension JournalAPI: DailyTransport {
         case .calories:
             guard let calories = log.calories, let text = log.description else { throw DailyError.invalidCalories }
             // An Int field, so the count goes over the wire as 600 and never 600.0.
-            struct Body: Encodable { let id: String; let description: String; let calories: Int; let date: String }
+            // capturedAt: when it was logged, not when it synced, as the server
+            // reads the row as the user being awake.
+            struct Body: Encodable { let id: String; let description: String; let calories: Int; let date: String; let capturedAt: String }
             data = try await postJSON("api/lifestyle/calories",
-                                      Body(id: log.id, description: text, calories: calories, date: log.day))
+                                      Body(id: log.id, description: text, calories: calories, date: log.day,
+                                           capturedAt: ISO8601DateFormatter().string(from: log.createdAt)))
         case .selfie:
             guard let image else { throw DailyError.missingImage }
             let body = try SelfieMultipart(log: log, image: image)

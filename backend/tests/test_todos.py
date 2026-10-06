@@ -206,7 +206,9 @@ def test_patch_unknown_todo_is_404(client):
 
 
 def test_completing_a_repeating_todo_advances_due_instead_of_finishing(client):
-    due = 1790000000  # some future due date
+    # Relative to now: a fixed date in the future stops being one, and this
+    # test then failed from the day it passed (the due catches up to now).
+    due = int(datetime.now(tz=timezone.utc).timestamp()) + 30 * 86400
     todo_id = client.post('/api/tasks/todos', json={
         'title': 'take out trash', 'due': due,
         'repeatInterval': 1, 'repeatUnit': 'week',
@@ -321,3 +323,26 @@ def test_migration_backfills_completed_at_on_legacy_dbs(tmp_path):
         if connection._conn is not None:
             connection._conn.close()
         connection._DB_PATH, connection._conn = prev_path, prev_conn
+
+
+def test_phone_ticks_and_removals_are_logged_when_they_were_made(client):
+    """task_events is read as the user awake (backend/sleep.py), and the phone
+    may send a change long after it was made, from a background sync."""
+    from datetime import datetime, timezone
+    from backend.db.connection import get_db
+    made = datetime(2026, 7, 8, 21, 15, tzinfo=timezone.utc)
+    at = {'capturedAt': made.isoformat()}
+    keep = client.post('/api/tasks/todos', json={'title': 'bins'}).get_json()['id']
+    drop = client.post('/api/tasks/todos', json={'title': 'old idea'}).get_json()['id']
+    assert client.patch(f'/api/tasks/todos/{keep}', json={'done': True}, query_string=at).status_code == 200
+    assert client.delete(f'/api/tasks/todos/{drop}', query_string=at).status_code == 200
+    task = client.post('/api/tasks', json={'title': 'stretch'}).get_json()['id']
+    assert client.post(f'/api/tasks/{task}/complete', query_string={'date': '2026-07-08', **at}).status_code == 200
+    events = get_db().execute('SELECT kind, created_at FROM task_events ORDER BY kind').fetchall()
+    assert [(e['kind'], e['created_at']) for e in events] == [
+        ('daily_completed', int(made.timestamp())),
+        ('task_deleted', int(made.timestamp())),
+        ('todo_completed', int(made.timestamp())),
+    ]
+    assert client.patch(f'/api/tasks/todos/{keep}', json={'done': False},
+                        query_string={'capturedAt': 'whenever'}).status_code == 400

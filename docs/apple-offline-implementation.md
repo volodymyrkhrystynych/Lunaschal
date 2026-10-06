@@ -660,7 +660,13 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
       toggle at the bottom left switches the drag between moving and changing the length.
       Wake/sleep bands come from `GET /api/calendar/sleep/<date>` (derived on the server,
       so fetched and cached per day rather than replicated); hand-set times queue as a
-      `PUT`. The per-event mic and zoom are still web-only. Passed in
+      `PUT`. The server's rule is the desktop's: the first activity after 4am is the
+      wake time and the last before the next 4am is bedtime. `backend/sleep.py` counts
+      journal entries, chat messages, transcriptions, food, calorie logs, library reading
+      spans, to-do ticks and removals, Paper writing, Study and opening a newspaper.
+      What the phone queues offline (calorie logs, voice messages, to-do changes) now
+      carries `capturedAt`, so a background sync at 03:00 isn't read as being awake;
+      drawings published from the iPad don't yet. The per-event mic and zoom are still web-only. Passed in
       simulator; not verified on device.
 - [ ] Review Calendar, Lifestyle, Food, Learning, and other existing views before
       claiming mobile feature parity; full desktop parity is not a requirement.

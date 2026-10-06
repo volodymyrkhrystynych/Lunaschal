@@ -83,7 +83,7 @@ def _conversation(client) -> str:
 
 def _record(client, conv_id, *, message_id=None, attachment_id=None,
             data=b'\x00' * 2048, filename='recording.webm', mime='audio/webm',
-            text=None, attachment_ids=None):
+            text=None, attachment_ids=None, captured_at=None):
     form = {
         'audio': (io.BytesIO(data), filename, mime),
         'messageId': message_id or str(ULID()),
@@ -91,6 +91,8 @@ def _record(client, conv_id, *, message_id=None, attachment_id=None,
     }
     if text is not None:
         form['text'] = text
+    if captured_at is not None:
+        form['capturedAt'] = captured_at
     if attachment_ids is not None:
         import json
         form['attachmentIds'] = json.dumps(attachment_ids)
@@ -123,6 +125,24 @@ def test_the_clip_is_stored_and_becomes_a_message(client, transcribes, started_r
     # a conversation one directory removal.
     stored = list((chat_root / conv).glob(f'{attachment_id}.*'))
     assert len(stored) == 1 and stored[0].read_bytes() == b'\x00' * 2048
+
+
+def test_a_clip_synced_later_counts_when_it_was_spoken(client, transcribes, started_runs):
+    """A background sync at 03:00 is the phone, not the user: the message is
+    stamped, and a conversation it creates filed, by when it was said."""
+    from datetime import datetime
+    from backend.day_boundary import day_key_for
+    spoken = datetime.fromisoformat('2026-07-08T23:30:00+00:00')
+    conv = str(ULID())
+    res, message_id, _ = _record(client, conv, captured_at=spoken.isoformat())
+    assert res.status_code == 201
+    db = get_db()
+    assert db.execute('SELECT created_at FROM messages WHERE id=?',
+                      (message_id,)).fetchone()['created_at'] == int(spoken.timestamp())
+    assert db.execute('SELECT day_key FROM conversations WHERE id=?',
+                      (conv,)).fetchone()['day_key'] == day_key_for(int(spoken.timestamp()))
+    bad, _, _ = _record(client, str(ULID()), captured_at='last night')
+    assert bad.status_code == 400
 
 
 def test_a_clip_can_outrun_its_conversation(client, transcribes, started_runs):

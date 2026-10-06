@@ -5,6 +5,7 @@ from datetime import date
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 
+from backend.capture_time import optional_capture_time
 from backend.db.connection import get_db, mapping_to_dict, row_to_dict
 from backend.day_boundary import day_bounds, day_key_for
 from backend.todo_recurrence import (
@@ -64,6 +65,20 @@ def _log_event(
         (str(ULID()), kind, title, ref_id, task_list, detail or None,
          created_at if created_at is not None else int(time.time())),
     )
+
+
+def _acted_at(clock: int) -> int:
+    """When the user did this: the phone's `capturedAt`, else now.
+
+    The phone queues these offline and may send them hours later — from a
+    background sync in the small hours, say — and task_events is one of the
+    things backend/sleep.py reads as the user being awake. A query parameter
+    rather than a body field, because deletes carry no body. Never later than
+    now: a capture time from the future is a wrong clock. Raises ValueError for
+    a malformed value, as the journal and food routes refuse one.
+    """
+    captured = optional_capture_time(request.args)
+    return min(captured, clock) if captured is not None else clock
 
 
 @bp.get('')
@@ -156,8 +171,12 @@ def delete_task(task_id):
     if not row:
         return jsonify({'error': 'Not found'}), 404
 
+    try:
+        acted = _acted_at(int(time.time()))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     deleted_pos = row['position']
-    _log_event(db, 'task_deleted', row['title'], task_id, 'daily')
+    _log_event(db, 'task_deleted', row['title'], task_id, 'daily', created_at=acted)
     db.execute('DELETE FROM daily_tasks WHERE id=?', (task_id,))
     db.execute(
         'UPDATE daily_tasks SET position=position-1, updated_at=? WHERE position > ?',
@@ -193,10 +212,15 @@ def complete_task(task_id):
     day, err = _requested_day()
     if err:
         return jsonify({'error': err}), 400
+    try:
+        acted = _acted_at(int(time.time()))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     db = get_db()
-    # A tick replayed from a past day is filed in that day's last second, so
-    # its Journal notification lands on the day it was made.
-    now = min(int(time.time()), day_bounds(day)[1] - 1)
+    # Stamped when it was ticked, if the phone says. Without that, a tick
+    # replayed from a past day is filed in that day's last second, so its
+    # Journal notification still lands on the day it was made.
+    now = min(acted, day_bounds(day)[1] - 1)
     complete_daily_task(db, task_id, day, now)
     db.commit()
     return jsonify({'success': True})
@@ -343,7 +367,7 @@ def complete_todo_row(db, todo_id: str, now: int) -> bool:
         if row['done']:
             return False
 
-    _log_event(db, 'todo_completed', row['title'], todo_id, row['list'], row['notes'])
+    _log_event(db, 'todo_completed', row['title'], todo_id, row['list'], row['notes'], created_at=now)
     return True
 
 
@@ -417,12 +441,16 @@ def update_todo(todo_id):
         return jsonify({'error': 'nothing to update'}), 400
 
     now = int(time.time())
+    try:
+        acted = _acted_at(now)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     if fields:
         fields.append('updated_at=?')
         values.extend([now, todo_id])
         db.execute(f'UPDATE todos SET {", ".join(fields)} WHERE id=?', values)
     if completion_change == 'complete':
-        complete_todo_row(db, todo_id, now)
+        complete_todo_row(db, todo_id, acted)
     elif completion_change == 'uncomplete':
         _uncomplete_todo_row(db, todo_id, now)
     db.commit()
@@ -437,9 +465,14 @@ def delete_todo(todo_id):
     ).fetchone()
     # Log removals of still-active items only — deleting an already-done todo is
     # cleanup, not a "removed from my list" event.
+    try:
+        acted = _acted_at(int(time.time()))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     if row and not row['done']:
         _log_event(
-            db, 'task_deleted', row['title'], todo_id, row['list'], row['notes']
+            db, 'task_deleted', row['title'], todo_id, row['list'], row['notes'],
+            created_at=acted,
         )
     db.execute('DELETE FROM todos WHERE id=?', (todo_id,))
     db.commit()
