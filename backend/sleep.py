@@ -9,10 +9,11 @@ rather than growing a second copy of the 4.
 Three things are load-bearing:
 
 - **Derived on read, never stored.** There is no nightly job and no snapshot
-  row. `created_at` is always "now", so once a day's window has passed nothing
-  new can land inside it and a derived time for a past day cannot drift. That
-  removes the whole class of bug where a summary row and the data it summarises
-  disagree.
+  row, which removes the whole class of bug where a summary row and the data it
+  summarises disagree. A past day can still change, and that is deliberate: the
+  phone works offline and stamps what it sends with the moment it happened, so
+  an entry written at 01:00 and synced at 09:00 moves that night's bedtime when
+  it arrives. Only a hand-set end is immune, which is what setting it means.
 - **Only manual values are persisted.** A `sleep_logs` row exists only for a day
   the user corrected by hand, and its two columns are independently nullable, so
   "the wake time is right but I put the phone down and read for an hour" is one
@@ -30,21 +31,44 @@ from ulid import ULID
 from backend.day_boundary import DAY_ROLLOVER_HOUR, day_bounds
 from backend.db.connection import get_db
 
-# Tables whose rows mean "the user was awake and doing something", with the
-# filter that keeps a row honest. Table names are fixed here and never come from
-# a request, which is what makes interpolating them into the query safe.
+# Where the user being awake is written down: (table, timestamp columns,
+# filter). Every column holds moments the user was awake. Table and column names are fixed here and never come from a
+# request, which is what makes interpolating them into the query safe.
 #
 # Assistant and system messages are excluded: a reply is the app being awake,
 # not the user. Nudges, the morning check-in and Writing/Ideas discussions all
 # post to /api/chat/stream, but only calls carrying a conversationId persist a
 # row -- so background chatter can't fake activity, while a discussion the user
 # actually typed in counts, as it should.
+#
+# A reading span is a range, so both of its ends are moments: a chapter opened
+# at 23:50 and put down at 00:40 went to sleep at 00:40, and each end counts
+# for whichever day's window it falls in. task_events is the to-do
+# log (ticked, completed, removed) and every row of it is a tap by the user.
+#
+# The last three are *last touched* columns, not logs: each holds only the most
+# recent time, so working on a paper again on Wednesday takes Monday's late
+# session out of Monday's evidence. That is the price of counting them at all
+# -- nothing else records drawing, studying or reading the paper -- and it can
+# only ever remove an old moment, never invent one, so a past day can lose its
+# latest activity but never gain a false one.
+#
+# What the phone sends is stamped with the time it happened on the device, not
+# when it synced -- a background sync at 03:00 is the phone, not the user. Its
+# journal entries, food, calorie logs, voice messages, to-do ticks and reading
+# spans all carry it. A drawing published from the iPad does not yet: it lands
+# on `papers.content_updated_at` at the moment it reaches the server.
 SIGNALS = (
-    ('journal_entries', ''),
-    ('messages', "AND role = 'user'"),
-    ('transcriptions', ''),
-    ('food_entries', ''),
-    ('calorie_logs', ''),
+    ('journal_entries', ('created_at',), ''),
+    ('messages', ('created_at',), "AND role = 'user'"),
+    ('transcriptions', ('created_at',), ''),
+    ('food_entries', ('created_at',), ''),
+    ('calorie_logs', ('created_at',), ''),
+    ('fic_reading_spans', ('started_at', 'ended_at'), ''),
+    ('task_events', ('created_at',), ''),
+    ('papers', ('content_updated_at',), ''),
+    ('study_sources', ('last_opened_at',), ''),
+    ('newspaper_issues', ('last_read_at',), ''),
 )
 
 
@@ -59,15 +83,16 @@ def derive_window(day_key: str) -> tuple[int | None, int | None]:
     firsts: list[int] = []
     lasts: list[int] = []
     db = get_db()
-    for table, extra in SIGNALS:
-        row = db.execute(
-            f'SELECT MIN(created_at) AS first, MAX(created_at) AS last FROM {table}'
-            f' WHERE created_at >= ? AND created_at < ? {extra}',
-            (start, end),
-        ).fetchone()
-        if row and row['first'] is not None:
-            firsts.append(row['first'])
-            lasts.append(row['last'])
+    for table, columns, extra in SIGNALS:
+        for column in columns:
+            row = db.execute(
+                f'SELECT MIN({column}) AS first, MAX({column}) AS last FROM {table}'
+                f' WHERE {column} >= ? AND {column} < ? {extra}',
+                (start, end),
+            ).fetchone()
+            if row and row['first'] is not None:
+                firsts.append(row['first'])
+                lasts.append(row['last'])
     return (min(firsts) if firsts else None, max(lasts) if lasts else None)
 
 

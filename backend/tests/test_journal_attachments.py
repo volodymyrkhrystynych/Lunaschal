@@ -1049,3 +1049,61 @@ def test_an_empty_entry_with_nothing_coming_is_still_refused(client):
     res = client.post('/api/journal', json={'id': str(ULID()), 'content': ''})
 
     assert res.status_code == 400
+
+
+# --- the iPhone's playable copy (backend/journal/playable.py) ---------------
+
+
+def _fake_ffmpeg(monkeypatch, calls, *, fail=False):
+    import subprocess
+    from backend.journal import playable
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if fail:
+            raise subprocess.CalledProcessError(1, argv)
+        with open(argv[-1], 'wb') as out:
+            out.write(b'aac')
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(playable.subprocess, 'run', run)
+
+
+def test_a_webm_clip_is_converted_once_for_the_phone(client, entry_id, monkeypatch):
+    calls = []
+    _fake_ffmpeg(monkeypatch, calls)
+    att = _upload(client, entry_id, filename='clip.webm', mime='audio/webm').get_json()
+    url = f'/api/journal/attachments/{att["id"]}/file'
+
+    original = client.get(url)
+    assert original.data == b'\x00' * 2048, 'the browser still gets the original'
+    assert calls == []
+
+    first = client.get(url + '?playable=1')
+    assert first.status_code == 200
+    assert first.mimetype == 'audio/mp4'
+    assert first.data == b'aac'
+    second = client.get(url + '?playable=1')
+    assert second.data == b'aac'
+    assert len(calls) == 1, 'the copy is kept beside the original'
+
+
+def test_a_clip_the_phone_can_already_play_is_sent_as_it_is(client, entry_id, monkeypatch):
+    calls = []
+    _fake_ffmpeg(monkeypatch, calls)
+    att = _upload(client, entry_id).get_json()
+    reply = client.get(f'/api/journal/attachments/{att["id"]}/file?playable=1')
+    assert reply.status_code == 200
+    assert reply.data == b'\x00' * 2048
+    assert calls == []
+
+
+def test_a_clip_that_cannot_be_converted_says_so(client, entry_id, monkeypatch):
+    calls = []
+    _fake_ffmpeg(monkeypatch, calls, fail=True)
+    att = _upload(client, entry_id, filename='clip.ogg', mime='audio/ogg').get_json()
+    reply = client.get(f'/api/journal/attachments/{att["id"]}/file?playable=1')
+    assert reply.status_code == 415
+    folder = storage.attachment_path(att['id'], 'ogg').parent
+    assert sorted(p.name for p in folder.iterdir()) == [storage.attachment_path(att['id'], 'ogg').name], \
+        'no half-written copy is left behind'

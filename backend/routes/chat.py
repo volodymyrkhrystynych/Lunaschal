@@ -9,6 +9,7 @@ from backend.weather import entry as entry_weather
 from backend.chat import storage as chat_storage
 from backend.chat import compaction as chat_compaction
 from backend.chat import autoreply
+from backend.capture_time import optional_capture_time
 from backend.day_boundary import day_key_for
 from backend.geo import coord_pair
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
@@ -584,10 +585,9 @@ def create_recording(id):
     creates it first, but a boot sweep after a crash sends only the clip — and
     the alternative to `INSERT OR IGNORE` is a 404 that strands the audio.
 
-    A replay that lands the next day therefore files the clip under today's
-    conversation rather than the one it was spoken into. That is the better of
-    the two wrong answers: the words end up somewhere the user can see them,
-    which is not true of a 404.
+    A conversation created this way is filed under the day the clip was spoken
+    (`capturedAt`, sent by the phone), so a replay landing the next day still
+    goes to that day rather than the one it arrived on.
     """
     audio = request.files.get('audio')
     if audio is None or not audio.filename:
@@ -617,11 +617,20 @@ def create_recording(id):
     if path is None:
         return jsonify({'error': _UNSUPPORTED_AUDIO}), 400
 
-    now = int(time.time())
+    # When it was spoken, as the recording device says: a clip sent by a
+    # background sync at 03:00 was not the user awake at 03:00 (backend/sleep.py
+    # counts this row), and it belongs to the day it was said on.
+    try:
+        captured_at = optional_capture_time(request.form)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    clock = int(time.time())
+    # A capture time from the future is a wrong clock, not a plan.
+    now = min(captured_at, clock) if captured_at is not None else clock
     db.execute(
         'INSERT OR IGNORE INTO conversations(id, title, day_key, mode, created_at, updated_at)'
         " VALUES (?,NULL,?,'chat',?,?)",
-        (id, day_key_for(), now, now),
+        (id, day_key_for(now), now, now),
     )
     db.execute(
         'INSERT OR IGNORE INTO messages(id, conversation_id, role, content, metadata,'
@@ -659,7 +668,8 @@ def create_recording(id):
         " VALUES (?,?,?,?,?,'audio','running',?,?)",
         (attachment_id, id, message_id, str(path), audio.mimetype, row['n'], now),
     )
-    db.execute('UPDATE conversations SET updated_at=? WHERE id=?', (now, id))
+    # Arrival, not capture: the list sorts by it and must not move backwards.
+    db.execute('UPDATE conversations SET updated_at=? WHERE id=?', (clock, id))
     db.commit()
     _transcribe_recording_bg(attachment_id, message_id, str(path))
 

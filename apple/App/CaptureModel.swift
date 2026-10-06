@@ -20,6 +20,17 @@ final class CaptureModel: ObservableObject {
     private var backgroundSyncing = false
     @Published private(set) var journalRecords: [SyncChange] = []
     @Published private(set) var journalCount = 0
+    /// Each loaded journal entry's attachments, in the server's order.
+    @Published private(set) var journalAttachments: [String: [JournalAttachmentItem]] = [:]
+    /// Calendar occurrences that can border a run of the journal feed, as on the web.
+    @Published private(set) var journalOccurrences: [CalendarOccurrence] = []
+    /// Series templates and their exceptions; the calendar expands them per view.
+    /// Events made here and not yet on the server are laid over the replica's.
+    @Published private(set) var calendarEvents: [CalendarEvent] = []
+    @Published private(set) var pendingCalendarIDs: Set<String> = []
+    @Published private(set) var calendarExceptions: [CalendarException] = []
+    /// Wake and sleep per day key: the server's last answer with queued hand-set times on top.
+    @Published private(set) var sleepDays: [String: SleepDay] = [:]
     private var journalLimit = 200
     private var journalQuery = ""
     @Published private(set) var pendingEdits: [PendingEdit] = []
@@ -49,6 +60,8 @@ final class CaptureModel: ObservableObject {
     @Published var todoRefusals: [String] = []
     let todoOutbox: TodoOutbox
     private let todoSyncer: TodoSync
+    private let calendarOutbox: CalendarOutbox
+    private let calendarSyncer: CalendarSyncer
     /// The fic reader's reading spans and last-read chapters, until uploaded.
     let ficActivity: FicActivityStore
     private let ficActivitySyncer: FicActivitySync
@@ -95,6 +108,8 @@ final class CaptureModel: ObservableObject {
         chatRecordingSyncer = ChatRecordingSync(store: chatRecordings)
         todoOutbox = try TodoOutbox(root: store.root.appendingPathComponent("todo-outbox", isDirectory: true))
         todoSyncer = TodoSync(outbox: todoOutbox)
+        calendarOutbox = try CalendarOutbox(root: store.root.appendingPathComponent("calendar-outbox", isDirectory: true))
+        calendarSyncer = CalendarSyncer(outbox: calendarOutbox)
         ficActivity = try FicActivityStore(root: store.root.appendingPathComponent("fic-activity", isDirectory: true))
         ficActivitySyncer = FicActivitySync(store: ficActivity)
         try chatRecordings.recoverInterrupted()
@@ -117,9 +132,9 @@ final class CaptureModel: ObservableObject {
         recentExercises = (try? JSONDecoder().decode([RecentExercise].self, from: Data(contentsOf: workoutCache("recent")))) ?? []
         recentWorkouts = (try? JSONDecoder().decode([WorkoutSession].self, from: Data(contentsOf: workoutCache("sessions")))) ?? []
         weather = try? JSONDecoder().decode(WeatherDay.self, from: Data(contentsOf: weatherCache))
-        journalRecords = try replica.records(collection: "journal_entries")
-        journalCount = try replica.count(collection: "journal_entries")
         pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
+        try loadJournal()
+        try loadCalendar()
         refreshLibraryBytes()
         recorder.onChange = { [weak self] in
             self?.reload()
@@ -154,10 +169,65 @@ final class CaptureModel: ObservableObject {
             workoutLogs = try workouts.list()
             chatRecordingQueue = try chatRecordings.list()
             todoQueue = try todoOutbox.list()
-            journalRecords = try replica.records(collection: "journal_entries", query: journalQuery, limit: journalLimit)
-            journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
+            try loadJournal()
             pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
+            try loadCalendar()
         } catch { message = error.localizedDescription }
+    }
+
+    private func loadJournal() throws {
+        journalRecords = try replica.newestRecords(collection: "journal_entries", query: journalQuery, limit: journalLimit)
+        journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
+        journalAttachments = JournalAttachmentItem.grouped(
+            try replica.relatedRecords(collection: "journal_attachments", field: "entryId", values: journalRecords.map(\.id)))
+    }
+
+    /// The categorised calendar occurrences around the days the feed covers,
+    /// for its borders. A search shows matches, not a day, so it has none, as
+    /// on the web.
+    private func placeJournalOccurrences() {
+        let times = journalRecords.compactMap { JournalTimestamp.parse($0.data?["createdAt"]?.string) }
+            + captures.map(\.createdAt)
+        guard journalQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let range = JournalEventGroups.dayRange(times) else {
+            journalOccurrences = []
+            return
+        }
+        journalOccurrences = CalendarExpansion.expand(calendarEvents, exceptions: calendarExceptions,
+                                                      start: range.start, end: range.end)
+            .filter { !$0.event.categoryTags.isEmpty }
+    }
+
+    private func loadCalendar() throws {
+        // Every row, not a page: a series anchored years ago still occurs today.
+        let overlay = CalendarOverlay(
+            events: try replica.records(collection: "calendar_events", limit: 100_000).compactMap(CalendarEvent.init(record:)),
+            exceptions: try replica.records(collection: "calendar_event_exceptions", limit: 100_000)
+                .compactMap(CalendarException.init(record:)),
+            pending: try calendarOutbox.list())
+        calendarEvents = overlay.events
+        calendarExceptions = overlay.exceptions
+        pendingCalendarIDs = overlay.pendingIDs
+        sleepDays = CalendarSleep.overlay(sleepCache, pending: try calendarOutbox.list())
+        placeJournalOccurrences()
+    }
+
+    /// The server derives wake and sleep from the day's activity, so they are
+    /// fetched rather than replicated, and kept here for the days already seen.
+    private var sleepCacheURL: URL { calendarOutbox.root.appendingPathComponent("sleep.json") }
+    private var sleepCache: [String: SleepDay] {
+        (try? JSONDecoder().decode([String: SleepDay].self, from: Data(contentsOf: sleepCacheURL))) ?? [:]
+    }
+
+    /// Asks the server for a day's wake and sleep; offline, the cached answer stands.
+    func refreshSleep(_ day: String) async {
+        guard let api = chatAPI(), let fetched = try? await api.sleep(day: day) else { return }
+        var cache = sleepCache
+        cache[day] = fetched
+        // A couple of months of days is plenty to page back through offline.
+        for stale in cache.keys.sorted().dropLast(60) { cache[stale] = nil }
+        try? JSONEncoder().encode(cache).write(to: sleepCacheURL, options: .atomic)
+        try? loadCalendar()
     }
 
     private func refreshLibraryBytes() {
@@ -304,6 +374,66 @@ final class CaptureModel: ObservableObject {
         return try? JournalAPI(server: server, token: token, allowCellular: allowCellular)
     }
 
+    // MARK: Journal media
+
+    /// Attachments fetched to be shown in the feed. Caches, so iOS may take the
+    /// space back; a library download's copy is the one meant to last.
+    private var journalMediaRoot: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("journal-media", isDirectory: true)
+    }
+    private var journalMediaFetches: [String: Task<URL?, Never>] = [:]
+
+    /// A file on this device for an attachment, or its poster: the library
+    /// download's copy if there is one, or else one fetched now and kept. Nil
+    /// offline when nothing is saved yet.
+    func journalMediaFile(_ item: JournalAttachmentItem, thumbnail: Bool = false) async -> URL? {
+        // A WebM clip downloaded with the library is the original, which the
+        // phone cannot play; the server's AAC copy is fetched instead.
+        let playable = !thumbnail && item.media == .audio && !item.phonePlayable
+        if !thumbnail, !playable,
+           let saved = try? media.downloaded(collection: "journal_attachments", id: item.id) { return saved }
+        let name = item.id + (thumbnail ? ".poster" : playable ? ".m4a" : "")
+        let file = journalMediaRoot.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: file.path) { return file }
+        if let running = journalMediaFetches[name] { return await running.value }
+        guard let api = chatAPI() else { return nil }
+        let fetch = Task<URL?, Never> {
+            do {
+                try await api.downloadJournalAttachment(item.id, thumbnail: thumbnail, playable: playable, to: file)
+                return file
+            } catch { return nil }
+        }
+        journalMediaFetches[name] = fetch
+        defer { journalMediaFetches[name] = nil }
+        return await fetch.value
+    }
+
+    /// Something to play an audio or video attachment with. Audio and short
+    /// videos come from a file on this device; a video with none, such as the
+    /// archived copy of a YouTube video, streams from the server.
+    func journalPlayer(_ item: JournalAttachmentItem) async -> AVPlayer? {
+        // The saved files have no extension, so the type is said outright.
+        func player(_ url: URL, mime: String, options: [String: Any] = [:]) -> AVPlayer {
+            var options = options
+            if !mime.isEmpty { options[AVURLAssetOverrideMIMETypeKey] = mime }
+            return AVPlayer(playerItem: AVPlayerItem(asset: AVURLAsset(url: url, options: options)))
+        }
+        if item.media == .audio {
+            guard let file = await journalMediaFile(item) else { return nil }
+            return player(file, mime: item.playerMIME)
+        }
+        if item.media == .video, let saved = try? media.downloaded(collection: "journal_attachments", id: item.id) {
+            return player(saved, mime: item.mime)
+        }
+        guard signedIn, let server, let token, let api = chatAPI(),
+              let url = try? api.journalAttachmentURL(item.id),
+              let cookie = HTTPCookie(properties: [.name: "lunaschal_token", .value: token,
+                                                   .domain: server.host ?? "", .path: "/"]) else { return nil }
+        return player(url, mime: item.playerMIME,
+                      options: [AVURLAssetHTTPCookiesKey: [cookie]])
+    }
+
     /// Queues a Todo tab change and starts sending it.
     func queueTodo(_ change: TodoChange) {
         do {
@@ -324,6 +454,28 @@ final class CaptureModel: ObservableObject {
             if (error as? URLError) != nil { throw error }
         }
         todoQueue = (try? todoOutbox.list()) ?? todoQueue
+    }
+
+    /// Saved on the device first, so it shows at once and survives being offline.
+    @discardableResult
+    func queueCalendar(_ change: CalendarChange) -> Bool {
+        do {
+            try calendarOutbox.append(change)
+            try loadCalendar()
+            requestSync()
+            return true
+        } catch { message = error.localizedDescription; return false }
+    }
+
+    private func sendCalendarEvents(using api: JournalAPI) async throws {
+        guard !((try? calendarOutbox.list()) ?? []).isEmpty else { return }
+        do {
+            let refused = try await calendarSyncer.run(using: api)
+            if !refused.isEmpty { message = refused.joined(separator: "\n") }
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+            if (error as? URLError) != nil { throw error }
+        }
     }
 
     func discard(_ item: ChatRecording) {
@@ -509,6 +661,7 @@ final class CaptureModel: ObservableObject {
             // First: a voice message is a question someone is waiting on.
             try await chatRecordingSyncer.run(using: api)
             try await sendTodoChanges(using: api)
+            try await sendCalendarEvents(using: api)
             try await syncer.run(using: api)
             try await dailySyncer.run(using: api)
             try await workoutSyncer.run(using: api)
@@ -520,6 +673,11 @@ final class CaptureModel: ObservableObject {
                 "journal_entries", "journal_attachments", "fics", "study_sources",
                 "papers", "conversations", "knowledge_archives", "fic_folders", "fic_bookmarks",
             ])
+            // Its own scope, so a server without it never fails the journal's sync.
+            if CalendarSync.supported(by: try await api.syncCollections()) {
+                try await replicaSyncer.run(using: api, collections: CalendarSync.collections, sendEdits: false)
+                await refreshSleep(DayKey.of(Date()))
+            }
             for publication in try drawingPublications.all() where publication.state == "pending" {
                 try Task.checkCancellation()
                 let reply = try await api.publishDrawing(publication, store: drawingPublications)

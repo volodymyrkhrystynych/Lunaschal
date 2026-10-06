@@ -104,7 +104,9 @@ extension JournalAPI: ChatRecordingTransport {
     public func sendChatRecording(_ item: ChatRecording, conversationID: String, audioURL: URL) async throws {
         guard (try audioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else { throw CaptureError.missingAudio }
         var fields = [("attachmentId", item.id), ("messageId", item.messageID),
-                      ("attachmentIds", String(decoding: try JSONEncoder().encode(item.attachmentIDs), as: UTF8.self))]
+                      ("attachmentIds", String(decoding: try JSONEncoder().encode(item.attachmentIDs), as: UTF8.self)),
+                      // When it was said, not when it synced: the server reads it as the user awake.
+                      ("capturedAt", ISO8601DateFormatter().string(from: item.createdAt))]
         if let text = item.text { fields.append(("text", text)) }
         let (body, boundary) = try writeMultipart(fields: fields, files: [
             MultipartFile(field: "audio", filename: "recording.m4a", contentType: "audio/mp4", source: audioURL)

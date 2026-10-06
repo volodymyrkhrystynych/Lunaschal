@@ -304,3 +304,25 @@ def test_explicit_restore_rotation_invalidates_even_an_in_range_cursor(client):
     assert new_epoch != original['epoch']
     assert client.get('/api/mobile/sync', query_string={'cursor': original['cursor']}).status_code == 410
     assert len(start(client).json['changes']) == 1
+
+
+def test_calendar_series_and_exceptions_replicate_read_only(client):
+    created = client.post('/api/calendar', json={
+        'title': 'Gym', 'date': '2026-10-05', 'time': '07:00', 'endTime': '08:00',
+        'tags': ['health'], 'repeatFreq': 'weekly', 'repeatByweekday': [1, 3],
+    })
+    assert created.status_code in (200, 201), created.json
+    id = created.json['id']
+    assert client.delete(f'/api/calendar/{id}/occurrence/2026-10-07').status_code in (200, 204)
+    page = client.get('/api/mobile/sync',
+                      query_string={'collections': 'calendar_events,calendar_event_exceptions'}).json
+    by_collection = {row['collection']: row['data'] for row in page['changes']}
+    event = by_collection['calendar_events']
+    assert event['id'] == id and event['repeatFreq'] == 'weekly' and event['repeatByweekday'] == '1,3'
+    assert event['endTime'] == '08:00' and json.loads(event['tags']) == ['health']
+    assert 'journalId' not in event and 'classificationError' not in event
+    skip = by_collection['calendar_event_exceptions']
+    assert skip['eventId'] == id and skip['date'] == '2026-10-07' and skip['action'] == 'skip'
+    edit = {'id': str(ULID()), 'epoch': page['epoch'], 'collection': 'calendar_events', 'recordId': id,
+            'baseRevision': page['changes'][0]['revision'], 'action': 'update', 'data': {'title': 'x'}}
+    assert client.post('/api/mobile/operations', json=edit).status_code == 400
