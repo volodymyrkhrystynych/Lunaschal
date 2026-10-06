@@ -39,13 +39,15 @@ what each device can currently do and which work remains device-only.
   continue. **Save** files one journal entry: each page as a JPEG (a newspaper
   files its cover plus the pages written on), plus the notebook's one YouTube link.
   The text composer's draft is never touched.
-  **Screenshots of the other app in Split View** come through Shortcuts, because
-  iPadOS lets no app capture another app's pixels: make a shortcut *Take
-  Screenshot → Add Screenshot to Lunaschal Notes* and bind it to Back Tap,
-  AssistiveTouch or a keyboard shortcut. The intent runs in the app's process,
-  works out where Lunaschal's window is, crops it out (the larger remaining strip
-  with Stage Manager) and pastes the rest onto the current page. With no notebook
-  open, the screenshot waits for the next one. **Paste image** takes any copied picture.
+  **Screenshots of the other app in Split View**: iPadOS lets no app capture
+  another app's pixels, so the screenshot is the system's and Lunaschal cuts its
+  own window out of it (the larger remaining strip with Stage Manager). With no
+  setup: take a screenshot (Pencil corner swipe, or top + volume), choose **Copy
+  and Delete**, then **Paste image**. Paste crops only an image exactly the
+  screen's pixel size, so a copied photo goes in whole. For one tap, a shortcut
+  *Take Screenshot → Add Screenshot to Lunaschal Notes* run from AssistiveTouch
+  or a Full Keyboard Access command does the same in the app's process (Back Tap
+  is iPhone-only); with no notebook open, its screenshot waits for the next one.
 
 - The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
   default) is the composer below; **Daily** logs the day's selfie (front camera),

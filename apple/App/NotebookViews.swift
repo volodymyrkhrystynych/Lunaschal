@@ -153,12 +153,18 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         return "Added to page \(current + 1)."
     }
 
+    /// A screenshot copied from the system's screenshot editor (Copy and
+    /// Delete) loses Lunaschal's half on the way in, the same as one from the
+    /// Shortcut; any other copied picture goes in whole.
     func pasteImage() {
         guard let image = UIPasteboard.general.image?.cgImage else {
             error = "The clipboard has no image. Copy a screenshot first."
             return
         }
-        insertScreenshot(image)
+        let geometry = NotebookSession.shared.geometry()
+        insertScreenshot(geometry.map {
+            NotebookCrop.cropIfScreenshot(image, screen: $0.screen, window: $0.window, scale: $0.scale)
+        } ?? image)
     }
 
     /// Screenshots that arrived while no notebook was open.
@@ -548,18 +554,20 @@ private struct ScreenshotHelp: View {
         NavigationStack {
             List {
                 Section {
-                    Text("iPadOS doesn't let an app capture another app's screen, so screenshots come in through Shortcuts. Lunaschal cuts its own half out and pastes the rest onto the page you're on.")
+                    Text("iPadOS doesn't let an app capture another app's screen, so take the screenshot yourself: Lunaschal cuts its own half out and puts the rest on the page you're on.")
                 }
-                Section("Set it up once") {
-                    Label("Open Shortcuts and make a new shortcut.", systemImage: "1.circle")
-                    Label("Add Take Screenshot.", systemImage: "2.circle")
-                    Label("Add Lunaschal's Add Screenshot to Lunaschal Notes and pass it the screenshot.", systemImage: "3.circle")
-                    Label("Bind the shortcut to Back Tap or AssistiveTouch (Settings › Accessibility › Touch), or to a keyboard shortcut.", systemImage: "4.circle")
+                Section("Without any setup") {
+                    Label("Take a screenshot: swipe up from a bottom corner with the Pencil, or press the top and volume buttons.", systemImage: "1.circle")
+                    Label("In the screenshot editor, choose Copy and Delete.", systemImage: "2.circle")
+                    Label("Here, choose Paste image. Lunaschal's half is cut off; a copied picture that isn't a screenshot goes in whole.", systemImage: "3.circle")
+                }
+                Section("One tap, with a shortcut") {
+                    Label("In Shortcuts, make a shortcut: Take Screenshot, then Add Screenshot to Lunaschal Notes.", systemImage: "1.circle")
+                    Label("Run it from AssistiveTouch (Settings › Accessibility › Touch) or a Full Keyboard Access command.", systemImage: "2.circle")
                 }
                 Section {
-                    Text("Running it while no notebook is open keeps the screenshot for the next one you open.")
+                    Text("Running the shortcut while no notebook is open keeps the screenshot for the next one you open.")
                     if waiting > 0 { Text("\(waiting) screenshot\(waiting == 1 ? "" : "s") waiting.") }
-                    Text("You can also copy any image and use Paste image.")
                 }
             }
             .navigationTitle("Screenshots")

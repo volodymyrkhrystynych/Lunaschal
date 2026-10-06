@@ -44,6 +44,22 @@ final class NotebookCropTests: XCTestCase {
                        CGRect(x: 0, y: 0, width: 500, height: 750))
     }
 
+    func testPasteCropsOnlyAScreenSizedImage() throws {
+        let ours = CGRect(x: 688, y: 0, width: 688, height: 1032)
+        // A system screenshot: exactly the screen at 2x.
+        let screenshot = try XCTUnwrap(solid(.red, CGSize(width: 2752, height: 2064)))
+        XCTAssertTrue(NotebookCrop.isScreenshot(screenshot, screen: landscape, scale: 2))
+        let cropped = NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: ours, scale: 2)
+        XCTAssertEqual(cropped.width, 1376)
+        XCTAssertEqual(cropped.height, 2064)
+        // A copied photo with the screen's shape but not its size goes in whole.
+        let photo = try XCTUnwrap(solid(.red, CGSize(width: 1376, height: 1032)))
+        XCTAssertFalse(NotebookCrop.isScreenshot(photo, screen: landscape, scale: 2))
+        XCTAssertEqual(NotebookCrop.cropIfScreenshot(photo, screen: landscape, window: ours, scale: 2).width, 1376)
+        // Our window full-screen: a screenshot, but nothing to cut.
+        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: landscape, scale: 2).width, 2752)
+    }
+
     func testCropKeepsTheWholeImageWhenTheShapeDisagrees() throws {
         let image = try XCTUnwrap(solid(.red, CGSize(width: 750, height: 1000)))
         let cropped = NotebookCrop.crop(image, screen: landscape, window: CGRect(x: 688, y: 0, width: 688, height: 1032))

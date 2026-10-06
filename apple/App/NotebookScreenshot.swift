@@ -35,6 +35,19 @@ enum NotebookCrop {
             .intersection(CGRect(origin: .zero, size: imageSize))
     }
 
+    /// A system screenshot is exactly the screen in pixels; a copied photo
+    /// almost never is. Paste crops only what passes this, so a picture copied
+    /// from Photos is never cut in half.
+    static func isScreenshot(_ image: CGImage, screen: CGRect, scale: CGFloat) -> Bool {
+        let width = screen.width * scale, height = screen.height * scale
+        return abs(CGFloat(image.width) - width) <= 1 && abs(CGFloat(image.height) - height) <= 1
+    }
+
+    /// For Paste: the other app's part of a screenshot, anything else whole.
+    static func cropIfScreenshot(_ image: CGImage, screen: CGRect, window: CGRect, scale: CGFloat) -> CGImage {
+        isScreenshot(image, screen: screen, scale: scale) ? crop(image, screen: screen, window: window) : image
+    }
+
     /// The other app's part of `image`, or the whole image when that can't be
     /// told (our window full-screen, or the screenshot's shape doesn't match
     /// the screen, as after a rotation mid-shortcut).
@@ -57,12 +70,12 @@ final class NotebookSession {
 
     /// Our window and screen right now, in screen points. Read at delivery
     /// rather than tracked, since Split View can swap sides without resizing.
-    func geometry() -> (screen: CGRect, window: CGRect)? {
+    func geometry() -> (screen: CGRect, window: CGRect, scale: CGFloat)? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first,
               let window = scene.keyWindow ?? scene.windows.first else { return nil }
         let space = scene.screen.coordinateSpace
-        return (scene.screen.bounds, window.convert(window.bounds, to: space))
+        return (scene.screen.bounds, window.convert(window.bounds, to: space), scene.screen.scale)
     }
 
     /// Returns where the image went, for the Shortcut's dialog.
