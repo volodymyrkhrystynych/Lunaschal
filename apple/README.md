@@ -26,6 +26,27 @@ what each device can currently do and which work remains device-only.
   drawings. Stale saves retain a conflict copy; they never overwrite newer ink.
   Cross-platform ink conversion and PDF annotation remain outstanding.
 
+- **iPad notebooks** (Capture → **Notes** or **Newspaper**, top right). A
+  full-window, paginated PaperKit canvas with the tab bar hidden: Pencil ink,
+  pictures that can be moved and resized, text boxes and shapes from the tool
+  picker's **+**, and fixed pages (A4 for notes) navigated from the top bar.
+  **Newspaper** opens today's archived issue (by the 4am day; the newest is offered if
+  today's isn't in) with every PDF page under the ink. It downloads the PDF once
+  from `GET /api/newspapers/issues/<date>/pdf`, since mobile sync doesn't carry
+  issue PDFs, and reopens the same unsaved notebook instead of making a second one.
+  The web reader's own markup is untouched. Back autosaves (current + previous
+  checkpoint, like drawings) and the notebook is listed under Draw → Notebooks to
+  continue. **Save** files one journal entry: each page as a JPEG (a newspaper
+  files its cover plus the pages written on), plus the notebook's one YouTube link.
+  The text composer's draft is never touched.
+  **Screenshots of the other app in Split View** come through Shortcuts, because
+  iPadOS lets no app capture another app's pixels: make a shortcut *Take
+  Screenshot → Add Screenshot to Lunaschal Notes* and bind it to Back Tap,
+  AssistiveTouch or a keyboard shortcut. The intent runs in the app's process,
+  works out where Lunaschal's window is, crops it out (the larger remaining strip
+  with Stage Manager) and pastes the rest onto the current page. With no notebook
+  open, the screenshot waits for the next one. **Paste image** takes any copied picture.
+
 - The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
   default) is the composer below; **Daily** logs the day's selfie (front camera),
   body weight and calorie entries. Each is saved on the device first, keyed by the

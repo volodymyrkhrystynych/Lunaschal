@@ -23,16 +23,19 @@ struct DrawingLibraryView: View {
                 Text("Choose an exported .drawing file. It opens as a new editable page; existing pages are kept.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            ForEach(pages) { page in
-                NavigationLink { DrawingEditor(owner: model, page: page) } label: {
-                    VStack(alignment: .leading) {
-                        Text(page.title)
-                        Text(page.updatedAt, format: .dateTime.month().day().hour().minute()).font(.caption)
-                        Text(publicationStatus(page)).font(.caption).foregroundStyle(.secondary)
+            NotebookSection(model: model)
+            Section("Drawings") {
+                ForEach(pages) { page in
+                    NavigationLink { DrawingEditor(owner: model, page: page) } label: {
+                        VStack(alignment: .leading) {
+                            Text(page.title)
+                            Text(page.updatedAt, format: .dateTime.month().day().hour().minute()).font(.caption)
+                            Text(publicationStatus(page)).font(.caption).foregroundStyle(.secondary)
+                        }
                     }
-                }
-                .contextMenu {
-                    Button("Rename") { title = page.title; naming = page }
+                    .contextMenu {
+                        Button("Rename") { title = page.title; naming = page }
+                    }
                 }
             }
         }

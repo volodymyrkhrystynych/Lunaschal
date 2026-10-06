@@ -295,6 +295,51 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Untitled drawing"].firstMatch.waitForExistence(timeout: 5))
     }
 
+    func testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal() {
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        guard UIDevice.current.userInterfaceIdiom == .pad else {
+            XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+            XCTAssertFalse(notes.exists)
+            XCTAssertFalse(app.buttons["capture-newspaper"].exists)
+            return
+        }
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["capture-newspaper"].exists)
+        notes.tap()
+        XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
+        // Full window: no tab is left to tap.
+        let journalTabs = app.descendants(matching: .any).matching(identifier: "Journal").allElementsBoundByIndex
+        XCTAssertFalse(journalTabs.contains { $0.isHittable })
+
+        app.buttons["notebook-add-page"].tap()
+        XCTAssertEqual(app.buttons["notebook-page"].label, "2 / 2")
+        app.buttons["notebook-youtube"].tap()
+        let link = app.alerts.textFields["YouTube video URL"]
+        XCTAssertTrue(link.waitForExistence(timeout: 5))
+        link.typeText("https://youtu.be/M7lc1UVf-VE")
+        app.alerts.buttons["Add"].tap()
+        XCTAssertTrue(app.buttons["YouTube video added"].waitForExistence(timeout: 5))
+
+        // Back saves it; Draw lists it to continue.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tab(app, "Draw").tap()
+        let row = app.staticTexts.containing(NSPredicate(format: "label CONTAINS '2 pages'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Not in the journal yet"].firstMatch.exists)
+        row.tap()
+        XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["notebook-page"].label, "1 / 2")
+        app.buttons["notebook-save"].tap()
+        // Saving goes back to Draw, where it now reads as filed.
+        XCTAssertTrue(app.staticTexts["Saved to journal"].firstMatch.waitForExistence(timeout: 10)
+                      || app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Saved to journal'")).firstMatch.waitForExistence(timeout: 5))
+
+        tab(app, "Journal").tap()
+        XCTAssertTrue(app.staticTexts["https://www.youtube.com/watch?v=M7lc1UVf-VE"].firstMatch.waitForExistence(timeout: 10))
+    }
+
     func testCaptureSurvivesTerminationWithoutAServer() {
         let app = XCUIApplication()
         app.launch()
