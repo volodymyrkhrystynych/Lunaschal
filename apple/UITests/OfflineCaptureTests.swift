@@ -71,8 +71,14 @@ final class OfflineCaptureTests: XCTestCase {
             _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: row)], timeout: 3)
         }
         XCTAssertTrue(row.isHittable, "No \(name) in More", file: file, line: line)
-        row.tap()
-        XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: 5), file: file, line: line)
+        // The row turns hittable while the pop back to the menu is still
+        // animating, and a tap then is dropped (seen on CI's slower iPad
+        // simulator). Retry until the screen opens, as selectTab does.
+        for _ in 0..<3 {
+            row.tap()
+            if app.navigationBars[name].waitForExistence(timeout: 5) { return }
+        }
+        XCTFail("\(name) did not open from More", file: file, line: line)
     }
 
     func testBottomBarIsCaptureJournalChatTodoMore() {
