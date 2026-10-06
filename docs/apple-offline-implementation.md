@@ -668,6 +668,22 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
       carries `capturedAt`, so a background sync at 03:00 isn't read as being awake;
       drawings published from the iPad don't yet. The per-event mic and zoom are still web-only. Passed in
       simulator; not verified on device.
+- [x] Read the Journal as the desktop's feed: one timeline, newest first, with this
+      device's unsynced captures interleaved by time. Each server entry's card shows its
+      photos (a strip, full screen on a tap), voice clips played in place with their
+      transcripts, videos and watched YouTube videos (poster, the archived copy played
+      full screen, the source link and the summary). A categorised calendar event wraps
+      the entries written during it in rings of its category colours
+      (`JournalEventGroups` ports `src/lib/journalEventGroups.ts`; an item sits in one
+      border, never two). Media comes from the library download's copy when there is one,
+      otherwise it is fetched from `/api/journal/attachments/<id>/file` (or `/thumbnail`)
+      and kept in Caches; a video with no device copy streams. A desktop clip is
+      WebM/Opus, which AVFoundation can't open, so the phone asks for
+      `?playable=1` and the server answers with an AAC copy made once by ffmpeg and kept
+      beside the original (`backend/journal/playable.py`). Entries are read in
+      `createdAt` order (`ReplicaStore.newestRecords`), no longer by sync revision.
+      Passed in simulator, with a debug-only `-journalFeedFixture` launch argument
+      seeding the UI test; not verified on device.
 - [ ] Review Calendar, Lifestyle, Food, Learning, and other existing views before
       claiming mobile feature parity; full desktop parity is not a requirement.
 

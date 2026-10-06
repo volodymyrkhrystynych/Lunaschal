@@ -447,13 +447,13 @@ private struct SleepEditor: View {
     }
 }
 
-private extension Color {
+extension Color {
     init(hex: UInt32) {
         self.init(red: Double((hex >> 16) & 0xff) / 255, green: Double((hex >> 8) & 0xff) / 255, blue: Double(hex & 0xff) / 255)
     }
 }
 
-private func eventTimeLabel(_ occurrence: CalendarOccurrence) -> String {
+func eventTimeLabel(_ occurrence: CalendarOccurrence) -> String {
     if occurrence.event.allDay { return "All day" }
     guard let start = occurrence.time else { return "Any time" }
     return occurrence.endTime.map { "\(start) – \($0)" } ?? start

@@ -20,6 +20,10 @@ final class CaptureModel: ObservableObject {
     private var backgroundSyncing = false
     @Published private(set) var journalRecords: [SyncChange] = []
     @Published private(set) var journalCount = 0
+    /// Each loaded journal entry's attachments, in the server's order.
+    @Published private(set) var journalAttachments: [String: [JournalAttachmentItem]] = [:]
+    /// Calendar occurrences that can border a run of the journal feed, as on the web.
+    @Published private(set) var journalOccurrences: [CalendarOccurrence] = []
     /// Series templates and their exceptions; the calendar expands them per view.
     /// Events made here and not yet on the server are laid over the replica's.
     @Published private(set) var calendarEvents: [CalendarEvent] = []
@@ -125,9 +129,8 @@ final class CaptureModel: ObservableObject {
         recentExercises = (try? JSONDecoder().decode([RecentExercise].self, from: Data(contentsOf: workoutCache("recent")))) ?? []
         recentWorkouts = (try? JSONDecoder().decode([WorkoutSession].self, from: Data(contentsOf: workoutCache("sessions")))) ?? []
         weather = try? JSONDecoder().decode(WeatherDay.self, from: Data(contentsOf: weatherCache))
-        journalRecords = try replica.records(collection: "journal_entries")
-        journalCount = try replica.count(collection: "journal_entries")
         pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
+        try loadJournal()
         try loadCalendar()
         refreshLibraryBytes()
         recorder.onChange = { [weak self] in
@@ -161,11 +164,33 @@ final class CaptureModel: ObservableObject {
             workoutLogs = try workouts.list()
             chatRecordingQueue = try chatRecordings.list()
             todoQueue = try todoOutbox.list()
-            journalRecords = try replica.records(collection: "journal_entries", query: journalQuery, limit: journalLimit)
-            journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
+            try loadJournal()
             pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
             try loadCalendar()
         } catch { message = error.localizedDescription }
+    }
+
+    private func loadJournal() throws {
+        journalRecords = try replica.newestRecords(collection: "journal_entries", query: journalQuery, limit: journalLimit)
+        journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
+        journalAttachments = JournalAttachmentItem.grouped(
+            try replica.relatedRecords(collection: "journal_attachments", field: "entryId", values: journalRecords.map(\.id)))
+    }
+
+    /// The categorised calendar occurrences around the days the feed covers,
+    /// for its borders. A search shows matches, not a day, so it has none, as
+    /// on the web.
+    private func placeJournalOccurrences() {
+        let times = journalRecords.compactMap { JournalTimestamp.parse($0.data?["createdAt"]?.string) }
+            + captures.map(\.createdAt)
+        guard journalQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let range = JournalEventGroups.dayRange(times) else {
+            journalOccurrences = []
+            return
+        }
+        journalOccurrences = CalendarExpansion.expand(calendarEvents, exceptions: calendarExceptions,
+                                                      start: range.start, end: range.end)
+            .filter { !$0.event.categoryTags.isEmpty }
     }
 
     private func loadCalendar() throws {
@@ -179,6 +204,7 @@ final class CaptureModel: ObservableObject {
         calendarExceptions = overlay.exceptions
         pendingCalendarIDs = overlay.pendingIDs
         sleepDays = CalendarSleep.overlay(sleepCache, pending: try calendarOutbox.list())
+        placeJournalOccurrences()
     }
 
     /// The server derives wake and sleep from the day's activity, so they are
@@ -295,6 +321,66 @@ final class CaptureModel: ObservableObject {
     func chatAPI() -> JournalAPI? {
         guard signedIn, let server, let token else { return nil }
         return try? JournalAPI(server: server, token: token, allowCellular: allowCellular)
+    }
+
+    // MARK: Journal media
+
+    /// Attachments fetched to be shown in the feed. Caches, so iOS may take the
+    /// space back; a library download's copy is the one meant to last.
+    private var journalMediaRoot: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("journal-media", isDirectory: true)
+    }
+    private var journalMediaFetches: [String: Task<URL?, Never>] = [:]
+
+    /// A file on this device for an attachment, or its poster: the library
+    /// download's copy if there is one, or else one fetched now and kept. Nil
+    /// offline when nothing is saved yet.
+    func journalMediaFile(_ item: JournalAttachmentItem, thumbnail: Bool = false) async -> URL? {
+        // A WebM clip downloaded with the library is the original, which the
+        // phone cannot play; the server's AAC copy is fetched instead.
+        let playable = !thumbnail && item.media == .audio && !item.phonePlayable
+        if !thumbnail, !playable,
+           let saved = try? media.downloaded(collection: "journal_attachments", id: item.id) { return saved }
+        let name = item.id + (thumbnail ? ".poster" : playable ? ".m4a" : "")
+        let file = journalMediaRoot.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: file.path) { return file }
+        if let running = journalMediaFetches[name] { return await running.value }
+        guard let api = chatAPI() else { return nil }
+        let fetch = Task<URL?, Never> {
+            do {
+                try await api.downloadJournalAttachment(item.id, thumbnail: thumbnail, playable: playable, to: file)
+                return file
+            } catch { return nil }
+        }
+        journalMediaFetches[name] = fetch
+        defer { journalMediaFetches[name] = nil }
+        return await fetch.value
+    }
+
+    /// Something to play an audio or video attachment with. Audio and short
+    /// videos come from a file on this device; a video with none, such as the
+    /// archived copy of a YouTube video, streams from the server.
+    func journalPlayer(_ item: JournalAttachmentItem) async -> AVPlayer? {
+        // The saved files have no extension, so the type is said outright.
+        func player(_ url: URL, mime: String, options: [String: Any] = [:]) -> AVPlayer {
+            var options = options
+            if !mime.isEmpty { options[AVURLAssetOverrideMIMETypeKey] = mime }
+            return AVPlayer(playerItem: AVPlayerItem(asset: AVURLAsset(url: url, options: options)))
+        }
+        if item.media == .audio {
+            guard let file = await journalMediaFile(item) else { return nil }
+            return player(file, mime: item.playerMIME)
+        }
+        if item.media == .video, let saved = try? media.downloaded(collection: "journal_attachments", id: item.id) {
+            return player(saved, mime: item.mime)
+        }
+        guard signedIn, let server, let token, let api = chatAPI(),
+              let url = try? api.journalAttachmentURL(item.id),
+              let cookie = HTTPCookie(properties: [.name: "lunaschal_token", .value: token,
+                                                   .domain: server.host ?? "", .path: "/"]) else { return nil }
+        return player(url, mime: item.playerMIME,
+                      options: [AVURLAssetHTTPCookiesKey: [cookie]])
     }
 
     /// Queues a Todo tab change and starts sending it.

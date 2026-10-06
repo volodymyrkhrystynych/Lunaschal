@@ -410,7 +410,7 @@ private struct JournalTab: View {
     var body: some View {
         Group {
             switch page {
-            case .journal: CaptureList(model: model)
+            case .journal: JournalFeedView(model: model)
             case .calendar: CalendarPage(model: model)
             }
         }
@@ -432,74 +432,7 @@ private struct JournalTab: View {
     }
 }
 
-private struct CaptureList: View {
-    @ObservedObject var model: CaptureModel
-    @State private var query = ""
-
-    private var captures: [Capture] { model.captures.filter { $0.matchesSearch(query) } }
-
-    var body: some View {
-        List {
-            if !model.pendingEdits.isEmpty {
-                Section("Pending edits") {
-                    ForEach(model.pendingEdits) { edit in
-                        NavigationLink { PendingEditView(model: model, edit: edit) } label: {
-                            VStack(alignment: .leading) {
-                                Text(edit.original.title).lineLimit(1)
-                                Text(edit.state == "pending" ? "Saved on device · Waiting to sync" : "Needs resolution")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            }
-            Section {
-                ForEach(captures) { capture in
-                    NavigationLink {
-                        CaptureDetail(model: model, id: capture.id)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(capture.snapshot?.title ?? (capture.text.isEmpty ? (capture.files.first?.name ?? "Recording") : capture.text))
-                                .lineLimit(2)
-                            if capture.kind == .food {
-                                Label("Food log", systemImage: "fork.knife").font(.caption)
-                            }
-                            Text(capture.createdAt, format: .dateTime.month().day().hour().minute())
-                                .font(.caption).foregroundStyle(.secondary)
-                            EntryWeatherText(weather: capture.entryWeather)
-                            Text(status(capture)).font(.caption)
-                        }
-                    }
-                }
-            } header: { Text("Captured on this device") }
-            Section("Server journal · Available offline") {
-                ForEach(model.journalRecords) { record in
-                    NavigationLink { JournalRecordView(model: model, record: record) } label: {
-                        VStack(alignment: .leading) {
-                            Text(record.title).lineLimit(2)
-                            Text(record.data?["createdAt"]?.string ?? "").font(.caption).foregroundStyle(.secondary)
-                            EntryWeatherText(weather: EntryWeather.parse(record.data?["weather"]?.string))
-                        }
-                    }
-                }
-                if model.journalRecords.count < model.journalCount {
-                    Button("Load more entries (\(model.journalRecords.count) of \(model.journalCount))") { model.loadMoreJournal() }
-                }
-            }
-        }
-        .overlay {
-            if captures.isEmpty && model.journalRecords.isEmpty && model.pendingEdits.isEmpty {
-                ContentUnavailableView(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No captures yet" : "No matching entries", systemImage: "book.closed")
-            }
-        }
-        .navigationTitle("Journal")
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search saved journal")
-        .onAppear { model.searchJournal(query) }
-        .onChange(of: query) { _, value in model.searchJournal(value) }
-    }
-}
-
-private func status(_ item: Capture) -> String {
+func captureStatus(_ item: Capture) -> String {
     switch item.state {
     case .recording: return "Recording on this device"
     case .interrupted: return "Interrupted — review recording"
@@ -509,7 +442,7 @@ private func status(_ item: Capture) -> String {
     }
 }
 
-private struct CaptureDetail: View {
+struct CaptureDetail: View {
     @ObservedObject var model: CaptureModel
     let id: String
 
@@ -519,7 +452,7 @@ private struct CaptureDetail: View {
                 Section {
                     if capture.kind == .food { Label("Food log entry", systemImage: "fork.knife") }
                     Text(capture.createdAt, format: .dateTime)
-                    Text(status(capture))
+                    Text(captureStatus(capture))
                     if let error = capture.lastError { Text(error).foregroundStyle(.orange) }
                 }
                 if let snapshot = capture.snapshot, !snapshot.content.isEmpty {

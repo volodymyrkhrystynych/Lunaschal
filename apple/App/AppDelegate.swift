@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
                 .appendingPathComponent("Captures", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                 attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+            #if DEBUG
+            try JournalFixture.seedIfAsked(root: directory)
+            #endif
             return try CaptureModel(store: CaptureStore(root: directory))
         }
         startup = result

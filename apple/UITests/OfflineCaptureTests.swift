@@ -231,7 +231,12 @@ final class OfflineCaptureTests: XCTestCase {
         // Saved on the device and drawn on today's timeline at once.
         let event = app.buttons.matching(identifier: "calendar-event").matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
         XCTAssertTrue(event.waitForExistence(timeout: 5))
-        event.tap()
+        // The element's frame includes its label, so the middle of it can be
+        // empty space; tap the line's foot, as the overlap test does.
+        func tapLine(_ element: XCUIElement) {
+            element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 14, dy: element.frame.height - 16)).tap()
+        }
+        tapLine(event)
         XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Saved on device · Waiting to sync"].exists)
         app.navigationBars[name].buttons.firstMatch.tap()
@@ -244,7 +249,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(event.waitForExistence(timeout: 5))
 
         // Edit it, as the web's event details do.
-        event.tap()
+        tapLine(event)
         app.navigationBars[name].buttons["Edit"].tap()
         let field = app.textFields["calendar-event-title"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
@@ -257,7 +262,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(edited.waitForExistence(timeout: 5))
 
         // And delete it, from inside Edit.
-        edited.tap()
+        tapLine(edited)
         XCTAssertFalse(app.buttons["calendar-event-delete"].exists, "Delete lives in Edit now")
         deleteFromEdit(app, title: name + " checkup")
         XCTAssertFalse(app.buttons.matching(identifier: "calendar-event")
@@ -515,6 +520,63 @@ final class OfflineCaptureTests: XCTestCase {
         app.staticTexts[text].tap()
         XCTAssertTrue(app.staticTexts["Saved on device · Waiting to sync"].exists)
         XCTAssertTrue(app.staticTexts["Original text"].exists)
+    }
+
+    /// The feed reads like the desktop's: the event's border around what was
+    /// written during it, and the entry's photo, clip and video on its card.
+    func testJournalFeedShowsMediaInsideTheCalendarBorder() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-journalFeedFixture")
+        app.launch()
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        pages.buttons["Journal"].tap()
+
+        let group = app.descendants(matching: .any).matching(identifier: "journal-event-group")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "Walk by the river")).firstMatch
+        XCTAssertTrue(group.waitForExistence(timeout: 10), "the categorised event borders the entry")
+        let walk = app.staticTexts["Fixture walk"]
+        let later = app.staticTexts["Fixture later"]
+        XCTAssertTrue(walk.exists)
+        XCTAssertTrue(later.exists)
+        XCTAssertLessThan(group.frame.minY, walk.frame.minY, "the event's heading opens its border")
+        XCTAssertLessThan(later.frame.maxY, group.frame.minY, "newest first, and outside the border")
+
+        let photo = app.buttons["journal-photo"].firstMatch
+        XCTAssertTrue(photo.waitForExistence(timeout: 5))
+        photo.tap()
+        let done = app.buttons["Done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5), "a photo opens full screen")
+        done.tap()
+
+        // Short drags: a full swipe flings a lazily drawn row off the far edge.
+        func nudge(until element: XCUIElement) {
+            for _ in 0..<8 where !element.isHittable {
+                let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
+                start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -200)))
+            }
+        }
+        let play = app.buttons["journal-audio-play"].firstMatch
+        nudge(until: play)
+        XCTAssertTrue(play.waitForExistence(timeout: 5))
+        XCTAssertEqual(play.label, "Play")
+        play.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", "/ 0:02")).firstMatch
+            .waitForExistence(timeout: 5), "the clip plays in place")
+        XCTAssertTrue(app.buttons["Transcript"].exists || app.staticTexts["Transcript"].exists)
+
+        let video = app.buttons["journal-video"].firstMatch
+        XCTAssertTrue(video.exists)
+        XCTAssertTrue(app.links["Open on YouTube"].exists || app.buttons["Open on YouTube"].exists)
+        XCTAssertTrue(app.staticTexts["A film about rivers."].exists, "the video's summary shows open")
+
+        for _ in 0..<8 where !later.isHittable {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 200)))
+        }
+        later.tap()
+        XCTAssertTrue(app.navigationBars["Fixture later"].waitForExistence(timeout: 5), "an entry still opens")
     }
 
     func testYouTubeLinksAttachToTheEntryAndSaveStaysPinned() {

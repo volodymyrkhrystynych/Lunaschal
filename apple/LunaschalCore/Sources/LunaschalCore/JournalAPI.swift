@@ -365,6 +365,35 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return try Data(contentsOf: file)
     }
 
+    /// Where a journal attachment's file is served from, for a player that
+    /// streams it rather than saving it first: a long video, or the archived
+    /// copy of a YouTube video that no library download carries.
+    /// `playable` asks for a clip the phone can open: AVFoundation cannot
+    /// read the WebM a desktop recording is, so the server sends an AAC copy.
+    public func journalAttachmentURL(_ id: String, thumbnail: Bool = false, playable: Bool = false) throws -> URL {
+        guard ULID.isValid(id) else { throw CaptureError.invalidID }
+        let url = server.appendingPathComponent("api/journal/attachments/\(id)/\(thumbnail ? "thumbnail" : "file")")
+        guard playable, !thumbnail, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        parts.queryItems = [URLQueryItem(name: "playable", value: "1")]
+        return parts.url ?? url
+    }
+
+    /// Saves a journal attachment's file, or its poster, to `destination`,
+    /// replacing whatever was there only once the whole file has arrived.
+    public func downloadJournalAttachment(_ id: String, thumbnail: Bool = false, playable: Bool = false,
+                                          to destination: URL) async throws {
+        var req = request("")
+        req.url = try journalAttachmentURL(id, thumbnail: thumbnail, playable: playable)
+        req.setValue(nil, forHTTPHeaderField: "Accept")
+        let (file, response) = try await session.download(for: req)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try check(Data(), response)
+        let manager = FileManager.default
+        try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if manager.fileExists(atPath: destination.path) { try manager.removeItem(at: destination) }
+        try manager.moveItem(at: file, to: destination)
+    }
+
     func request(_ path: String, method: String = "GET") -> URLRequest {
         var req = URLRequest(url: server.appendingPathComponent(path))
         req.httpMethod = method
