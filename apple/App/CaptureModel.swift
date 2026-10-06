@@ -73,6 +73,8 @@ final class CaptureModel: ObservableObject {
     let replica: ReplicaStore
     let drawings: DrawingStore
     let drawingPublications: DrawingPublicationStore
+    /// The iPad's paginated notes canvases, blank or over a newspaper issue.
+    let notebooks: NotebookStore
     let uploads: RecordingUploadStore
     let transfers: TransferStore
     let media: MediaStore
@@ -95,6 +97,7 @@ final class CaptureModel: ObservableObject {
         transfers = try TransferStore(root: store.root.appendingPathComponent("transfer-state", isDirectory: true))
         drawings = try DrawingStore(root: store.root.appendingPathComponent("drawings", isDirectory: true))
         drawingPublications = try DrawingPublicationStore(root: store.root.appendingPathComponent("drawing-publications", isDirectory: true))
+        notebooks = try NotebookStore(root: store.root.appendingPathComponent("notebooks", isDirectory: true))
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
         daily = try DailyStore(root: store.root.appendingPathComponent("daily", isDirectory: true))
@@ -141,6 +144,8 @@ final class CaptureModel: ObservableObject {
         watchReceiver.onChange = { [weak self] in self?.reload(); self?.requestSync() }
         watchReceiver.onError = { [weak self] in self?.message = $0.localizedDescription }
         watchReceiver.activate()
+        // A screenshot from the Shortcuts action lands here even with no editor open.
+        NotebookSession.shared.store = notebooks
         location.onFix = { [weak self] fix in
             self?.unsentFix = (fix.coordinate.latitude, fix.coordinate.longitude)
             self?.requestSync()
@@ -286,6 +291,52 @@ final class CaptureModel: ObservableObject {
             try store.commitDraft(text: text, youtubeURLs: youtubeURLs, kind: kind, location: location.recent)
             reload(); requestSync(); return true
         } catch { message = error.localizedDescription; reload(); return false }
+    }
+
+    // MARK: Notebooks
+
+    /// Files a notebook's rendered pages, plus its one video, as a journal
+    /// entry. The composer's draft is left alone.
+    func saveNotebook(_ notebook: Notebook, text: String, pages: [(data: Data, name: String)]) -> Notebook? {
+        do {
+            let capture = try store.commitImages(text: text, youtubeURLs: notebook.youtubeURL.map { [$0] } ?? [],
+                                                 images: pages, location: location.recent)
+            let saved = try notebooks.markSaved(notebook.id, captureID: capture.id)
+            reload(); requestSync()
+            return saved
+        } catch { message = error.localizedDescription; reload(); return nil }
+    }
+
+    /// The issues the server has archived: asked fresh when signed in, and
+    /// otherwise read from the replica, which carries them once the library
+    /// has been downloaded.
+    func newspaperIssues() async -> [NewspaperIssue] {
+        if let api = chatAPI(), let issues = try? await api.newspaperIssues() { return issues }
+        return ((try? replica.records(collection: "newspaper_issues", limit: 400)) ?? [])
+            .compactMap { NewspaperIssue(record: $0.data) }
+    }
+
+    /// Opens a notebook over `issue`: the unsaved one already made for it, or a
+    /// new one once its PDF has downloaded. Nil (with a message) offline.
+    func openNewspaper(_ issue: NewspaperIssue) async -> Notebook? {
+        do {
+            if let existing = try notebooks.unsavedNewspaper(date: issue.date) { markOpened(issue); return existing }
+            guard let api = chatAPI() else {
+                message = "Connect to your server to download this newspaper. Once downloaded it stays on this iPad."
+                return nil
+            }
+            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("newspaper-downloads", isDirectory: true)
+            let pdf = try await api.downloadIssuePDF(date: issue.date, into: scratch)
+            defer { try? FileManager.default.removeItem(at: pdf) }
+            let notebook = try notebooks.createNewspaper(date: issue.date, pdf: pdf, pageCount: issue.pageCount)
+            markOpened(issue)
+            return notebook
+        } catch { message = error.localizedDescription; return nil }
+    }
+
+    private func markOpened(_ issue: NewspaperIssue) {
+        guard let api = chatAPI() else { return }
+        Task { try? await api.markIssueOpened(date: issue.date) }
     }
 
     // MARK: Workout

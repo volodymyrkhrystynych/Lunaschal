@@ -125,6 +125,36 @@ final class CaptureFileTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: reopened.clipURL(capture.clips[0])), Data("aac".utf8))
     }
 
+    func testNotebookPagesSaveWithoutTouchingTheComposerDraft() throws {
+        let clip = try store.beginClip(transcribe: true)
+        try record(clip)
+        try store.finishClip(clip.attachmentID)
+        let staged = try store.stageFile(data: Data("staged".utf8), name: "s.jpg", contentType: "image/jpeg")
+
+        let capture = try store.commitImages(text: "Toronto Star, 2026-10-06",
+                                             youtubeURLs: ["https://youtu.be/aircAruvnKk"],
+                                             images: [(Data("p1".utf8), "Notes p1.jpg"), (Data("p2".utf8), "Notes p2.jpg")])
+        XCTAssertEqual(capture.files.map(\.name), ["Notes p1.jpg", "Notes p2.jpg"])
+        XCTAssertTrue(capture.files.allSatisfy(\.isImage))
+        XCTAssertEqual(capture.clips, [])
+        XCTAssertEqual(capture.links.map(\.url), ["https://www.youtube.com/watch?v=aircAruvnKk"])
+        XCTAssertEqual(try Data(contentsOf: store.fileURL(capture.files[1])), Data("p2".utf8))
+        XCTAssertEqual(try CaptureStore(root: root).load(capture.id), capture)
+        // The half-written text entry's clip and photo are still waiting.
+        let draft = try store.draft()
+        XCTAssertEqual(draft.clips.map(\.attachmentID), [clip.attachmentID])
+        XCTAssertEqual(draft.files, [staged])
+    }
+
+    func testNotebookSaveWithABadLinkLeavesNoFilesBehind() throws {
+        let before = Set((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("files").path)) ?? [])
+        XCTAssertThrowsError(try store.commitImages(text: "", youtubeURLs: ["https://example.com"],
+                                                    images: [(Data("p1".utf8), "Notes p1.jpg")]))
+        let after = Set((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("files").path)) ?? [])
+        XCTAssertEqual(after, before)
+        XCTAssertEqual(try store.list(), [])
+    }
+
     func testClipOnlyDraftSavesAsAnEntryWithNoText() throws {
         let clip = try store.beginClip(transcribe: false)
         try record(clip)

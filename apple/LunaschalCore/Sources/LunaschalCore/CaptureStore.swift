@@ -169,15 +169,48 @@ public final class CaptureStore {
                             location: (latitude: Double, longitude: Double)? = nil,
                             now: Date = Date()) throws -> Capture {
         let staged = try draft()
+        let capture = try commit(text: text, youtubeURLs: youtubeURLs, kind: kind, files: staged.files,
+                                 clips: staged.clips, location: location, now: now)
+        try updateDraft { $0 = CaptureDraft() }
+        return capture
+    }
+
+    /// A journal entry made of pictures that were never staged: the iPad
+    /// notebook's rendered pages. The composer's draft is neither read nor
+    /// cleared, so a half-written text entry waits where it was.
+    @discardableResult
+    public func commitImages(text: String, youtubeURLs: [String], images: [(data: Data, name: String)],
+                             location: (latitude: Double, longitude: Double)? = nil,
+                             now: Date = Date()) throws -> Capture {
+        var files: [CaptureFile] = []
+        do {
+            for image in images {
+                guard !image.data.isEmpty else { throw CaptureError.missingFile }
+                let file = CaptureFile(name: image.name, contentType: "image/jpeg", now: now)
+                let destination = try fileURL(file)
+                try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try image.data.write(to: destination, options: .atomic)
+                files.append(file)
+            }
+            return try commit(text: text, youtubeURLs: youtubeURLs, kind: .journal, files: files, clips: [],
+                              location: location, now: now)
+        } catch {
+            for file in files { try? fm.removeItem(at: fileURL(file)) }
+            throw error
+        }
+    }
+
+    private func commit(text: String, youtubeURLs: [String], kind: CaptureKind, files: [CaptureFile],
+                        clips: [CaptureClip], location: (latitude: Double, longitude: Double)?,
+                        now: Date) throws -> Capture {
         let links = kind == .food ? [] : try youtubeURLs.map(YouTubeLink.canonical)
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // With nothing written, links are the entry's words; a file or clip needs none.
         var capture = Capture(text: body.isEmpty ? links.joined(separator: "\n") : body, kind: kind, now: now,
-                              youtubeURLs: links, files: staged.files, clips: staged.clips)
+                              youtubeURLs: links, files: files, clips: clips)
         capture.latitude = location?.latitude
         capture.longitude = location?.longitude
         try save(capture)
-        try updateDraft { $0 = CaptureDraft() }
         return capture
     }
 

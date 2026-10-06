@@ -61,6 +61,9 @@ private struct CaptureTab: View {
 
     @ObservedObject var model: CaptureModel
     @State private var page = Page.entry
+    @State private var notebook: Notebook?
+    @State private var olderIssue: NewspaperIssue?
+    @State private var fetchingPaper = false
 
     var body: some View {
         // All three stay built and only the chosen one shows: building a page
@@ -87,7 +90,48 @@ private struct CaptureTab: View {
                 .pickerStyle(.segmented)
                 .fixedSize()
             }
+            // The notes canvas wants a Pencil and room, so it is the iPad's.
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { Task { await openNewspaper() } } label: {
+                        if fetchingPaper { ProgressView() } else { Label("Newspaper", systemImage: "newspaper") }
+                    }
+                    .disabled(fetchingPaper)
+                    .accessibilityIdentifier("capture-newspaper")
+                    Button { openNotes() } label: { Label("Notes", systemImage: "pencil.and.scribble") }
+                        .accessibilityIdentifier("capture-notes")
+                }
+            }
         }
+        .navigationDestination(item: $notebook) { NotebookEditor(owner: model, notebook: $0) }
+        .confirmationDialog("Today's paper isn't archived yet.", isPresented: Binding(get: { olderIssue != nil }, set: { if !$0 { olderIssue = nil } }),
+                            titleVisibility: .visible, presenting: olderIssue) { issue in
+            Button("Open \(issue.date)") { Task { await open(issue) } }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func openNotes() {
+        do { notebook = try model.notebooks.create() }
+        catch { model.message = error.localizedDescription }
+    }
+
+    /// Today's paper by the 4am day; the newest one is offered if today's isn't in.
+    private func openNewspaper() async {
+        fetchingPaper = true
+        defer { fetchingPaper = false }
+        switch NewspaperIssue.choose(await model.newspaperIssues()) {
+        case .today(let issue): await open(issue)
+        case .newest(let issue): olderIssue = issue
+        case .none: model.message = model.signedIn ? NotebookError.noIssue.localizedDescription
+            : "Sign in to your server to open the newspaper."
+        }
+    }
+
+    private func open(_ issue: NewspaperIssue) async {
+        fetchingPaper = true
+        defer { fetchingPaper = false }
+        if let opened = await model.openNewspaper(issue) { notebook = opened }
     }
 }
 

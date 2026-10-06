@@ -35,8 +35,8 @@ has been validated. Exact commits and CI results are recorded in the
 
 The iPhone tabs are Capture, Journal, Chat, Todo, and More. More holds Library
 and Settings; the workout log is Capture → Workout. Chat is the desktop's Chat
-tab, and Todo is the tasks card from the desktop's Lifestyle tab (see README.md). iPad also has Study and Draw, and hides the tab bar while a drawing
-or a Study annotation is open, so its toolbar doesn't overflow;
+tab, and Todo is the tasks card from the desktop's Lifestyle tab (see README.md). iPad also has Study and Draw, and hides the tab bar while a drawing,
+a notebook (Capture → Notes / Newspaper) or a Study annotation is open, so its toolbar doesn't overflow;
 native drawing creation/editing is iPad-only, and so are Paper previews, since they live under Study.
 Library is books-only and switches between two views. Library picks a provider
 (site or file type) and sorts by the site's latest chapter date. Folders lists
@@ -86,6 +86,7 @@ The Watch only depends on the paired phone for handoff, not direct Tailscale acc
 | Upload interrupted or response lost | Durable retry identities and server idempotency                                     | Foreground transfer bytes do not continue after process termination         |
 | Recording interrupted               | Play/export retained audio; explicitly keep it if playable                          | An unfinalized AAC container may be unplayable                              |
 | Drawing checkpoint fails            | Keep current/previous generations; restore previous saved version                   | Checkpoints are local and are not a server backup                           |
+| Notebook checkpoint or newspaper download fails | Previous checkpoint kept and restorable; a failed PDF download creates no notebook | Notebooks are local until Save files them as a journal entry |
 | Download fails or storage fills     | Pause/retry; verified range downloads resume; remove downloaded copies              | No automatic eviction; text and staged uploads are outside the media budget |
 | Concurrent Journal edits            | Review conflict; apply against latest revision or save text separately              | Do not discard a pending change unless it is no longer needed               |
 | Concurrent drawing edits            | Keep the queued original; create a new local copy and explicitly Save it to Paper   | Native ink never merges automatically; web ink is preview-only on Apple     |

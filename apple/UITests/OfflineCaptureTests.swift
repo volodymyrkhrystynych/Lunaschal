@@ -2,6 +2,17 @@ import XCTest
 import UIKit
 
 final class OfflineCaptureTests: XCTestCase {
+    /// How long to wait for the chrome (tabs, the More menu) after a launch or
+    /// a navigation. CI's simulators answer each query in seconds, so a 10 s
+    /// wait could give up after two looks; waits return as soon as they're met.
+    private let settle: TimeInterval = 30
+
+    /// `isHittable` on an element mid-transition (no frame yet) fails the test
+    /// outright with "Activation point invalid" rather than returning false.
+    private func reachable(_ element: XCUIElement) -> Bool {
+        element.exists && !element.frame.isEmpty && element.isHittable
+    }
+
     private func tab(_ app: XCUIApplication, _ name: String) -> XCUIElement {
         if UIDevice.current.userInterfaceIdiom == .phone {
             return app.tabBars.buttons[name]
@@ -10,9 +21,9 @@ final class OfflineCaptureTests: XCTestCase {
         // and each tab appears twice: firstMatch can be the copy that is never
         // hittable. Prefer the one that is, once it shows up.
         let matches = app.descendants(matching: .any).matching(identifier: name)
-        let deadline = Date().addingTimeInterval(10)
+        let deadline = Date().addingTimeInterval(settle)
         repeat {
-            if let visible = matches.allElementsBoundByIndex.first(where: { $0.isHittable }) { return visible }
+            if let visible = matches.allElementsBoundByIndex.first(where: reachable) { return visible }
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         } while Date() < deadline && matches.count > 0
         return matches.firstMatch
@@ -23,7 +34,7 @@ final class OfflineCaptureTests: XCTestCase {
         let item = tab(app, name)
         let hittable = NSPredicate(format: "exists == true AND hittable == true")
         guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: item)],
-                            timeout: 10) == .completed else {
+                            timeout: settle) == .completed else {
             XCTFail("Tab \(name) did not become tappable", file: file, line: line)
             return
         }
@@ -34,6 +45,22 @@ final class OfflineCaptureTests: XCTestCase {
             if app.navigationBars[name].waitForExistence(timeout: 5) { return }
         }
         XCTFail("Tab \(name) did not open", file: file, line: line)
+    }
+
+    // A form's Save, just after typing: on CI's slow simulator the tap can land
+    // before Save enables, or be swallowed, and the form stays open with the
+    // keyboard up. Wait for it to enable and retry until the form closes.
+    private func saveForm(_ app: XCUIApplication, _ title: String,
+                          file: StaticString = #filePath, line: UInt = #line) {
+        let bar = app.navigationBars[title]
+        let save = bar.buttons["Save"]
+        _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: save)],
+                           timeout: settle)
+        for _ in 0..<3 {
+            save.tap()
+            if bar.waitForNonExistence(timeout: 5) { return }
+        }
+        XCTFail("\(title) stayed open after Save", file: file, line: line)
     }
 
     // A tap while a list is still settling can leave the field unfocused, and
@@ -55,7 +82,7 @@ final class OfflineCaptureTests: XCTestCase {
         let more = tab(app, "More")
         let hittable = NSPredicate(format: "exists == true AND hittable == true")
         guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: more)],
-                            timeout: 10) == .completed else {
+                            timeout: settle) == .completed else {
             XCTFail("More did not become tappable", file: file, line: line)
             return
         }
@@ -64,13 +91,16 @@ final class OfflineCaptureTests: XCTestCase {
         // to be tappable, not merely present. As in selectTab, retry a tap that
         // the previous animation swallowed. An expectation can be waited on
         // only once, so each retry gets its own.
-        for _ in 0..<2 where !row.isHittable {
+        for _ in 0..<2 where !reachable(row) {
             more.tap()
             let back = app.navigationBars.buttons["More"]
             if back.waitForExistence(timeout: 2) { back.tap() }
             _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: row)], timeout: 3)
         }
-        XCTAssertTrue(row.isHittable, "No \(name) in More", file: file, line: line)
+        if !reachable(row) {
+            _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: row)], timeout: 5)
+        }
+        XCTAssertTrue(reachable(row), "No \(name) in More", file: file, line: line)
         // The row turns hittable while the pop back to the menu is still
         // animating, and a tap then is dropped (seen on CI's slower iPad
         // simulator). Retry until the screen opens, as selectTab does.
@@ -233,7 +263,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(save.isEnabled, "nothing to save without a title")
         focus(title)
         title.typeText(name)
-        save.tap()
+        saveForm(app, "New event")
         // Saved on the device and drawn on today's timeline at once.
         let event = app.buttons.matching(identifier: "calendar-event").matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
         XCTAssertTrue(event.waitForExistence(timeout: 5))
@@ -262,7 +292,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertEqual(field.value as? String, name, "the form opens on the event")
         focus(field)
         field.typeText(" checkup")
-        app.navigationBars["Edit event"].buttons["Save"].tap()
+        saveForm(app, "Edit event")
         let edited = app.buttons.matching(identifier: "calendar-event")
             .matching(NSPredicate(format: "label BEGINSWITH %@", name + " checkup")).firstMatch
         XCTAssertTrue(edited.waitForExistence(timeout: 5))
@@ -300,7 +330,7 @@ final class OfflineCaptureTests: XCTestCase {
                 box.tap()
                 XCTAssertTrue(box.isSelected)
             }
-            app.navigationBars["New event"].buttons["Save"].tap()
+            saveForm(app, "New event")
         }
         func event(_ name: String) -> XCUIElement {
             app.buttons.matching(identifier: "calendar-event").matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
@@ -368,7 +398,7 @@ final class OfflineCaptureTests: XCTestCase {
         let wake = app.switches["sleep-set-wake"]
         XCTAssertTrue(wake.waitForExistence(timeout: 5))
         if (wake.value as? String) != "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
-        app.navigationBars["Sleep"].buttons["Save"].tap()
+        saveForm(app, "Sleep")
         XCTAssertTrue(app.descendants(matching: .any)["sleep-band-morning"].waitForExistence(timeout: 5))
 
         // Leave the day as it was found: the simulator keeps what runs queue.
@@ -378,7 +408,7 @@ final class OfflineCaptureTests: XCTestCase {
         }
         app.buttons["calendar-sleep"].tap()
         if (wake.value as? String) == "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
-        app.navigationBars["Sleep"].buttons["Save"].tap()
+        saveForm(app, "Sleep")
     }
 
     func testWorkoutLogsSetsLikeTheDesktopWithoutAServer() {
@@ -498,6 +528,51 @@ final class OfflineCaptureTests: XCTestCase {
         app.launch()
         tab(app, "Draw").tap()
         XCTAssertTrue(app.staticTexts["Untitled drawing"].firstMatch.waitForExistence(timeout: 5))
+    }
+
+    func testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal() {
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        guard UIDevice.current.userInterfaceIdiom == .pad else {
+            XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+            XCTAssertFalse(notes.exists)
+            XCTAssertFalse(app.buttons["capture-newspaper"].exists)
+            return
+        }
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["capture-newspaper"].exists)
+        notes.tap()
+        XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
+        // Full window: no tab is left to tap.
+        let journalTabs = app.descendants(matching: .any).matching(identifier: "Journal").allElementsBoundByIndex
+        XCTAssertFalse(journalTabs.contains { $0.isHittable })
+
+        app.buttons["notebook-add-page"].tap()
+        XCTAssertEqual(app.buttons["notebook-page"].label, "2 / 2")
+        app.buttons["notebook-youtube"].tap()
+        let link = app.alerts.textFields["YouTube video URL"]
+        XCTAssertTrue(link.waitForExistence(timeout: 5))
+        link.typeText("https://youtu.be/M7lc1UVf-VE")
+        app.alerts.buttons["Add"].tap()
+        XCTAssertTrue(app.buttons["YouTube video added"].waitForExistence(timeout: 5))
+
+        // Back saves it; Draw lists it to continue.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tab(app, "Draw").tap()
+        let row = app.staticTexts.containing(NSPredicate(format: "label CONTAINS '2 pages'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Not in the journal yet"].firstMatch.exists)
+        row.tap()
+        XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["notebook-page"].label, "1 / 2")
+        app.buttons["notebook-save"].tap()
+        // Saving goes back to Draw, where it now reads as filed.
+        XCTAssertTrue(app.staticTexts["Saved to journal"].firstMatch.waitForExistence(timeout: 10)
+                      || app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Saved to journal'")).firstMatch.waitForExistence(timeout: 5))
+
+        tab(app, "Journal").tap()
+        XCTAssertTrue(app.staticTexts["https://www.youtube.com/watch?v=M7lc1UVf-VE"].firstMatch.waitForExistence(timeout: 10))
     }
 
     func testCaptureSurvivesTerminationWithoutAServer() {

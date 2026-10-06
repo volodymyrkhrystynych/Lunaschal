@@ -730,3 +730,38 @@ func writeMultipart(fields: [(String, String)], files: [MultipartFile]) throws -
     }
     return (url, boundary)
 }
+
+// MARK: Newspaper issues (the iPad notebook's newspaper pages)
+
+extension JournalAPI {
+    private struct IssueList: Decodable { let issues: [NewspaperIssue] }
+
+    /// Every archived issue, newest first.
+    public func newspaperIssues() async throws -> [NewspaperIssue] {
+        try JSONDecoder().decode(IssueList.self, from: await get("api/newspapers/issues", [:])).issues
+    }
+
+    /// Downloads one issue's PDF into `directory` and returns the file. The
+    /// PDF lives on the server's archive drive and is not part of mobile sync.
+    public func downloadIssuePDF(date: String, into directory: URL) async throws -> URL {
+        guard NewspaperIssue.isDate(date) else { throw NotebookError.invalidIssue }
+        var req = request("api/newspapers/issues/\(date)/pdf")
+        req.setValue("application/pdf", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 15 * 60
+        let (file, response) = try await session.download(for: req)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try check(Data(), response)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("\(ULID.make()).pdf")
+        try FileManager.default.moveItem(at: file, to: destination)
+        return destination
+    }
+
+    /// Tells the server the issue is being read, which moves its Journal card
+    /// the same way opening it in the web reader does.
+    public func markIssueOpened(date: String) async throws {
+        guard NewspaperIssue.isDate(date) else { throw NotebookError.invalidIssue }
+        let (data, response) = try await session.data(for: request("api/newspapers/issues/\(date)/opened", method: "POST"))
+        try check(data, response)
+    }
+}
