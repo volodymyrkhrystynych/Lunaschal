@@ -20,7 +20,7 @@ struct CaptureRoot: View {
         TabView {
             NavigationStack { CaptureTab(model: model) }
                 .tabItem { Label("Capture", systemImage: "square.and.pencil") }
-            NavigationStack { CaptureList(model: model) }
+            NavigationStack { JournalTab(model: model) }
                 .tabItem { Label("Journal", systemImage: "book.closed") }
             NavigationStack { ChatView(chat: chat, capture: model) }
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
@@ -396,6 +396,42 @@ struct CameraPicker: UIViewControllerRepresentable {
     }
 }
 
+/// The Journal tab: Sync on the left on both pages, and a switch on the right
+/// between the journal and the calendar.
+private struct JournalTab: View {
+    enum Page: String, CaseIterable, Identifiable {
+        case journal = "Journal", calendar = "Calendar"
+        var id: Self { self }
+    }
+
+    @ObservedObject var model: CaptureModel
+    @SceneStorage("journalTabPage") private var page = Page.journal
+
+    var body: some View {
+        Group {
+            switch page {
+            case .journal: CaptureList(model: model)
+            case .calendar: CalendarPage(model: model)
+            }
+        }
+        .onChange(of: page) { _, page in if page == .calendar { model.requestSync() } }
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                if model.syncing { ProgressView() }
+                else { Button("Sync") { model.requestSync(manual: true) }.disabled(!model.signedIn) }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Picker("Journal page", selection: $page) {
+                    ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .accessibilityIdentifier("journal-page")
+            }
+        }
+    }
+}
+
 private struct CaptureList: View {
     @ObservedObject var model: CaptureModel
     @State private var query = ""
@@ -460,10 +496,6 @@ private struct CaptureList: View {
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search saved journal")
         .onAppear { model.searchJournal(query) }
         .onChange(of: query) { _, value in model.searchJournal(value) }
-        .toolbar {
-            if model.syncing { ProgressView() }
-            else { Button("Sync") { model.requestSync(manual: true) }.disabled(!model.signedIn) }
-        }
     }
 }
 

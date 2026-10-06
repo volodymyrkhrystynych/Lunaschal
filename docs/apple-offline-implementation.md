@@ -643,6 +643,25 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
 - [ ] Preserve useful keyboard access, accessibility labels, Dynamic Type, and rotation.
 - [x] Capture a food log entry from the Capture draft (Save food entry); the server's
       `POST /api/food` now keeps the device's `capturedAt`. Browsing meals stays on the web.
+- [x] Read the calendar offline: `calendar_events` and `calendar_event_exceptions` are
+      read-only replica collections, synced as their own scope only when `/capabilities`
+      lists them; `CalendarExpansion` ports `backend/calendar_recurrence.py`. Journal's
+      toolbar has Sync on the left and a Journal/Calendar switch on the right. The Calendar
+      page is the web's phone day view (`CalendarTimeline` mirrors `calendarDayLayout.ts`);
+      creates, edits ("This and future" / "All events") and deletes (occurrence / this and
+      future / whole series) queue in `CalendarOutbox` and show at once through
+      `CalendarOverlay`. Ids are client ULIDs, including a split's new series (`newId` on
+      `PATCH /api/calendar/<id>/from/<date>`), so a replay never duplicates. The six
+      categories are checkboxes on the event's page, saved as soon as they're ticked
+      (`PATCH` with `categoryTags` alone), and on the New event form; Edit leaves them out
+      and holds Delete instead. A split now carries the categories into the new series. Overlapping events share their hours in lanes, with labels
+      placed clear of every line in the group. Dragging an event queues a `reschedule`
+      (one occurrence of a series becomes a move exception, as the web's drag does); a
+      toggle at the bottom left switches the drag between moving and changing the length.
+      Wake/sleep bands come from `GET /api/calendar/sleep/<date>` (derived on the server,
+      so fetched and cached per day rather than replicated); hand-set times queue as a
+      `PUT`. The per-event mic and zoom are still web-only. Passed in
+      simulator; not verified on device.
 - [ ] Review Calendar, Lifestyle, Food, Learning, and other existing views before
       claiming mobile feature parity; full desktop parity is not a requirement.
 

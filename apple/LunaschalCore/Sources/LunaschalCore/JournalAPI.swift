@@ -299,6 +299,22 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return try JSONDecoder().decode(OperationReply.self, from: data)
     }
 
+    /// The replica collections this server can sync.
+    public func syncCollections() async throws -> [String] {
+        struct Capabilities: Decodable { let collections: [String] }
+        let (data, response) = try await session.data(for: request("api/mobile/capabilities"))
+        try check(data, response)
+        return try JSONDecoder().decode(Capabilities.self, from: data).collections
+    }
+
+    /// A day's wake and sleep. Derived on the server from what was done that
+    /// day, so it's fetched rather than replicated.
+    public func sleep(day: String) async throws -> SleepDay {
+        let (data, response) = try await session.data(for: request("api/calendar/sleep/\(try Self.calendarPath(day))"))
+        try check(data, response)
+        return try JSONDecoder().decode(SleepDay.self, from: data)
+    }
+
     public func mediaCollections() async throws -> [String] {
         let (data, response) = try await session.data(for: request("api/mobile/capabilities"))
         try check(data, response)

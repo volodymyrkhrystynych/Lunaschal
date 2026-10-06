@@ -326,6 +326,37 @@ def test_end_series_validates(client):
 
 # --- splitting a series on edit ("this and future") ---
 
+def test_update_from_with_a_client_id_replays_without_a_second_split(client):
+    """The phone queues edits offline; a replay whose answer was lost must not
+    start a duplicate series (the edit also clears repeatUntil, so it would show)."""
+    id = create_ok(client, title='Work', date='2026-07-01', time='09:00', repeatFreq='daily')
+    new_id = '01JA0000000000000000000000'
+    body = json.dumps({'newId': new_id, 'time': '10:00', 'repeatFreq': 'daily', 'repeatUntil': None})
+    for _ in range(2):
+        resp = client.patch(f'/api/calendar/{id}/from/2026-07-15', data=body, content_type='application/json')
+        assert resp.status_code == 200 and resp.get_json() == {'id': new_id, 'split': True}
+    events = listing(client, '2026-07-01', '2026-07-31')
+    assert [e['date'] for e in events] == [f'2026-07-{d:02d}' for d in range(1, 32)]
+    assert {e['id'] for e in events if e['date'] >= '2026-07-15'} == {new_id}
+    assert client.patch(f'/api/calendar/{id}/from/2026-07-20', data=json.dumps({'newId': 'nope', 'time': '11:00'}),
+                        content_type='application/json').status_code == 400
+
+
+def test_update_from_carries_the_categories_into_the_new_series(client):
+    """A split used to leave the new half uncoloured and drop categories sent with it."""
+    id = create_ok(client, title='Gym', date='2026-07-01', time='07:00', repeatFreq='daily',
+                   categoryTags=['exercise'])
+    later = client.patch(f'/api/calendar/{id}/from/2026-07-10', data=json.dumps({'time': '08:00'}),
+                         content_type='application/json').get_json()['id']
+    client.patch(f'/api/calendar/{later}/from/2026-07-20',
+                 data=json.dumps({'time': '09:00', 'categoryTags': ['exercise', 'outside']}),
+                 content_type='application/json')
+    events = {e['date']: e for e in listing(client, '2026-07-01', '2026-07-31')}
+    assert json.loads(events['2026-07-05']['categoryTags']) == ['exercise']
+    assert json.loads(events['2026-07-15']['categoryTags']) == ['exercise']
+    assert json.loads(events['2026-07-25']['categoryTags']) == ['exercise', 'outside']
+
+
 def test_update_from_preserves_past_values(client):
     """Moving work hours must not retroactively claim the old days ran late."""
     id = create_ok(client, title='Work', date='2026-07-01', time='09:00',
