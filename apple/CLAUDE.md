@@ -29,7 +29,7 @@ xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   -parallel-testing-enabled NO -derivedDataPath apple/DerivedData CODE_SIGNING_ALLOWED=NO test
 
-# iPad-only UI tests (CI runs these two on an iPad simulator)
+# iPad-only UI tests (CI's ipad job runs these, plus the notebook test)
 #   add: -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M5)'
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingWorkspaceReopensWithoutAServer
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate
@@ -46,7 +46,7 @@ python3.13 apple/tools/check_archive.py apple/Lunaschal.xcarchive
 
 **XcodeGen collects sources by folder**, so a new `.swift` file in `App/`, `Watch/`, `AppTests/` or `UITests/` isn't compiled until you regenerate. A file that seems to be ignored usually just hasn't been picked up yet. `LunaschalCore` is an SPM package and picks up new files on its own.
 
-The CI equivalent is `.github/workflows/apple.yml`. Match it rather than inventing new flags.
+The CI equivalent is `.github/workflows/apple.yml`. Match it rather than inventing new flags. It runs on pull requests and by hand, never on a push to `main`, as parallel jobs: Linux core and tool tests, the device archive with the Watch build, three shards of the iPhone UI tests (`tools/ui_shards.py` splits them by name, and the first shard also runs the app unit tests), and the iPad tests. A failing simulator test gets one retry, and a test stuck for 5 minutes is stopped. The signed release (`apple-release.yml`) runs no tests; it builds whatever is at the tip of `main`.
 
 ## Layout and where code belongs
 
