@@ -21,8 +21,10 @@ jobs:
       - run: swift test --package-path apple/LunaschalCore
   ios:
     runs-on: macos-26
-    # Setup ~4 min, iPhone UI tests 6-16 min, iPad 5-8 min: 25 cut the iPad step off.
-    timeout-minutes: 40
+    # Setup and archives ~6 min, iPhone tests ~27 min, iPad ~7 min (Oct 2026).
+    # 25 cut the iPad step off; 40 then cancelled a run whose every step had
+    # passed, which the signed release reads as untested and skips.
+    timeout-minutes: 60
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
