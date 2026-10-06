@@ -5,6 +5,7 @@ import { todayISO } from '@/lib/lifestyle';
 import { TasksSection } from '../Tasks';
 import { ActivityHeatmap } from './ActivityHeatmap';
 import { CaloriesCard } from './CaloriesCard';
+import { HealthCard } from './HealthCard';
 import { BodyWeightCard, Progression } from './Progression';
 import { SelfieCard } from './SelfieCard';
 import { TrendsChart } from './TrendsChart';
@@ -110,6 +111,7 @@ export function Lifestyle() {
           <TasksSection />
           <div className="flex flex-col gap-4 min-w-0">
             <WorkoutLog />
+            <HealthCard />
             {!needsCalories && <CaloriesCard />}
             <WeatherCard />
             {!needsSelfie && <SelfieCard />}

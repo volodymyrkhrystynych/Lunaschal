@@ -1376,6 +1376,70 @@ def seed_lifestyle(db):
     _seed_weather(db)
 
 
+def seed_apple_health(db):
+    """What the iPhone app uploads from HealthKit (backend/apple_health/).
+
+    Nights are seeded for 3-6 days ago only: seed_lifestyle puts a manual
+    sleep_logs row on the last three days, and a manual row outranks the Watch,
+    so seeding the same nights would show nothing new. These older days are the
+    ones where the day view says "from Apple Watch".
+    """
+    import uuid
+    from datetime import datetime, timedelta
+
+    def hk_id() -> str:
+        return str(uuid.uuid4()).upper()
+
+    received = ts(0)
+    rows = []
+    for days_ago in range(3, 7):
+        day = datetime.fromisoformat(today_key(days_ago))
+        # Asleep from 23:40 the night before to 07:15, with a short wake.
+        start = (day - timedelta(minutes=20)).timestamp()
+        mid = (day + timedelta(hours=3)).timestamp()
+        end = (day + timedelta(hours=7, minutes=15)).timestamp()
+        rows += [
+            (hk_id(), 'HKCategoryTypeIdentifierSleepAnalysis', 'category', start, mid, 3, None),
+            (hk_id(), 'HKCategoryTypeIdentifierSleepAnalysis', 'category', mid, mid + 600, 2, None),
+            (hk_id(), 'HKCategoryTypeIdentifierSleepAnalysis', 'category', mid + 600, end, 4, None),
+        ]
+    for hours_ago, bpm in ((1, 64), (3, 71), (6, 88), (10, 58)):
+        moment = ts(0, hours_ago)
+        rows.append((hk_id(), 'HKQuantityTypeIdentifierHeartRate', 'quantity', moment, moment, bpm, 'count/min'))
+    db.executemany(
+        'INSERT INTO health_samples (id, type, kind, start_ts, end_ts, value, unit, source_name,'
+        ' source_bundle, device, metadata, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        [(*r, 'Apple Watch', 'com.apple.health.demo', 'Watch7,9', None, received) for r in rows],
+    )
+
+    for days_ago, minutes, steps, kcal in [
+        (0, 18, 4200, 210), (1, 46, 9800, 520), (2, 31, 7600, 380), (3, 5, 2100, 90),
+        (4, 62, 12400, 640), (5, 24, 6900, 300), (6, 38, 8800, 450),
+    ]:
+        for type_, value, unit in (
+            ('HKQuantityTypeIdentifierAppleExerciseTime', minutes, 'min'),
+            ('HKQuantityTypeIdentifierStepCount', steps, 'count'),
+            ('HKQuantityTypeIdentifierActiveEnergyBurned', kcal, 'kcal'),
+        ):
+            db.execute(
+                'INSERT INTO health_daily (date, type, value, unit, updated_at) VALUES (?,?,?,?,?)',
+                (today_key(days_ago), type_, value, unit, received),
+            )
+
+    for days_ago, activity, name, minutes, kcal, meters in [
+        (1, 52, 'walking', 42, 190, 3400),
+        (4, 37, 'running', 31, 340, 5200),
+    ]:
+        start = ts(days_ago, 5)
+        db.execute(
+            'INSERT INTO health_workouts (id, activity_type, activity_name, start_ts, end_ts, duration_s,'
+            ' energy_kcal, distance_m, source_name, source_bundle, metadata, received_at)'
+            ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+            (hk_id(), activity, name, start, start + minutes * 60, minutes * 60, kcal, meters,
+             'Apple Watch', 'com.apple.health.demo', '{"HKIndoorWorkout":false}', received),
+        )
+
+
 def _seed_weather(db):
     """The Lifestyle weather strip: a day's sunrise/sunset, its resolved
     location, and the hourly series drawn across it."""
@@ -2117,6 +2181,7 @@ def main() -> None:
     seed_ideas(db, page_id)
     seed_meetings(db)
     seed_lifestyle(db)
+    seed_apple_health(db)
     seed_piano(db)
     seed_practice(db)
     seed_notes(db)

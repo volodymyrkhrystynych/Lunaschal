@@ -257,6 +257,67 @@ CREATE TABLE IF NOT EXISTS sleep_logs (
     updated_at INTEGER NOT NULL
 );
 
+-- Apple Health, copied up by the iPhone app (backend/apple_health/). HealthKit is the
+-- source of truth and these are a mirror of it: every row is keyed by the
+-- HealthKit object's own UUID, so re-sending a batch is an upsert and a deletion
+-- in Health arrives as a deleted UUID. Times are unix seconds as REAL --
+-- heart-rate samples are sub-second, and unlike the rest of the schema these
+-- are read raw for analysis rather than through row_to_dict's ISO conversion,
+-- which is why the columns are *_ts and not *_at.
+--
+-- `type` is the HealthKit identifier verbatim (HKQuantityTypeIdentifierStepCount,
+-- HKCategoryTypeIdentifierSleepAnalysis, ...). A quantity's `value` is in `unit`;
+-- a category's `value` is HealthKit's raw enum (sleep: 0 in bed, 1 asleep, 2
+-- awake, 3 core, 4 deep, 5 REM) and `unit` is NULL.
+CREATE TABLE IF NOT EXISTS health_samples (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('quantity', 'category')),
+    start_ts REAL NOT NULL,
+    end_ts REAL NOT NULL,
+    value REAL,
+    unit TEXT,
+    source_name TEXT,
+    source_bundle TEXT,
+    device TEXT,
+    metadata TEXT,
+    received_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_samples_type_start ON health_samples(type, start_ts);
+
+-- Workouts recorded on the Watch (or anything else that writes HKWorkout).
+-- Kept apart from workout_sessions on purpose: those are what the user logged
+-- and rated by hand, and the heatmap's five hues are full.
+CREATE TABLE IF NOT EXISTS health_workouts (
+    id TEXT PRIMARY KEY,
+    activity_type INTEGER NOT NULL,
+    activity_name TEXT NOT NULL,
+    start_ts REAL NOT NULL,
+    end_ts REAL NOT NULL,
+    duration_s REAL NOT NULL,
+    energy_kcal REAL,
+    distance_m REAL,
+    source_name TEXT,
+    source_bundle TEXT,
+    metadata TEXT,
+    received_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_workouts_start ON health_workouts(start_ts);
+
+-- Per-day totals of cumulative quantities (steps, exercise minutes, active
+-- energy...), computed *on the phone* by HealthKit's statistics query. Summing
+-- health_samples instead double-counts: the iPhone and the Watch both record
+-- the same walk, and only HealthKit knows how to merge them. `date` is the 4am
+-- day key (backend/day_boundary.py), the same day the rest of the app uses.
+CREATE TABLE IF NOT EXISTS health_daily (
+    date TEXT NOT NULL,
+    type TEXT NOT NULL,
+    value REAL NOT NULL,
+    unit TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (date, type)
+);
+
 CREATE TABLE IF NOT EXISTS mcp_servers (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,

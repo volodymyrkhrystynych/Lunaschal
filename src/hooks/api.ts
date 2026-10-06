@@ -2556,6 +2556,35 @@ export interface HeatmapDayResponse {
   sessions: WorkoutSession[];
 }
 
+/** A workout HealthKit recorded (usually on the Watch). Times are unix
+ *  seconds — the Apple Health routes return numbers, not ISO strings. */
+export interface HealthWorkout {
+  id: string;
+  activityType: number;
+  activityName: string;
+  start: number;
+  end: number;
+  durationSeconds: number;
+  energyKcal: number | null;
+  distanceMeters: number | null;
+  source: string | null;
+}
+
+/** One 4am day of Apple Health totals; null where nothing was recorded. */
+export interface HealthDay {
+  date: string;
+  exerciseMinutes: number | null;
+  steps: number | null;
+  activeEnergyKcal: number | null;
+}
+
+export interface HealthActivity {
+  days: HealthDay[];
+  workouts: HealthWorkout[];
+  /** Unix seconds of the last upload from the phone; null if never synced. */
+  lastSyncedAt: number | null;
+}
+
 /** One Monday-start week of the momentum chart. Every week in the window is
  *  sent, zeros included — a skipped quiet week would draw as a flat trend. */
 export interface TrendWeek {
@@ -5038,6 +5067,8 @@ export const api = {
       get<{ weeks: TrendWeek[] }>(
         `/api/lifestyle/trends${weeks ? `?weeks=${weeks}` : ''}`
       ),
+    health: (days = 28) =>
+      get<HealthActivity>(`/api/apple-health/activity?days=${days}`),
     exercises: {
       list: () => get<ExerciseSummary[]>('/api/lifestyle/exercises'),
       progression: (name: string) =>
