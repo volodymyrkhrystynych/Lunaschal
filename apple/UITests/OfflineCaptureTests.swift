@@ -47,6 +47,22 @@ final class OfflineCaptureTests: XCTestCase {
         XCTFail("Tab \(name) did not open", file: file, line: line)
     }
 
+    // A form's Save, just after typing: on CI's slow simulator the tap can land
+    // before Save enables, or be swallowed, and the form stays open with the
+    // keyboard up. Wait for it to enable and retry until the form closes.
+    private func saveForm(_ app: XCUIApplication, _ title: String,
+                          file: StaticString = #filePath, line: UInt = #line) {
+        let bar = app.navigationBars[title]
+        let save = bar.buttons["Save"]
+        _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: save)],
+                           timeout: settle)
+        for _ in 0..<3 {
+            save.tap()
+            if bar.waitForNonExistence(timeout: 5) { return }
+        }
+        XCTFail("\(title) stayed open after Save", file: file, line: line)
+    }
+
     // A tap while a list is still settling can leave the field unfocused, and
     // typeText then fails outright. Retry the tap until the keyboard is there.
     private func focus(_ field: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
@@ -247,7 +263,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(save.isEnabled, "nothing to save without a title")
         focus(title)
         title.typeText(name)
-        save.tap()
+        saveForm(app, "New event")
         // Saved on the device and drawn on today's timeline at once.
         let event = app.buttons.matching(identifier: "calendar-event").matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
         XCTAssertTrue(event.waitForExistence(timeout: 5))
@@ -276,7 +292,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertEqual(field.value as? String, name, "the form opens on the event")
         focus(field)
         field.typeText(" checkup")
-        app.navigationBars["Edit event"].buttons["Save"].tap()
+        saveForm(app, "Edit event")
         let edited = app.buttons.matching(identifier: "calendar-event")
             .matching(NSPredicate(format: "label BEGINSWITH %@", name + " checkup")).firstMatch
         XCTAssertTrue(edited.waitForExistence(timeout: 5))
@@ -314,7 +330,7 @@ final class OfflineCaptureTests: XCTestCase {
                 box.tap()
                 XCTAssertTrue(box.isSelected)
             }
-            app.navigationBars["New event"].buttons["Save"].tap()
+            saveForm(app, "New event")
         }
         func event(_ name: String) -> XCUIElement {
             app.buttons.matching(identifier: "calendar-event").matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
@@ -382,7 +398,7 @@ final class OfflineCaptureTests: XCTestCase {
         let wake = app.switches["sleep-set-wake"]
         XCTAssertTrue(wake.waitForExistence(timeout: 5))
         if (wake.value as? String) != "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
-        app.navigationBars["Sleep"].buttons["Save"].tap()
+        saveForm(app, "Sleep")
         XCTAssertTrue(app.descendants(matching: .any)["sleep-band-morning"].waitForExistence(timeout: 5))
 
         // Leave the day as it was found: the simulator keeps what runs queue.
@@ -392,7 +408,7 @@ final class OfflineCaptureTests: XCTestCase {
         }
         app.buttons["calendar-sleep"].tap()
         if (wake.value as? String) == "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
-        app.navigationBars["Sleep"].buttons["Save"].tap()
+        saveForm(app, "Sleep")
     }
 
     func testWorkoutLogsSetsLikeTheDesktopWithoutAServer() {
