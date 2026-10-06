@@ -31,6 +31,24 @@ final class NotebookTests: XCTestCase {
         XCTAssertEqual(Set(revisions), [third.checkpoint!, second.checkpoint!])
     }
 
+    func testLockedLayersTravelWithTheirPages() throws {
+        let root = try directory(), store = try NotebookStore(root: root)
+        let notebook = try store.create()
+        let first = try store.checkpoint(notebook.id, pages: [Data([1]), Data([2]), Data([3])],
+                                         locked: [nil, Data([7])], marked: [1], preview: Data([9]))
+        XCTAssertEqual(try NotebookStore(root: root).lockedLayers(first), [nil, Data([7]), nil])
+        // Unlocking writes the next checkpoint without the layer; the old one keeps it.
+        let second = try store.checkpoint(notebook.id, pages: [Data([1]), Data([8]), Data([3])],
+                                          marked: [1], preview: Data([9]))
+        XCTAssertEqual(try store.lockedLayers(second), [nil, nil, nil])
+        XCTAssertEqual(try store.lockedLayers(store.restorePrevious(notebook.id)), [nil, Data([7]), nil])
+        XCTAssertThrowsError(try store.checkpoint(notebook.id, pages: [Data([1])], locked: [Data()],
+                                                  marked: [], preview: Data([9])))
+        XCTAssertThrowsError(try store.checkpoint(notebook.id, pages: [Data([1])], locked: [nil, Data([1])],
+                                                  marked: [], preview: Data([9])))
+        XCTAssertEqual(try store.lockedLayers(NotebookStore(root: root).notebook(notebook.id)), [nil, Data([7]), nil])
+    }
+
     func testFailedCheckpointKeepsThePreviousOne() throws {
         let store = try NotebookStore(root: directory())
         let notebook = try store.create()

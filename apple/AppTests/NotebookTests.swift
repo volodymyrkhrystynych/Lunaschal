@@ -60,6 +60,26 @@ final class NotebookCropTests: XCTestCase {
         XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: landscape, scale: 2).width, 2752)
     }
 
+    func testPasteChecksTheCutHalfReallyIsLunaschal() throws {
+        let screenPixels = CGSize(width: 2752, height: 2064)
+        let left = CGRect(x: 0, y: 0, width: 1376, height: 2064), right = CGRect(x: 1376, y: 0, width: 1376, height: 2064)
+        // Taken with the reader on the left and Lunaschal on the right.
+        let screenshot = try XCTUnwrap(picture(screenPixels) { drawApp($0, left, lines: true); drawApp($0, right, lines: false) })
+        let ours = try XCTUnwrap(picture(CGSize(width: 172, height: 258)) { drawApp($0, CGRect(x: 0, y: 0, width: 172, height: 258), lines: false) })
+        let onRight = CGRect(x: 688, y: 0, width: 688, height: 1032), onLeft = CGRect(x: 0, y: 0, width: 688, height: 1032)
+
+        XCTAssertTrue(NotebookCrop.showsWindow(screenshot, snapshot: ours, screen: landscape, window: onRight))
+        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: onRight, scale: 2, snapshot: ours).width, 1376)
+        // Lunaschal has since moved to the left: the old screenshot's left half
+        // is the reader, so nothing is cut.
+        XCTAssertFalse(NotebookCrop.showsWindow(screenshot, snapshot: ours, screen: landscape, window: onLeft))
+        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: onLeft, scale: 2, snapshot: ours).width, 2752)
+        // Two blank halves can't be told apart: paste whole rather than guess.
+        let blank = try XCTUnwrap(solid(.white, screenPixels))
+        let blankOurs = try XCTUnwrap(solid(.white, CGSize(width: 172, height: 258)))
+        XCTAssertFalse(NotebookCrop.showsWindow(blank, snapshot: blankOurs, screen: landscape, window: onRight))
+    }
+
     func testCropKeepsTheWholeImageWhenTheShapeDisagrees() throws {
         let image = try XCTUnwrap(solid(.red, CGSize(width: 750, height: 1000)))
         let cropped = NotebookCrop.crop(image, screen: landscape, window: CGRect(x: 688, y: 0, width: 688, height: 1032))
@@ -67,6 +87,31 @@ final class NotebookCropTests: XCTestCase {
         let wide = try XCTUnwrap(solid(.red, CGSize(width: 1376, height: 1032)))
         XCTAssertEqual(NotebookCrop.crop(wide, screen: landscape, window: CGRect(x: 688, y: 0, width: 688, height: 1032)).width, 688)
     }
+}
+
+/// A stand-in app, drawn into `rect` of a picture: a light page with dark
+/// bars across it (`lines`), or our notebook (a top bar and a blank page).
+private func drawApp(_ context: UIGraphicsImageRendererContext, _ rect: CGRect, lines: Bool) {
+    UIColor.white.setFill()
+    context.fill(rect)
+    UIColor.darkGray.setFill()
+    if lines {
+        var y = rect.minY + rect.height * 0.08
+        while y < rect.maxY - 20 {
+            context.fill(CGRect(x: rect.minX + rect.width * 0.08, y: y, width: rect.width * 0.8, height: rect.height * 0.02))
+            y += rect.height * 0.06
+        }
+    } else {
+        context.fill(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height * 0.08))
+        context.fill(CGRect(x: rect.minX + rect.width * 0.1, y: rect.maxY - rect.height * 0.1,
+                            width: rect.width * 0.8, height: rect.height * 0.06))
+    }
+}
+
+func picture(_ size: CGSize, draw: (UIGraphicsImageRendererContext) -> Void) -> CGImage? {
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    return UIGraphicsImageRenderer(size: size, format: format).image(actions: draw).cgImage
 }
 
 func solid(_ color: UIColor, _ size: CGSize) -> CGImage? {
@@ -197,6 +242,82 @@ final class NotebookEditorTests: XCTestCase {
         let cover = try XCTUnwrap(UIImage(data: files[0].data)?.cgImage)
         XCTAssertLessThan(pixel(cover, x: cover.width / 2, y: cover.height - 20).r, 60)
         XCTAssertGreaterThan(pixel(cover, x: cover.width / 2, y: cover.height / 2).r, 200)
+    }
+
+    func testLockedPicturesLeaveTheCanvasButStayOnThePage() async throws {
+        let store = try store()
+        let notebook = try store.create()
+        let model = NotebookEditorModel(store: store, notebook: notebook)
+        XCTAssertFalse(model.currentHasPictures)
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 1000, height: 300))))
+        XCTAssertTrue(model.currentHasPictures)
+        let frame = model.pages[0].contentsRenderFrame
+
+        await model.lockPictures()
+        XCTAssertTrue(model.currentIsLocked)
+        XCTAssertFalse(model.currentHasPictures)
+        XCTAssertTrue(NotebookPage.isBlank(model.pages[0]), "nothing left on the canvas to drag")
+        XCTAssertEqual(model.lockedLayer(0)?.contentsRenderFrame, frame)
+        // Still drawn, and still filed.
+        let files = await model.renderForSave()
+        XCTAssertEqual(files.count, 1)
+        let image = try XCTUnwrap(UIImage(data: files[0].data)?.cgImage)
+        XCTAssertGreaterThan(pixel(image, x: image.width / 2, y: 80).r, 200)
+        // A new picture goes below the locked one, and can be locked with it.
+        model.insertScreenshot(try XCTUnwrap(solid(.blue, CGSize(width: 1000, height: 300))))
+        XCTAssertGreaterThan(model.pages[0].contentsRenderFrame.minY, frame.maxY)
+        await model.lockPictures()
+        XCTAssertGreaterThan(try XCTUnwrap(model.lockedLayer(0)).contentsRenderFrame.maxY, frame.maxY + 300)
+
+        // Survives a reopen.
+        await model.checkpoint()
+        let reopened = NotebookEditorModel(store: store, notebook: try store.notebook(notebook.id))
+        XCTAssertTrue(reopened.currentIsLocked)
+        XCTAssertTrue(NotebookPage.isBlank(reopened.pages[0]))
+
+        await reopened.unlockPictures()
+        XCTAssertFalse(reopened.currentIsLocked)
+        XCTAssertTrue(reopened.currentHasPictures)
+        XCTAssertFalse(NotebookPage.isBlank(reopened.pages[0]))
+        await reopened.checkpoint()
+        XCTAssertEqual(try store.lockedLayers(store.notebook(notebook.id)), [nil])
+    }
+
+    func testLockAndUnlockCanBeRepeatedWithoutLosingAnything() async throws {
+        let store = try store()
+        let notebook = try store.create()
+        var model = NotebookEditorModel(store: store, notebook: notebook)
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 1000, height: 300))))
+        let frame = model.pages[0].contentsRenderFrame
+        for _ in 0..<3 {
+            await model.lockPictures()
+            XCTAssertTrue(model.currentIsLocked)
+            await model.checkpoint()
+            model = NotebookEditorModel(store: store, notebook: try store.notebook(notebook.id))
+            await model.unlockPictures()
+            XCTAssertFalse(model.currentIsLocked)
+            XCTAssertEqual(model.pages[0].contentsRenderFrame, frame)
+            await model.checkpoint()
+            model = NotebookEditorModel(store: store, notebook: try store.notebook(notebook.id))
+            XCTAssertEqual(model.pages[0].contentsRenderFrame, frame, "the pictures survive a reload")
+        }
+    }
+
+    func testLockingKeepsInkAndLocksPerPage() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 600, height: 300))))
+        model.addPage()
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 600, height: 300))))
+        model.go(to: 0)
+        await model.lockPictures()
+        XCTAssertTrue(model.currentIsLocked)
+        model.go(to: 1)
+        XCTAssertFalse(model.currentIsLocked, "only the page it was locked on")
+        XCTAssertTrue(model.currentHasPictures)
+        model.deleteCurrentPage()
+        XCTAssertEqual(model.locked.count, 1)
+        XCTAssertTrue(model.currentIsLocked)
     }
 
     func testInboxScreenshotsArePlacedWhenAnEditorOpens() throws {

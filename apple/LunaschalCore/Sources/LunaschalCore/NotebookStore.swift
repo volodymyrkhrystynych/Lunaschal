@@ -128,22 +128,36 @@ public final class NotebookStore {
         return try (0..<notebook.pageCount).map { try Data(contentsOf: folder.appendingPathComponent("page-\($0).markup")) }
     }
 
+    /// Each page's locked layer (pictures pinned under the ink), nil where a
+    /// page has none. Same length as `pages`; empty before the first checkpoint.
+    public func lockedLayers(_ notebook: Notebook) throws -> [Data?] {
+        guard let checkpoint = notebook.checkpoint else { return [] }
+        let folder = try checkpointDirectory(notebook.id, checkpoint)
+        return (0..<notebook.pageCount).map { try? Data(contentsOf: folder.appendingPathComponent("page-\($0).locked")) }
+    }
+
     public func previewURL(_ notebook: Notebook) throws -> URL? {
         guard let checkpoint = notebook.checkpoint else { return nil }
         return try checkpointDirectory(notebook.id, checkpoint).appendingPathComponent("preview.png")
     }
 
     @discardableResult
-    public func checkpoint(_ id: String, pages: [Data], marked: Set<Int>, preview: Data) throws -> Notebook {
+    public func checkpoint(_ id: String, pages: [Data], locked: [Data?] = [], marked: Set<Int>,
+                           preview: Data) throws -> Notebook {
         var notebook = try notebook(id)
         guard !pages.isEmpty, !preview.isEmpty, !pages.contains(where: \.isEmpty),
-              pages.count >= notebook.pdfPageCount else { throw DrawingError.incompleteCheckpoint }
+              pages.count >= notebook.pdfPageCount, locked.count <= pages.count,
+              !locked.contains(where: { $0?.isEmpty == true }) else { throw DrawingError.incompleteCheckpoint }
         let previous = notebook.checkpoint
         let revision = ULID.make()
         let folder = try checkpointDirectory(id, revision)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         for (index, page) in pages.enumerated() {
             try page.write(to: folder.appendingPathComponent("page-\(index).markup"), options: .atomic)
+        }
+        for (index, layer) in locked.enumerated() {
+            guard let layer else { continue }
+            try layer.write(to: folder.appendingPathComponent("page-\(index).locked"), options: .atomic)
         }
         try preview.write(to: folder.appendingPathComponent("preview.png"), options: .atomic)
         notebook.checkpoint = revision

@@ -39,12 +39,19 @@ what each device can currently do and which work remains device-only.
   continue. **Save** files one journal entry: each page as a JPEG (a newspaper
   files its cover plus the pages written on), plus the notebook's one YouTube link.
   The text composer's draft is never touched.
+  **Lock pictures on this page** (camera menu) pins a page's pictures under the
+  ink so they can be written over but not selected or dragged; a lock badge
+  shows beside the page number, and Unlock makes them movable again. PaperKit
+  has no per-item lock, so the pictures move to a layer drawn beneath the canvas
+  (`page-N.locked` beside the page's markup in each checkpoint).
   **Screenshots of the other app in Split View**: iPadOS lets no app capture
   another app's pixels, so the screenshot is the system's and Lunaschal cuts its
   own window out of it (the larger remaining strip with Stage Manager). With no
   setup: take a screenshot (Pencil corner swipe, or top + volume), choose **Copy
   and Delete**, then **Paste image**. Paste crops only an image exactly the
-  screen's pixel size, so a copied photo goes in whole. For one tap, a shortcut
+  screen's pixel size, and only when the part it would cut matches a snapshot of
+  Lunaschal's window, so a copied photo, or an older screenshot taken with the
+  apps the other way round, goes in whole. For one tap, a shortcut
   *Take Screenshot → Add Screenshot to Lunaschal Notes* run from AssistiveTouch
   or a Full Keyboard Access command does the same in the app's process (Back Tap
   is iPhone-only); with no notebook open, its screenshot waits for the next one.

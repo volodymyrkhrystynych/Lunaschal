@@ -44,8 +44,68 @@ enum NotebookCrop {
     }
 
     /// For Paste: the other app's part of a screenshot, anything else whole.
-    static func cropIfScreenshot(_ image: CGImage, screen: CGRect, window: CGRect, scale: CGFloat) -> CGImage {
-        isScreenshot(image, screen: screen, scale: scale) ? crop(image, screen: screen, window: window) : image
+    /// With a snapshot of our window, also check the part being thrown away
+    /// really is Lunaschal: an older screenshot, taken with the apps the other
+    /// way round, has the right size and the wrong half.
+    static func cropIfScreenshot(_ image: CGImage, screen: CGRect, window: CGRect, scale: CGFloat,
+                                 snapshot: CGImage? = nil) -> CGImage {
+        guard isScreenshot(image, screen: screen, scale: scale) else { return image }
+        if let snapshot, !showsWindow(image, snapshot: snapshot, screen: screen, window: window) { return image }
+        return crop(image, screen: screen, window: window)
+    }
+
+    /// Whether `screenshot` shows our window where it is now. Our snapshot is
+    /// compared with that part of the screenshot and with the same-sized part
+    /// on the far side; ours has to be clearly the closer of the two. When the
+    /// two can't be told apart (two blank pages) the answer is no, and the
+    /// paste goes in whole: a whole screenshot is easier to fix than a wrong half.
+    static func showsWindow(_ screenshot: CGImage, snapshot: CGImage, screen: CGRect, window: CGRect) -> Bool {
+        let ours = window.intersection(screen)
+        guard !ours.isNull, ours.width > 0, ours.height > 0 else { return false }
+        let imageSize = CGSize(width: screenshot.width, height: screenshot.height)
+        // Side by side mirrors left/right; stacked mirrors top/bottom.
+        let mirrored = ours.height >= screen.height - 1
+            ? CGRect(x: screen.minX + screen.maxX - ours.maxX, y: ours.minY, width: ours.width, height: ours.height)
+            : CGRect(x: ours.minX, y: screen.minY + screen.maxY - ours.maxY, width: ours.width, height: ours.height)
+        let width = 48, height = max(8, Int((48 * ours.height / ours.width).rounded()))
+        guard let reference = grayscale(snapshot, crop: nil, width: width, height: height),
+              let here = grayscale(screenshot, crop: pixelRect(ours, screen: screen, imageSize: imageSize),
+                                   width: width, height: height) else { return false }
+        let near = difference(reference, here, width: width)
+        guard near < 0.25 else { return false }
+        if mirrored.intersection(ours).width > ours.width * 0.5 { return near < 0.06 }
+        guard let there = grayscale(screenshot, crop: pixelRect(mirrored, screen: screen, imageSize: imageSize),
+                                    width: width, height: height) else { return false }
+        return near < 0.6 * difference(reference, there, width: width)
+    }
+
+    /// `image` (or a rect of it, in pixels) as a small grey thumbnail, 0...1.
+    static func grayscale(_ image: CGImage, crop: CGRect?, width: Int, height: Int) -> [Float]? {
+        let source = crop.flatMap { image.cropping(to: $0) } ?? image
+        var pixels = [UInt8](repeating: 0, count: width * height)
+        guard let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+        context.interpolationQuality = .medium
+        context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return pixels.map { Float($0) / 255 }
+    }
+
+    /// Mean difference in brightness and in edges. Edges are what tell a blank
+    /// notebook page from a white web page full of text.
+    static func difference(_ a: [Float], _ b: [Float], width: Int) -> Float {
+        guard a.count == b.count, !a.isEmpty else { return 1 }
+        var total: Float = 0
+        for index in a.indices {
+            total += abs(a[index] - b[index])
+            if index % width + 1 < width {
+                total += abs((a[index + 1] - a[index]) - (b[index + 1] - b[index]))
+            }
+            if index + width < a.count {
+                total += abs((a[index + width] - a[index]) - (b[index + width] - b[index]))
+            }
+        }
+        return total / Float(a.count)
     }
 
     /// The other app's part of `image`, or the whole image when that can't be
@@ -76,6 +136,18 @@ final class NotebookSession {
               let window = scene.keyWindow ?? scene.windows.first else { return nil }
         let space = scene.screen.coordinateSpace
         return (scene.screen.bounds, window.convert(window.bounds, to: space), scene.screen.scale)
+    }
+
+    /// Our window as it looks now, small: enough to recognise it in a screenshot.
+    func snapshot() -> CGImage? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first,
+              let window = scene.keyWindow ?? scene.windows.first, window.bounds.width > 0 else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 0.25
+        return UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
+        }.cgImage
     }
 
     /// Returns where the image went, for the Shortcut's dialog.
