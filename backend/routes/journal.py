@@ -20,7 +20,7 @@ from backend.ai.journal import (
 )
 from backend.ai import jobs
 from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
-from backend.journal import archive, storage, voice_drafts, youtube_import
+from backend.journal import archive, playable, storage, voice_drafts, youtube_import
 from backend.study import youtube
 from backend.tags import tags_json
 
@@ -1408,7 +1408,7 @@ def delete_attachment(attachment_id):
 @bp.get('/attachments/<attachment_id>/file')
 def get_attachment_file(attachment_id):
     row = get_db().execute(
-        'SELECT path, mime, name FROM journal_attachments WHERE id=?',
+        'SELECT path, mime, name, kind FROM journal_attachments WHERE id=?',
         (attachment_id,),
     ).fetchone()
     if not row:
@@ -1416,6 +1416,14 @@ def get_attachment_file(attachment_id):
     path = _resolve_attachment_path(row['path'])
     if path is None or not path.is_file():
         return jsonify({'error': 'Not found'}), 404
+    # The iPhone app asks for a clip it can play: AVFoundation cannot open the
+    # WebM a desktop recording is (backend/journal/playable.py).
+    if request.args.get('playable') == '1' and playable.needs_copy(path, row['kind']):
+        try:
+            copy = playable.aac_copy(path)
+        except playable.PlayableUnavailable as e:
+            return jsonify({'error': str(e)}), 415
+        return send_file(copy, mimetype='audio/mp4', conditional=True)
     # conditional=True so <audio> range requests work — seeking in a long voice
     # memo otherwise re-downloads the whole file on every scrub.
     return send_file(path, mimetype=row['mime'] or None, conditional=True)

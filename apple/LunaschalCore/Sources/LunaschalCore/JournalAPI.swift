@@ -299,6 +299,22 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return try JSONDecoder().decode(OperationReply.self, from: data)
     }
 
+    /// The replica collections this server can sync.
+    public func syncCollections() async throws -> [String] {
+        struct Capabilities: Decodable { let collections: [String] }
+        let (data, response) = try await session.data(for: request("api/mobile/capabilities"))
+        try check(data, response)
+        return try JSONDecoder().decode(Capabilities.self, from: data).collections
+    }
+
+    /// A day's wake and sleep. Derived on the server from what was done that
+    /// day, so it's fetched rather than replicated.
+    public func sleep(day: String) async throws -> SleepDay {
+        let (data, response) = try await session.data(for: request("api/calendar/sleep/\(try Self.calendarPath(day))"))
+        try check(data, response)
+        return try JSONDecoder().decode(SleepDay.self, from: data)
+    }
+
     public func mediaCollections() async throws -> [String] {
         let (data, response) = try await session.data(for: request("api/mobile/capabilities"))
         try check(data, response)
@@ -349,6 +365,35 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return try Data(contentsOf: file)
     }
 
+    /// Where a journal attachment's file is served from, for a player that
+    /// streams it rather than saving it first: a long video, or the archived
+    /// copy of a YouTube video that no library download carries.
+    /// `playable` asks for a clip the phone can open: AVFoundation cannot
+    /// read the WebM a desktop recording is, so the server sends an AAC copy.
+    public func journalAttachmentURL(_ id: String, thumbnail: Bool = false, playable: Bool = false) throws -> URL {
+        guard ULID.isValid(id) else { throw CaptureError.invalidID }
+        let url = server.appendingPathComponent("api/journal/attachments/\(id)/\(thumbnail ? "thumbnail" : "file")")
+        guard playable, !thumbnail, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        parts.queryItems = [URLQueryItem(name: "playable", value: "1")]
+        return parts.url ?? url
+    }
+
+    /// Saves a journal attachment's file, or its poster, to `destination`,
+    /// replacing whatever was there only once the whole file has arrived.
+    public func downloadJournalAttachment(_ id: String, thumbnail: Bool = false, playable: Bool = false,
+                                          to destination: URL) async throws {
+        var req = request("")
+        req.url = try journalAttachmentURL(id, thumbnail: thumbnail, playable: playable)
+        req.setValue(nil, forHTTPHeaderField: "Accept")
+        let (file, response) = try await session.download(for: req)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try check(Data(), response)
+        let manager = FileManager.default
+        try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if manager.fileExists(atPath: destination.path) { try manager.removeItem(at: destination) }
+        try manager.moveItem(at: file, to: destination)
+    }
+
     func request(_ path: String, method: String = "GET") -> URLRequest {
         var req = URLRequest(url: server.appendingPathComponent(path))
         req.httpMethod = method
@@ -377,9 +422,12 @@ extension JournalAPI: DailyTransport {
         case .calories:
             guard let calories = log.calories, let text = log.description else { throw DailyError.invalidCalories }
             // An Int field, so the count goes over the wire as 600 and never 600.0.
-            struct Body: Encodable { let id: String; let description: String; let calories: Int; let date: String }
+            // capturedAt: when it was logged, not when it synced, as the server
+            // reads the row as the user being awake.
+            struct Body: Encodable { let id: String; let description: String; let calories: Int; let date: String; let capturedAt: String }
             data = try await postJSON("api/lifestyle/calories",
-                                      Body(id: log.id, description: text, calories: calories, date: log.day))
+                                      Body(id: log.id, description: text, calories: calories, date: log.day,
+                                           capturedAt: ISO8601DateFormatter().string(from: log.createdAt)))
         case .selfie:
             guard let image else { throw DailyError.missingImage }
             let body = try SelfieMultipart(log: log, image: image)

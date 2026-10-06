@@ -117,6 +117,16 @@ public final class ReplicaStore {
         return try recordsQuery(filter + " ORDER BY revision DESC,id ASC LIMIT ?", parameters + [String(limit)])
     }
 
+    /// Newest first by when each record was made, rather than by when the
+    /// server last changed it: the Journal feed reads as a timeline, and an old
+    /// entry edited today belongs where it was written.
+    public func newestRecords(collection: String, query: String = "", limit: Int = 200) throws -> [SyncChange] {
+        guard limit > 0 else { throw ReplicaError.invalidPage }
+        let (filter, parameters) = recordFilter(collection: collection, query: query)
+        return try recordsQuery(filter + " ORDER BY json_extract(payload,'$.createdAt') DESC,id DESC LIMIT ?",
+                                parameters + [String(limit)])
+    }
+
     public func count(collection: String, query: String = "") throws -> Int {
         let (filter, parameters) = recordFilter(collection: collection, query: query)
         return Int(try rows("SELECT COUNT(*) FROM replica_records " + filter, parameters).first?[0] ?? "0") ?? 0
@@ -134,6 +144,21 @@ public final class ReplicaStore {
         guard ["ficId", "paperId", "pageId", "entryId", "conversationId"].contains(field) else { throw ReplicaError.invalidPage }
         return try recordsQuery("WHERE collection=? AND deleted=0 AND json_extract(payload,?)=? ORDER BY revision",
                                 [collection, "$." + field, value])
+    }
+
+    /// `relatedRecords` for many parents in one pass: the Journal feed draws
+    /// every loaded entry's attachments at once.
+    public func relatedRecords(collection: String, field: String, values: [String]) throws -> [SyncChange] {
+        guard ["ficId", "paperId", "pageId", "entryId", "conversationId"].contains(field) else { throw ReplicaError.invalidPage }
+        var out: [SyncChange] = []
+        // Kept well under SQLite's bound-parameter limit.
+        for start in stride(from: 0, to: values.count, by: 400) {
+            let chunk = Array(values[start..<min(start + 400, values.count)])
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            out += try recordsQuery("WHERE collection=? AND deleted=0 AND json_extract(payload,?) IN (\(marks)) ORDER BY revision",
+                                    [collection, "$." + field] + chunk)
+        }
+        return out
     }
 
     public func paperPages(paperID: String) throws -> [SyncChange] {

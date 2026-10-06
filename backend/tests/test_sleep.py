@@ -68,6 +68,51 @@ def calories(ts: int) -> None:
     get_db().commit()
 
 
+def reading(started: int, ended: int) -> None:
+    db = get_db()
+    db.execute("INSERT OR IGNORE INTO fics(id, title, source_type, created_at, updated_at)"
+               " VALUES ('fic-1','Fic','epub',0,0)")
+    db.execute("INSERT OR IGNORE INTO fic_chapters(id, fic_id, position, title, content_html, content_text, created_at)"
+               " VALUES ('ch-1','fic-1',1,'One','','',0)")
+    db.execute('INSERT INTO fic_reading_spans(id, fic_id, chapter_id, started_at, ended_at) VALUES (?,?,?,?,?)',
+               (str(ULID()), 'fic-1', 'ch-1', started, ended))
+    db.commit()
+
+
+def task_event(ts: int) -> None:
+    get_db().execute(
+        "INSERT INTO task_events(id, kind, title, created_at) VALUES (?, 'todo_completed', 'bins', ?)",
+        (str(ULID()), ts),
+    )
+    get_db().commit()
+
+
+def paper(ts: int) -> None:
+    get_db().execute(
+        'INSERT INTO papers(id, title, created_at, updated_at, content_updated_at) VALUES (?,?,?,?,?)',
+        (str(ULID()), 'p', 0, ts, ts),
+    )
+    get_db().commit()
+
+
+def study(ts: int) -> None:
+    get_db().execute(
+        "INSERT INTO study_sources(id, title, kind, last_opened_at, created_at, updated_at)"
+        " VALUES (?, 's', 'web', ?, 0, 0)",
+        (str(ULID()), ts),
+    )
+    get_db().commit()
+
+
+def newspaper(ts: int) -> None:
+    get_db().execute(
+        "INSERT INTO newspaper_issues(id, date, pdf_path, byte_size, page_count, last_read_at, created_at)"
+        " VALUES (?, ?, 'x.pdf', 1, 1, ?, 0)",
+        (str(ULID()), f'1999-01-{ts % 28 + 1:02d}', ts),
+    )
+    get_db().commit()
+
+
 # A moment safely past the end of DAY's window, so the day counts as lived.
 AFTER = at('2026-07-09', '12:00')
 
@@ -108,6 +153,33 @@ def test_every_signal_table_counts():
     food(at(DAY, '18:00'))
     calories(at(DAY, '23:30'))
     assert sleep.derive_window(DAY) == (at(DAY, '07:10'), at(DAY, '23:30'))
+
+
+def test_reading_to_dos_paper_study_and_the_newspaper_count():
+    reading(at(DAY, '06:40'), at(DAY, '07:05'))
+    task_event(at(DAY, '10:00'))
+    paper(at(DAY, '14:00'))
+    study(at(DAY, '16:00'))
+    newspaper(at(DAY, '23:45'))
+    assert sleep.derive_window(DAY) == (at(DAY, '06:40'), at(DAY, '23:45'))
+
+
+def test_each_signal_alone_sets_both_ends():
+    for record in (task_event, paper, study, newspaper):
+        day = '2026-07-%02d' % (10 + [task_event, paper, study, newspaper].index(record))
+        record(at(day, '08:00'))
+        assert sleep.derive_window(day) == (at(day, '08:00'), at(day, '08:00')), record.__name__
+
+
+def test_reading_past_midnight_puts_that_night_to_bed_when_the_book_closes():
+    reading(at(DAY, '23:50'), at('2026-07-09', '00:40'))
+    assert sleep.derive_window(DAY) == (at(DAY, '23:50'), at('2026-07-09', '00:40'))
+
+
+def test_a_reading_span_across_four_am_counts_each_end_for_its_own_day():
+    reading(at('2026-07-09', '03:30'), at('2026-07-09', '04:20'))
+    assert sleep.derive_window(DAY) == (at('2026-07-09', '03:30'), at('2026-07-09', '03:30'))
+    assert sleep.derive_window('2026-07-09') == (at('2026-07-09', '04:20'), at('2026-07-09', '04:20'))
 
 
 def test_an_assistant_reply_is_not_the_user_being_awake():

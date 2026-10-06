@@ -106,7 +106,17 @@ what each device can currently do and which work remains device-only.
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
 - Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
-  Study and Draw. More
+  Study and Draw. Journal's toolbar has Sync on the left and a Journal/Calendar
+  switch on the right. The Journal page is the desktop's feed: one newest-first timeline
+  with inline photos, playable voice clips (desktop WebM clips arrive as an AAC copy),
+  videos and YouTube posters, and calendar events' category-coloured borders around the
+  entries written during them. Media not already downloaded is fetched and cached when
+  online. Calendar is the web's 4am-to-4am day view over the synced events,
+  with the web's create, edit and delete (including "This and future" / "All events" on a
+  repeating event; Delete is inside Edit), the six category checkboxes on the event's page and
+  their colours, overlapping events side by side,
+  drag to move (or, with the bottom-left toggle on Length, to change the end), and shaded
+  wake/sleep bands with an editor; changes are saved on the device and replayed in order on the next sync. More
   holds Library and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
   Library/Folders switch. Library mode has provider pills and sorts by the site's latest
   chapter date (`latest_activity`), not the download time. Folders mode lists folders and Unsorted,

@@ -172,7 +172,9 @@ public final class TodoOutbox {
 }
 
 public protocol TodoTransport {
-    func send(_ change: TodoChange) async throws
+    /// `capturedAt` is when the change was made on the phone, which the
+    /// server stamps it with rather than the moment it synced.
+    func send(_ change: TodoChange, capturedAt: Date) async throws
 }
 
 /// The server turned a change down for good: a full list, a bad field, a
@@ -198,7 +200,7 @@ public final class TodoSync {
         for op in try outbox.list() {
             try Task.checkCancellation()
             do {
-                try await transport.send(op.change)
+                try await transport.send(op.change, capturedAt: op.createdAt)
             } catch let refusal as TodoRefusal {
                 // Deleting something already gone is what was wanted.
                 if !(refusal.status == 404 && op.change.isDelete) {

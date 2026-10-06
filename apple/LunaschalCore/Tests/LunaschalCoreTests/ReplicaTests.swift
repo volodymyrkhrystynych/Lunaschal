@@ -37,6 +37,30 @@ final class ReplicaTests: XCTestCase {
         XCTAssertEqual(try reopened.epoch, epoch)
     }
 
+    func testTheJournalFeedReadsByWhenEntriesWereWrittenWithTheirAttachments() throws {
+        func entry(_ id: String, _ revision: Int64, _ createdAt: String) -> SyncChange {
+            SyncChange(revision: revision, collection: "journal_entries", id: id, deleted: false,
+                       data: ["id": .string(id), "content": .string("x"), "createdAt": .string(createdAt)])
+        }
+        func attachment(_ id: String, _ entry: String) -> SyncChange {
+            SyncChange(revision: 9, collection: "journal_attachments", id: id, deleted: false,
+                       data: ["id": .string(id), "entryId": .string(entry), "kind": .string("image")])
+        }
+        let old = ULID.make(), new = ULID.make(), other = ULID.make()
+        try store.apply(SyncPage(protocolVersion: 1, epoch: epoch, mode: "bootstrap", changes: [
+            entry(old, 5, "2026-10-01T09:00:00+00:00"), entry(new, 2, "2026-10-04T09:00:00+00:00"),
+            entry(other, 3, "2026-10-02T09:00:00+00:00"),
+            attachment(ULID.make(), old), attachment(ULID.make(), new), attachment(ULID.make(), other),
+        ], hasMore: false, cursor: "c", collections: ["journal_entries", "journal_attachments"]), startingBootstrap: true)
+        XCTAssertEqual(try store.records(collection: "journal_entries").first?.id, old, "the sync order is by revision")
+        XCTAssertEqual(try store.newestRecords(collection: "journal_entries").map(\.id), [new, other, old])
+        XCTAssertEqual(try store.newestRecords(collection: "journal_entries", limit: 1).map(\.id), [new])
+        let related = try store.relatedRecords(collection: "journal_attachments", field: "entryId", values: [old, new])
+        XCTAssertEqual(Set(related.compactMap { $0.data?["entryId"]?.string }), [old, new])
+        XCTAssertEqual(try store.relatedRecords(collection: "journal_attachments", field: "entryId", values: []).count, 0)
+        XCTAssertThrowsError(try store.relatedRecords(collection: "journal_attachments", field: "payload", values: [old]))
+    }
+
     func testOptionalKnowledgeRemainsReadableAfterOtherCollectionsRefresh() throws {
         let article = SyncChange(revision: 1, collection: "wiki_articles", id: id, deleted: false,
             data: ["id": .string(id), "title": .string("Offline knowledge"),

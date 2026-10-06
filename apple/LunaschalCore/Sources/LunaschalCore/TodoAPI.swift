@@ -6,19 +6,26 @@ import FoundationNetworking
 // MARK: Daily tasks and to-dos (the desktop's /api/tasks routes)
 
 extension JournalAPI: TodoTransport {
-    public func send(_ change: TodoChange) async throws {
+    /// Ticks and removals are logged on the server, and that log is read as
+    /// the user being awake, so those carry when they were made.
+    public func send(_ change: TodoChange, capturedAt: Date) async throws {
         switch change {
         case let .addTask(id, title): try await addDailyTask(id: id, title)
         case let .renameTask(id, title): try await renameDailyTask(id, to: title)
         case let .reorderTasks(order): try await reorderDailyTasks(order)
-        case let .deleteTask(id): try await deleteDailyTask(id)
-        case let .tickTask(id, day, done): try await setDailyTask(id, day: day, done: done)
+        case let .deleteTask(id): try await deleteDailyTask(id, at: capturedAt)
+        case let .tickTask(id, day, done): try await setDailyTask(id, day: day, done: done, at: capturedAt)
         case let .createTodo(draft): try await createTodo(draft)
         case let .editTodo(id, draft): try await editTodo(id, draft)
-        case let .setTodo(id, done): try await setTodo(id, done: done)
+        case let .setTodo(id, done): try await setTodo(id, done: done, at: capturedAt)
         case let .moveTodo(id, list): try await moveTodo(id, to: list)
-        case let .deleteTodo(id): try await deleteTodo(id)
+        case let .deleteTodo(id): try await deleteTodo(id, at: capturedAt)
         }
+    }
+
+    /// `?capturedAt=` — a query parameter, since a delete has no body.
+    static func capturedAtQuery(_ date: Date?) -> [String: String] {
+        date.map { ["capturedAt": ISO8601DateFormatter().string(from: $0)] } ?? [:]
     }
 
     public func dailyTasks() async throws -> [DailyTask] {
@@ -38,14 +45,14 @@ extension JournalAPI: TodoTransport {
         try await todoCall("api/tasks/reorder", method: "POST", ["order": order])
     }
 
-    public func deleteDailyTask(_ id: String) async throws {
-        try await todoCall("api/tasks/\(try Self.pathID(id))", method: "DELETE")
+    public func deleteDailyTask(_ id: String, at: Date? = nil) async throws {
+        try await todoCall("api/tasks/\(try Self.pathID(id))", method: "DELETE", query: Self.capturedAtQuery(at))
     }
 
     /// The completion for `day`, the 4am day it was ticked on.
-    public func setDailyTask(_ id: String, day: String, done: Bool) async throws {
+    public func setDailyTask(_ id: String, day: String, done: Bool, at: Date? = nil) async throws {
         try await todoCall("api/tasks/\(try Self.pathID(id))/complete", method: done ? "POST" : "DELETE",
-                           query: ["date": day])
+                           query: ["date": day].merging(Self.capturedAtQuery(at)) { first, _ in first })
     }
 
     public func todos() async throws -> [TodoItem] {
@@ -65,16 +72,17 @@ extension JournalAPI: TodoTransport {
     }
 
     /// Completing a repeating to-do moves it to its next due date instead.
-    public func setTodo(_ id: String, done: Bool) async throws {
-        try await todoCall("api/tasks/todos/\(try Self.pathID(id))", method: "PATCH", ["done": done])
+    public func setTodo(_ id: String, done: Bool, at: Date? = nil) async throws {
+        try await todoCall("api/tasks/todos/\(try Self.pathID(id))", method: "PATCH", query: Self.capturedAtQuery(at),
+                           ["done": done])
     }
 
     public func moveTodo(_ id: String, to list: String) async throws {
         try await todoCall("api/tasks/todos/\(try Self.pathID(id))", method: "PATCH", ["list": list])
     }
 
-    public func deleteTodo(_ id: String) async throws {
-        try await todoCall("api/tasks/todos/\(try Self.pathID(id))", method: "DELETE")
+    public func deleteTodo(_ id: String, at: Date? = nil) async throws {
+        try await todoCall("api/tasks/todos/\(try Self.pathID(id))", method: "DELETE", query: Self.capturedAtQuery(at))
     }
 
     private func todoCall(_ path: String, method: String, query: [String: String] = [:]) async throws {

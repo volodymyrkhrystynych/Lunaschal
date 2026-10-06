@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from datetime import date as dt, datetime, timedelta
 from flask import Blueprint, jsonify, request
@@ -566,9 +567,15 @@ def end_series(id, date):
 # Columns a split copies onto the new series. `journal_id` and the
 # calendar_journal_links rows deliberately stay behind: they point at entries
 # written about specific past days.
+# A client-minted id, as the device's offline queue mints them.
+_ULID_RE = re.compile(r'[0-9A-HJKMNP-TV-Z]{26}')
+
 _SPLIT_COLUMNS = (
     'title', 'description', 'time', 'end_time', 'all_day', 'tags',
     'repeat_freq', 'repeat_interval', 'repeat_byweekday', 'repeat_until',
+    # The categories travel with the series: a split that dropped them left
+    # the new half uncoloured, and a categoryTags sent with the edit was lost.
+    'category_tags', 'classified_at', 'classification_error',
 )
 
 
@@ -589,6 +596,15 @@ def update_series_from(id, date):
         return jsonify({'error': 'date must be YYYY-MM-DD'}), 400
 
     body = request.json or {}
+    # A client-chosen id for the new series makes an offline-queued split
+    # replay idempotently: a replay whose split already landed would otherwise
+    # cut the capped series again and start a duplicate.
+    new_id = body.get('newId')
+    if new_id is not None:
+        if not isinstance(new_id, str) or not _ULID_RE.fullmatch(new_id):
+            return jsonify({'error': 'newId must be a ULID'}), 400
+        if db.execute('SELECT 1 FROM calendar_events WHERE id=?', (new_id,)).fetchone():
+            return jsonify({'id': new_id, 'split': True})
     updates, err = _event_updates(body)
     if err:
         return jsonify({'error': err}), 400
@@ -606,7 +622,7 @@ def update_series_from(id, date):
     values = {col: row[col] for col in _SPLIT_COLUMNS}
     values.update({k: v for k, v in updates.items() if k in _SPLIT_COLUMNS})
 
-    new_id = str(ULID())
+    new_id = new_id or str(ULID())
     cols = ', '.join(_SPLIT_COLUMNS)
     ph = ','.join('?' * len(_SPLIT_COLUMNS))
     db.execute(

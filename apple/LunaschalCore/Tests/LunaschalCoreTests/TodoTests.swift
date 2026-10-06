@@ -193,11 +193,26 @@ final class TodoOutboxTests: XCTestCase {
 
     private final class Transport: TodoTransport {
         var sent: [TodoChange] = []
+        var times: [Date] = []
         var answers: [Error?] = []
-        func send(_ change: TodoChange) async throws {
+        func send(_ change: TodoChange, capturedAt: Date) async throws {
             sent.append(change)
+            times.append(capturedAt)
             if !answers.isEmpty, let error = answers.removeFirst() { throw error }
         }
+    }
+
+    func testChangesAreSentWithWhenTheyWereMadeNotWhenTheySync() async throws {
+        let outbox = try TodoOutbox(root: root)
+        try outbox.append(.setTodo(id: "a", done: true))
+        try outbox.append(.tickTask(id: "T1", day: "2026-10-05", done: true))
+        let made = try outbox.list().map(\.createdAt)
+        let transport = Transport()
+        _ = try await TodoSync(outbox: outbox).run(using: transport)
+        XCTAssertEqual(transport.times, made)
+        XCTAssertEqual(JournalAPI.capturedAtQuery(Date(timeIntervalSince1970: 1_790_000_000)),
+                       ["capturedAt": "2026-09-21T14:13:20Z"])
+        XCTAssertEqual(JournalAPI.capturedAtQuery(nil), [:])
     }
 
     func testARefusalIsDroppedAndTheRestGoOn() async throws {

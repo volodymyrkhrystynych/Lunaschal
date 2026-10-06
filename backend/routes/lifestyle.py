@@ -893,6 +893,16 @@ def log_calories():
     if err:
         return jsonify({'error': err}), 400
 
+    # When it was logged on the device: an offline entry synced at 03:00 was
+    # not the user awake at 03:00 (backend/sleep.py counts this row).
+    try:
+        captured_at = optional_capture_time(body)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    clock = int(time.time())
+    # A capture time from the future is a wrong clock, not a plan.
+    created_at = min(captured_at, clock) if captured_at is not None else clock
+
     # Client-supplied ULID for idempotent offline replay; the weigh-in above
     # needs none because it already upserts on the day.
     entry_id = body.get('id') or str(ULID())
@@ -900,7 +910,7 @@ def log_calories():
     db.execute(
         'INSERT OR IGNORE INTO calorie_logs(id, date, description, calories, created_at)'
         ' VALUES (?,?,?,?,?)',
-        (entry_id, day, description, calories, int(time.time())),
+        (entry_id, day, description, calories, created_at),
     )
     db.commit()
     row = db.execute(

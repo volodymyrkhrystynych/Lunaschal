@@ -24,6 +24,10 @@ COLLECTIONS = {
     'knowledge_archives': 'id zim_uuid filename title language zim_date flavour size article_count kind enabled has_fulltext_index has_title_index health created_at updated_at',
     'conversations': 'id title created_at updated_at',
     'messages': 'id conversation_id role content status raw_content created_at',
+    # Read-only on the device: the phone expands the series itself, so it gets
+    # the template rows and their per-occurrence exceptions, not instances.
+    'calendar_events': 'id title description date time end_time all_day tags category_tags repeat_freq repeat_interval repeat_byweekday repeat_until created_at',
+    'calendar_event_exceptions': 'id event_id date action new_date new_time new_end_time created_at',
 }
 COLLECTIONS = {name: tuple(columns.split()) for name, columns in COLLECTIONS.items()}
 SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, 'book-metadata-v1'], sort_keys=True).encode()).hexdigest()

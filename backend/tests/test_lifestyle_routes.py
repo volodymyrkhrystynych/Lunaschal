@@ -435,6 +435,26 @@ def test_calories_day_view_carries_a_running_total(client):
     assert [e['description'] for e in day['entries']] == ['chicken and rice', 'protein shake']
 
 
+def test_a_calorie_entry_synced_later_keeps_when_it_was_logged(client):
+    """backend/sleep.py reads this row as the user awake, so a background sync
+    at 03:00 must not stamp it 03:00."""
+    import time
+    from datetime import datetime, timezone
+    logged = datetime(2026, 7, 20, 12, 30, tzinfo=timezone.utc)
+    entry = client.post('/api/lifestyle/calories', json={
+        'date': '2026-07-20', 'description': 'lunch', 'calories': 500, 'capturedAt': logged.isoformat(),
+    }).get_json()
+    assert datetime.fromisoformat(entry['createdAt'].replace('Z', '+00:00')) == logged
+    # A clock from the future is a wrong clock: it's filed as now instead.
+    ahead = client.post('/api/lifestyle/calories', json={
+        'date': '2026-07-20', 'description': 'later', 'calories': 1, 'capturedAt': '2999-01-01T00:00:00+00:00',
+    }).get_json()
+    assert datetime.fromisoformat(ahead['createdAt'].replace('Z', '+00:00')).timestamp() <= time.time() + 1
+    assert client.post('/api/lifestyle/calories', json={
+        'date': '2026-07-20', 'description': 'x', 'calories': 1, 'capturedAt': 'noon',
+    }).status_code == 400
+
+
 def test_empty_day_totals_zero(client):
     day = client.get('/api/lifestyle/calories?date=2026-07-20').get_json()
     assert day == {'date': '2026-07-20', 'entries': [], 'total': 0}
