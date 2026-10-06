@@ -1222,6 +1222,24 @@ CREATE TABLE IF NOT EXISTS calorie_logs (
 
 CREATE INDEX IF NOT EXISTS idx_calorie_logs_date ON calorie_logs(date);
 
+-- Pomodoro runs from the Watch: a 25-minute work block, the 5-minute break
+-- after one, or a 10-minute timeout. One row per run, under the id the Watch
+-- minted, so a replayed upload is a no-op. date is the 4am day of started_at.
+-- completed = 0 is a run cancelled before its time was up; ended_at is then
+-- when it was cancelled. Not on the heatmap — see backend/lifestyle/CLAUDE.md.
+CREATE TABLE IF NOT EXISTS pomodoro_sessions (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('work', 'break', 'timeout')),
+    date TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER NOT NULL,
+    planned_seconds INTEGER NOT NULL,
+    completed INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pomodoro_sessions_date ON pomodoro_sessions(date);
+
 -- Hourly weather, one row per (day_key, hour_ts). day_key is the 4am-anchored
 -- day from backend/day_boundary.py, not the raw calendar date Open-Meteo
 -- returns — see backend/weather/sync.py. Rows are upserted in place as the day

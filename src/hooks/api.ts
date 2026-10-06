@@ -2604,6 +2604,34 @@ export interface Selfie {
   createdAt: string;
 }
 
+export type PomodoroKind = 'work' | 'break' | 'timeout';
+
+/** One Watch timer run. `completed` is false for one cancelled early, and
+ *  `endedAt` is then when it was cancelled. */
+export interface PomodoroSession {
+  id: string;
+  kind: PomodoroKind;
+  date: string;
+  startedAt: string;
+  endedAt: string;
+  plannedSeconds: number;
+  completed: boolean;
+  createdAt: string;
+}
+
+export interface PomodoroDay {
+  date: string;
+  focusMinutes: number;
+  breakMinutes: number;
+  timeoutMinutes: number;
+  completedBlocks: number;
+}
+
+export interface PomodoroSummary {
+  days: PomodoroDay[];
+  sessions: PomodoroSession[];
+}
+
 export interface CalorieLog {
   id: string;
   date: string;
@@ -5097,6 +5125,12 @@ export const api = {
       }) => post<CalorieLog>('/api/lifestyle/calories', data),
       delete: (id: string) =>
         del<{ success: boolean }>(`/api/lifestyle/calories/${id}`),
+    },
+    pomodoro: {
+      summary: (days = 14) =>
+        get<PomodoroSummary>(`/api/lifestyle/pomodoro?days=${days}`),
+      delete: (id: string) =>
+        del<{ success: boolean }>(`/api/lifestyle/pomodoro/sessions/${id}`),
     },
     weather: {
       today: () => get<WeatherToday>('/api/lifestyle/weather/today'),

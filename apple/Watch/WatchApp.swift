@@ -2,6 +2,7 @@ import SwiftUI
 import WatchKit
 import WatchConnectivity
 import AVFoundation
+import UserNotifications
 import LunaschalCore
 
 @main
@@ -26,7 +27,9 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     }
     let store: CaptureStore
     nonisolated private let receiptRoot: URL
+    nonisolated private let pomodoroOutbox: URL
     let recorder: Recorder
+    let pomodoro: PomodoroModel
     @Published var captures: [Capture] = []
     @Published var received: Set<String> = []
     @Published var uploaded: Set<String> = []
@@ -36,6 +39,9 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         self.store = store
         receiptRoot = store.root
         recorder = Recorder(store: store)
+        pomodoro = try PomodoroModel(root: store.root.deletingLastPathComponent()
+            .appendingPathComponent("Pomodoro", isDirectory: true))
+        pomodoroOutbox = pomodoro.outbox.root
         super.init()
         try store.recoverInterruptedRecordings()
         recorder.onChange = { [weak self] in self?.reload(); self?.sendPending() }
@@ -97,11 +103,17 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     nonisolated func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
         Task { @MainActor in
             if let error { self.message = error.localizedDescription }
-            if state == .activated { self.sendPending() }
+            if state == .activated { self.sendPending(); self.pomodoro.sendPending() }
         }
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        if let id = userInfo["pomodoroStored"] as? String {
+            // The phone has it on disk; the Watch's copy can go.
+            do { try PomodoroStore(root: pomodoroOutbox).remove(id) }
+            catch { Task { @MainActor in self.message = error.localizedDescription } }
+            return
+        }
         if let bytes = userInfo["serverStored"] as? Data {
             do {
                 let receipt = try JSONDecoder().decode(WatchServerReceipt.self, from: bytes)
@@ -133,9 +145,22 @@ private struct WatchCaptureView: View {
     @ObservedObject var recorder: Recorder
     @Environment(\.scenePhase) private var phase
     @State private var removing: Capture?
+    @State private var showTimer = false
 
     var body: some View {
+        NavigationStack {
+            list.navigationDestination(isPresented: $showTimer) { PomodoroView(model: model.pomodoro) }
+        }
+        .onAppear {
+            if let kind = PomodoroModel.launchStart, model.pomodoro.timer.run == nil {
+                model.pomodoro.start(kind); showTimer = true
+            }
+        }
+    }
+
+    private var list: some View {
         List {
+            Button { showTimer = true } label: { PomodoroRow(model: model.pomodoro) }
             if recorder.activeID != nil {
                 Text("Recording…").foregroundStyle(.red)
                 Button("Stop and save", role: .destructive) { recorder.stop() }
@@ -168,7 +193,7 @@ private struct WatchCaptureView: View {
                 .font(.footnote)
         }
         .onChange(of: phase) { _, value in
-            if value == .active { model.reload(); model.sendPending() }
+            if value == .active { model.reload(); model.sendPending(); model.pomodoro.refresh(); model.pomodoro.sendPending() }
         }
         .confirmationDialog("Remove this Watch recording?", isPresented: Binding(
             get: { removing != nil }, set: { if !$0 { removing = nil } })) {
@@ -181,13 +206,15 @@ private struct WatchCaptureView: View {
 }
 
 @MainActor
-final class WatchLifecycle: NSObject, WKApplicationDelegate {
+final class WatchLifecycle: NSObject, WKApplicationDelegate, UNUserNotificationCenterDelegate {
     private var pending: Set<WKRefreshBackgroundTask> = []
     private var observer: NSKeyValueObservation?
     private var activationObserver: NSKeyValueObservation?
 
     func applicationDidFinishLaunching() {
         _ = WatchModel.startup
+        PomodoroModel.registerCategories()
+        UNUserNotificationCenter.current().delegate = self
         observer = WCSession.default.observe(\.hasContentPending, options: [.initial, .new]) { [weak self] _, _ in
             Task { @MainActor in self?.completeIfIdle() }
         }
@@ -202,6 +229,26 @@ final class WatchLifecycle: NSObject, WKApplicationDelegate {
         }
         completeIfIdle()
     }
+    /// A button on the timer's notification: Continue, Break or Cancel.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse) async {
+        let action = PomodoroModel.Action(rawValue: response.actionIdentifier)
+        await MainActor.run {
+            guard case .success(let model) = WatchModel.startup else { return }
+            if let action { model.pomodoro.perform(action) } else { model.pomodoro.refresh() }
+        }
+    }
+
+    /// The app is open when the time is up: the screen already shows the
+    /// choices, so a haptic is enough and no banner covers them.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        await MainActor.run {
+            if case .success(let model) = WatchModel.startup { model.pomodoro.refresh() }
+        }
+        return []
+    }
+
     private func completeIfIdle() {
         guard WCSession.default.activationState == .activated, !WCSession.default.hasContentPending else { return }
         pending.forEach { $0.setTaskCompletedWithSnapshot(false) }

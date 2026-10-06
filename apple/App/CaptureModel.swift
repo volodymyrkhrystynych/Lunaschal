@@ -51,6 +51,9 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var recentWorkouts: [WorkoutSession] = []
     let workouts: WorkoutStore
     private let workoutSyncer: WorkoutSync
+    /// Watch pomodoro runs the phone has acknowledged but the server hasn't had.
+    private let pomodoros: PomodoroStore
+    private let pomodoroSyncer: PomodoroSync
     /// Chat voice messages not yet on the server, and whatever the last pass said about them.
     @Published private(set) var chatRecordingQueue: [ChatRecording] = []
     let chatRecordings: ChatRecordingStore
@@ -104,6 +107,8 @@ final class CaptureModel: ObservableObject {
         dailySyncer = DailySync(store: daily)
         workouts = try WorkoutStore(root: store.root.appendingPathComponent("workouts", isDirectory: true))
         workoutSyncer = WorkoutSync(store: workouts)
+        pomodoros = try PomodoroStore(root: store.root.appendingPathComponent("pomodoro-outbox", isDirectory: true))
+        pomodoroSyncer = PomodoroSync(store: pomodoros)
         chatRecordings = try ChatRecordingStore(root: store.root.appendingPathComponent("chat-recordings", isDirectory: true))
         chatRecordingSyncer = ChatRecordingSync(store: chatRecordings)
         todoOutbox = try TodoOutbox(root: store.root.appendingPathComponent("todo-outbox", isDirectory: true))
@@ -114,7 +119,7 @@ final class CaptureModel: ObservableObject {
         ficActivitySyncer = FicActivitySync(store: ficActivity)
         try chatRecordings.recoverInterrupted()
         recorder = Recorder(store: store)
-        watchReceiver = try WatchReceiver(store: store)
+        watchReceiver = try WatchReceiver(store: store, pomodoros: pomodoros)
         syncer = CaptureSync(store: store, uploads: uploads, transfers: transfers)
         replicaSyncer = ReplicaSync(store: replica)
         libraryWorker = LibraryDownload(replicaURL: store.root.appendingPathComponent("replica.sqlite"),
@@ -623,6 +628,7 @@ final class CaptureModel: ObservableObject {
             hasEdits: replica.edits().contains { $0.state == "pending" }
                 || daily.list().contains { $0.state == .pending }
                 || workouts.list().contains { $0.state == .pending }
+                || !pomodoros.list().isEmpty
                 || drawingPublications.all().contains { $0.state == "pending" }
                 || !ficActivity.list().isEmpty
                 || !todoOutbox.list().isEmpty, signedIn: signedIn,
@@ -665,6 +671,7 @@ final class CaptureModel: ObservableObject {
             try await syncer.run(using: api)
             try await dailySyncer.run(using: api)
             try await workoutSyncer.run(using: api)
+            try await pomodoroSyncer.run(using: api)
             try await ficActivitySyncer.run(using: api)
             await refreshWorkouts(using: api)
             await refreshDaily(using: api)
