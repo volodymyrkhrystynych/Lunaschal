@@ -52,7 +52,7 @@ what each device can currently do and which work remains device-only.
   screen's pixel size, and only when the part it would cut matches a snapshot of
   Lunaschal's window, so a copied photo, or an older screenshot taken with the
   apps the other way round, goes in whole. For one tap, a shortcut
-  *Take Screenshot → Add Screenshot to Lunaschal Notes* run from AssistiveTouch
+  _Take Screenshot → Add Screenshot to Lunaschal Notes_ run from AssistiveTouch
   or a Full Keyboard Access command does the same in the app's process (Back Tap
   is iPhone-only); with no notebook open, its screenshot waits for the next one.
 
@@ -142,6 +142,30 @@ what each device can currently do and which work remains device-only.
   the screen. The last feed loaded is kept, so it still reads offline.
   Passed in simulator offline; not yet run against a server or verified on
   device.
+- Learning (More → Learning) is the desktop Learning tab's Review, Queue and
+  Browse over the same `/api/learning` routes, filtered by folder and tag.
+  Review runs the desktop's two passes: answer each due card (typed, or
+  spoken with the mic button, which records, sends the clip to the server's
+  `/api/transcribe` and adds the words, marking the answer as spoken so the
+  server tidies the transcript before grading) or Flip past it, then see each answer beside the
+  card's with the server's claim-by-claim grade, polled in as it lands, and
+  rate it with the suggestion highlighted. Each answer is saved as it's given,
+  so leaving mid-session resumes it; ratings reuse the attempt id as the review
+  id, so a resend can't advance the schedule twice. Queue approves (with the
+  near-duplicate prompt: keep both, replace the old card, delete the new one),
+  regenerates with a direction, or denies. Browse edits tags in place and
+  wording as a revision, and deletes. The More row's badge counts cards due.
+  It needs the server for everything; there is no offline queue. Card chat,
+  verification, brain-dump creation and folder management remain desktop-only.
+  Speech mode is a switch in More → Settings → Learning: answers given with it
+  on carry a spoken summary of what was missed, read aloud once on the results
+  through the server's `/api/tts`, with Replay. Opening it without a server passed in simulator; the
+  server-backed flows, including the microphone, have not been run against a
+  server or on device.
+  Debug builds launched with `-learningFixture` swap the server for an
+  in-memory stand-in with sample folders, tags, due and queued cards and a
+  word-match grader, so the screen can be seen without one; a UI test runs a
+  whole review against it.
 - Offline YouTube links attached to a typed entry (any number per entry), with
   preserved drafts and stable entry and per-link attachment IDs. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
@@ -158,7 +182,7 @@ what each device can currently do and which work remains device-only.
   their colours, overlapping events side by side,
   drag to move (or, with the bottom-left toggle on Length, to change the end), and shaded
   wake/sleep bands with an editor; changes are saved on the device and replayed in order on the next sync. More
-  holds Library and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
+  holds Library, Learning and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
   Library/Folders switch. Library mode has provider pills and sorts by the site's latest
   chapter date (`latest_activity`), not the download time. Folders mode lists folders and Unsorted,
   and each pushes its books with a Back button. Both have title/tag search, tag and

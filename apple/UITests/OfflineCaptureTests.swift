@@ -130,6 +130,104 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
     }
 
+    func testLearningOpensFromMoreAndAsksForTheServer() {
+        let app = XCUIApplication()
+        app.launch()
+        openMore(app, "Learning")
+        // Review, Queue and Browse all need the server; without one the
+        // screen says so rather than showing an empty deck.
+        XCTAssertTrue(app.segmentedControls["learning-page"].waitForExistence(timeout: 5))
+        for page in ["Review", "Queue", "Browse"] {
+            XCTAssertTrue(app.segmentedControls["learning-page"].buttons[page].exists, "Missing \(page)")
+        }
+        XCTAssertTrue(app.staticTexts["Learning needs your server"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["learning-check"].exists)
+    }
+
+    private func snapshot(_ app: XCUIApplication, _ name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    /// The whole review against `-learningFixture`'s stand-in server: answer
+    /// one card, flip the rest, see the grade land, rate them all; then the
+    /// queue's duplicate prompt and the browser.
+    func testLearningReviewsTheFixtureDeck() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-learningFixture")
+        app.launch()
+        openMore(app, "Learning")
+
+        let field = app.textFields["learning-answer"]
+        XCTAssertTrue(field.waitForExistence(timeout: settle), "No card to answer")
+        XCTAssertTrue(app.staticTexts["Card 1 of 6"].exists)
+        snapshot(app, "1-answer")
+        focus(field)
+        field.typeText("It runs code on the main thread")
+        app.buttons["learning-check"].tap()
+        XCTAssertTrue(app.staticTexts["Card 2 of 6"].waitForExistence(timeout: 5))
+        for _ in 0..<5 { app.buttons["learning-flip"].tap(); RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+
+        XCTAssertTrue(app.staticTexts["Result 1 of 6"].waitForExistence(timeout: 5))
+        // The stand-in grades about a second after the answer: one of two claims.
+        XCTAssertTrue(app.staticTexts["Partly right."].waitForExistence(timeout: 10), "The grade never landed")
+        snapshot(app, "2-result")
+        app.buttons["learning-rate-Good"].tap()
+        for n in 2...6 {
+            XCTAssertTrue(app.staticTexts["Result \(n) of 6"].waitForExistence(timeout: 5))
+            app.buttons["learning-rate-Easy"].tap()
+        }
+        XCTAssertTrue(app.staticTexts["All caught up!"].waitForExistence(timeout: 5))
+
+        app.segmentedControls["learning-page"].buttons.element(boundBy: 1).tap()
+        let approve = app.buttons["Approve"].firstMatch
+        XCTAssertTrue(approve.waitForExistence(timeout: 5))
+        snapshot(app, "3-queue")
+        app.swipeUp()
+        app.buttons.matching(identifier: "Approve").element(boundBy: 2).tap()
+        XCTAssertTrue(app.staticTexts["Similar card exists"].waitForExistence(timeout: 5), "No duplicate prompt")
+        snapshot(app, "4-duplicate")
+        app.buttons["Keep both"].tap()
+
+        // An approved card is due at once, so it's back on Review's count.
+        XCTAssertTrue(app.segmentedControls["learning-page"].buttons["Review (1)"].waitForExistence(timeout: 5),
+                      "The approved card isn't due")
+        app.segmentedControls["learning-page"].buttons["Browse"].tap()
+        XCTAssertTrue(app.staticTexts["#concurrency"].waitForExistence(timeout: 5), "Browse is empty")
+        snapshot(app, "5-browse")
+    }
+
+    /// Speech mode is switched in Settings, and an answer given with it on
+    /// comes back with a summary to read aloud and a Replay button.
+    func testLearningSpeechModeIsASettingAndOffersReplay() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-learningFixture")
+        app.launch()
+        openMore(app, "Settings")
+        let toggle = app.switches["settings-learning-speech"]
+        for _ in 0..<6 where !reachable(toggle) { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "No speech mode switch in Settings")
+        if (toggle.value as? String) != "1" { toggle.switches.firstMatch.tap() }
+        XCTAssertEqual(toggle.value as? String, "1")
+
+        openMore(app, "Learning")
+        let field = app.textFields["learning-answer"]
+        XCTAssertTrue(field.waitForExistence(timeout: settle))
+        focus(field)
+        field.typeText("It runs code on the main thread")
+        app.buttons["learning-check"].tap()
+        XCTAssertTrue(app.staticTexts["Card 2 of 6"].waitForExistence(timeout: 5))
+        for _ in 0..<5 { app.buttons["learning-flip"].tap(); RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+        XCTAssertTrue(app.buttons["learning-replay"].waitForExistence(timeout: 10), "No read-aloud for a speech-mode answer")
+        snapshot(app, "speech-mode-result")
+        // A flipped card has nothing to read.
+        app.buttons["learning-rate-Good"].tap()
+        XCTAssertTrue(app.staticTexts["Result 2 of 6"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["learning-replay"].exists)
+    }
+
     func testDailyLogsWeightAndCaloriesWithoutAServer() {
         let app = XCUIApplication()
         app.launch()

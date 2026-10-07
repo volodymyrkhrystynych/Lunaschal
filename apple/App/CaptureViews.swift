@@ -8,12 +8,14 @@ struct CaptureRoot: View {
     @ObservedObject var model: CaptureModel
     @StateObject private var chat: ChatModel
     @StateObject private var todo: TodoModel
+    @StateObject private var learning: LearningModel
     @Environment(\.scenePhase) private var scenePhase
 
     init(model: CaptureModel) {
         self.model = model
         _chat = StateObject(wrappedValue: ChatModel(capture: model))
         _todo = StateObject(wrappedValue: TodoModel(capture: model))
+        _learning = StateObject(wrappedValue: LearningModel(capture: model))
     }
 
     var body: some View {
@@ -34,13 +36,13 @@ struct CaptureRoot: View {
                 NavigationStack { DrawingLibraryView(model: model) }
                     .tabItem { Label("Draw", systemImage: "pencil.tip") }
             }
-            NavigationStack { MoreMenu(model: model) }
+            NavigationStack { MoreMenu(model: model, learning: learning) }
                 .tabItem { Label("More", systemImage: "line.3.horizontal") }
         }
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
-        .onChange(of: model.syncPasses) { _, _ in Task { await todo.refresh() } }
+        .onChange(of: model.syncPasses) { _, _ in Task { await todo.refresh(); await learning.refresh() } }
         .task(id: scenePhase) {
             guard scenePhase == .active else { model.leaveForeground(); return }
             model.resumeFicDownloads()
@@ -581,6 +583,7 @@ private struct AudioPreview: View {
 // shows five tabs before iOS adds its own More overflow, so this owns that slot.
 private struct MoreMenu: View {
     @ObservedObject var model: CaptureModel
+    @ObservedObject var learning: LearningModel
 
     var body: some View {
         List {
@@ -590,6 +593,12 @@ private struct MoreMenu: View {
             NavigationLink { JobsFeedView(capture: model) } label: {
                 Label("Jobs", systemImage: "briefcase")
             }.accessibilityIdentifier("more-Jobs")
+            NavigationLink { LearningView(learning: learning) } label: {
+                Label("Learning", systemImage: "graduationcap")
+            }
+            // Cards due for review, as the desktop's Review button counts them.
+            .badge(learning.stats.due)
+            .accessibilityIdentifier("more-Learning")
             NavigationLink { ConnectionSettings(model: model) } label: {
                 Label("Settings", systemImage: "gear")
             }.accessibilityIdentifier("more-Settings")
@@ -602,6 +611,7 @@ private struct ConnectionSettings: View {
     @ObservedObject var model: CaptureModel
     @AppStorage("allowCellularSync") private var allowCellular = true
     @AppStorage("backgroundSyncEnabled") private var backgroundSyncEnabled = true
+    @AppStorage(LearningModel.speechModeKey) private var learningSpeechMode = false
     @State private var address = ""
     @State private var password = ""
     @State private var code = ""
@@ -643,6 +653,12 @@ private struct ConnectionSettings: View {
                 Toggle("Allow cellular sync", isOn: $allowCellular)
                     .onChange(of: allowCellular) { _, _ in model.cancelSync() }
                 Text("Applies to journal text, audio, and chapter updates after your first library download. Bulk library downloads use Wi-Fi only.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Learning") {
+                Toggle("Speech mode", isOn: $learningSpeechMode)
+                    .accessibilityIdentifier("settings-learning-speech")
+                Text("Hear what you got wrong. For answers given while this is on, a short summary of what you missed is read aloud on the results, using your server's text-to-speech.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             IntelligenceAvailabilityView()
