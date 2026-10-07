@@ -140,18 +140,27 @@ class ResearchTools:
     def _run_delegate(self, args):
         skips_local = (args.get('reason') or '').strip() in _SKIPS_LOCAL
         if not skips_local and not self.searched:
+            # `blocked` tells the step label this was the rule refusing the
+            # call, not the web being down — "unavailable" read as an outage.
             return (
-                'Search the offline library first, or mark this as an '
-                'inherently current question, or as one the user explicitly '
-                'asked you to search the web for.',
+                'Blocked by the offline-first rule: the offline library has '
+                'not been searched yet. Call local_knowledge_search, or call '
+                'delegate again with reason=current for an inherently current '
+                'question, or reason=user_requested if the user explicitly '
+                'asked you to search the web.',
                 {'tool': 'delegate', 'arg': args.get('task'), 'ok': False,
-                 'error': 'offline library has not been searched'},
+                 'blocked': True,
+                 'error': 'the offline library was not searched first'},
             )
         if not skips_local and self.hits and not self.read:
             return (
-                'Read the strongest local result before deciding it is insufficient.',
+                'Blocked by the offline-first rule: the offline search found '
+                'results, and none has been read yet. Call local_knowledge_read '
+                'on the most relevant one; if it does not answer the question, '
+                'call delegate again.',
                 {'tool': 'delegate', 'arg': args.get('task'), 'ok': False,
-                 'error': 'offline search result has not been read'},
+                 'blocked': True,
+                 'error': 'none of the offline results were read first'},
             )
         result = agent.run((args.get('task') or '').strip(),
                            checkpoint=self._checkpoint, deadline=self._deadline)

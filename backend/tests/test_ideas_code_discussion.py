@@ -124,7 +124,7 @@ def test_the_research_state_is_fresh_per_discussion(client, repos_root, monkeypa
     second = discuss.build_toolbox(None)[1]['delegate']
     _text, event = second.run_tool('delegate', {'task': 't', 'reason': 'local_insufficient'})
     assert event['ok'] is False
-    assert event['error'] == 'offline library has not been searched'
+    assert event['error'] == 'the offline library was not searched first'
 
 
 def test_code_map_is_offered_only_when_the_repo_has_a_graph(

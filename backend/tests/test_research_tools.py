@@ -65,8 +65,9 @@ def test_the_web_is_refused_before_the_library_is_searched(library):
     text, event = _delegate(state, 'local_insufficient')
 
     assert event['ok'] is False
-    assert event['error'] == 'offline library has not been searched'
-    assert 'offline library' in text
+    assert event['blocked'] is True
+    assert event['error'] == 'the offline library was not searched first'
+    assert 'offline-first rule' in text
     assert library['delegate'] == []
 
 
@@ -74,8 +75,10 @@ def test_the_web_is_refused_until_the_strongest_hit_is_read(library):
     _tools, _dispatch, state = research_tools.build()
     state.run_tool('local_knowledge_search', {'queries': ['x', 'y']})
 
-    _text, event = _delegate(state, 'local_insufficient')
-    assert event['error'] == 'offline search result has not been read'
+    text, event = _delegate(state, 'local_insufficient')
+    assert event['blocked'] is True
+    assert event['error'] == 'none of the offline results were read first'
+    assert 'local_knowledge_read' in text
     assert library['delegate'] == []
 
 
@@ -146,7 +149,7 @@ def test_two_toolboxes_do_not_share_the_gate(library):
 
     _t2, _d2, second = research_tools.build()
     _text, event = _delegate(second, 'local_insufficient')
-    assert event['error'] == 'offline library has not been searched'
+    assert event['error'] == 'the offline library was not searched first'
 
 
 def test_the_checkpoint_and_deadline_reach_the_delegate(library):

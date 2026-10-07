@@ -232,7 +232,7 @@ def test_web_delegate_requires_local_attempt_unless_question_is_current(
 
     payload = _drain()[-1][1]
 
-    assert payload['steps'][0]['error'] == 'offline library has not been searched'
+    assert payload['steps'][0]['error'] == 'the offline library was not searched first'
 
 
 def test_web_delegate_requires_reading_a_local_hit(monkeypatch, answered):
@@ -253,7 +253,7 @@ def test_web_delegate_requires_reading_a_local_hit(monkeypatch, answered):
 
     payload = _drain()[-1][1]
 
-    assert payload['steps'][-1]['error'] == 'offline search result has not been read'
+    assert payload['steps'][-1]['error'] == 'none of the offline results were read first'
 
 
 def test_an_inherently_current_question_can_go_directly_to_web(

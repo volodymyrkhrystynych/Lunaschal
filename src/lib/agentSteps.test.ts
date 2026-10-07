@@ -62,6 +62,20 @@ describe('stepLabel', () => {
     ).toBe('Web search unavailable: no provider');
   });
 
+  it('names the offline-first rule when it blocked web research', () => {
+    expect(
+      stepLabel({
+        tool: 'delegate',
+        arg: 'airpods',
+        ok: false,
+        blocked: true,
+        error: 'none of the offline results were read first',
+      })
+    ).toBe(
+      'Web research blocked by the offline-first rule: none of the offline results were read first'
+    );
+  });
+
   it('describes an unavailable search without an error message', () => {
     expect(stepLabel({ tool: 'web_search', arg: 'fsrs', ok: false })).toBe(
       'Web search unavailable'

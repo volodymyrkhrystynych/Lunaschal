@@ -18,6 +18,9 @@ export interface AgentStep {
   // deep_research step this rides alongside `ok: true` — a pass that was cut
   // short still writes up what it found, and that answer is a result.
   timedOut?: boolean;
+  // Present only on a `delegate` step the offline-first rule refused — the
+  // web was never tried, so "unavailable" would describe an outage.
+  blocked?: boolean;
   // Present only on a `writing_read` step: whether the thing opened was a
   // chapter or a note. The label is materially better for saying which.
   kind?: string;
@@ -135,7 +138,9 @@ export function stepLabel(step: AgentStep): string {
     case 'delegate':
       return step.ok
         ? `Asked web research about "${target}" — ${step.count ?? 0} sources`
-        : `Web research unavailable${step.error ? `: ${step.error}` : ''}`;
+        : step.blocked
+          ? `Web research blocked by the offline-first rule${step.error ? `: ${step.error}` : ''}`
+          : `Web research unavailable${step.error ? `: ${step.error}` : ''}`;
     case 'deep_research': {
       const sources = `${step.count ?? 0} source${step.count === 1 ? '' : 's'}`;
       if (!step.ok)
