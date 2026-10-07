@@ -52,6 +52,9 @@ struct BookListView: View {
 
     var body: some View {
         List {
+            if model.ficDownload != nil {
+                Section { FicDownloadBanner(model: model) }
+            }
             ForEach(books) { book in
                 NavigationLink { BookReaderEntry(model: model, book: book) } label: { BookRow(book: book) }
             }
@@ -240,6 +243,8 @@ struct BookReaderEntry: View {
                 resume = try model.replica.resumePoint(bookID: book.id)
             } catch { model.message = error.localizedDescription }
             loaded = true
+            // Straight to the front of the queue: this is the book being looked at.
+            model.ensureFicOnDevice(book)
         }
     }
 }

@@ -33,6 +33,8 @@ xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
 #   add: -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M5)'
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingWorkspaceReopensWithoutAServer
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate
+#        -only-testing:LunaschalUITests/OfflineCaptureTests/testNewspaperScrollsAsOneColumn
+#        -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesPagesTurnWithASwipe
 
 xcodebuild -project apple/Lunaschal.xcodeproj -scheme LunaschalWatch \
   -sdk watchsimulator -destination 'generic/platform=watchOS Simulator' \

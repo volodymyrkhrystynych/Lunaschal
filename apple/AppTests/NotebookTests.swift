@@ -1,6 +1,7 @@
 import XCTest
 import PDFKit
 import PaperKit
+import PencilKit
 import UIKit
 import LunaschalCore
 @testable import Lunaschal
@@ -46,21 +47,41 @@ final class NotebookCropTests: XCTestCase {
 
     func testPasteCropsOnlyAScreenSizedImage() throws {
         let ours = CGRect(x: 688, y: 0, width: 688, height: 1032)
-        // A system screenshot: exactly the screen at 2x.
+        // A system screenshot: exactly the screen at 2x. Lunaschal on the
+        // right, so the left half is what's kept.
         let screenshot = try XCTUnwrap(solid(.red, CGSize(width: 2752, height: 2064)))
         XCTAssertTrue(NotebookCrop.isScreenshot(screenshot, screen: landscape, scale: 2))
         let cropped = NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: ours, scale: 2)
-        XCTAssertEqual(cropped.width, 1376)
-        XCTAssertEqual(cropped.height, 2064)
+        XCTAssertEqual(cropped.outcome, .cropped)
+        XCTAssertEqual(cropped.image.width, 1376)
+        XCTAssertEqual(cropped.image.height, 2064)
         // A copied photo with the screen's shape but not its size goes in whole.
         let photo = try XCTUnwrap(solid(.red, CGSize(width: 1376, height: 1032)))
         XCTAssertFalse(NotebookCrop.isScreenshot(photo, screen: landscape, scale: 2))
-        XCTAssertEqual(NotebookCrop.cropIfScreenshot(photo, screen: landscape, window: ours, scale: 2).width, 1376)
+        let whole = NotebookCrop.cropIfScreenshot(photo, screen: landscape, window: ours, scale: 2)
+        XCTAssertEqual(whole.outcome, .notScreenshot(width: 1376, height: 1032))
+        XCTAssertEqual(whole.image.width, 1376)
         // Our window full-screen: a screenshot, but nothing to cut.
-        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: landscape, scale: 2).width, 2752)
+        let full = NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: landscape, scale: 2)
+        XCTAssertEqual(full.outcome, .fullScreen)
+        XCTAssertEqual(full.image.width, 2752)
     }
 
-    func testPasteChecksTheCutHalfReallyIsLunaschal() throws {
+    func testDisplayZoomScreenshotsAreRecognisedByTheNativePixels() throws {
+        // "More Space": more points than the panel has pixels at 2x, so only
+        // the native size (reported portrait) says what a screenshot is.
+        let zoomed = CGRect(x: 0, y: 0, width: 1590, height: 1192)
+        let native = CGSize(width: 2064, height: 2752)
+        let screenshot = try XCTUnwrap(solid(.red, CGSize(width: 2752, height: 2064)))
+        XCTAssertFalse(NotebookCrop.isScreenshot(screenshot, screen: zoomed, scale: 2))
+        XCTAssertTrue(NotebookCrop.isScreenshot(screenshot, screen: zoomed, scale: 2, native: native))
+        let result = NotebookCrop.cropIfScreenshot(screenshot, screen: zoomed, window: CGRect(x: 795, y: 0, width: 795, height: 1192),
+                                                   scale: 2, native: native)
+        XCTAssertEqual(result.outcome, .cropped)
+        XCTAssertEqual(result.image.width, 1376)
+    }
+
+    func testPasteCutsUnlessTheScreenshotClearlyHasLunaschalOnTheOtherSide() throws {
         let screenPixels = CGSize(width: 2752, height: 2064)
         let left = CGRect(x: 0, y: 0, width: 1376, height: 2064), right = CGRect(x: 1376, y: 0, width: 1376, height: 2064)
         // Taken with the reader on the left and Lunaschal on the right.
@@ -68,16 +89,25 @@ final class NotebookCropTests: XCTestCase {
         let ours = try XCTUnwrap(picture(CGSize(width: 172, height: 258)) { drawApp($0, CGRect(x: 0, y: 0, width: 172, height: 258), lines: false) })
         let onRight = CGRect(x: 688, y: 0, width: 688, height: 1032), onLeft = CGRect(x: 0, y: 0, width: 688, height: 1032)
 
-        XCTAssertTrue(NotebookCrop.showsWindow(screenshot, snapshot: ours, screen: landscape, window: onRight))
-        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: onRight, scale: 2, snapshot: ours).width, 1376)
-        // Lunaschal has since moved to the left: the old screenshot's left half
-        // is the reader, so nothing is cut.
-        XCTAssertFalse(NotebookCrop.showsWindow(screenshot, snapshot: ours, screen: landscape, window: onLeft))
-        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: onLeft, scale: 2, snapshot: ours).width, 2752)
-        // Two blank halves can't be told apart: paste whole rather than guess.
+        XCTAssertFalse(NotebookCrop.sidesSwapped(screenshot, snapshot: ours, screen: landscape, window: onRight))
+        let kept = NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: onRight, scale: 2, snapshot: ours)
+        XCTAssertEqual(kept.outcome, .cropped)
+        XCTAssertEqual(kept.image.width, 1376)
+        // Lunaschal has since moved to the left: the old screenshot's left
+        // half is the reader, so nothing is cut.
+        XCTAssertTrue(NotebookCrop.sidesSwapped(screenshot, snapshot: ours, screen: landscape, window: onLeft))
+        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: onLeft, scale: 2, snapshot: ours).outcome,
+                       .sidesSwapped)
+        // Two blank halves can't be told apart: that's no reason not to cut.
         let blank = try XCTUnwrap(solid(.white, screenPixels))
         let blankOurs = try XCTUnwrap(solid(.white, CGSize(width: 172, height: 258)))
-        XCTAssertFalse(NotebookCrop.showsWindow(blank, snapshot: blankOurs, screen: landscape, window: onRight))
+        XCTAssertEqual(NotebookCrop.cropIfScreenshot(blank, screen: landscape, window: onRight, scale: 2, snapshot: blankOurs).outcome,
+                       .cropped)
+        // A snapshot that resembles neither half (PaperKit's canvas drawn
+        // blank, the tool picker missing) doesn't stop the cut either.
+        let unlike = try XCTUnwrap(solid(.black, CGSize(width: 172, height: 258)))
+        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: onRight, scale: 2, snapshot: unlike).outcome,
+                       .cropped)
     }
 
     func testCropKeepsTheWholeImageWhenTheShapeDisagrees() throws {
@@ -225,15 +255,21 @@ final class NotebookEditorTests: XCTestCase {
         let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try issuePDF(pages: 4), pageCount: 4)
         let model = NotebookEditorModel(store: store, notebook: notebook)
         XCTAssertNil(model.error)
+        // One scroll: the four issue pages stacked in a single markup, each at
+        // the column's width in its own shape.
+        XCTAssertTrue(model.isColumn)
         XCTAssertEqual(model.pageCount, 4)
-        XCTAssertEqual(model.pages[0].bounds.size, CGSize(width: 1240, height: 1550))
+        XCTAssertEqual(model.pages.count, 1)
+        XCTAssertEqual(model.pageRect(0).size, CGSize(width: 1240, height: 1550))
+        XCTAssertEqual(model.pages[0].bounds.size, CGSize(width: 1240, height: 1550 * 4))
         XCTAssertEqual(model.pageLabel, "p. 1 / 4")
         XCTAssertFalse(model.canDeleteCurrent, "issue pages can't be deleted")
         model.go(to: 2)
         model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 400, height: 300))))
         model.addPage()
-        XCTAssertTrue(model.canDeleteCurrent, "a page added after the issue can")
-        XCTAssertEqual(model.pages[4].bounds, NotebookPage.blank)
+        XCTAssertEqual(model.pageCount, 5)
+        XCTAssertFalse(model.canDeleteCurrent, "ink can't be cut out of a column, so no page of one can go")
+        XCTAssertEqual(model.pageRect(4), CGRect(x: 0, y: 1550 * 4, width: 1240, height: NotebookPage.blank.height))
 
         let files = await model.renderForSave()
         XCTAssertEqual(files.map(\.name), ["Toronto Star 2026-10-06 p1.jpg", "Toronto Star 2026-10-06 p3.jpg"])
@@ -344,5 +380,132 @@ final class NotebookEditorTests: XCTestCase {
         session.editor = model
         XCTAssertEqual(try session.deliver(png), "Added to page 1.")
         XCTAssertThrowsError(try session.deliver(Data("not an image".utf8)))
+    }
+}
+
+@MainActor
+final class NotebookColumnConversionTests: XCTestCase {
+    private func store() throws -> NotebookStore {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return try NotebookStore(root: root)
+    }
+
+    /// An issue as the previous build left it: paged, each markup the shape
+    /// of its PDF page, with something written on page 2.
+    private func pagedIssue(_ store: NotebookStore) async throws -> Notebook {
+        let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
+        try NewspaperFixture.makeIssue(at: pdfURL)
+        let count = NewspaperFixture.shapes.count
+        var paper = try store.createNewspaper(date: "2026-10-06", pdf: pdfURL, pageCount: count)
+        paper.layout = nil
+        try JSONEncoder().encode(paper).write(to: store.root.appendingPathComponent(paper.id + ".json"))
+        let pdf = try XCTUnwrap(PDFDocument(url: XCTUnwrap(store.pdfURL(paper))))
+        var pages: [Data] = []
+        for index in 0..<count {
+            var page = PaperMarkup(bounds: NotebookPage.bounds(for: pdf.page(at: index)))
+            if index == 1 {
+                page.insertNewShape(configuration: ShapeConfiguration(type: .rectangle), frame: CGRect(x: 200, y: 300, width: 400, height: 200))
+            }
+            pages.append(try await page.dataRepresentation())
+        }
+        return try store.checkpoint(paper.id, pages: pages, marked: [1], preview: Data([1]))
+    }
+
+    func testAPagedIssueOpensAsAColumnWithItsInkStillOnPageTwo() async throws {
+        let store = try store()
+        let paged = try await pagedIssue(store)
+        XCTAssertFalse(paged.isColumn)
+        let model = NotebookEditorModel(store: store, notebook: paged)
+        XCTAssertTrue(model.isColumn)
+        XCTAssertEqual(model.pageCount, NewspaperFixture.shapes.count)
+        XCTAssertEqual(model.pages.count, 1, "one markup for the whole issue")
+        XCTAssertTrue(model.pages[0].contentsRenderFrame.intersects(model.pageRect(1)),
+                      "the mark moved down onto page 2")
+        XCTAssertFalse(model.pages[0].contentsRenderFrame.intersects(model.pageRect(0)))
+        await model.checkpoint()
+        let saved = try store.notebook(paged.id)
+        XCTAssertTrue(saved.isColumn)
+        XCTAssertEqual(saved.pageCount, NewspaperFixture.shapes.count)
+        XCTAssertEqual(saved.markedPages, [1], "page 2's mark came across with it")
+    }
+
+    func testWritingOnAPageFilesItAndRubbingItOutStopsFilingIt() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try await pagedIssue(store))
+        await model.checkpoint()
+        // Written on page 3, with page 3 on screen.
+        model.go(to: 2)
+        var written = model.pages[0]
+        written.insertNewShape(configuration: ShapeConfiguration(type: .ellipse),
+                               frame: model.pageRect(2).insetBy(dx: 400, dy: 200))
+        model.canvasChanged(written, page: 0)
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(model.notebook.id).markedPages, [1, 2])
+        // Page 2's mark erased while page 2 is on screen: it stops being filed.
+        model.go(to: 1)
+        var erased = PaperMarkup(bounds: written.bounds)
+        erased.insertNewShape(configuration: ShapeConfiguration(type: .ellipse),
+                              frame: model.pageRect(2).insetBy(dx: 400, dy: 200))
+        model.canvasChanged(erased, page: 0)
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(model.notebook.id).markedPages, [2])
+    }
+
+    func testPagesStackAtFullWidthInTheirOwnShapes() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try await pagedIssue(store))
+        var top: CGFloat = 0
+        for (index, ratio) in NewspaperFixture.shapes.enumerated() {
+            let slot = model.pageRect(index)
+            XCTAssertEqual(slot.minY, top, "page \(index + 1) starts where the last one ended")
+            XCTAssertEqual(slot.width, NotebookColumn.width)
+            XCTAssertEqual(slot.height / slot.width, ratio, accuracy: 0.01, "page \(index + 1) keeps its shape")
+            top = slot.maxY
+            let rendered = await model.render(index, width: 600)
+            let image = try XCTUnwrap(rendered)
+            XCTAssertEqual(Double(image.height) / Double(image.width), Double(ratio), accuracy: 0.01)
+        }
+        XCTAssertEqual(model.pages[0].bounds.height, top)
+    }
+
+    func testANewIssueStartsAsAColumn() throws {
+        let store = try store()
+        let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
+        try NewspaperFixture.makeIssue(at: pdfURL)
+        let paper = try store.createNewspaper(date: "2026-10-06", pdf: pdfURL, pageCount: NewspaperFixture.shapes.count)
+        let model = NotebookEditorModel(store: store, notebook: paper)
+        XCTAssertTrue(model.isColumn)
+        XCTAssertEqual(model.pages.first?.bounds.width, NotebookColumn.width)
+        XCTAssertEqual(model.pages.first?.bounds.height, model.pageRect(NewspaperFixture.shapes.count - 1).maxY)
+        XCTAssertFalse(model.canDeleteCurrent)
+    }
+
+    /// The ink lands in the same place on the page whatever size the picture
+    /// is: a 400-pixel preview used to show the page's top-left corner, and a
+    /// 2000-pixel journal picture its ink shrunk into the corner.
+    func testInkScalesWithThePicture() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        var page = model.pages[0]
+        // A mark in the bottom-right quarter of an A4 page.
+        let mark = CGRect(x: 900, y: 1400, width: 200, height: 200)
+        page.insertNewShape(configuration: ShapeConfiguration(type: .rectangle), frame: mark)
+        model.canvasChanged(page, page: 0)
+        for width: CGFloat in [400, 1240, 2000] {
+            let rendered = await model.render(0, width: width)
+            let image = try XCTUnwrap(rendered)
+            let scale = CGFloat(image.width) / NotebookPage.width
+            let centre = CGPoint(x: mark.midX * scale, y: mark.midY * scale)
+            let corner = CGPoint(x: 20 * scale, y: 20 * scale)
+            XCTAssertTrue(isDark(image, at: centre), "the mark is where it was drawn at \(width)")
+            XCTAssertFalse(isDark(image, at: corner), "and not shrunk into the corner at \(width)")
+        }
+    }
+
+    private func isDark(_ image: CGImage, at point: CGPoint) -> Bool {
+        let bytes = CFDataGetBytePtr(image.dataProvider!.data!)!
+        let offset = Int(point.y) * image.bytesPerRow + Int(point.x) * 4
+        return bytes[offset] < 80 && bytes[offset + 1] < 80 && bytes[offset + 2] < 80
     }
 }

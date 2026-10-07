@@ -22,6 +22,12 @@ targets:
       - package: LunaschalCore
       - target: LunaschalWatch
         embed: true
+      - sdk: HealthKit.framework
+    entitlements:
+      path: App/Lunaschal.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile
@@ -50,6 +56,7 @@ targets:
         NSCameraUsageDescription: Take photos to attach to your journal entries.
         NSLocationWhenInUseUsageDescription: Record where a journal or food entry was written, and show the weather there.
         NSLocalNetworkUsageDescription: Connect to your personal Lunaschal server.
+        NSHealthShareUsageDescription: Copy your sleep, workouts, exercise minutes and other Health data to your own Lunaschal server, so wake and sleep times fill in automatically and you can analyse it there.
         UIBackgroundModes: [audio, processing]
         BGTaskSchedulerPermittedIdentifiers: [com.lunaschal.mobile.sync]
         UISupportedInterfaceOrientations:

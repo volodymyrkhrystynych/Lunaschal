@@ -2556,6 +2556,35 @@ export interface HeatmapDayResponse {
   sessions: WorkoutSession[];
 }
 
+/** A workout HealthKit recorded (usually on the Watch). Times are unix
+ *  seconds — the Apple Health routes return numbers, not ISO strings. */
+export interface HealthWorkout {
+  id: string;
+  activityType: number;
+  activityName: string;
+  start: number;
+  end: number;
+  durationSeconds: number;
+  energyKcal: number | null;
+  distanceMeters: number | null;
+  source: string | null;
+}
+
+/** One 4am day of Apple Health totals; null where nothing was recorded. */
+export interface HealthDay {
+  date: string;
+  exerciseMinutes: number | null;
+  steps: number | null;
+  activeEnergyKcal: number | null;
+}
+
+export interface HealthActivity {
+  days: HealthDay[];
+  workouts: HealthWorkout[];
+  /** Unix seconds of the last upload from the phone; null if never synced. */
+  lastSyncedAt: number | null;
+}
+
 /** One Monday-start week of the momentum chart. Every week in the window is
  *  sent, zeros included — a skipped quiet week would draw as a flat trend. */
 export interface TrendWeek {
@@ -2602,6 +2631,34 @@ export interface Selfie {
   mime: string | null;
   url: string;
   createdAt: string;
+}
+
+export type PomodoroKind = 'work' | 'break' | 'timeout';
+
+/** One Watch timer run. `completed` is false for one cancelled early, and
+ *  `endedAt` is then when it was cancelled. */
+export interface PomodoroSession {
+  id: string;
+  kind: PomodoroKind;
+  date: string;
+  startedAt: string;
+  endedAt: string;
+  plannedSeconds: number;
+  completed: boolean;
+  createdAt: string;
+}
+
+export interface PomodoroDay {
+  date: string;
+  focusMinutes: number;
+  breakMinutes: number;
+  timeoutMinutes: number;
+  completedBlocks: number;
+}
+
+export interface PomodoroSummary {
+  days: PomodoroDay[];
+  sessions: PomodoroSession[];
 }
 
 export interface CalorieLog {
@@ -5038,6 +5095,8 @@ export const api = {
       get<{ weeks: TrendWeek[] }>(
         `/api/lifestyle/trends${weeks ? `?weeks=${weeks}` : ''}`
       ),
+    health: (days = 28) =>
+      get<HealthActivity>(`/api/apple-health/activity?days=${days}`),
     exercises: {
       list: () => get<ExerciseSummary[]>('/api/lifestyle/exercises'),
       progression: (name: string) =>
@@ -5097,6 +5156,12 @@ export const api = {
       }) => post<CalorieLog>('/api/lifestyle/calories', data),
       delete: (id: string) =>
         del<{ success: boolean }>(`/api/lifestyle/calories/${id}`),
+    },
+    pomodoro: {
+      summary: (days = 14) =>
+        get<PomodoroSummary>(`/api/lifestyle/pomodoro?days=${days}`),
+      delete: (id: string) =>
+        del<{ success: boolean }>(`/api/lifestyle/pomodoro/sessions/${id}`),
     },
     weather: {
       today: () => get<WeatherToday>('/api/lifestyle/weather/today'),

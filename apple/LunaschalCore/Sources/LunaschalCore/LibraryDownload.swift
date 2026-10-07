@@ -15,7 +15,7 @@ public actor LibraryDownload {
     private let mediaURL: URL
     private var replica: ReplicaStore?
     private var media: MediaStore?
-    private var running = false
+    var running = false
 
     public init(replicaURL: URL, mediaURL: URL) {
         self.replicaURL = replicaURL
@@ -29,14 +29,14 @@ public actor LibraryDownload {
         return knowledge ? base + ["wiki_articles"] : base
     }
 
-    private func replicaStore() throws -> ReplicaStore {
+    func replicaStore() throws -> ReplicaStore {
         if let replica { return replica }
         let store = try ReplicaStore(url: replicaURL)
         replica = store
         return store
     }
 
-    private func mediaStore() throws -> MediaStore {
+    func mediaStore() throws -> MediaStore {
         if let media { return media }
         let store = try MediaStore(root: mediaURL)
         media = store

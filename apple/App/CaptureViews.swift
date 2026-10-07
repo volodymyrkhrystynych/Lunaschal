@@ -8,12 +8,14 @@ struct CaptureRoot: View {
     @ObservedObject var model: CaptureModel
     @StateObject private var chat: ChatModel
     @StateObject private var todo: TodoModel
+    @StateObject private var learning: LearningModel
     @Environment(\.scenePhase) private var scenePhase
 
     init(model: CaptureModel) {
         self.model = model
         _chat = StateObject(wrappedValue: ChatModel(capture: model))
         _todo = StateObject(wrappedValue: TodoModel(capture: model))
+        _learning = StateObject(wrappedValue: LearningModel(capture: model))
     }
 
     var body: some View {
@@ -34,15 +36,16 @@ struct CaptureRoot: View {
                 NavigationStack { DrawingLibraryView(model: model) }
                     .tabItem { Label("Draw", systemImage: "pencil.tip") }
             }
-            NavigationStack { MoreMenu(model: model) }
+            NavigationStack { MoreMenu(model: model, learning: learning) }
                 .tabItem { Label("More", systemImage: "line.3.horizontal") }
         }
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
-        .onChange(of: model.syncPasses) { _, _ in Task { await todo.refresh() } }
+        .onChange(of: model.syncPasses) { _, _ in Task { await todo.refresh(); await learning.refresh() } }
         .task(id: scenePhase) {
             guard scenePhase == .active else { model.leaveForeground(); return }
+            model.resumeFicDownloads()
             while !Task.isCancelled {
                 model.requestSync()
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
@@ -580,12 +583,22 @@ private struct AudioPreview: View {
 // shows five tabs before iOS adds its own More overflow, so this owns that slot.
 private struct MoreMenu: View {
     @ObservedObject var model: CaptureModel
+    @ObservedObject var learning: LearningModel
 
     var body: some View {
         List {
             NavigationLink { LibraryView(model: model) } label: {
                 Label("Library", systemImage: "books.vertical")
             }.accessibilityIdentifier("more-Library")
+            NavigationLink { JobsFeedView(capture: model) } label: {
+                Label("Jobs", systemImage: "briefcase")
+            }.accessibilityIdentifier("more-Jobs")
+            NavigationLink { LearningView(learning: learning) } label: {
+                Label("Learning", systemImage: "graduationcap")
+            }
+            // Cards due for review, as the desktop's Review button counts them.
+            .badge(learning.stats.due)
+            .accessibilityIdentifier("more-Learning")
             NavigationLink { ConnectionSettings(model: model) } label: {
                 Label("Settings", systemImage: "gear")
             }.accessibilityIdentifier("more-Settings")
@@ -598,6 +611,7 @@ private struct ConnectionSettings: View {
     @ObservedObject var model: CaptureModel
     @AppStorage("allowCellularSync") private var allowCellular = true
     @AppStorage("backgroundSyncEnabled") private var backgroundSyncEnabled = true
+    @AppStorage(LearningModel.speechModeKey) private var learningSpeechMode = false
     @State private var address = ""
     @State private var password = ""
     @State private var code = ""
@@ -641,9 +655,53 @@ private struct ConnectionSettings: View {
                 Text("Applies to journal text, audio, and chapter updates after your first library download. Bulk library downloads use Wi-Fi only.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            Section("Learning") {
+                Toggle("Speech mode", isOn: $learningSpeechMode)
+                    .accessibilityIdentifier("settings-learning-speech")
+                Text("Hear what you got wrong. For answers given while this is on, a short summary of what you missed is read aloud on the results, using your server's text-to-speech.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if model.healthAvailable { HealthSettings(model: model) }
             IntelligenceAvailabilityView()
         }
         .navigationTitle("Settings")
         .onAppear { address = model.server?.absoluteString ?? address }
+    }
+}
+
+private struct HealthSettings: View {
+    @ObservedObject var model: CaptureModel
+    @AppStorage("healthSyncEnabled") private var enabled = false
+    @State private var asking = false
+
+    var body: some View {
+        Section("Apple Health") {
+            Toggle("Sync Apple Health", isOn: Binding(
+                get: { enabled },
+                set: { on in
+                    if on {
+                        asking = true
+                        Task { _ = await model.enableHealth(); asking = false }
+                    } else { model.disableHealth() }
+                }))
+                .disabled(asking)
+            if enabled {
+                let status = model.healthStatus
+                if let last = status.lastSuccess {
+                    Text("Last synced \(last.formatted(date: .abbreviated, time: .shortened)) · \(status.sent.formatted()) items sent")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Text("Not synced yet. The first sync reads all of your Health history and can take a while.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                if let error = status.lastError {
+                    Text(error).font(.footnote).foregroundStyle(.red)
+                }
+                Button("Sync now") { model.requestSync(manual: true) }.disabled(model.syncing)
+                Button("Resend all Health data") { model.resendAllHealth() }.disabled(model.syncing)
+            }
+            Text("Reads sleep, workouts, exercise minutes, heart rate and everything else Health allows, and copies it to your Lunaschal server. Watch data arrives through the phone. Choose which types to share in the Health permission sheet; changing it later is in the Health app under Sharing → Apps.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
     }
 }

@@ -37,29 +37,52 @@ enum NotebookCrop {
 
     /// A system screenshot is exactly the screen in pixels; a copied photo
     /// almost never is. Paste crops only what passes this, so a picture copied
-    /// from Photos is never cut in half.
-    static func isScreenshot(_ image: CGImage, screen: CGRect, scale: CGFloat) -> Bool {
-        let width = screen.width * scale, height = screen.height * scale
-        return abs(CGFloat(image.width) - width) <= 1 && abs(CGFloat(image.height) - height) <= 1
+    /// from Photos is never cut in half. `native` is the panel's own pixel
+    /// size, which is what a screenshot has under Display Zoom ("More Space"),
+    /// where points × scale is not.
+    static func isScreenshot(_ image: CGImage, screen: CGRect, scale: CGFloat, native: CGSize? = nil) -> Bool {
+        let size = CGSize(width: image.width, height: image.height)
+        func matches(_ other: CGSize) -> Bool {
+            (abs(size.width - other.width) <= 2 && abs(size.height - other.height) <= 2)
+                || (abs(size.width - other.height) <= 2 && abs(size.height - other.width) <= 2)
+        }
+        return matches(CGSize(width: screen.width * scale, height: screen.height * scale))
+            || native.map(matches) == true
+    }
+
+    /// What Paste did with an image, so the status line can say why a
+    /// screenshot went in whole instead of leaving that to be guessed at.
+    enum PasteOutcome: Equatable {
+        case cropped
+        case notScreenshot(width: Int, height: Int)
+        case fullScreen
+        case sidesSwapped
     }
 
     /// For Paste: the other app's part of a screenshot, anything else whole.
-    /// With a snapshot of our window, also check the part being thrown away
-    /// really is Lunaschal: an older screenshot, taken with the apps the other
-    /// way round, has the right size and the wrong half.
+    /// Cutting is the default for anything screen-sized. The snapshot of our
+    /// window can only veto it, and only when the screenshot clearly shows us
+    /// on the *other* side (an older one, taken with the apps the other way
+    /// round). A snapshot that matches neither side well, which is what
+    /// PaperKit's canvas and the floating tool picker tend to produce, never
+    /// stops the cut.
     static func cropIfScreenshot(_ image: CGImage, screen: CGRect, window: CGRect, scale: CGFloat,
-                                 snapshot: CGImage? = nil) -> CGImage {
-        guard isScreenshot(image, screen: screen, scale: scale) else { return image }
-        if let snapshot, !showsWindow(image, snapshot: snapshot, screen: screen, window: window) { return image }
-        return crop(image, screen: screen, window: window)
+                                 native: CGSize? = nil, snapshot: CGImage? = nil) -> (image: CGImage, outcome: PasteOutcome) {
+        guard isScreenshot(image, screen: screen, scale: scale, native: native) else {
+            return (image, .notScreenshot(width: image.width, height: image.height))
+        }
+        if let snapshot, sidesSwapped(image, snapshot: snapshot, screen: screen, window: window) {
+            return (image, .sidesSwapped)
+        }
+        let cropped = crop(image, screen: screen, window: window)
+        return (cropped, cropped.width == image.width && cropped.height == image.height ? .fullScreen : .cropped)
     }
 
-    /// Whether `screenshot` shows our window where it is now. Our snapshot is
-    /// compared with that part of the screenshot and with the same-sized part
-    /// on the far side; ours has to be clearly the closer of the two. When the
-    /// two can't be told apart (two blank pages) the answer is no, and the
-    /// paste goes in whole: a whole screenshot is easier to fix than a wrong half.
-    static func showsWindow(_ screenshot: CGImage, snapshot: CGImage, screen: CGRect, window: CGRect) -> Bool {
+    /// Whether `screenshot` shows our window on the far side from where it is
+    /// now. Our snapshot is compared with where we are and with the mirrored
+    /// part; only a confident match on the mirrored side counts. Two blank
+    /// halves, or a snapshot that resembles neither, is not a swap.
+    static func sidesSwapped(_ screenshot: CGImage, snapshot: CGImage, screen: CGRect, window: CGRect) -> Bool {
         let ours = window.intersection(screen)
         guard !ours.isNull, ours.width > 0, ours.height > 0 else { return false }
         let imageSize = CGSize(width: screenshot.width, height: screenshot.height)
@@ -67,16 +90,15 @@ enum NotebookCrop {
         let mirrored = ours.height >= screen.height - 1
             ? CGRect(x: screen.minX + screen.maxX - ours.maxX, y: ours.minY, width: ours.width, height: ours.height)
             : CGRect(x: ours.minX, y: screen.minY + screen.maxY - ours.maxY, width: ours.width, height: ours.height)
+        guard mirrored.intersection(ours).width <= ours.width * 0.5 else { return false }
         let width = 48, height = max(8, Int((48 * ours.height / ours.width).rounded()))
         guard let reference = grayscale(snapshot, crop: nil, width: width, height: height),
               let here = grayscale(screenshot, crop: pixelRect(ours, screen: screen, imageSize: imageSize),
-                                   width: width, height: height) else { return false }
-        let near = difference(reference, here, width: width)
-        guard near < 0.25 else { return false }
-        if mirrored.intersection(ours).width > ours.width * 0.5 { return near < 0.06 }
-        guard let there = grayscale(screenshot, crop: pixelRect(mirrored, screen: screen, imageSize: imageSize),
+                                   width: width, height: height),
+              let there = grayscale(screenshot, crop: pixelRect(mirrored, screen: screen, imageSize: imageSize),
                                     width: width, height: height) else { return false }
-        return near < 0.6 * difference(reference, there, width: width)
+        let near = difference(reference, here, width: width), far = difference(reference, there, width: width)
+        return far < 0.25 && far < 0.6 * near
     }
 
     /// `image` (or a rect of it, in pixels) as a small grey thumbnail, 0...1.
@@ -130,12 +152,12 @@ final class NotebookSession {
 
     /// Our window and screen right now, in screen points. Read at delivery
     /// rather than tracked, since Split View can swap sides without resizing.
-    func geometry() -> (screen: CGRect, window: CGRect, scale: CGFloat)? {
+    func geometry() -> (screen: CGRect, window: CGRect, scale: CGFloat, native: CGSize)? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first,
               let window = scene.keyWindow ?? scene.windows.first else { return nil }
-        let space = scene.screen.coordinateSpace
-        return (scene.screen.bounds, window.convert(window.bounds, to: space), scene.screen.scale)
+        let screen = scene.screen
+        return (screen.bounds, window.convert(window.bounds, to: screen.coordinateSpace), screen.scale, screen.nativeBounds.size)
     }
 
     /// Our window as it looks now, small: enough to recognise it in a screenshot.

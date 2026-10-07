@@ -28,6 +28,7 @@ public final class ReplicaStore {
                 try execute("CREATE TABLE IF NOT EXISTS replica_records(collection TEXT NOT NULL,id TEXT NOT NULL,revision INTEGER NOT NULL,deleted INTEGER NOT NULL,payload TEXT,PRIMARY KEY(collection,id))")
                 try execute("CREATE TABLE IF NOT EXISTS replica_outbox(id TEXT PRIMARY KEY,operation TEXT NOT NULL,original TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',error TEXT,conflict TEXT)")
                 try execute("CREATE VIRTUAL TABLE IF NOT EXISTS replica_search USING fts5(collection UNINDEXED,id UNINDEXED,title,body)")
+                try execute("CREATE TABLE IF NOT EXISTS replica_sweep(collection TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(collection,id))")
                 if version < 2 {
                     for record in try recordsQuery("WHERE collection='newspaper_frontpages' AND deleted=0", []) {
                         try execute("UPDATE replica_search SET title=? WHERE collection=? AND id=?",
@@ -90,21 +91,49 @@ public final class ReplicaStore {
                 try execute("DELETE FROM replica_meta WHERE key LIKE 'ready:%'")
                 try execute("DELETE FROM replica_records")
                 try execute("DELETE FROM replica_search")
+                try execute("DELETE FROM replica_sweep")
                 try execute("UPDATE replica_outbox SET state='conflict',error='Server history changed. Review this saved edit.' WHERE state='pending'")
                 try set("epoch", page.epoch)
             } else if startingBootstrap {
                 try execute("DELETE FROM replica_meta WHERE key=?", ["ready:" + scope(page.collections)])
                 // A complete bootstrap is a replacement for its chosen scope;
-                // no unselected records or pending edits are removed.
+                // no unselected records or pending edits are removed. What it
+                // replaces is swept when it finishes, not deleted as it starts:
+                // a 5 GB library bootstrap used to empty every downloaded fic
+                // for the hours it took to reach them again.
                 for collection in page.collections {
-                    try execute("DELETE FROM replica_records WHERE collection=?", [collection])
-                    try execute("DELETE FROM replica_search WHERE collection=?", [collection])
+                    try execute("INSERT OR IGNORE INTO replica_sweep(collection,id) SELECT collection,id FROM replica_records WHERE collection=?", [collection])
                 }
             }
             for change in page.changes { try put(change) }
             try set(scope(page.collections), page.cursor)
-            if !page.hasMore { try set("ready:" + scope(page.collections), "1") }
+            if !page.hasMore {
+                try set("ready:" + scope(page.collections), "1")
+                for collection in page.collections {
+                    try execute("DELETE FROM replica_search WHERE collection=? AND id IN (SELECT id FROM replica_sweep WHERE collection=?)", [collection, collection])
+                    try execute("DELETE FROM replica_records WHERE collection=? AND id IN (SELECT id FROM replica_sweep WHERE collection=?)", [collection, collection])
+                    try execute("DELETE FROM replica_sweep WHERE collection=?", [collection])
+                }
+            }
         }
+    }
+
+    /// Records fetched outside any cursor — one fic, ahead of the library
+    /// download. Each is the server's latest revision of that record, so the
+    /// bootstrap or delta that reaches it later is a no-op (`put` keeps the
+    /// newer revision). A page from another epoch is dropped: those revisions
+    /// mean nothing against this replica's history.
+    @discardableResult
+    public func storePrefetched(_ changes: [SyncChange], epoch: String) throws -> Bool {
+        guard changes.allSatisfy({ $0.revision > 0 && !$0.id.isEmpty &&
+            ($0.deleted ? $0.data == nil : $0.data?["id"]?.string == $0.id) }) else { throw ReplicaError.invalidPage }
+        var stored = false
+        try transaction {
+            guard try self.epoch == epoch else { return }
+            for change in changes { try put(change) }
+            stored = true
+        }
+        return stored
     }
 
     public func record(collection: String, id: String) throws -> SyncChange? {
@@ -138,6 +167,14 @@ public final class ReplicaStore {
         let terms = query.split(whereSeparator: { $0.isWhitespace }).map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"*" }.joined(separator: " AND ")
         return (filter + " AND id IN (SELECT id FROM replica_search WHERE replica_search MATCH ? AND collection=?)",
                 [collection, terms, collection])
+    }
+
+    /// `relatedRecords(...).count` without reading every payload: a long fic's
+    /// chapters are megabytes of text, and this is asked on every book opened.
+    public func relatedCount(collection: String, field: String, value: String) throws -> Int {
+        guard ["ficId", "paperId", "pageId", "entryId", "conversationId"].contains(field) else { throw ReplicaError.invalidPage }
+        return Int(try rows("SELECT COUNT(*) FROM replica_records WHERE collection=? AND deleted=0 AND json_extract(payload,?)=?",
+                            [collection, "$." + field, value]).first?[0] ?? "0") ?? 0
     }
 
     public func relatedRecords(collection: String, field: String, value: String) throws -> [SyncChange] {
@@ -416,6 +453,8 @@ public final class ReplicaStore {
     }
 
     private func put(_ change: SyncChange) throws {
+        // Seen by the server's current history, so a running bootstrap keeps it.
+        try execute("DELETE FROM replica_sweep WHERE collection=? AND id=?", [change.collection, change.id])
         if let current = try record(collection: change.collection, id: change.id), current.revision >= change.revision { return }
         try execute("INSERT OR REPLACE INTO replica_records(collection,id,revision,deleted,payload) VALUES (?,?,?,?,?)",
                     [change.collection, change.id, String(change.revision), change.deleted ? "1" : "0", try change.data.map(json)])

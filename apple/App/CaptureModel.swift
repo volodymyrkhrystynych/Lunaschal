@@ -37,6 +37,12 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var downloadingLibrary = false
     @Published private(set) var libraryMessage: String?
     @Published private(set) var libraryBytes: Int64 = 0
+    /// Fics opened but not yet on the device, the one downloading first.
+    @Published private(set) var ficQueue = FicQueue()
+    @Published private(set) var ficDownload: FicDownloadStatus?
+    @Published private(set) var ficErrors: [String: String] = [:]
+    /// Bumped each time a fic page lands, so an open book redraws its chapters.
+    @Published private(set) var ficDownloadRevision = 0
     /// The Daily tab: what this device has logged, and the server's record of today.
     @Published private(set) var dailyLogs: [DailyLog] = []
     @Published private(set) var dailyStatus: DailyStatus?
@@ -51,6 +57,9 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var recentWorkouts: [WorkoutSession] = []
     let workouts: WorkoutStore
     private let workoutSyncer: WorkoutSync
+    /// Watch pomodoro runs the phone has acknowledged but the server hasn't had.
+    private let pomodoros: PomodoroStore
+    private let pomodoroSyncer: PomodoroSync
     /// Chat voice messages not yet on the server, and whatever the last pass said about them.
     @Published private(set) var chatRecordingQueue: [ChatRecording] = []
     let chatRecordings: ChatRecordingStore
@@ -60,6 +69,11 @@ final class CaptureModel: ObservableObject {
     @Published var todoRefusals: [String] = []
     let todoOutbox: TodoOutbox
     private let todoSyncer: TodoSync
+    /// Jobs feed decisions the server hasn't had yet, and what it last turned down.
+    @Published private(set) var jobQueue: [JobDecisionOp] = []
+    @Published var jobRefusals: [String] = []
+    let jobStore: JobStore
+    private let jobSyncer: JobSync
     private let calendarOutbox: CalendarOutbox
     private let calendarSyncer: CalendarSyncer
     /// The fic reader's reading spans and last-read chapters, until uploaded.
@@ -79,10 +93,14 @@ final class CaptureModel: ObservableObject {
     let transfers: TransferStore
     let media: MediaStore
     let daily: DailyStore
+    let healthState: HealthStateStore
+    @Published private(set) var healthStatus = HealthStateStore.Status()
     let recorder: Recorder
     private let watchReceiver: WatchReceiver
     private let syncer: CaptureSync
     private let dailySyncer: DailySync
+    private let healthSyncer: HealthSync
+    private lazy var healthSource: HealthKitSource? = HealthKitSource.isAvailable ? HealthKitSource() : nil
     private let replicaSyncer: ReplicaSync
     private let libraryWorker: LibraryDownload
     private var activeAPI: JournalAPI?
@@ -90,6 +108,11 @@ final class CaptureModel: ObservableObject {
     private var token: String?
     private var syncingTask: Task<Void, Never>?
     private var libraryTask: Task<Void, Never>?
+    private var ficTask: Task<Void, Never>?
+    private var ficAPI: JournalAPI?
+    /// The bulk download yielded to an opened fic and picks up once the queue empties.
+    private var resumeLibraryAfterFics = false
+    private var ficEstimate = TransferEstimate(started: Date())
 
     init(store: CaptureStore) throws {
         self.store = store
@@ -98,23 +121,32 @@ final class CaptureModel: ObservableObject {
         drawings = try DrawingStore(root: store.root.appendingPathComponent("drawings", isDirectory: true))
         drawingPublications = try DrawingPublicationStore(root: store.root.appendingPathComponent("drawing-publications", isDirectory: true))
         notebooks = try NotebookStore(root: store.root.appendingPathComponent("notebooks", isDirectory: true))
+        #if DEBUG
+        try NewspaperFixture.seedIfAsked(notebooks)
+        #endif
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
         daily = try DailyStore(root: store.root.appendingPathComponent("daily", isDirectory: true))
         dailySyncer = DailySync(store: daily)
+        healthState = try HealthStateStore(root: store.root.appendingPathComponent("apple-health", isDirectory: true))
+        healthSyncer = HealthSync(store: healthState)
         workouts = try WorkoutStore(root: store.root.appendingPathComponent("workouts", isDirectory: true))
         workoutSyncer = WorkoutSync(store: workouts)
+        pomodoros = try PomodoroStore(root: store.root.appendingPathComponent("pomodoro-outbox", isDirectory: true))
+        pomodoroSyncer = PomodoroSync(store: pomodoros)
         chatRecordings = try ChatRecordingStore(root: store.root.appendingPathComponent("chat-recordings", isDirectory: true))
         chatRecordingSyncer = ChatRecordingSync(store: chatRecordings)
         todoOutbox = try TodoOutbox(root: store.root.appendingPathComponent("todo-outbox", isDirectory: true))
         todoSyncer = TodoSync(outbox: todoOutbox)
+        jobStore = try JobStore(root: store.root.appendingPathComponent("jobs", isDirectory: true))
+        jobSyncer = JobSync(store: jobStore)
         calendarOutbox = try CalendarOutbox(root: store.root.appendingPathComponent("calendar-outbox", isDirectory: true))
         calendarSyncer = CalendarSyncer(outbox: calendarOutbox)
         ficActivity = try FicActivityStore(root: store.root.appendingPathComponent("fic-activity", isDirectory: true))
         ficActivitySyncer = FicActivitySync(store: ficActivity)
         try chatRecordings.recoverInterrupted()
         recorder = Recorder(store: store)
-        watchReceiver = try WatchReceiver(store: store)
+        watchReceiver = try WatchReceiver(store: store, pomodoros: pomodoros)
         syncer = CaptureSync(store: store, uploads: uploads, transfers: transfers)
         replicaSyncer = ReplicaSync(store: replica)
         libraryWorker = LibraryDownload(replicaURL: store.root.appendingPathComponent("replica.sqlite"),
@@ -126,9 +158,11 @@ final class CaptureModel: ObservableObject {
         captures = try store.list()
         draft = try store.draft()
         dailyLogs = try daily.list()
+        healthStatus = healthState.status()
         workoutLogs = try workouts.list()
         chatRecordingQueue = try chatRecordings.list()
         todoQueue = try todoOutbox.list()
+        jobQueue = try jobStore.pending()
         recentExercises = (try? JSONDecoder().decode([RecentExercise].self, from: Data(contentsOf: workoutCache("recent")))) ?? []
         recentWorkouts = (try? JSONDecoder().decode([WorkoutSession].self, from: Data(contentsOf: workoutCache("sessions")))) ?? []
         weather = try? JSONDecoder().decode(WeatherDay.self, from: Data(contentsOf: weatherCache))
@@ -161,6 +195,55 @@ final class CaptureModel: ObservableObject {
         UserDefaults.standard.object(forKey: "backgroundSyncEnabled") as? Bool ?? true
     }
 
+    /// Off until turned on in Settings: reading Health is a permission sheet
+    /// the user should see because they asked for it, not on first launch.
+    var healthSyncEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "healthSyncEnabled") && healthSource != nil
+    }
+
+    var healthAvailable: Bool { healthSource != nil }
+
+    /// Asks for read access, then syncs. Returns false only when the question
+    /// itself failed; a refusal is invisible to us and simply uploads nothing.
+    func enableHealth() async -> Bool {
+        guard let healthSource else { message = "Health data isn't available on this device."; return false }
+        do {
+            try await healthSource.requestAuthorization()
+            UserDefaults.standard.set(true, forKey: "healthSyncEnabled")
+            requestSync()
+            return true
+        } catch {
+            message = error.localizedDescription
+            return false
+        }
+    }
+
+    func disableHealth() {
+        UserDefaults.standard.set(false, forKey: "healthSyncEnabled")
+        onBackgroundSyncNeeded?()
+    }
+
+    /// Re-reads all of Health from the beginning. Safe: the server upserts
+    /// by HealthKit UUID, so nothing is stored twice.
+    func resendAllHealth() {
+        do { try healthState.reset() } catch { message = error.localizedDescription }
+        healthStatus = healthState.status()
+        requestSync(manual: true)
+    }
+
+    /// A Health problem on this device (HealthKit refusing a query) is shown
+    /// in Settings and doesn't fail the rest of the pass; the server being
+    /// unreachable or the pass being cancelled still does.
+    private func syncHealth(using api: JournalAPI) async throws {
+        guard healthSyncEnabled, let healthSource else { return }
+        defer { healthStatus = healthState.status() }
+        do {
+            try await healthSyncer.run(source: healthSource, transport: api)
+        } catch {
+            if Task.isCancelled || error is CancellationError || error is URLError || error is HTTPFailure { throw error }
+        }
+    }
+
     func reload() {
         do {
             captures = try store.list()
@@ -169,6 +252,7 @@ final class CaptureModel: ObservableObject {
             workoutLogs = try workouts.list()
             chatRecordingQueue = try chatRecordings.list()
             todoQueue = try todoOutbox.list()
+            jobQueue = try jobStore.pending()
             try loadJournal()
             pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
             try loadCalendar()
@@ -456,6 +540,28 @@ final class CaptureModel: ObservableObject {
         todoQueue = (try? todoOutbox.list()) ?? todoQueue
     }
 
+    /// Queues a Queue or Dismiss from the jobs feed and starts sending it.
+    func decideJob(_ job: FeedJob, _ decision: JobDecision) {
+        do {
+            try jobStore.decide(job, decision)
+            jobQueue = try jobStore.pending()
+        } catch { message = error.localizedDescription; return }
+        requestSync()
+    }
+
+    /// Like a to-do change, a decision the server can't take right now waits
+    /// for the next pass without holding up the uploads after it.
+    private func sendJobDecisions(using api: JournalAPI) async throws {
+        guard !((try? jobStore.pending()) ?? []).isEmpty else { return }
+        do {
+            jobRefusals += try await jobSyncer.run(using: api)
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+            if (error as? URLError) != nil { throw error }
+        }
+        jobQueue = (try? jobStore.pending()) ?? jobQueue
+    }
+
     /// Saved on the device first, so it shows at once and survives being offline.
     @discardableResult
     func queueCalendar(_ change: CalendarChange) -> Bool {
@@ -598,6 +704,8 @@ final class CaptureModel: ObservableObject {
     func signOut() {
         cancelSync()
         pauseLibrary()
+        pauseFicDownloads()
+        ficQueue.removeAll()
         do {
             if let server { try SessionToken.remove(server: server) }
             token = nil
@@ -623,9 +731,12 @@ final class CaptureModel: ObservableObject {
             hasEdits: replica.edits().contains { $0.state == "pending" }
                 || daily.list().contains { $0.state == .pending }
                 || workouts.list().contains { $0.state == .pending }
+                || !pomodoros.list().isEmpty
                 || drawingPublications.all().contains { $0.state == "pending" }
                 || !ficActivity.list().isEmpty
-                || !todoOutbox.list().isEmpty, signedIn: signedIn,
+                || !todoOutbox.list().isEmpty
+                || !jobStore.pending().isEmpty
+                || (healthSyncEnabled && HealthSync.isDue(healthState.status(), now: Date())), signedIn: signedIn,
             enabled: backgroundSyncEnabled, now: Date())
     }
 
@@ -640,6 +751,7 @@ final class CaptureModel: ObservableObject {
     func leaveForeground() {
         if !backgroundSyncing { cancelSync() }
         pauseLibrary()
+        pauseFicDownloads()
         onBackgroundSyncNeeded?()
     }
 
@@ -661,10 +773,12 @@ final class CaptureModel: ObservableObject {
             // First: a voice message is a question someone is waiting on.
             try await chatRecordingSyncer.run(using: api)
             try await sendTodoChanges(using: api)
+            try await sendJobDecisions(using: api)
             try await sendCalendarEvents(using: api)
             try await syncer.run(using: api)
             try await dailySyncer.run(using: api)
             try await workoutSyncer.run(using: api)
+            try await pomodoroSyncer.run(using: api)
             try await ficActivitySyncer.run(using: api)
             await refreshWorkouts(using: api)
             await refreshDaily(using: api)
@@ -687,6 +801,7 @@ final class CaptureModel: ObservableObject {
                 try await libraryWorker.updateText(using: api, collections: LibraryDownload.collections(
                     knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge")))
             }
+            try await syncHealth(using: api)
             // Anything ticked off while this pass was busy uploading.
             try await sendTodoChanges(using: api)
             let retry = try transfers.all().compactMap(\.retryAt).min()
@@ -750,6 +865,98 @@ final class CaptureModel: ObservableObject {
         libraryAPI?.cancel()
     }
 
+    // MARK: Fic downloads
+
+    /// Whether `book` can be read without the network: its PDF, or as many
+    /// chapters as the server says it has.
+    func isFicOnDevice(_ book: SyncChange) -> Bool {
+        if book.data?["sourceType"]?.string == "pdf" {
+            return (try? media.downloaded(collection: "fics", id: book.id)) != nil
+        }
+        let local = (try? replica.relatedCount(collection: "fic_chapters", field: "ficId", value: book.id)) ?? 0
+        let expected = book.data?["chapterCount"]?.number.map(Int.init) ?? 1
+        return local > 0 && local >= expected
+    }
+
+    /// Opening a fic that isn't on the device puts it at the front of the
+    /// queue and starts it now, ahead of the library download and of any fic
+    /// opened before it. Over any connection: opening a book is asking for it.
+    func ensureFicOnDevice(_ book: SyncChange) {
+        guard signedIn, !isFicOnDevice(book) else { return }
+        ficErrors[book.id] = nil
+        let headChanged = ficQueue.prioritize(book.id, title: book.title)
+        guard headChanged || ficTask == nil else { return }
+        if downloadingLibrary {
+            resumeLibraryAfterFics = true
+            pauseLibrary()
+        }
+        restartFicDownloads()
+    }
+
+    /// Picks the queue back up after the app returns to the foreground.
+    func resumeFicDownloads() {
+        guard ficTask == nil, !ficQueue.isEmpty, signedIn else { return }
+        restartFicDownloads()
+    }
+
+    func pauseFicDownloads() {
+        ficTask?.cancel()
+        ficAPI?.cancel()
+        ficTask = nil
+        ficDownload = nil
+    }
+
+    private func restartFicDownloads() {
+        let previous = ficTask, library = libraryTask
+        previous?.cancel()
+        ficAPI?.cancel()
+        ficTask = Task {
+            // Only one writer at a time: let whatever was running let go first.
+            await previous?.value
+            await library?.value
+            await runFicQueue()
+        }
+    }
+
+    private func runFicQueue() async {
+        while let entry = ficQueue.head {
+            guard !Task.isCancelled else { return }
+            guard signedIn, let server, let token else { break }
+            ficDownload = FicDownloadStatus(id: entry.id, title: entry.title, fraction: 0, doneBytes: 0, totalBytes: 0,
+                                            secondsLeft: nil)
+            ficEstimate = TransferEstimate(started: Date())
+            do {
+                let api = try JournalAPI(server: server, token: token, allowCellular: true)
+                ficAPI = api
+                try await libraryWorker.downloadFic(entry.id, after: entry.after, using: api) { [weak self] progress in
+                    await self?.showFicProgress(entry, progress)
+                }
+                ficQueue.remove(entry.id)
+            } catch {
+                if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+                ficErrors[entry.id] = error.localizedDescription
+                ficQueue.remove(entry.id)
+            }
+            ficDownloadRevision += 1
+        }
+        ficDownload = nil
+        ficAPI = nil
+        ficTask = nil
+        if resumeLibraryAfterFics, ficQueue.isEmpty {
+            resumeLibraryAfterFics = false
+            startLibraryDownload()
+        }
+    }
+
+    private func showFicProgress(_ entry: FicQueue.Entry, _ progress: FicDownloadProgress) {
+        guard ficQueue.head?.id == entry.id else { return }
+        ficQueue.record(entry.id, after: progress.after)
+        ficDownload = FicDownloadStatus(id: entry.id, title: entry.title, fraction: progress.fraction,
+            doneBytes: progress.doneBytes, totalBytes: progress.totalBytes,
+            secondsLeft: ficEstimate.secondsLeft(done: progress.doneBytes, total: progress.totalBytes, now: Date()))
+        ficDownloadRevision += 1
+    }
+
     func removeLibraryMedia() {
         guard !downloadingLibrary else { return }
         do {
@@ -806,5 +1013,22 @@ final class CaptureModel: ObservableObject {
             reload()
             requestSync()
         } catch { message = error.localizedDescription }
+    }
+}
+
+/// What the fic download indicator shows.
+struct FicDownloadStatus: Equatable {
+    let id: String
+    let title: String
+    let fraction: Double
+    let doneBytes: Int64
+    let totalBytes: Int64
+    let secondsLeft: TimeInterval?
+
+    var detail: String {
+        let size = totalBytes > 0
+            ? "\(ByteCountFormatter.string(fromByteCount: doneBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))"
+            : "Starting…"
+        return "\(Int((fraction * 100).rounded()))% · \(size) · \(TransferEstimate.describe(secondsLeft))"
     }
 }

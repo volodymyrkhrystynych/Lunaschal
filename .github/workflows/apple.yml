@@ -116,6 +116,8 @@ jobs:
             -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingWorkspaceReopensWithoutAServer \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal \
+            -only-testing:LunaschalUITests/OfflineCaptureTests/testNewspaperScrollsAsOneColumn \
+            -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesPagesTurnWithASwipe \
             CODE_SIGNING_ALLOWED=NO test
       - uses: actions/upload-artifact@v4
         if: failure()

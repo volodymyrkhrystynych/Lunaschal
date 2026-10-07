@@ -7,6 +7,7 @@ from backend.mobile_sync.registry import COLLECTIONS
 from backend.mobile_sync.operations import apply
 from backend.mobile_sync import media
 from backend.mobile_sync import drawings
+from backend.mobile_sync import fic_download
 
 bp = Blueprint('mobile_sync', __name__, url_prefix='/api/mobile')
 
@@ -16,7 +17,8 @@ def capabilities():
     return jsonify({'protocolVersion': PROTOCOL_VERSION, 'collections': list(COLLECTIONS),
                     'captureTimestamp': True, 'maxPageSize': 200,
                     'editableCollections': ['journal_entries', 'fic_bookmarks'],
-                    'mediaCollections': list(media.MEDIA), 'nativeDrawingFormat': 'pencilkit-v1'})
+                    'mediaCollections': list(media.MEDIA), 'nativeDrawingFormat': 'pencilkit-v1',
+                    'ficDownload': True})
 
 
 @bp.post('/drawings')
@@ -60,6 +62,20 @@ def media_file(collection, record_id):
     # Archived HTML remains untrusted even when downloaded through this route.
     response.headers['Content-Security-Policy'] = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'"
     return response
+
+
+@bp.get('/fics/<fic_id>/download')
+def fic_download_page(fic_id):
+    """One fic's chapters ahead of the library download; see fic_download.py."""
+    try:
+        return jsonify(fic_download.page(fic_id, after=request.args.get('after', ''),
+                                         limit=int(request.args.get('limit', str(fic_download.DEFAULT_PAGE_CHAPTERS)))))
+    except fic_download.FicNotFound:
+        return jsonify(error='Fic not found'), 404
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    except (OSError, FileExistsError):
+        return jsonify(error='Media changed or became unavailable; retry'), 409
 
 
 @bp.post('/operations')

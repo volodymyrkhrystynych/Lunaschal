@@ -130,6 +130,104 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
     }
 
+    func testLearningOpensFromMoreAndAsksForTheServer() {
+        let app = XCUIApplication()
+        app.launch()
+        openMore(app, "Learning")
+        // Review, Queue and Browse all need the server; without one the
+        // screen says so rather than showing an empty deck.
+        XCTAssertTrue(app.segmentedControls["learning-page"].waitForExistence(timeout: 5))
+        for page in ["Review", "Queue", "Browse"] {
+            XCTAssertTrue(app.segmentedControls["learning-page"].buttons[page].exists, "Missing \(page)")
+        }
+        XCTAssertTrue(app.staticTexts["Learning needs your server"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["learning-check"].exists)
+    }
+
+    private func snapshot(_ app: XCUIApplication, _ name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    /// The whole review against `-learningFixture`'s stand-in server: answer
+    /// one card, flip the rest, see the grade land, rate them all; then the
+    /// queue's duplicate prompt and the browser.
+    func testLearningReviewsTheFixtureDeck() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-learningFixture")
+        app.launch()
+        openMore(app, "Learning")
+
+        let field = app.textFields["learning-answer"]
+        XCTAssertTrue(field.waitForExistence(timeout: settle), "No card to answer")
+        XCTAssertTrue(app.staticTexts["Card 1 of 6"].exists)
+        snapshot(app, "1-answer")
+        focus(field)
+        field.typeText("It runs code on the main thread")
+        app.buttons["learning-check"].tap()
+        XCTAssertTrue(app.staticTexts["Card 2 of 6"].waitForExistence(timeout: 5))
+        for _ in 0..<5 { app.buttons["learning-flip"].tap(); RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+
+        XCTAssertTrue(app.staticTexts["Result 1 of 6"].waitForExistence(timeout: 5))
+        // The stand-in grades about a second after the answer: one of two claims.
+        XCTAssertTrue(app.staticTexts["Partly right."].waitForExistence(timeout: 10), "The grade never landed")
+        snapshot(app, "2-result")
+        app.buttons["learning-rate-Good"].tap()
+        for n in 2...6 {
+            XCTAssertTrue(app.staticTexts["Result \(n) of 6"].waitForExistence(timeout: 5))
+            app.buttons["learning-rate-Easy"].tap()
+        }
+        XCTAssertTrue(app.staticTexts["All caught up!"].waitForExistence(timeout: 5))
+
+        app.segmentedControls["learning-page"].buttons.element(boundBy: 1).tap()
+        let approve = app.buttons["Approve"].firstMatch
+        XCTAssertTrue(approve.waitForExistence(timeout: 5))
+        snapshot(app, "3-queue")
+        app.swipeUp()
+        app.buttons.matching(identifier: "Approve").element(boundBy: 2).tap()
+        XCTAssertTrue(app.staticTexts["Similar card exists"].waitForExistence(timeout: 5), "No duplicate prompt")
+        snapshot(app, "4-duplicate")
+        app.buttons["Keep both"].tap()
+
+        // An approved card is due at once, so it's back on Review's count.
+        XCTAssertTrue(app.segmentedControls["learning-page"].buttons["Review (1)"].waitForExistence(timeout: 5),
+                      "The approved card isn't due")
+        app.segmentedControls["learning-page"].buttons["Browse"].tap()
+        XCTAssertTrue(app.staticTexts["#concurrency"].waitForExistence(timeout: 5), "Browse is empty")
+        snapshot(app, "5-browse")
+    }
+
+    /// Speech mode is switched in Settings, and an answer given with it on
+    /// comes back with a summary to read aloud and a Replay button.
+    func testLearningSpeechModeIsASettingAndOffersReplay() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-learningFixture")
+        app.launch()
+        openMore(app, "Settings")
+        let toggle = app.switches["settings-learning-speech"]
+        for _ in 0..<6 where !reachable(toggle) { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "No speech mode switch in Settings")
+        if (toggle.value as? String) != "1" { toggle.switches.firstMatch.tap() }
+        XCTAssertEqual(toggle.value as? String, "1")
+
+        openMore(app, "Learning")
+        let field = app.textFields["learning-answer"]
+        XCTAssertTrue(field.waitForExistence(timeout: settle))
+        focus(field)
+        field.typeText("It runs code on the main thread")
+        app.buttons["learning-check"].tap()
+        XCTAssertTrue(app.staticTexts["Card 2 of 6"].waitForExistence(timeout: 5))
+        for _ in 0..<5 { app.buttons["learning-flip"].tap(); RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+        XCTAssertTrue(app.buttons["learning-replay"].waitForExistence(timeout: 10), "No read-aloud for a speech-mode answer")
+        snapshot(app, "speech-mode-result")
+        // A flipped card has nothing to read.
+        app.buttons["learning-rate-Good"].tap()
+        XCTAssertTrue(app.staticTexts["Result 2 of 6"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["learning-replay"].exists)
+    }
+
     func testDailyLogsWeightAndCaloriesWithoutAServer() {
         let app = XCUIApplication()
         app.launch()
@@ -444,6 +542,42 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["\(name) 10"].exists)
         XCTAssertTrue(app.staticTexts["\(name) · 12"].exists)
         XCTAssertTrue(app.staticTexts["Waiting to sync"].exists)
+    }
+
+    // With no server the feed still opens, with the sort and a hint to sign
+    // in rather than an error alert. Whether it is empty depends on whether
+    // the fixture test ran first in this simulator, so that isn't checked.
+    func testJobsFeedOpensFromMoreWithoutAServer() {
+        let app = XCUIApplication()
+        app.launch()
+        openMore(app, "Jobs")
+        XCTAssertTrue(app.segmentedControls["jobs-sort"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Sign in under More → Settings to load new postings."].waitForExistence(timeout: 5))
+        app.segmentedControls["jobs-sort"].buttons["Nearest"].tap()
+        XCTAssertTrue(app.staticTexts["Remote first, then nearest."].waitForExistence(timeout: 5))
+    }
+
+    // The fixture's five postings: strong, possible and an untriaged one that
+    // scores well above the line; two stretches below it, out of sight. Queue
+    // takes a card away at once, and with no server it waits in the outbox.
+    func testJobsFeedGroupsCardsAndQueuesOffline() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-jobsFeedFixture")
+        app.launch()
+        openMore(app, "Jobs")
+        XCTAssertTrue(app.staticTexts["Senior iOS Engineer"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Worth a look (3)"].exists)
+        XCTAssertTrue(app.staticTexts["Worth applying"].exists)
+        XCTAssertTrue(app.staticTexts["2.4 km from Union Station"].exists)
+
+        app.buttons["job-queue-01K7ZZZZZZZZZZZZZZZZZZZZJ1"].tap()
+        XCTAssertTrue(app.staticTexts["Senior iOS Engineer"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Worth a look (2)"].waitForExistence(timeout: 5))
+        // The footer sits under the last card, so it is drawn only once scrolled to.
+        let waiting = app.staticTexts["1 decision waiting to reach the server."]
+        for _ in 0..<4 where !waiting.exists { app.swipeUp() }
+        XCTAssertTrue(waiting.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["The rest (2)"].exists)
     }
 
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
@@ -919,5 +1053,127 @@ final class OfflineCaptureTests: XCTestCase {
         app.launch()
         selectTab(app, "Chat")
         XCTAssertTrue(app.staticTexts["chat-recording-pending"].waitForExistence(timeout: 10), "The clip survives a relaunch")
+    }
+
+    /// The newspaper is one continuous scroll: no page turning, the page
+    /// counter follows the scroll, and the issue's own pages can't be deleted.
+    func testNewspaperScrollsAsOneColumn() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launchArguments.append("-newspaperFixture")
+        app.launch()
+        tab(app, "Draw").tap()
+        let row = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Toronto Star'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+        let counter = app.buttons["notebook-page"]
+        XCTAssertTrue(counter.waitForExistence(timeout: 10))
+        XCTAssertEqual(counter.label, "p. 1 / 4")
+        attach(app, "newspaper page 1")
+        let shown = app.otherElements["notebook-visible-frame"]
+        XCTAssertTrue(shown.waitForExistence(timeout: 5))
+        // Fitted to the width from the top of page 1: nothing off to either
+        // side, nothing hidden under the bar, the rest of the paper below.
+        XCTAssertTrue(waitForValue(shown) { frame in
+            abs(frame[0]) <= 1 && abs(frame[2] - 1240) <= 1 && abs(frame[1]) <= 1
+        }, "the top of page 1, at full width: \(shown.value ?? "nil")")
+
+        // Next scrolls the column down to the top of page 2 rather than
+        // swapping the page. The fixture's page 1 is 1.8 times as tall as wide.
+        app.buttons["Next page"].tap()
+        XCTAssertTrue(waitForLabel(counter, equalTo: "p. 2 / 4"))
+        XCTAssertTrue(waitForValue(shown) { frame in
+            abs(frame[1] - 2232) <= 2 && abs(frame[0]) <= 1 && abs(frame[2] - 1240) <= 1
+        }, "the top of page 2, at full width: \(shown.value ?? "nil")")
+        attach(app, "newspaper page 2")
+
+        // Turned sideways it still fills the width, so still nothing scrolls
+        // sideways; less of the page fits, and the rest is below.
+        XCUIDevice.shared.orientation = .landscapeLeft
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        XCTAssertTrue(waitForValue(shown) { frame in
+            abs(frame[0]) <= 1 && abs(frame[2] - 1240) <= 1 && frame[3] < frame[2]
+        }, "landscape fills the width: \(shown.value ?? "nil")")
+        attach(app, "newspaper landscape")
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(waitForValue(shown) { frame in abs(frame[2] - 1240) <= 1 && frame[3] > frame[2] },
+                      "upright again, full width: \(shown.value ?? "nil")")
+
+        counter.tap()
+        XCTAssertTrue(app.buttons["Page 4"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Delete this page"].exists, "an issue's pages share one canvas")
+        app.buttons["Page 4"].tap()
+        XCTAssertTrue(waitForLabel(counter, equalTo: "p. 4 / 4"))
+    }
+
+    /// A notes page turns sideways on a swipe, and finishing that swipe on
+    /// the last page makes a new one; backwards from the first does nothing.
+    func testNotesPagesTurnWithASwipe() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        notes.tap()
+        let counter = app.buttons["notebook-page"]
+        XCTAssertTrue(counter.waitForExistence(timeout: 10))
+        let start = counter.label
+        let total = Int(start.split(separator: "/").last?.trimmingCharacters(in: .whitespaces) ?? "") ?? 1
+        // Go to the last page first, if this notebook has several.
+        for _ in 1..<max(total, 1) { app.buttons["Next page"].tap() }
+        XCTAssertEqual(counter.label, "\(total) / \(total)")
+
+        let window = app.windows.firstMatch
+        let right = window.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
+        let left = window.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5))
+        // A short drag springs back.
+        right.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
+        XCTAssertEqual(counter.label, "\(total) / \(total)")
+        // A deliberate one off the last page adds a page.
+        right.press(forDuration: 0.05, thenDragTo: left)
+        XCTAssertTrue(waitForLabel(counter, equalTo: "\(total + 1) / \(total + 1)"))
+        attach(app, "notes new page")
+        // And back.
+        left.press(forDuration: 0.05, thenDragTo: right)
+        XCTAssertTrue(waitForLabel(counter, equalTo: "\(total) / \(total + 1)"))
+        // A page fits whole either way up: no vertical scrolling sideways on.
+        let shown = app.otherElements["notebook-visible-frame"]
+        XCUIDevice.shared.orientation = .landscapeLeft
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        XCTAssertTrue(waitForValue(shown) { frame in
+            frame[1] <= 0.5 && frame[1] + frame[3] >= 1753.5 && frame[0] <= 0.5 && frame[0] + frame[2] >= 1239.5
+        }, "the whole A4 page on screen in landscape: \(shown.value ?? "nil")")
+        attach(app, "notes landscape")
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(waitForValue(shown) { frame in frame[1] + frame[3] >= 1753.5 && frame[0] + frame[2] >= 1239.5 })
+
+        // Backwards from the first page: nothing.
+        for _ in 1..<max(total, 1) { app.buttons["Previous page"].tap() }
+        XCTAssertEqual(counter.label, "1 / \(total + 1)")
+        left.press(forDuration: 0.05, thenDragTo: right)
+        XCTAssertEqual(counter.label, "1 / \(total + 1)")
+    }
+
+    /// Waits for the canvas's visible frame (x, y, width, height, in canvas
+    /// units) to satisfy `check`.
+    private func waitForValue(_ element: XCUIElement, _ check: @escaping ([Double]) -> Bool) -> Bool {
+        let predicate = NSPredicate { object, _ in
+            let frame = ((object as? XCUIElement)?.value as? String ?? "").split(separator: ",").compactMap { Double($0) }
+            return frame.count == 4 && check(frame)
+        }
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 5) == .completed
+    }
+
+    private func waitForLabel(_ element: XCUIElement, equalTo value: String? = nil, notEqualTo other: String? = nil) -> Bool {
+        let format = value != nil ? "label == %@" : "label != %@"
+        let predicate = NSPredicate(format: format, value ?? other ?? "")
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 5) == .completed
+    }
+
+    private func attach(_ app: XCUIApplication, _ name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
     }
 }

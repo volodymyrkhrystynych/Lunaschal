@@ -27,17 +27,30 @@ what each device can currently do and which work remains device-only.
   Cross-platform ink conversion and PDF annotation remain outstanding.
 
 - **iPad notebooks** (Capture → **Notes** or **Newspaper**, top right). A
-  full-window, paginated PaperKit canvas with the tab bar hidden: Pencil ink,
+  full-window PaperKit canvas with the tab bar hidden: Pencil ink,
   pictures that can be moved and resized, text boxes and shapes from the tool
-  picker's **+**, and fixed pages (A4 for notes) navigated from the top bar.
+  picker's **+**.
+  **Notes** are A4 pages, one at a time, each fitted whole to the window so
+  nothing scrolls. A finger drags a page sideways and a deliberate swipe (a
+  third of the page's width) turns it; short of that it springs back. Swiping on
+  past the last page shows a **+ New page** marker and adding the page is what
+  finishing the swipe does; backwards from the first page nothing moves, and
+  zoomed in a sideways drag is panning. The top bar's arrows still work.
   **Newspaper** opens today's archived issue (by the 4am day; the newest is offered if
-  today's isn't in) with every PDF page under the ink. It downloads the PDF once
+  today's isn't in) as **one continuous scroll**: a single canvas with every PDF
+  page stacked down it at its own shape, so ink can cross from one page to the
+  next. It is always fitted to the width, either way up, so nothing scrolls
+  sideways unless zoomed in and the paper reads by scrolling down. An issue's
+  pages share that one canvas, so they can't be deleted (Add page puts a blank
+  A4 sheet at the foot). An issue opened by an earlier build (one markup per
+  page) is converted on open, each page's ink moved down to its place in the
+  column; the paged original stays as the previous checkpoint. It downloads the PDF once
   from `GET /api/newspapers/issues/<date>/pdf`, since mobile sync doesn't carry
   issue PDFs, and reopens the same unsaved notebook instead of making a second one.
   The web reader's own markup is untouched. Back autosaves (current + previous
   checkpoint, like drawings) and the notebook is listed under Draw → Notebooks to
   continue. **Save** files one journal entry: each page as a JPEG (a newspaper
-  files its cover plus the pages written on), plus the notebook's one YouTube link.
+  files its cover plus the pages written on, found from the ink itself), plus the notebook's one YouTube link.
   The text composer's draft is never touched.
   **Lock pictures on this page** (camera menu) pins a page's pictures under the
   ink so they can be written over but not selected or dragged; a lock badge
@@ -48,11 +61,14 @@ what each device can currently do and which work remains device-only.
   another app's pixels, so the screenshot is the system's and Lunaschal cuts its
   own window out of it (the larger remaining strip with Stage Manager). With no
   setup: take a screenshot (Pencil corner swipe, or top + volume), choose **Copy
-  and Delete**, then **Paste image**. Paste crops only an image exactly the
-  screen's pixel size, and only when the part it would cut matches a snapshot of
-  Lunaschal's window, so a copied photo, or an older screenshot taken with the
-  apps the other way round, goes in whole. For one tap, a shortcut
-  *Take Screenshot → Add Screenshot to Lunaschal Notes* run from AssistiveTouch
+  and Delete**, then **Paste image**. Paste crops any image exactly the
+  screen's pixel size (by points × scale or the panel's native pixels, so
+  Display Zoom counts), so a copied photo goes in whole. A snapshot of
+  Lunaschal's window can only veto the cut, when an older screenshot clearly
+  shows Lunaschal on the other side; a snapshot that matches neither half does
+  not. A note under the title says what Paste did and why. **Insert from
+  library** adds pictures from Photos, whole. For one tap, a shortcut
+  _Take Screenshot → Add Screenshot to Lunaschal Notes_ run from AssistiveTouch
   or a Full Keyboard Access command does the same in the app's process (Back Tap
   is iPhone-only); with no notebook open, its screenshot waits for the next one.
 
@@ -73,6 +89,21 @@ what each device can currently do and which work remains device-only.
   saved on the device, and uploaded in order with a device-minted id and the time
   they were logged, so a replay is a no-op and sets done offline still group into
   the workout they belong to. Rating and location need the server.
+- **Apple Health sync** (Settings → Apple Health, off until turned on). Reads
+  every Health type the app has a unit for -- sleep stages, workouts, exercise
+  minutes, steps, heart rate, HRV, vitals, body, nutrition, symptoms -- through
+  HealthKit anchored queries, and posts them to `/api/apple-health/sync`. The
+  Watch needs no code for this: it syncs into the phone's Health store. Each
+  type's anchor moves only after the server acknowledges the page, so an
+  interrupted pass resends at most one page, and the server upserts by
+  HealthKit UUID. Daily totals of cumulative types (steps, exercise minutes,
+  energy) are computed by HealthKit's statistics query on the 4am day and sent
+  separately, because summing raw samples double-counts phone + Watch; the last
+  three days are recomputed every pass. Runs inside the normal sync pass and is
+  due for a background pass every three hours. The catalog's units are checked
+  on the simulator (`HealthKitSourceTests`); reading real data with permission,
+  and the permission sheet itself, are not yet verified on device. Background
+  delivery (being woken when the Watch syncs) is not implemented.
 - Weather. The Entry page shows the conditions now at its top left; tapping them
   shows feels-like (Open-Meteo's apparent temperature: wind chill and humidity),
   wind and gusts ("windy" from 30 km/h sustained or 50 km/h gusts), and whether
@@ -131,6 +162,41 @@ what each device can currently do and which work remains device-only.
   server turns down (a fifth daily task, say) is dropped and said in the tab.
   Passed in simulator offline (including the badge and a relaunch with
   changes waiting); not yet run against a server or verified on device.
+- More → Jobs is the desktop Jobs tab's triage feed: the same postings in the
+  same order, grouped Worth a look / The rest, sortable Best match or Nearest,
+  each card showing the model's two-sentence summary (or the start of the
+  description before it has one), its flags and the commute. Queue (build a
+  tailored resume in the background) and Dismiss are buttons on the card and
+  swipes on the row. A decision takes the card away at once and waits in a
+  sync outbox, sent in order on the next pass; a later decision on the same
+  posting replaces an unsent one, and one the server turns down is said on
+  the screen. The last feed loaded is kept, so it still reads offline.
+  Passed in simulator offline; not yet run against a server or verified on
+  device.
+- Learning (More → Learning) is the desktop Learning tab's Review, Queue and
+  Browse over the same `/api/learning` routes, filtered by folder and tag.
+  Review runs the desktop's two passes: answer each due card (typed, or
+  spoken with the mic button, which records, sends the clip to the server's
+  `/api/transcribe` and adds the words, marking the answer as spoken so the
+  server tidies the transcript before grading) or Flip past it, then see each answer beside the
+  card's with the server's claim-by-claim grade, polled in as it lands, and
+  rate it with the suggestion highlighted. Each answer is saved as it's given,
+  so leaving mid-session resumes it; ratings reuse the attempt id as the review
+  id, so a resend can't advance the schedule twice. Queue approves (with the
+  near-duplicate prompt: keep both, replace the old card, delete the new one),
+  regenerates with a direction, or denies. Browse edits tags in place and
+  wording as a revision, and deletes. The More row's badge counts cards due.
+  It needs the server for everything; there is no offline queue. Card chat,
+  verification, brain-dump creation and folder management remain desktop-only.
+  Speech mode is a switch in More → Settings → Learning: answers given with it
+  on carry a spoken summary of what was missed, read aloud once on the results
+  through the server's `/api/tts`, with Replay. Opening it without a server passed in simulator; the
+  server-backed flows, including the microphone, have not been run against a
+  server or on device.
+  Debug builds launched with `-learningFixture` swap the server for an
+  in-memory stand-in with sample folders, tags, due and queued cards and a
+  word-match grader, so the screen can be seen without one; a UI test runs a
+  whole review against it.
 - Offline YouTube links attached to a typed entry (any number per entry), with
   preserved drafts and stable entry and per-link attachment IDs. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
@@ -147,7 +213,7 @@ what each device can currently do and which work remains device-only.
   their colours, overlapping events side by side,
   drag to move (or, with the bottom-left toggle on Length, to change the end), and shaded
   wake/sleep bands with an editor; changes are saved on the device and replayed in order on the next sync. More
-  holds Library and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
+  holds Library, Learning and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
   Library/Folders switch. Library mode has provider pills and sorts by the site's latest
   chapter date (`latest_activity`), not the download time. Folders mode lists folders and Unsorted,
   and each pushes its books with a Back button. Both have title/tag search, tag and
@@ -350,6 +416,19 @@ publicly to make CI work: simulator capture tests never contact it.
   Recording lifecycle and paired-device transfers remain unverified.
   WatchConnectivity transfer validation requires paired devices
   ([Apple's transferFile documentation](<https://developer.apple.com/documentation/watchconnectivity/wcsession/transferfile(_:metadata:)>)).
+- The Watch has a pomodoro timer: Focus (25 minutes, then Continue, a 5-minute
+  Break, or Cancel) and Timeout (10 minutes, then Continue or Cancel). Rules are
+  `PomodoroTimer` in LunaschalCore; the state is saved, so a relaunch resumes from
+  the end time. A local notification carries the same buttons, since the app is
+  suspended with the wrist down. Each finished or cancelled run goes to the phone
+  by `transferUserInfo` and is deleted from the Watch only after the phone replies
+  `pomodoroStored`; the phone's `pomodoro-outbox` uploads it to
+  `POST /api/lifestyle/pomodoro/sessions`, and Lifestyle shows it on the Focus card.
+  A cancel within the first minute is not logged. Debug builds take
+  `-PomodoroSeconds 10` and `-PomodoroStart work|timeout` launch arguments for
+  checking the simulator without tapping. The countdown, end-of-timer choices and
+  relaunch passed in the watchOS simulator; notification buttons and the
+  Watch-to-phone transfer need paired devices.
 - Settings checks the actual Foundation Models text-model and locale availability,
   including disabled/ineligible/not-ready states. Generation and local speech
   recognition remain optional later layers. Server transcription is the only
