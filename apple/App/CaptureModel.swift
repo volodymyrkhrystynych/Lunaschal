@@ -93,10 +93,14 @@ final class CaptureModel: ObservableObject {
     let transfers: TransferStore
     let media: MediaStore
     let daily: DailyStore
+    let healthState: HealthStateStore
+    @Published private(set) var healthStatus = HealthStateStore.Status()
     let recorder: Recorder
     private let watchReceiver: WatchReceiver
     private let syncer: CaptureSync
     private let dailySyncer: DailySync
+    private let healthSyncer: HealthSync
+    private lazy var healthSource: HealthKitSource? = HealthKitSource.isAvailable ? HealthKitSource() : nil
     private let replicaSyncer: ReplicaSync
     private let libraryWorker: LibraryDownload
     private var activeAPI: JournalAPI?
@@ -124,6 +128,8 @@ final class CaptureModel: ObservableObject {
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
         daily = try DailyStore(root: store.root.appendingPathComponent("daily", isDirectory: true))
         dailySyncer = DailySync(store: daily)
+        healthState = try HealthStateStore(root: store.root.appendingPathComponent("apple-health", isDirectory: true))
+        healthSyncer = HealthSync(store: healthState)
         workouts = try WorkoutStore(root: store.root.appendingPathComponent("workouts", isDirectory: true))
         workoutSyncer = WorkoutSync(store: workouts)
         pomodoros = try PomodoroStore(root: store.root.appendingPathComponent("pomodoro-outbox", isDirectory: true))
@@ -152,6 +158,7 @@ final class CaptureModel: ObservableObject {
         captures = try store.list()
         draft = try store.draft()
         dailyLogs = try daily.list()
+        healthStatus = healthState.status()
         workoutLogs = try workouts.list()
         chatRecordingQueue = try chatRecordings.list()
         todoQueue = try todoOutbox.list()
@@ -186,6 +193,55 @@ final class CaptureModel: ObservableObject {
 
     var backgroundSyncEnabled: Bool {
         UserDefaults.standard.object(forKey: "backgroundSyncEnabled") as? Bool ?? true
+    }
+
+    /// Off until turned on in Settings: reading Health is a permission sheet
+    /// the user should see because they asked for it, not on first launch.
+    var healthSyncEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "healthSyncEnabled") && healthSource != nil
+    }
+
+    var healthAvailable: Bool { healthSource != nil }
+
+    /// Asks for read access, then syncs. Returns false only when the question
+    /// itself failed; a refusal is invisible to us and simply uploads nothing.
+    func enableHealth() async -> Bool {
+        guard let healthSource else { message = "Health data isn't available on this device."; return false }
+        do {
+            try await healthSource.requestAuthorization()
+            UserDefaults.standard.set(true, forKey: "healthSyncEnabled")
+            requestSync()
+            return true
+        } catch {
+            message = error.localizedDescription
+            return false
+        }
+    }
+
+    func disableHealth() {
+        UserDefaults.standard.set(false, forKey: "healthSyncEnabled")
+        onBackgroundSyncNeeded?()
+    }
+
+    /// Re-reads all of Health from the beginning. Safe: the server upserts
+    /// by HealthKit UUID, so nothing is stored twice.
+    func resendAllHealth() {
+        do { try healthState.reset() } catch { message = error.localizedDescription }
+        healthStatus = healthState.status()
+        requestSync(manual: true)
+    }
+
+    /// A Health problem on this device (HealthKit refusing a query) is shown
+    /// in Settings and doesn't fail the rest of the pass; the server being
+    /// unreachable or the pass being cancelled still does.
+    private func syncHealth(using api: JournalAPI) async throws {
+        guard healthSyncEnabled, let healthSource else { return }
+        defer { healthStatus = healthState.status() }
+        do {
+            try await healthSyncer.run(source: healthSource, transport: api)
+        } catch {
+            if Task.isCancelled || error is CancellationError || error is URLError || error is HTTPFailure { throw error }
+        }
     }
 
     func reload() {
@@ -679,7 +735,8 @@ final class CaptureModel: ObservableObject {
                 || drawingPublications.all().contains { $0.state == "pending" }
                 || !ficActivity.list().isEmpty
                 || !todoOutbox.list().isEmpty
-                || !jobStore.pending().isEmpty, signedIn: signedIn,
+                || !jobStore.pending().isEmpty
+                || (healthSyncEnabled && HealthSync.isDue(healthState.status(), now: Date())), signedIn: signedIn,
             enabled: backgroundSyncEnabled, now: Date())
     }
 
@@ -744,6 +801,7 @@ final class CaptureModel: ObservableObject {
                 try await libraryWorker.updateText(using: api, collections: LibraryDownload.collections(
                     knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge")))
             }
+            try await syncHealth(using: api)
             // Anything ticked off while this pass was busy uploading.
             try await sendTodoChanges(using: api)
             let retry = try transfers.all().compactMap(\.retryAt).min()

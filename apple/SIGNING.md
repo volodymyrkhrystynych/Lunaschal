@@ -26,6 +26,13 @@ The current bundle identifiers still need registration in that team:
 | iPhone/iPad     | `com.lunaschal.mobile`             |
 | Watch companion | `com.lunaschal.mobile.watchkitapp` |
 
+The iPhone App ID needs the **HealthKit** capability enabled (Certificates,
+Identifiers & Profiles → Identifiers → `com.lunaschal.mobile`), and any
+provisioning profile must be regenerated after enabling it: the app is signed
+with `com.apple.developer.healthkit` (from `project.yml`'s `entitlements`), and
+a profile without it fails at install. The Watch target reads no Health data
+itself and needs no capability.
+
 The Watch target's `WKCompanionAppBundleIdentifier` must continue to match the
 iPhone target. If the identifiers change, update both target settings and that
 Info.plist property in `project.yml` together. If changing the background task

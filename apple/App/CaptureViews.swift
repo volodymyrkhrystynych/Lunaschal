@@ -661,9 +661,47 @@ private struct ConnectionSettings: View {
                 Text("Hear what you got wrong. For answers given while this is on, a short summary of what you missed is read aloud on the results, using your server's text-to-speech.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            if model.healthAvailable { HealthSettings(model: model) }
             IntelligenceAvailabilityView()
         }
         .navigationTitle("Settings")
         .onAppear { address = model.server?.absoluteString ?? address }
+    }
+}
+
+private struct HealthSettings: View {
+    @ObservedObject var model: CaptureModel
+    @AppStorage("healthSyncEnabled") private var enabled = false
+    @State private var asking = false
+
+    var body: some View {
+        Section("Apple Health") {
+            Toggle("Sync Apple Health", isOn: Binding(
+                get: { enabled },
+                set: { on in
+                    if on {
+                        asking = true
+                        Task { _ = await model.enableHealth(); asking = false }
+                    } else { model.disableHealth() }
+                }))
+                .disabled(asking)
+            if enabled {
+                let status = model.healthStatus
+                if let last = status.lastSuccess {
+                    Text("Last synced \(last.formatted(date: .abbreviated, time: .shortened)) · \(status.sent.formatted()) items sent")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Text("Not synced yet. The first sync reads all of your Health history and can take a while.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                if let error = status.lastError {
+                    Text(error).font(.footnote).foregroundStyle(.red)
+                }
+                Button("Sync now") { model.requestSync(manual: true) }.disabled(model.syncing)
+                Button("Resend all Health data") { model.resendAllHealth() }.disabled(model.syncing)
+            }
+            Text("Reads sleep, workouts, exercise minutes, heart rate and everything else Health allows, and copies it to your Lunaschal server. Watch data arrives through the phone. Choose which types to share in the Health permission sheet; changing it later is in the Health app under Sharing → Apps.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
     }
 }

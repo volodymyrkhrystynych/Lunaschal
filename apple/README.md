@@ -89,6 +89,21 @@ what each device can currently do and which work remains device-only.
   saved on the device, and uploaded in order with a device-minted id and the time
   they were logged, so a replay is a no-op and sets done offline still group into
   the workout they belong to. Rating and location need the server.
+- **Apple Health sync** (Settings → Apple Health, off until turned on). Reads
+  every Health type the app has a unit for -- sleep stages, workouts, exercise
+  minutes, steps, heart rate, HRV, vitals, body, nutrition, symptoms -- through
+  HealthKit anchored queries, and posts them to `/api/apple-health/sync`. The
+  Watch needs no code for this: it syncs into the phone's Health store. Each
+  type's anchor moves only after the server acknowledges the page, so an
+  interrupted pass resends at most one page, and the server upserts by
+  HealthKit UUID. Daily totals of cumulative types (steps, exercise minutes,
+  energy) are computed by HealthKit's statistics query on the 4am day and sent
+  separately, because summing raw samples double-counts phone + Watch; the last
+  three days are recomputed every pass. Runs inside the normal sync pass and is
+  due for a background pass every three hours. The catalog's units are checked
+  on the simulator (`HealthKitSourceTests`); reading real data with permission,
+  and the permission sheet itself, are not yet verified on device. Background
+  delivery (being woken when the Watch syncs) is not implemented.
 - Weather. The Entry page shows the conditions now at its top left; tapping them
   shows feels-like (Open-Meteo's apparent temperature: wind chill and humidity),
   wind and gusts ("windy" from 30 km/h sustained or 50 km/h gusts), and whether

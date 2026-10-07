@@ -17,7 +17,10 @@ import { dayStartMs } from './dates';
 
 export const MINUTES_PER_DAY = 24 * 60;
 
-export type SleepSource = 'auto' | 'manual' | null;
+/** Where a wake/sleep time came from, strongest first: the user's own
+ * correction, the Watch's sleep record (backend/apple_health/nights.py), or the
+ * guess from the first/last thing done in the app. */
+export type SleepSource = 'manual' | 'health' | 'auto' | null;
 
 export interface SleepDay {
   date: string;

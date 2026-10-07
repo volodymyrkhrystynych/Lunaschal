@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
-import { clockValue } from '@/lib/sleep';
+import { clockValue, type SleepSource } from '@/lib/sleep';
 
 /**
  * Corrects the day's wake and sleep times by hand.
@@ -59,12 +59,14 @@ export function SleepEditor({
     onError: (e: Error) => setError(e.message),
   });
 
-  const sourceNote = (source: 'auto' | 'manual' | null) =>
+  const sourceNote = (source: SleepSource) =>
     source === 'manual'
       ? 'set by you'
-      : source === 'auto'
-        ? 'from activity'
-        : '';
+      : source === 'health'
+        ? 'from Apple Watch'
+        : source === 'auto'
+          ? 'from activity'
+          : '';
 
   return (
     <div

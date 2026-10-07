@@ -31,6 +31,7 @@ vi.mock('./TrendsChart', () => ({ TrendsChart: () => <div>Trends</div> }));
 vi.mock('./WorkoutLog', () => ({ WorkoutLog: () => <div>Workout</div> }));
 vi.mock('./FocusCard', () => ({ FocusCard: () => null }));
 vi.mock('./WeatherCard', () => ({ WeatherCard: () => <div>Weather</div> }));
+vi.mock('./HealthCard', () => ({ HealthCard: () => <div>Health</div> }));
 vi.mock('./SelfieCard', () => ({ SelfieCard: () => <div>Selfie</div> }));
 vi.mock('./CaloriesCard', () => ({
   CaloriesCard: () => {
