@@ -367,6 +367,15 @@ publicly to make CI work: simulator capture tests never contact it.
   `BGProcessingTask` window. Background sync can be disabled in Settings;
   iOS chooses when to run it. Expiration cancels work and preserves pending
   captures for retry. Ordinary foreground work stops when leaving the app.
+  Applying the server's pages and sending the outbox runs on its own actor and
+  database connection (`ReplicaSync`), not the UI's: it used to run on the main
+  actor, and with the library worker's long write transactions in between, the app
+  froze while it synced. Library pages are fetched 25 records at a time so no write
+  transaction is long; children are found through JSON expression indexes; chapter
+  lists read an outline rather than every chapter's text; and the reader saves its
+  position at most once a second. Settings → Transfers shows the last pass's step
+  times and the longest the UI thread was held (`SyncTimings`, `StallWatch`).
+  Passed in simulator; not yet verified on device with a full library.
   This is not autonomous background URLSession transfer: bytes do not continue
   after process termination. The existing redirect and cellular checks apply;
   bulk media downloads remain a separate Wi-Fi-only action. Persistent request

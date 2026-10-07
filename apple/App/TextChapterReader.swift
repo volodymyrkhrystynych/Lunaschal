@@ -19,6 +19,8 @@ struct TextChapterReader: View {
     @State private var spans = ReadingSpanState()
     @State private var pendingFraction: Double?
     @State private var sheet: ReaderSheet?
+    @State private var unsavedPosition: (String, String, Int, String?)?
+    @State private var positionSave: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
     private var store: ReplicaStore { owner.replica }
     private var ficID: String? { current.data?["ficId"]?.string }
@@ -101,18 +103,25 @@ struct TextChapterReader: View {
             }
         }
         .task(id: current.id) { load() }
-        .onDisappear { closeSpan(sync: true) }
+        .onDisappear { savePosition(); closeSpan(sync: true) }
         .onChange(of: scenePhase) { _, phase in
             guard phase != .active else { return }
+            savePosition()
             let now = Int(Date().timeIntervalSince1970)
             if let due = spans.takeFlush(now: now, force: true) { owner.queueReading(.span(due)) }
         }
         .onChange(of: position) { _, value in
             guard let value, !version.isEmpty, paragraphs.indices.contains(value) else { return }
-            do {
-                try store.saveReadingPosition(collection: "fic_chapters", id: current.id, version: version,
-                                              offset: value, bookID: ficID)
-            } catch { status = "Could not save reading position: \(error.localizedDescription)" }
+            // At most once a second while scrolling, and on the way out: each
+            // save is a disk-flushed write on the UI thread, and one per
+            // paragraph made scrolling wait on any download writing meanwhile.
+            unsavedPosition = (current.id, version, value, ficID)
+            positionSave?.cancel()
+            positionSave = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                savePosition()
+            }
         }
     }
 
@@ -152,12 +161,14 @@ struct TextChapterReader: View {
 
     private func load() {
         do {
+            // A chapter from a list is an outline, without its text.
+            if current.data?["contentText"] == nil,
+               let whole = try store.record(collection: "fic_chapters", id: current.id), !whole.deleted {
+                current = whole
+            }
             if let ficID {
                 if book == nil { book = try store.record(collection: "fics", id: ficID) }
-                if chapters.isEmpty {
-                    chapters = try store.relatedRecords(collection: "fic_chapters", field: "ficId", value: ficID)
-                        .sorted { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }
-                }
+                if chapters.isEmpty { chapters = try store.chapterOutline(bookID: ficID) }
                 // The desktop's last-read pointer, so it resumes here too.
                 owner.queueReading(.progress(ficId: ficID, chapterId: current.id))
             }
@@ -171,9 +182,21 @@ struct TextChapterReader: View {
     }
 
     private func move(to chapter: SyncChange) {
+        savePosition()
         closeSpan(sync: false)
         position = 0
-        current = chapter
+        current = (try? store.record(collection: "fic_chapters", id: chapter.id)) ?? chapter
+    }
+
+    private func savePosition() {
+        positionSave?.cancel()
+        positionSave = nil
+        guard let (chapterID, version, offset, bookID) = unsavedPosition else { return }
+        unsavedPosition = nil
+        do {
+            try store.saveReadingPosition(collection: "fic_chapters", id: chapterID, version: version,
+                                          offset: offset, bookID: bookID)
+        } catch { status = "Could not save reading position: \(error.localizedDescription)" }
     }
 
     private func recordScroll(_ value: Double) {

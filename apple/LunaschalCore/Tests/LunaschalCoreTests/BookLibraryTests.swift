@@ -169,6 +169,20 @@ final class BookLibraryTests: XCTestCase {
         XCTAssertTrue(try store.bookmarkEdits(bookID: book.id).isEmpty)
     }
 
+    func testABooksChaptersAreFoundThroughAnIndexNotByReadingEveryChapter() throws {
+        let (store, _) = try store()
+        let book = book(1)
+        try apply([book] + (0..<3).map { chapter(book, position: $0) }, to: store)
+        for field in ReplicaStore.relatedFields {
+            let plan = try store.relatedQueryPlan(collection: "fic_chapters", field: field, value: book.id)
+            XCTAssertTrue(plan.contains("replica_by_\(field)"), "\(field): \(plan)")
+        }
+        XCTAssertEqual(try store.relatedRecords(collection: "fic_chapters", field: "ficId", value: book.id).count, 3)
+        XCTAssertEqual(try store.relatedCount(collection: "fic_chapters", field: "ficId", value: book.id), 3)
+        XCTAssertEqual(try store.relatedRecords(collection: "fic_chapters", field: "ficId", values: [book.id]).count, 3)
+        XCTAssertThrowsError(try store.relatedRecords(collection: "fic_chapters", field: "title", value: "x"))
+    }
+
     func testSeveralFavoritesCanBeRemovedOfflineWithoutDuplicateDeletes() throws {
         let (store, _) = try store()
         let book = book(1), chapter = chapter(book)

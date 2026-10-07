@@ -295,8 +295,7 @@ struct BookView: View {
 
     private func refreshChapters() {
         do {
-            chapters = try model.replica.relatedRecords(collection: "fic_chapters", field: "ficId", value: book.id)
-                .sorted { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }
+            chapters = try model.replica.chapterOutline(bookID: book.id)
             resume = try model.replica.resumePoint(bookID: book.id)
             bookmarks = try model.replica.bookmarks(bookID: book.id)
             bookmarkEdits = try model.replica.bookmarkEdits(bookID: book.id)

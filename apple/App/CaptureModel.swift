@@ -148,7 +148,7 @@ final class CaptureModel: ObservableObject {
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store, pomodoros: pomodoros)
         syncer = CaptureSync(store: store, uploads: uploads, transfers: transfers)
-        replicaSyncer = ReplicaSync(store: replica)
+        replicaSyncer = ReplicaSync(url: store.root.appendingPathComponent("replica.sqlite"))
         libraryWorker = LibraryDownload(replicaURL: store.root.appendingPathComponent("replica.sqlite"),
                                         mediaURL: media.root)
         try store.recoverInterruptedRecordings()
@@ -761,49 +761,63 @@ final class CaptureModel: ObservableObject {
     }
 
     private func performSync(server: URL, token: String) async -> Bool {
+        timings = SyncTimings()
+        let stalls = StallWatch()
         defer {
-            syncing = false; activeAPI = nil; reload(); syncPasses += 1
+            syncing = false; activeAPI = nil
+            timed("refresh screens") { reload() }
+            syncPasses += 1
             watchReceiver.sendServerReceipts()
             onBackgroundSyncNeeded?()
+            timings.longestStall = stalls.stop()
+            lastSyncReport = timings.summary()
         }
         do {
             try Task.checkCancellation()
             let api = try JournalAPI(server: server, token: token, allowCellular: allowCellular, uploads: uploads)
             activeAPI = api
             // First: a voice message is a question someone is waiting on.
-            try await chatRecordingSyncer.run(using: api)
-            try await sendTodoChanges(using: api)
-            try await sendJobDecisions(using: api)
-            try await sendCalendarEvents(using: api)
-            try await syncer.run(using: api)
-            try await dailySyncer.run(using: api)
-            try await workoutSyncer.run(using: api)
-            try await pomodoroSyncer.run(using: api)
-            try await ficActivitySyncer.run(using: api)
-            await refreshWorkouts(using: api)
-            await refreshDaily(using: api)
-            await refreshWeather(using: api)
-            try await replicaSyncer.run(using: api, collections: [
-                "journal_entries", "journal_attachments", "fics", "study_sources",
-                "papers", "conversations", "knowledge_archives", "fic_folders", "fic_bookmarks",
-            ])
-            // Its own scope, so a server without it never fails the journal's sync.
-            if CalendarSync.supported(by: try await api.syncCollections()) {
-                try await replicaSyncer.run(using: api, collections: CalendarSync.collections, sendEdits: false)
-                await refreshSleep(DayKey.of(Date()))
+            try await timed("chat voice") { try await chatRecordingSyncer.run(using: api) }
+            try await timed("to-dos") { try await sendTodoChanges(using: api) }
+            try await timed("job decisions") { try await sendJobDecisions(using: api) }
+            try await timed("calendar changes") { try await sendCalendarEvents(using: api) }
+            try await timed("uploads") { try await syncer.run(using: api) }
+            try await timed("daily") { try await dailySyncer.run(using: api) }
+            try await timed("workouts") { try await workoutSyncer.run(using: api) }
+            try await timed("pomodoro") { try await pomodoroSyncer.run(using: api) }
+            try await timed("reading activity") { try await ficActivitySyncer.run(using: api) }
+            await timed("workout history") { await refreshWorkouts(using: api) }
+            await timed("daily status") { await refreshDaily(using: api) }
+            await timed("weather") { await refreshWeather(using: api) }
+            try await timed("journal & library") {
+                try await replicaSyncer.run(using: api, collections: [
+                    "journal_entries", "journal_attachments", "fics", "study_sources",
+                    "papers", "conversations", "knowledge_archives", "fic_folders", "fic_bookmarks",
+                ])
             }
-            for publication in try drawingPublications.all() where publication.state == "pending" {
-                try Task.checkCancellation()
-                let reply = try await api.publishDrawing(publication, store: drawingPublications)
-                try drawingPublications.receive(reply, for: publication)
+            // Its own scope, so a server without it never fails the journal's sync.
+            try await timed("calendar") {
+                if CalendarSync.supported(by: try await api.syncCollections()) {
+                    try await replicaSyncer.run(using: api, collections: CalendarSync.collections, sendEdits: false)
+                    await refreshSleep(DayKey.of(Date()))
+                }
+            }
+            try await timed("drawings") {
+                for publication in try drawingPublications.all() where publication.state == "pending" {
+                    try Task.checkCancellation()
+                    let reply = try await api.publishDrawing(publication, store: drawingPublications)
+                    try drawingPublications.receive(reply, for: publication)
+                }
             }
             if !downloadingLibrary {
-                try await libraryWorker.updateText(using: api, collections: LibraryDownload.collections(
-                    knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge")))
+                try await timed("library text") {
+                    try await libraryWorker.updateText(using: api, collections: LibraryDownload.collections(
+                        knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge")))
+                }
             }
-            try await syncHealth(using: api)
+            try await timed("health") { try await syncHealth(using: api) }
             // Anything ticked off while this pass was busy uploading.
-            try await sendTodoChanges(using: api)
+            try await timed("to-dos") { try await sendTodoChanges(using: api) }
             let retry = try transfers.all().compactMap(\.retryAt).min()
             syncMessage = retry.map { "Uploads will retry after \($0.formatted(date: .omitted, time: .shortened))." }
             return true
@@ -816,6 +830,22 @@ final class CaptureModel: ObservableObject {
             }
             return false
         }
+    }
+
+    /// The last pass's step times, for Settings → Transfers.
+    @Published private(set) var lastSyncReport: String?
+    private var timings = SyncTimings()
+
+    private func timed<T>(_ step: String, _ work: () async throws -> T) async rethrows -> T {
+        let start = Date()
+        defer { timings.record(step, seconds: Date().timeIntervalSince(start)) }
+        return try await work()
+    }
+
+    private func timed<T>(_ step: String, _ work: () throws -> T) rethrows -> T {
+        let start = Date()
+        defer { timings.record(step, seconds: Date().timeIntervalSince(start)) }
+        return try work()
     }
 
     func cancelSync() {

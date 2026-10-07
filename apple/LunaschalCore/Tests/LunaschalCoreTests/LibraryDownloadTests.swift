@@ -4,6 +4,7 @@ import XCTest
 private actor LibraryFixture: LibraryTransport {
     var pages: [SyncPage]
     var cursors: [String?] = []
+    var limits: [Int] = []
     var expired = false
     var delay = false
     var mediaCalls = 0
@@ -17,6 +18,10 @@ private actor LibraryFixture: LibraryTransport {
         if expired { throw HTTPFailure(status: 410) }
         guard !pages.isEmpty else { throw ReplicaError.invalidPage }
         return pages.removeFirst()
+    }
+    func syncPage(cursor: String?, collections: [String], limit: Int) async throws -> SyncPage {
+        limits.append(limit)
+        return try await syncPage(cursor: cursor, collections: collections)
     }
     func applyOperation(_ operation: ReplicaOperation) async throws -> OperationReply {
         XCTFail("Library downloads must not submit journal edits")
@@ -119,6 +124,9 @@ final class LibraryDownloadTests: XCTestCase {
         XCTAssertEqual(try store.cursor(collections: collections), "last")
         let calls = await api.cursors
         XCTAssertEqual(calls, ["ready", "next"])
+        // Small pages: each is one write transaction the UI's writes wait behind.
+        let limits = await api.limits
+        XCTAssertEqual(limits, [LibraryDownload.pageSize, LibraryDownload.pageSize])
     }
 
     func testBulkBootstrapEnablesLaterUpdatesAndKeepsUIConnectionReadable() async throws {
@@ -132,6 +140,8 @@ final class LibraryDownloadTests: XCTestCase {
         }
         XCTAssertTrue(try store.isBootstrapped(collections: collections))
         XCTAssertEqual(try store.cursor(collections: collections), "ready")
+        let limits = await api.limits
+        XCTAssertEqual(limits, [LibraryDownload.pageSize, LibraryDownload.pageSize])
     }
 
     func testCancellationKeepsCursorAndWorkerCanResume() async throws {

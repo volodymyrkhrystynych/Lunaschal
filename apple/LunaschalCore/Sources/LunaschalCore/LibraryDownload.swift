@@ -22,6 +22,10 @@ public actor LibraryDownload {
         self.mediaURL = mediaURL
     }
 
+    /// Records per page: a page of chapters is one write transaction, full
+    /// HTML and search index included, and the UI's own writes wait behind it.
+    static let pageSize = 25
+
     public nonisolated static func collections(knowledge: Bool) -> [String] {
         let base = ["fic_chapters", "messages",
                     "paper_pages", "paper_native_ink", "paper_page_images",
@@ -59,7 +63,7 @@ public actor LibraryDownload {
             try Task.checkCancellation()
             guard let cursor = try store.cursor(collections: collections) else { return false }
             do {
-                let page = try await transport.syncPage(cursor: cursor, collections: collections)
+                let page = try await transport.syncPage(cursor: cursor, collections: collections, limit: Self.pageSize)
                 try Task.checkCancellation()
                 guard page.mode == "delta", Set(page.collections) == Set(collections),
                       page.epoch == (try store.epoch),
@@ -96,7 +100,7 @@ public actor LibraryDownload {
             try Task.checkCancellation()
             let cursor = try store.cursor(collections: collections)
             do {
-                let page = try await transport.syncPage(cursor: cursor, collections: collections)
+                let page = try await transport.syncPage(cursor: cursor, collections: collections, limit: Self.pageSize)
                 try Task.checkCancellation()
                 guard Set(page.collections) == Set(collections),
                       cursor == (try store.cursor(collections: collections)) else {

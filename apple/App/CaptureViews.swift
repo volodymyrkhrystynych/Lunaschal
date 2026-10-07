@@ -648,6 +648,10 @@ private struct ConnectionSettings: View {
                 Toggle("Background sync", isOn: $backgroundSyncEnabled)
                     .onChange(of: backgroundSyncEnabled) { _, _ in model.backgroundPreferenceChanged() }
                 Text(model.backgroundStatus).font(.footnote).foregroundStyle(.secondary)
+                if let report = model.lastSyncReport {
+                    Text(report).font(.footnote).monospacedDigit().foregroundStyle(.secondary)
+                        .accessibilityIdentifier("last-sync-report")
+                }
                 Text("iOS decides when background sync runs. Opening the app syncs sooner.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Toggle("Allow cellular sync", isOn: $allowCellular)

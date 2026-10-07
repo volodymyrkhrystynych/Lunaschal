@@ -151,12 +151,18 @@ public enum JournalEventGroups {
 
 public enum JournalTimestamp {
     /// The server's ISO timestamps, with or without fractional seconds.
+    /// Made once: the feed parses every entry's time on each redraw, and a
+    /// new formatter per call was two ICU setups per entry, on the UI thread.
+    /// `ISO8601DateFormatter` is thread-safe.
+    private static let plain = ISO8601DateFormatter()
+    private static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
     public static func parse(_ value: String?) -> Date? {
         guard let value else { return nil }
-        let plain = ISO8601DateFormatter()
-        if let date = plain.date(from: value) { return date }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: value)
+        return plain.date(from: value) ?? fractional.date(from: value)
     }
 }
