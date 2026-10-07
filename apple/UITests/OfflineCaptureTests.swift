@@ -446,6 +446,42 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Waiting to sync"].exists)
     }
 
+    // With no server the feed still opens, with the sort and a hint to sign
+    // in rather than an error alert. Whether it is empty depends on whether
+    // the fixture test ran first in this simulator, so that isn't checked.
+    func testJobsFeedOpensFromMoreWithoutAServer() {
+        let app = XCUIApplication()
+        app.launch()
+        openMore(app, "Jobs")
+        XCTAssertTrue(app.segmentedControls["jobs-sort"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Sign in under More → Settings to load new postings."].waitForExistence(timeout: 5))
+        app.segmentedControls["jobs-sort"].buttons["Nearest"].tap()
+        XCTAssertTrue(app.staticTexts["Remote first, then nearest."].waitForExistence(timeout: 5))
+    }
+
+    // The fixture's five postings: strong, possible and an untriaged one that
+    // scores well above the line; two stretches below it, out of sight. Queue
+    // takes a card away at once, and with no server it waits in the outbox.
+    func testJobsFeedGroupsCardsAndQueuesOffline() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-jobsFeedFixture")
+        app.launch()
+        openMore(app, "Jobs")
+        XCTAssertTrue(app.staticTexts["Senior iOS Engineer"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Worth a look (3)"].exists)
+        XCTAssertTrue(app.staticTexts["Worth applying"].exists)
+        XCTAssertTrue(app.staticTexts["2.4 km from Union Station"].exists)
+
+        app.buttons["job-queue-01K7ZZZZZZZZZZZZZZZZZZZZJ1"].tap()
+        XCTAssertTrue(app.staticTexts["Senior iOS Engineer"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Worth a look (2)"].waitForExistence(timeout: 5))
+        // The footer sits under the last card, so it is drawn only once scrolled to.
+        let waiting = app.staticTexts["1 decision waiting to reach the server."]
+        for _ in 0..<4 where !waiting.exists { app.swipeUp() }
+        XCTAssertTrue(waiting.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["The rest (2)"].exists)
+    }
+
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
         let app = XCUIApplication()
         app.launch()

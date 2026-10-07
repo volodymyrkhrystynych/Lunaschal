@@ -60,6 +60,11 @@ final class CaptureModel: ObservableObject {
     @Published var todoRefusals: [String] = []
     let todoOutbox: TodoOutbox
     private let todoSyncer: TodoSync
+    /// Jobs feed decisions the server hasn't had yet, and what it last turned down.
+    @Published private(set) var jobQueue: [JobDecisionOp] = []
+    @Published var jobRefusals: [String] = []
+    let jobStore: JobStore
+    private let jobSyncer: JobSync
     private let calendarOutbox: CalendarOutbox
     private let calendarSyncer: CalendarSyncer
     /// The fic reader's reading spans and last-read chapters, until uploaded.
@@ -108,6 +113,8 @@ final class CaptureModel: ObservableObject {
         chatRecordingSyncer = ChatRecordingSync(store: chatRecordings)
         todoOutbox = try TodoOutbox(root: store.root.appendingPathComponent("todo-outbox", isDirectory: true))
         todoSyncer = TodoSync(outbox: todoOutbox)
+        jobStore = try JobStore(root: store.root.appendingPathComponent("jobs", isDirectory: true))
+        jobSyncer = JobSync(store: jobStore)
         calendarOutbox = try CalendarOutbox(root: store.root.appendingPathComponent("calendar-outbox", isDirectory: true))
         calendarSyncer = CalendarSyncer(outbox: calendarOutbox)
         ficActivity = try FicActivityStore(root: store.root.appendingPathComponent("fic-activity", isDirectory: true))
@@ -129,6 +136,7 @@ final class CaptureModel: ObservableObject {
         workoutLogs = try workouts.list()
         chatRecordingQueue = try chatRecordings.list()
         todoQueue = try todoOutbox.list()
+        jobQueue = try jobStore.pending()
         recentExercises = (try? JSONDecoder().decode([RecentExercise].self, from: Data(contentsOf: workoutCache("recent")))) ?? []
         recentWorkouts = (try? JSONDecoder().decode([WorkoutSession].self, from: Data(contentsOf: workoutCache("sessions")))) ?? []
         weather = try? JSONDecoder().decode(WeatherDay.self, from: Data(contentsOf: weatherCache))
@@ -169,6 +177,7 @@ final class CaptureModel: ObservableObject {
             workoutLogs = try workouts.list()
             chatRecordingQueue = try chatRecordings.list()
             todoQueue = try todoOutbox.list()
+            jobQueue = try jobStore.pending()
             try loadJournal()
             pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
             try loadCalendar()
@@ -456,6 +465,28 @@ final class CaptureModel: ObservableObject {
         todoQueue = (try? todoOutbox.list()) ?? todoQueue
     }
 
+    /// Queues a Queue or Dismiss from the jobs feed and starts sending it.
+    func decideJob(_ job: FeedJob, _ decision: JobDecision) {
+        do {
+            try jobStore.decide(job, decision)
+            jobQueue = try jobStore.pending()
+        } catch { message = error.localizedDescription; return }
+        requestSync()
+    }
+
+    /// Like a to-do change, a decision the server can't take right now waits
+    /// for the next pass without holding up the uploads after it.
+    private func sendJobDecisions(using api: JournalAPI) async throws {
+        guard !((try? jobStore.pending()) ?? []).isEmpty else { return }
+        do {
+            jobRefusals += try await jobSyncer.run(using: api)
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+            if (error as? URLError) != nil { throw error }
+        }
+        jobQueue = (try? jobStore.pending()) ?? jobQueue
+    }
+
     /// Saved on the device first, so it shows at once and survives being offline.
     @discardableResult
     func queueCalendar(_ change: CalendarChange) -> Bool {
@@ -625,7 +656,8 @@ final class CaptureModel: ObservableObject {
                 || workouts.list().contains { $0.state == .pending }
                 || drawingPublications.all().contains { $0.state == "pending" }
                 || !ficActivity.list().isEmpty
-                || !todoOutbox.list().isEmpty, signedIn: signedIn,
+                || !todoOutbox.list().isEmpty
+                || !jobStore.pending().isEmpty, signedIn: signedIn,
             enabled: backgroundSyncEnabled, now: Date())
     }
 
@@ -661,6 +693,7 @@ final class CaptureModel: ObservableObject {
             // First: a voice message is a question someone is waiting on.
             try await chatRecordingSyncer.run(using: api)
             try await sendTodoChanges(using: api)
+            try await sendJobDecisions(using: api)
             try await sendCalendarEvents(using: api)
             try await syncer.run(using: api)
             try await dailySyncer.run(using: api)

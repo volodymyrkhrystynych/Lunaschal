@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
                 attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
             #if DEBUG
             try JournalFixture.seedIfAsked(root: directory)
+            try JobsFixture.seedIfAsked(root: directory)
             #endif
             return try CaptureModel(store: CaptureStore(root: directory))
         }

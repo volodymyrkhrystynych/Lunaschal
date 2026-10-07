@@ -586,6 +586,9 @@ private struct MoreMenu: View {
             NavigationLink { LibraryView(model: model) } label: {
                 Label("Library", systemImage: "books.vertical")
             }.accessibilityIdentifier("more-Library")
+            NavigationLink { JobsFeedView(capture: model) } label: {
+                Label("Jobs", systemImage: "briefcase")
+            }.accessibilityIdentifier("more-Jobs")
             NavigationLink { ConnectionSettings(model: model) } label: {
                 Label("Settings", systemImage: "gear")
             }.accessibilityIdentifier("more-Settings")

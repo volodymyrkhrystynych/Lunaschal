@@ -182,6 +182,7 @@ and any remaining limits. Do not promote “source written” to “device verif
 | Drawing           | Native-quality Pencil drawing is a central reason for the Apple app                                                                            |
 | Chat              | Server-backed native tab (passed in simulator); voice messages queue offline. Local chat is optional and requires evaluation                  |
 | Todo              | Native tab (passed in simulator offline): daily tasks and to-dos, changes queued in an outbox, and a due-today/overdue badge                 |
+| Jobs              | More → Jobs (passed in simulator offline): the triage feed, last copy kept offline, Queue/Dismiss queued in an outbox                     |
 | Watch controls    | Transcribe and Record; both preserve the original audio and create journal entries                                                             |
 
 “Transcribe” means record and retain audio, create a journal entry, and request

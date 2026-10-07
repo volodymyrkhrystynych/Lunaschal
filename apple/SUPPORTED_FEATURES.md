@@ -29,12 +29,13 @@ has been validated. Exact commits and CI results are recorded in the
 | Share extension                           | Not implemented                                                                                                      | Not applicable                                    | —                                                        |
 | Chat                                      | Today's conversation, streamed replies, confirm cards, to-do bar, photos, voice messages                             | Not exposed                                       | Server for typing/photos/cards; voice messages queue offline |
 | Todo                                      | Daily tasks and To-Do/Archive lists; badge for to-dos due today or overdue                                           | Not exposed                                       | None; changes queue offline and sync in order            |
+| Jobs                                      | More → Jobs: the desktop's triage feed (Worth a look / The rest, Best match or Nearest), Queue and Dismiss            | Not exposed                                       | Server to load new postings; last feed shown offline, decisions queue offline |
 | Calendar                                  | Journal → Calendar switch: the web's phone day view (4am–4am timeline); view, create, edit, delete and drag events offline (bottom-left toggle: move or change length); category checkboxes and colours; wake/sleep bands | Not exposed                                       | Sync; changes queue offline and replay in order          |
 | Food, Lifestyle, Learning                 | Use the existing web app; native Food is Save food entry only, native Lifestyle is Capture → Daily only              | Not exposed                                       | Existing web app requirements apply                      |
 | Practice and Notebook                     | Intentionally omitted from native navigation                                                                         | Not exposed                                       | Existing Linux/web app remains available                 |
 
-The iPhone tabs are Capture, Journal, Chat, Todo, and More. More holds Library
-and Settings; the workout log is Capture → Workout. Chat is the desktop's Chat
+The iPhone tabs are Capture, Journal, Chat, Todo, and More. More holds Library,
+Jobs and Settings; the workout log is Capture → Workout. Chat is the desktop's Chat
 tab, and Todo is the tasks card from the desktop's Lifestyle tab (see README.md). iPad also has Study and Draw, and hides the tab bar while a drawing,
 a notebook (Capture → Notes / Newspaper) or a Study annotation is open, so its toolbar doesn't overflow;
 native drawing creation/editing is iPad-only, and so are Paper previews, since they live under Study.

@@ -131,6 +131,17 @@ what each device can currently do and which work remains device-only.
   server turns down (a fifth daily task, say) is dropped and said in the tab.
   Passed in simulator offline (including the badge and a relaunch with
   changes waiting); not yet run against a server or verified on device.
+- More → Jobs is the desktop Jobs tab's triage feed: the same postings in the
+  same order, grouped Worth a look / The rest, sortable Best match or Nearest,
+  each card showing the model's two-sentence summary (or the start of the
+  description before it has one), its flags and the commute. Queue (build a
+  tailored resume in the background) and Dismiss are buttons on the card and
+  swipes on the row. A decision takes the card away at once and waits in a
+  sync outbox, sent in order on the next pass; a later decision on the same
+  posting replaces an unsent one, and one the server turns down is said on
+  the screen. The last feed loaded is kept, so it still reads offline.
+  Passed in simulator offline; not yet run against a server or verified on
+  device.
 - Offline YouTube links attached to a typed entry (any number per entry), with
   preserved drafts and stable entry and per-link attachment IDs. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
