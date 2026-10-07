@@ -1302,6 +1302,31 @@ def seed_meetings(db):
     placeholder_audio(system_path(meeting_id))
 
 
+def seed_pomodoro(db):
+    """A week of Watch timer runs for the Lifestyle focus card: morning work
+    blocks with their breaks, a timeout, and one block cancelled partway.
+    Days 1-6 only, so nothing seeded can be in the future of a 4am-early run."""
+    def run(kind, start, minutes, planned, completed=True):
+        db.execute(
+            'INSERT INTO pomodoro_sessions (id, kind, date, started_at, ended_at,'
+            ' planned_seconds, completed, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (new_id(), kind, day_key_for(start), start, start + minutes * 60,
+             planned * 60, int(completed), start + minutes * 60),
+        )
+
+    for days_ago, blocks in [(1, 4), (2, 2), (3, 0), (4, 3), (5, 1), (6, 2)]:
+        clock = day_bounds(today_key(days_ago))[0] + 5 * 3600  # 09:00
+        for block in range(blocks):
+            run('work', clock, 25, 25)
+            clock += 25 * 60
+            if block < blocks - 1:
+                run('break', clock, 5, 5)
+                clock += 5 * 60
+        if days_ago in (2, 5):
+            run('timeout', clock + 3600, 10, 10)
+    run('work', day_bounds(today_key(3))[0] + 10 * 3600, 12, 25, completed=False)
+
+
 def seed_lifestyle(db):
     today = today_key()
     for i, (title, done) in enumerate([('Read 20 minutes', 1), ('Stretch', 0), ('Drink water', 1)]):
@@ -2117,6 +2142,7 @@ def main() -> None:
     seed_ideas(db, page_id)
     seed_meetings(db)
     seed_lifestyle(db)
+    seed_pomodoro(db)
     seed_piano(db)
     seed_practice(db)
     seed_notes(db)

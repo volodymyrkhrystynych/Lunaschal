@@ -401,6 +401,19 @@ publicly to make CI work: simulator capture tests never contact it.
   Recording lifecycle and paired-device transfers remain unverified.
   WatchConnectivity transfer validation requires paired devices
   ([Apple's transferFile documentation](<https://developer.apple.com/documentation/watchconnectivity/wcsession/transferfile(_:metadata:)>)).
+- The Watch has a pomodoro timer: Focus (25 minutes, then Continue, a 5-minute
+  Break, or Cancel) and Timeout (10 minutes, then Continue or Cancel). Rules are
+  `PomodoroTimer` in LunaschalCore; the state is saved, so a relaunch resumes from
+  the end time. A local notification carries the same buttons, since the app is
+  suspended with the wrist down. Each finished or cancelled run goes to the phone
+  by `transferUserInfo` and is deleted from the Watch only after the phone replies
+  `pomodoroStored`; the phone's `pomodoro-outbox` uploads it to
+  `POST /api/lifestyle/pomodoro/sessions`, and Lifestyle shows it on the Focus card.
+  A cancel within the first minute is not logged. Debug builds take
+  `-PomodoroSeconds 10` and `-PomodoroStart work|timeout` launch arguments for
+  checking the simulator without tapping. The countdown, end-of-timer choices and
+  relaunch passed in the watchOS simulator; notification buttons and the
+  Watch-to-phone transfer need paired devices.
 - Settings checks the actual Foundation Models text-model and locale availability,
   including disabled/ineligible/not-ready states. Generation and local speech
   recognition remain optional later layers. Server transcription is the only

@@ -26,7 +26,7 @@ from backend.capture_time import optional_capture_time
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.day_boundary import DAY_ROLLOVER_HOUR, day_bounds, day_key_for
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
-from backend.lifestyle import storage
+from backend.lifestyle import pomodoro, storage
 from backend.lifestyle.activity import is_activity_type, summarize_day
 from backend.lifestyle.exercises import canonicalize, display_name
 from backend.lifestyle.quick_entry import parse_entry
@@ -924,6 +924,72 @@ def log_calories():
 def delete_calories(entry_id):
     db = get_db()
     cur = db.execute('DELETE FROM calorie_logs WHERE id=?', (entry_id,))
+    db.commit()
+    if not cur.rowcount:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'success': True})
+
+
+# --- Pomodoro ----------------------------------------------------------------
+
+_POMODORO_COLS = 'id, kind, date, started_at, ended_at, planned_seconds, completed, created_at'
+
+
+def _pomodoro_dict(row) -> dict:
+    out = row_to_dict(row)
+    out['completed'] = bool(out['completed'])
+    return out
+
+
+@bp.get('/pomodoro')
+def pomodoro_summary():
+    """The Watch's timer runs: every day of the window (empty ones included,
+    for the chart) plus the latest runs."""
+    days, err = _parse_int(request.args.get('days'), 'days', 1, 366)
+    if err:
+        return jsonify({'error': err}), 400
+    days = days or 14
+    last = _today()
+    first = (date_cls.fromisoformat(last) - timedelta(days=days - 1)).isoformat()
+    db = get_db()
+    rows = db.execute(
+        f'SELECT {_POMODORO_COLS} FROM pomodoro_sessions WHERE date BETWEEN ? AND ?',
+        (first, last),
+    ).fetchall()
+    recent = db.execute(
+        f'SELECT {_POMODORO_COLS} FROM pomodoro_sessions ORDER BY started_at DESC LIMIT 10'
+    ).fetchall()
+    return jsonify({
+        'days': pomodoro.summarize(rows, first, last),
+        'sessions': [_pomodoro_dict(r) for r in recent],
+    })
+
+
+@bp.post('/pomodoro/sessions')
+def log_pomodoro():
+    """One finished or cancelled run, under the id the Watch minted: a replay
+    from the phone's outbox returns the stored row and changes nothing."""
+    try:
+        row = pomodoro.parse_session(request.get_json(silent=True), int(time.time()))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    db = get_db()
+    db.execute(
+        f'INSERT OR IGNORE INTO pomodoro_sessions({_POMODORO_COLS}) VALUES (?,?,?,?,?,?,?,?)',
+        (row['id'], row['kind'], row['date'], row['started_at'], row['ended_at'],
+         row['planned_seconds'], row['completed'], int(time.time())),
+    )
+    db.commit()
+    stored = db.execute(
+        f'SELECT {_POMODORO_COLS} FROM pomodoro_sessions WHERE id=?', (row['id'],)
+    ).fetchone()
+    return jsonify(_pomodoro_dict(stored)), 201
+
+
+@bp.delete('/pomodoro/sessions/<session_id>')
+def delete_pomodoro(session_id):
+    db = get_db()
+    cur = db.execute('DELETE FROM pomodoro_sessions WHERE id=?', (session_id,))
     db.commit()
     if not cur.rowcount:
         return jsonify({'error': 'Not found'}), 404

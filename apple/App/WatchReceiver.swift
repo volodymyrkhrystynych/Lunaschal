@@ -5,11 +5,13 @@ import LunaschalCore
 final class WatchReceiver: NSObject, WCSessionDelegate {
     private let inbox: WatchInbox
     private let store: CaptureStore
+    private let pomodoros: PomodoroStore
     var onChange: (@MainActor () -> Void)?
     var onError: (@MainActor (Error) -> Void)?
 
-    init(store: CaptureStore) throws {
+    init(store: CaptureStore, pomodoros: PomodoroStore) throws {
         self.store = store
+        self.pomodoros = pomodoros
         inbox = try WatchInbox(root: store.root.appendingPathComponent("watch-inbox", isDirectory: true))
         super.init()
     }
@@ -53,6 +55,16 @@ final class WatchReceiver: NSObject, WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        if let bytes = userInfo["pomodoroSession"] as? Data {
+            do {
+                let run = try JSONDecoder().decode(PomodoroSession.self, from: bytes)
+                // Durable before the Watch is told it may forget the run.
+                try pomodoros.save(run)
+                session.transferUserInfo(["pomodoroStored": run.id])
+                Task { @MainActor in self.onChange?() }
+            } catch { Task { @MainActor in self.onError?(error) } }
+            return
+        }
         if let bytes = userInfo["serverReceiptRequest"] as? Data {
             do {
                 let requested = try JSONDecoder().decode(WatchServerReceipt.self, from: bytes)
