@@ -180,8 +180,8 @@ and any remaining limits. Do not promote “source written” to “device verif
 | Knowledge         | Optional on each device; Wikipedia is a candidate collection, not a mandatory download                                                         |
 | Mobile exclusions | Practice and Notebook do not need native mobile tabs                                                                                           |
 | Drawing           | Native-quality Pencil drawing is a central reason for the Apple app                                                                            |
-| Chat              | Server-backed native tab (passed in simulator); voice messages queue offline. Local chat is optional and requires evaluation                  |
-| Todo              | Native tab (passed in simulator offline): daily tasks and to-dos, changes queued in an outbox, and a due-today/overdue badge                 |
+| Chat              | Server-backed native tab (passed in simulator); voice messages queue offline. Local chat is optional and requires evaluation                   |
+| Todo              | Native tab (passed in simulator offline): daily tasks and to-dos, changes queued in an outbox, and a due-today/overdue badge                   |
 | Watch controls    | Transcribe and Record; both preserve the original audio and create journal entries                                                             |
 
 “Transcribe” means record and retain audio, create a journal entry, and request
@@ -684,7 +684,11 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
       `createdAt` order (`ReplicaStore.newestRecords`), no longer by sync revision.
       Passed in simulator, with a debug-only `-journalFeedFixture` launch argument
       seeding the UI test; not verified on device.
-- [ ] Review Calendar, Lifestyle, Food, Learning, and other existing views before
+- [x] Learning: More → Learning with Review, Queue and Browse over `/api/learning`,
+      server-only. Session logic in `LunaschalCore/Learning.swift` with core tests;
+      opening without a server passed in simulator. Server-backed flows not yet
+      run against a server or on device.
+- [ ] Review Calendar, Lifestyle, Food, and other existing views before
       claiming mobile feature parity; full desktop parity is not a requirement.
 
 **Done when:** routine phone capture and iPad reading/drawing are easy to reach,
