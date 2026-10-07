@@ -278,10 +278,15 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
     }
 
     public func syncPage(cursor: String?, collections: [String]) async throws -> SyncPage {
+        try await syncPage(cursor: cursor, collections: collections, limit: 100)
+    }
+
+    public func syncPage(cursor: String?, collections: [String], limit: Int) async throws -> SyncPage {
         var req = request("api/mobile/sync")
         var parts = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)!
-        parts.queryItems = cursor.map { [URLQueryItem(name: "cursor", value: $0)] }
-            ?? [URLQueryItem(name: "collections", value: collections.joined(separator: ","))]
+        parts.queryItems = (cursor.map { [URLQueryItem(name: "cursor", value: $0)] }
+            ?? [URLQueryItem(name: "collections", value: collections.joined(separator: ","))])
+            + [URLQueryItem(name: "limit", value: String(limit))]
         req.url = parts.url
         let (data, response) = try await session.data(for: req)
         try check(data, response)

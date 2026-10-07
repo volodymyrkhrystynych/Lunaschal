@@ -41,6 +41,14 @@ public final class ReplicaStore {
                                     [searchBody(record.data ?? [:]), record.collection, record.id])
                     }
                 }
+                // A record's children (a fic's chapters, an entry's attachments) are
+                // found by a field inside the JSON payload. Unindexed, every lookup
+                // parsed every record's JSON, a whole library's chapters to open
+                // one book, on the UI thread. These match `relatedFilter` exactly.
+                // No version bump: an older build reads a database with them fine.
+                for field in Self.relatedFields {
+                    try execute("CREATE INDEX IF NOT EXISTS replica_by_\(field) ON replica_records(collection,\(Self.extract(field)))")
+                }
                 try execute("PRAGMA user_version=3")
             }
         } catch { sqlite3_close(db); db = nil; throw error }
@@ -171,29 +179,77 @@ public final class ReplicaStore {
 
     /// `relatedRecords(...).count` without reading every payload: a long fic's
     /// chapters are megabytes of text, and this is asked on every book opened.
+    /// The payload fields a child record names its parent by, each indexed.
+    static let relatedFields = ["ficId", "paperId", "pageId", "entryId", "conversationId"]
+
+    /// The indexed expression for `field`. The path is written into the SQL
+    /// rather than bound, because SQLite only uses an expression index for the
+    /// identical expression; `field` only ever comes from `relatedFields`.
+    static func extract(_ field: String) -> String { "json_extract(payload,'$.\(field)')" }
+
+    private func relatedFilter(_ field: String) throws -> String {
+        guard Self.relatedFields.contains(field) else { throw ReplicaError.invalidPage }
+        return Self.extract(field)
+    }
+
+    /// How SQLite would run `relatedRecords`, for the test that keeps it indexed.
+    func relatedQueryPlan(collection: String, field: String, value: String) throws -> String {
+        let extract = try relatedFilter(field)
+        return try rows("EXPLAIN QUERY PLAN SELECT id FROM replica_records WHERE collection=? AND \(extract)=? AND deleted=0",
+                        [collection, value]).map { $0.last ?? "" }.joined(separator: "\n")
+    }
+
     public func relatedCount(collection: String, field: String, value: String) throws -> Int {
-        guard ["ficId", "paperId", "pageId", "entryId", "conversationId"].contains(field) else { throw ReplicaError.invalidPage }
-        return Int(try rows("SELECT COUNT(*) FROM replica_records WHERE collection=? AND deleted=0 AND json_extract(payload,?)=?",
-                            [collection, "$." + field, value]).first?[0] ?? "0") ?? 0
+        let extract = try relatedFilter(field)
+        return Int(try rows("SELECT COUNT(*) FROM replica_records WHERE collection=? AND \(extract)=? AND deleted=0",
+                            [collection, value]).first?[0] ?? "0") ?? 0
+    }
+
+    /// How many chapters each of these books has on the device, in one pass:
+    /// the library list badges a page of books at a time.
+    public func chapterCounts(bookIDs: [String]) throws -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for start in stride(from: 0, to: bookIDs.count, by: 400) {
+            let chunk = Array(bookIDs[start..<min(start + 400, bookIDs.count)])
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            // Written out literally so an expression index on ficId can serve it.
+            for row in try rows("""
+                SELECT json_extract(payload,'$.ficId'),COUNT(*) FROM replica_records
+                WHERE collection='fic_chapters' AND deleted=0 AND json_extract(payload,'$.ficId') IN (\(marks))
+                GROUP BY 1
+                """, chunk) { counts[row[0]] = Int(row[1]) ?? 0 }
+        }
+        return counts
+    }
+
+    /// Bytes of record text held for these collections: what downloading the
+    /// library put in the database, beside the media files it put on disk.
+    public func storedBytes(collections: [String]) throws -> Int64 {
+        guard !collections.isEmpty else { return 0 }
+        let marks = Array(repeating: "?", count: collections.count).joined(separator: ",")
+        return Int64(try rows("""
+            SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM replica_records
+            WHERE deleted=0 AND collection IN (\(marks))
+            """, collections).first?[0] ?? "0") ?? 0
     }
 
     public func relatedRecords(collection: String, field: String, value: String) throws -> [SyncChange] {
-        guard ["ficId", "paperId", "pageId", "entryId", "conversationId"].contains(field) else { throw ReplicaError.invalidPage }
-        return try recordsQuery("WHERE collection=? AND deleted=0 AND json_extract(payload,?)=? ORDER BY revision",
-                                [collection, "$." + field, value])
+        let extract = try relatedFilter(field)
+        return try recordsQuery("WHERE collection=? AND \(extract)=? AND deleted=0 ORDER BY revision",
+                                [collection, value])
     }
 
     /// `relatedRecords` for many parents in one pass: the Journal feed draws
     /// every loaded entry's attachments at once.
     public func relatedRecords(collection: String, field: String, values: [String]) throws -> [SyncChange] {
-        guard ["ficId", "paperId", "pageId", "entryId", "conversationId"].contains(field) else { throw ReplicaError.invalidPage }
+        let extract = try relatedFilter(field)
         var out: [SyncChange] = []
         // Kept well under SQLite's bound-parameter limit.
         for start in stride(from: 0, to: values.count, by: 400) {
             let chunk = Array(values[start..<min(start + 400, values.count)])
             let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
-            out += try recordsQuery("WHERE collection=? AND deleted=0 AND json_extract(payload,?) IN (\(marks)) ORDER BY revision",
-                                    [collection, "$." + field] + chunk)
+            out += try recordsQuery("WHERE collection=? AND \(extract) IN (\(marks)) AND deleted=0 ORDER BY revision",
+                                    [collection] + chunk)
         }
         return out
     }
@@ -311,19 +367,40 @@ public final class ReplicaStore {
     /// included — at its scroll position, then the chapter this device last
     /// read, then the server's last-read chapter, then the first chapter. A
     /// chapter whose text isn't downloaded is skipped. Nil means no chapter text.
+    /// A book's chapters in reading order, without their text: id, title and
+    /// position. Enough for a chapter list, Next/Previous and the resume point,
+    /// at a fraction of the cost of decoding every chapter's HTML and text.
+    /// The reader loads the one chapter it shows with `record`.
+    public func chapterOutline(bookID: String) throws -> [SyncChange] {
+        let book = Self.extract("ficId")
+        return try rows("""
+            SELECT id,revision,json_object('id',id,'ficId',\(book),'title',json_extract(payload,'$.title'),
+                'position',json_extract(payload,'$.position'),'wordCount',json_extract(payload,'$.wordCount'))
+            FROM replica_records WHERE collection='fic_chapters' AND \(book)=? AND deleted=0
+            ORDER BY COALESCE(json_extract(payload,'$.position'),0),id
+            """, [bookID]).map {
+            SyncChange(revision: Int64($0[1])!, collection: "fic_chapters", id: $0[0], deleted: false,
+                       data: try decode([String: JSONValue].self, $0[2]))
+        }
+    }
+
     public func resumePoint(bookID: String) throws -> (chapter: SyncChange, fraction: Double?)? {
         guard ULID.isValid(bookID) else { throw ReplicaError.invalidEdit }
-        let chapters = try relatedRecords(collection: "fic_chapters", field: "ficId", value: bookID)
-        func chapter(_ id: String?) -> SyncChange? { id.flatMap { id in chapters.first { $0.id == id } } }
+        let outline = try chapterOutline(bookID: bookID)
+        // Only the chosen chapter is read whole.
+        func chapter(_ id: String?) throws -> SyncChange? {
+            guard let id, outline.contains(where: { $0.id == id }) else { return nil }
+            return try record(collection: "fic_chapters", id: id)
+        }
         if let mark = try bookmarks(bookID: bookID).first(where: { $0.data?["type"]?.string == "continue" }),
-           let target = chapter(mark.data?["chapterId"]?.string) {
+           let target = try chapter(mark.data?["chapterId"]?.string) {
             return (target, mark.data?["scrollPosition"]?.number)
         }
         if let local = try lastReadChapter(bookID: bookID) { return (local, nil) }
-        if let server = chapter(try record(collection: "fics", id: bookID)?.data?["lastReadChapterId"]?.string) {
+        if let server = try chapter(try record(collection: "fics", id: bookID)?.data?["lastReadChapterId"]?.string) {
             return (server, nil)
         }
-        return chapters.min { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }.map { ($0, nil) }
+        return try chapter(outline.first?.id).map { ($0, nil) }
     }
 
     /// How many books each folder holds, keyed by folder id, with books in no
@@ -350,11 +427,7 @@ public final class ReplicaStore {
     }
 
     public func bookmarks(bookID: String) throws -> [SyncChange] {
-        var saved = try relatedRecords(collection: "fic_bookmarks", field: "ficId", value: bookID)
-        // A continue replacement and its tombstone can arrive on separate pages.
-        if let latest = saved.filter({ $0.data?["type"]?.string == "continue" }).max(by: { $0.revision < $1.revision }) {
-            saved.removeAll { $0.data?["type"]?.string == "continue" && $0.id != latest.id }
-        }
+        var saved = try serverBookmarks(bookID: bookID)
         for edit in try bookmarkEdits(bookID: bookID) where edit.state == "pending" {
             if edit.operation.action == "delete" { saved.removeAll { $0.id == edit.operation.recordId } }
             else {
@@ -365,14 +438,30 @@ public final class ReplicaStore {
         return saved
     }
 
+    /// The bookmarks as the server last sent them, without edits waiting here.
+    private func serverBookmarks(bookID: String) throws -> [SyncChange] {
+        var saved = try relatedRecords(collection: "fic_bookmarks", field: "ficId", value: bookID)
+        // A continue replacement and its tombstone can arrive on separate pages.
+        if let latest = saved.filter({ $0.data?["type"]?.string == "continue" }).max(by: { $0.revision < $1.revision }) {
+            saved.removeAll { $0.data?["type"]?.string == "continue" && $0.id != latest.id }
+        }
+        return saved
+    }
+
+    /// A book has one continue point, so a new one replaces any that hasn't
+    /// synced yet (or was held as a conflict) rather than waiting for it: the
+    /// newest choice is the only one worth sending. It always names the
+    /// server's continue point as the one it replaces, never the unsent one.
     public func queueBookmark(chapter: SyncChange, type: String, fraction: Double) throws {
         guard let epoch = try epoch, chapter.collection == "fic_chapters", !chapter.deleted,
               let bookID = chapter.data?["ficId"]?.string, ["favorite", "continue"].contains(type),
               fraction.isFinite, (0...1).contains(fraction) else { throw ReplicaError.invalidEdit }
-        guard !(try bookmarkEdits(bookID: bookID)).contains(where: {
-            $0.original.data?["type"]?.string == type && (type == "continue" || $0.original.data?["chapterId"]?.string == chapter.id)
+        let waiting = try bookmarkEdits(bookID: bookID)
+        guard type == "continue" || !waiting.contains(where: {
+            $0.original.data?["type"]?.string == "favorite" && $0.original.data?["chapterId"]?.string == chapter.id
         }) else { throw ReplicaError.editAlreadyPending }
-        let previous = type == "continue" ? try bookmarks(bookID: bookID).first { $0.data?["type"]?.string == "continue" } : nil
+        let replaced = type == "continue" ? waiting.filter { $0.original.data?["type"]?.string == "continue" } : []
+        let previous = type == "continue" ? try serverBookmarks(bookID: bookID).first { $0.data?["type"]?.string == "continue" } : nil
         let id = ULID.make()
         let original = SyncChange(revision: previous?.revision ?? 0, collection: "fic_bookmarks", id: id, deleted: false,
             data: ["id": .string(id), "ficId": .string(bookID), "chapterId": .string(chapter.id),
@@ -381,8 +470,11 @@ public final class ReplicaStore {
             "type": .string(type), "scrollPosition": .number(fraction),
             "previousContinueId": previous.map { .string($0.id) } ?? .null]
         let operation = ReplicaOperation(epoch: epoch, record: original, action: "create", data: data)
-        try execute("INSERT INTO replica_outbox(id,operation,original) VALUES (?,?,?)",
-                    [operation.id, try json(operation), try json(original)])
+        try transaction {
+            for edit in replaced { try execute("DELETE FROM replica_outbox WHERE id=?", [edit.id]) }
+            try execute("INSERT INTO replica_outbox(id,operation,original) VALUES (?,?,?)",
+                        [operation.id, try json(operation), try json(original)])
+        }
     }
 
     public func deleteBookmark(_ bookmark: SyncChange) throws {
@@ -427,6 +519,31 @@ public final class ReplicaStore {
         try transaction {
             try put(change)
             try execute("DELETE FROM replica_outbox WHERE id=?", [operation.id])
+            try repointContinue(after: change)
+        }
+    }
+
+    /// A continue point replaced while its predecessor was already on its way
+    /// still names the server's older one, which the predecessor has just
+    /// replaced, so it would come back as a conflict. Point it at the one the
+    /// server now has instead.
+    private func repointContinue(after change: SyncChange) throws {
+        guard change.collection == "fic_bookmarks", change.data?["type"]?.string == "continue",
+              let bookID = change.data?["ficId"]?.string else { return }
+        for edit in try bookmarkEdits(bookID: bookID) where edit.state == "pending" && edit.operation.action == "create"
+            && edit.original.data?["type"]?.string == "continue" && edit.operation.recordId != change.id
+            && edit.operation.data["previousContinueId"]?.string != change.id {
+            guard var operation = try JSONSerialization.jsonObject(with: Data(try json(edit.operation).utf8)) as? [String: Any],
+                  var data = operation["data"] as? [String: Any],
+                  var original = try JSONSerialization.jsonObject(with: Data(try json(edit.original).utf8)) as? [String: Any]
+            else { continue }
+            data["previousContinueId"] = change.id
+            operation["data"] = data
+            operation["baseRevision"] = change.revision
+            original["revision"] = change.revision
+            try execute("UPDATE replica_outbox SET operation=?,original=? WHERE id=?",
+                        [String(decoding: try JSONSerialization.data(withJSONObject: operation), as: UTF8.self),
+                         String(decoding: try JSONSerialization.data(withJSONObject: original), as: UTF8.self), edit.id])
         }
     }
 

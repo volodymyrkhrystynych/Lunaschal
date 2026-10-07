@@ -130,6 +130,8 @@ struct LibraryCategoryView: View {
 }
 
 struct LibraryDownloadSettings: View {
+    private func size(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+
     @ObservedObject var model: CaptureModel
     @State private var confirmingRemoval = false
     @AppStorage("libraryBudgetGB") private var budget = 20
@@ -155,8 +157,9 @@ struct LibraryDownloadSettings: View {
                 }
                 Stepper("Media budget: \(budget) GB", value: $budget, in: 1...150, step: 5)
                     .disabled(model.downloadingLibrary)
-                Text("Downloaded media: \(ByteCountFormatter.string(fromByteCount: model.libraryBytes, countStyle: .file))")
+                Text("Downloaded: \(size(model.libraryTextBytes + model.libraryBytes)) (text \(size(model.libraryTextBytes)) · media \(size(model.libraryBytes)))")
                     .font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("library-downloaded-size")
                 Button("Remove downloaded media", role: .destructive) { confirmingRemoval = true }
                     .disabled(model.downloadingLibrary)
                 if let message = model.libraryMessage { Text(message).font(.footnote).foregroundStyle(.secondary) }
@@ -295,8 +298,7 @@ struct BookView: View {
 
     private func refreshChapters() {
         do {
-            chapters = try model.replica.relatedRecords(collection: "fic_chapters", field: "ficId", value: book.id)
-                .sorted { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }
+            chapters = try model.replica.chapterOutline(bookID: book.id)
             resume = try model.replica.resumePoint(bookID: book.id)
             bookmarks = try model.replica.bookmarks(bookID: book.id)
             bookmarkEdits = try model.replica.bookmarkEdits(bookID: book.id)

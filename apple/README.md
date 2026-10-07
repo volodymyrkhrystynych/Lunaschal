@@ -221,6 +221,13 @@ what each device can currently do and which work remains device-only.
   under Study. Download controls remain in More → Settings → Library downloads.
   Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:
   continue bookmark, then this device's last read, then the server's, then chapter 1),
+  or, for a book with no chapters on the device, its page, which downloads it ahead of
+  everything else and shows the progress. That page used to stay blank: the opening view
+  had nothing in it before it loaded, so its load never ran (fixed; covered by a UI test).
+  Debug builds launched with `-libraryFixture` fill the Library with made-up books in every
+  download state (on the device, half on it, not on it, a PDF book, one the server can't
+  send) and download from an in-app stand-in server slowly enough to watch, so the Library
+  and its download states can be seen without a server. Each launch resets them,
   and the reader moves between chapters with Previous/Next. The reader's bottom-left menu has Text and
   Transcribe commentary (a journal capture carrying `ficID`/`chapterID`: typed text
   is posted as `raw_content` and then linked, a recording links in its upload),
@@ -229,8 +236,11 @@ what each device can currently do and which work remains device-only.
   chapter queues it as last read. Both go through `FicActivityStore`. Chapter
   readers create Favorite or Continue-reading bookmarks offline, and
   saved bookmarks can be reopened or removed from a book. Bookmark changes sync
-  with the desktop, using replay receipts and conflict checks. One pending
-  Continue change per book is retained until it syncs or is resolved.
+  with the desktop, using replay receipts and conflict checks. A book keeps one
+  unsent Continue change: moving the continue point again replaces it (one held
+  as a conflict too) instead of waiting for a sync, and still names the server's
+  continue point as the one it replaces. If the replaced change was already on its
+  way, the newer one is re-pointed at what the server kept when that lands.
   Native drawing editing is iPad-only.
 - Study (iPad-only) contains Documents, Paper previews, newspapers, and Knowledge.
   The iPhone has no Study tab, so none of these are reachable there.
@@ -367,6 +377,15 @@ publicly to make CI work: simulator capture tests never contact it.
   `BGProcessingTask` window. Background sync can be disabled in Settings;
   iOS chooses when to run it. Expiration cancels work and preserves pending
   captures for retry. Ordinary foreground work stops when leaving the app.
+  Applying the server's pages and sending the outbox runs on its own actor and
+  database connection (`ReplicaSync`), not the UI's: it used to run on the main
+  actor, and with the library worker's long write transactions in between, the app
+  froze while it synced. Library pages are fetched 25 records at a time so no write
+  transaction is long; children are found through JSON expression indexes; chapter
+  lists read an outline rather than every chapter's text; and the reader saves its
+  position at most once a second. Settings → Transfers shows the last pass's step
+  times and the longest the UI thread was held (`SyncTimings`, `StallWatch`).
+  Passed in simulator; not yet verified on device with a full library.
   This is not autonomous background URLSession transfer: bytes do not continue
   after process termination. The existing redirect and cellular checks apply;
   bulk media downloads remain a separate Wi-Fi-only action. Persistent request
@@ -393,7 +412,11 @@ publicly to make CI work: simulator capture tests never contact it.
   downloaded record references them; unreadable manifests block removal safely.
   Partial downloads and old content versions remain until whole-media cleanup.
   Future bulk downloads can restore a removed item. Pinning is not implemented.
-  Settings → Library downloads shows current media-directory usage, including partial downloads.
+  Settings → Library downloads shows what the library takes on the device: the
+  text of books, chapters and the other library collections as stored in the
+  replica, plus media-directory usage including partial downloads. The media
+  budget still covers media only. In the book list, a green download badge marks
+  a fic whose chapters (or PDF) are all on the device. Passed in simulator.
   File readers distinguish metadata-only, pending, partial, downloaded, and
   server-unavailable states. Server observations persist across relaunch and are
   labelled as the last check; they never hide an existing verified local copy.

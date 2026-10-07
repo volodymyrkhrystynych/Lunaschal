@@ -22,6 +22,10 @@ public actor LibraryDownload {
         self.mediaURL = mediaURL
     }
 
+    /// Records per page: a page of chapters is one write transaction, full
+    /// HTML and search index included, and the UI's own writes wait behind it.
+    static let pageSize = 25
+
     public nonisolated static func collections(knowledge: Bool) -> [String] {
         let base = ["fic_chapters", "messages",
                     "paper_pages", "paper_native_ink", "paper_page_images",
@@ -45,6 +49,12 @@ public actor LibraryDownload {
 
     public func usedBytes() throws -> Int64 { try mediaStore().usedBytes() }
 
+    /// The library's text: books, their chapters and everything else the
+    /// library download replicates, as stored in the database.
+    public func textBytes() throws -> Int64 {
+        try replicaStore().storedBytes(collections: ["fics"] + Self.collections(knowledge: true))
+    }
+
     /// Cellular-capable text updates never bootstrap or download binary media.
     /// Limit each pass so a large backlog doesn't monopolize ordinary sync.
     @discardableResult
@@ -59,7 +69,7 @@ public actor LibraryDownload {
             try Task.checkCancellation()
             guard let cursor = try store.cursor(collections: collections) else { return false }
             do {
-                let page = try await transport.syncPage(cursor: cursor, collections: collections)
+                let page = try await transport.syncPage(cursor: cursor, collections: collections, limit: Self.pageSize)
                 try Task.checkCancellation()
                 guard page.mode == "delta", Set(page.collections) == Set(collections),
                       page.epoch == (try store.epoch),
@@ -96,7 +106,7 @@ public actor LibraryDownload {
             try Task.checkCancellation()
             let cursor = try store.cursor(collections: collections)
             do {
-                let page = try await transport.syncPage(cursor: cursor, collections: collections)
+                let page = try await transport.syncPage(cursor: cursor, collections: collections, limit: Self.pageSize)
                 try Task.checkCancellation()
                 guard Set(page.collections) == Set(collections),
                       cursor == (try store.cursor(collections: collections)) else {
