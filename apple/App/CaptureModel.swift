@@ -98,6 +98,9 @@ final class CaptureModel: ObservableObject {
         drawings = try DrawingStore(root: store.root.appendingPathComponent("drawings", isDirectory: true))
         drawingPublications = try DrawingPublicationStore(root: store.root.appendingPathComponent("drawing-publications", isDirectory: true))
         notebooks = try NotebookStore(root: store.root.appendingPathComponent("notebooks", isDirectory: true))
+        #if DEBUG
+        try NewspaperFixture.seedIfAsked(notebooks)
+        #endif
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
         daily = try DailyStore(root: store.root.appendingPathComponent("daily", isDirectory: true))

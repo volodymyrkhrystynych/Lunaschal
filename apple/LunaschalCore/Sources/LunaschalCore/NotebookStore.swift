@@ -11,6 +11,14 @@ public struct Notebook: Codable, Identifiable, Hashable {
         case newspaper(date: String)
     }
 
+    /// How the pages are held. A paged notebook keeps one markup per page; a
+    /// column keeps a single markup with every page stacked down it
+    /// (`NotebookColumn`), which is what lets a newspaper be read as one
+    /// continuous scroll and ink cross from one page to the next.
+    public enum Layout: String, Codable, Hashable {
+        case paged, column
+    }
+
     public let id: String
     public var title: String
     public let createdAt: Date
@@ -27,6 +35,9 @@ public struct Notebook: Codable, Identifiable, Hashable {
     /// Journal captures made from this notebook, oldest first.
     public var savedCaptureIDs: [String]
     public var savedAt: Date?
+    /// Absent from every notebook written before columns existed, which is
+    /// exactly what makes those read as paged.
+    public var layout: Layout?
 
     init(title: String, source: Source, pageCount: Int, pdfPageCount: Int, now: Date) {
         id = ULID.make(now: now)
@@ -41,7 +52,13 @@ public struct Notebook: Codable, Identifiable, Hashable {
         checkpoint = nil
         savedCaptureIDs = []
         savedAt = nil
+        layout = nil
     }
+
+    public var isColumn: Bool { layout == .column }
+
+    /// How many markups a checkpoint holds: one for a column, one per page otherwise.
+    public var markupCount: Int { isColumn ? 1 : pageCount }
 
     public var newspaperDate: String? {
         if case .newspaper(let date) = source { return date }
@@ -95,8 +112,9 @@ public final class NotebookStore {
     public func createNewspaper(date: String, pdf: URL, pageCount: Int, now: Date = Date()) throws -> Notebook {
         guard NewspaperIssue.isDate(date), pageCount > 0 else { throw NotebookError.invalidIssue }
         try Self.validatePDF(pdf)
-        let notebook = Notebook(title: NewspaperIssue.title(date), source: .newspaper(date: date),
+        var notebook = Notebook(title: NewspaperIssue.title(date), source: .newspaper(date: date),
                                 pageCount: pageCount, pdfPageCount: pageCount, now: now)
+        notebook.layout = .column
         let folder = try directory(notebook.id)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let destination = folder.appendingPathComponent("source.pdf")
@@ -121,11 +139,12 @@ public final class NotebookStore {
         return fm.fileExists(atPath: url.path) ? url : nil
     }
 
-    /// Every page's markup in order, or empty before the first checkpoint.
+    /// Every page's markup in order — for a column, the one markup holding
+    /// them all — or empty before the first checkpoint.
     public func pages(_ notebook: Notebook) throws -> [Data] {
         guard let checkpoint = notebook.checkpoint else { return [] }
         let folder = try checkpointDirectory(notebook.id, checkpoint)
-        return try (0..<notebook.pageCount).map { try Data(contentsOf: folder.appendingPathComponent("page-\($0).markup")) }
+        return try (0..<notebook.markupCount).map { try Data(contentsOf: folder.appendingPathComponent("page-\($0).markup")) }
     }
 
     /// Each page's locked layer (pictures pinned under the ink), nil where a
@@ -133,7 +152,7 @@ public final class NotebookStore {
     public func lockedLayers(_ notebook: Notebook) throws -> [Data?] {
         guard let checkpoint = notebook.checkpoint else { return [] }
         let folder = try checkpointDirectory(notebook.id, checkpoint)
-        return (0..<notebook.pageCount).map { try? Data(contentsOf: folder.appendingPathComponent("page-\($0).locked")) }
+        return (0..<notebook.markupCount).map { try? Data(contentsOf: folder.appendingPathComponent("page-\($0).locked")) }
     }
 
     public func previewURL(_ notebook: Notebook) throws -> URL? {
@@ -141,12 +160,20 @@ public final class NotebookStore {
         return try checkpointDirectory(notebook.id, checkpoint).appendingPathComponent("preview.png")
     }
 
+    /// `column` saves a column: `pages` is its one markup and `slots` how many
+    /// pages are stacked in it. A paged notebook saved this way becomes a
+    /// column from then on — the converted copy of its pages is in this
+    /// checkpoint, and the paged originals stay in the previous one.
     @discardableResult
     public func checkpoint(_ id: String, pages: [Data], locked: [Data?] = [], marked: Set<Int>,
-                           preview: Data) throws -> Notebook {
+                           preview: Data, column slots: Int? = nil) throws -> Notebook {
         var notebook = try notebook(id)
+        let pageCount = slots ?? pages.count
         guard !pages.isEmpty, !preview.isEmpty, !pages.contains(where: \.isEmpty),
-              pages.count >= notebook.pdfPageCount, locked.count <= pages.count,
+              slots == nil || pages.count == 1,
+              // A column saved as pages would read back as one page of a stack.
+              slots != nil || !notebook.isColumn,
+              pageCount >= notebook.pdfPageCount, locked.count <= pages.count,
               !locked.contains(where: { $0?.isEmpty == true }) else { throw DrawingError.incompleteCheckpoint }
         let previous = notebook.checkpoint
         let revision = ULID.make()
@@ -161,8 +188,9 @@ public final class NotebookStore {
         }
         try preview.write(to: folder.appendingPathComponent("preview.png"), options: .atomic)
         notebook.checkpoint = revision
-        notebook.pageCount = pages.count
-        notebook.markedPages = marked.filter { $0 < pages.count }
+        notebook.pageCount = pageCount
+        notebook.markedPages = marked.filter { $0 < pageCount }
+        if slots != nil { notebook.layout = .column }
         notebook.updatedAt = Date()
         try write(notebook)
         // Current + previous only, as in DrawingStore.
@@ -186,7 +214,15 @@ public final class NotebookStore {
         }) else { throw DrawingError.noPreviousCheckpoint }
         let count = try fm.contentsOfDirectory(atPath: previous.path).filter { $0.hasSuffix(".markup") }.count
         notebook.checkpoint = previous.lastPathComponent
-        notebook.pageCount = max(count, notebook.pdfPageCount)
+        // A column's one markup holds every page, so its page count is not a
+        // file count — unless the previous checkpoint predates the column, in
+        // which case the notebook is paged again and converts on next open.
+        if notebook.isColumn && count == 1 {
+            notebook.pageCount = max(notebook.pageCount, notebook.pdfPageCount)
+        } else {
+            notebook.layout = nil
+            notebook.pageCount = max(count, notebook.pdfPageCount)
+        }
         notebook.updatedAt = Date()
         try write(notebook)
         return notebook

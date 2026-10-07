@@ -920,4 +920,126 @@ final class OfflineCaptureTests: XCTestCase {
         selectTab(app, "Chat")
         XCTAssertTrue(app.staticTexts["chat-recording-pending"].waitForExistence(timeout: 10), "The clip survives a relaunch")
     }
+
+    /// The newspaper is one continuous scroll: no page turning, the page
+    /// counter follows the scroll, and the issue's own pages can't be deleted.
+    func testNewspaperScrollsAsOneColumn() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launchArguments.append("-newspaperFixture")
+        app.launch()
+        tab(app, "Draw").tap()
+        let row = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Toronto Star'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+        let counter = app.buttons["notebook-page"]
+        XCTAssertTrue(counter.waitForExistence(timeout: 10))
+        XCTAssertEqual(counter.label, "p. 1 / 4")
+        attach(app, "newspaper page 1")
+        let shown = app.otherElements["notebook-visible-frame"]
+        XCTAssertTrue(shown.waitForExistence(timeout: 5))
+        // Fitted to the width from the top of page 1: nothing off to either
+        // side, nothing hidden under the bar, the rest of the paper below.
+        XCTAssertTrue(waitForValue(shown) { frame in
+            abs(frame[0]) <= 1 && abs(frame[2] - 1240) <= 1 && abs(frame[1]) <= 1
+        }, "the top of page 1, at full width: \(shown.value ?? "nil")")
+
+        // Next scrolls the column down to the top of page 2 rather than
+        // swapping the page. The fixture's page 1 is 1.8 times as tall as wide.
+        app.buttons["Next page"].tap()
+        XCTAssertTrue(waitForLabel(counter, equalTo: "p. 2 / 4"))
+        XCTAssertTrue(waitForValue(shown) { frame in
+            abs(frame[1] - 2232) <= 2 && abs(frame[0]) <= 1 && abs(frame[2] - 1240) <= 1
+        }, "the top of page 2, at full width: \(shown.value ?? "nil")")
+        attach(app, "newspaper page 2")
+
+        // Turned sideways it still fills the width, so still nothing scrolls
+        // sideways; less of the page fits, and the rest is below.
+        XCUIDevice.shared.orientation = .landscapeLeft
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        XCTAssertTrue(waitForValue(shown) { frame in
+            abs(frame[0]) <= 1 && abs(frame[2] - 1240) <= 1 && frame[3] < frame[2]
+        }, "landscape fills the width: \(shown.value ?? "nil")")
+        attach(app, "newspaper landscape")
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(waitForValue(shown) { frame in abs(frame[2] - 1240) <= 1 && frame[3] > frame[2] },
+                      "upright again, full width: \(shown.value ?? "nil")")
+
+        counter.tap()
+        XCTAssertTrue(app.buttons["Page 4"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Delete this page"].exists, "an issue's pages share one canvas")
+        app.buttons["Page 4"].tap()
+        XCTAssertTrue(waitForLabel(counter, equalTo: "p. 4 / 4"))
+    }
+
+    /// A notes page turns sideways on a swipe, and finishing that swipe on
+    /// the last page makes a new one; backwards from the first does nothing.
+    func testNotesPagesTurnWithASwipe() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        notes.tap()
+        let counter = app.buttons["notebook-page"]
+        XCTAssertTrue(counter.waitForExistence(timeout: 10))
+        let start = counter.label
+        let total = Int(start.split(separator: "/").last?.trimmingCharacters(in: .whitespaces) ?? "") ?? 1
+        // Go to the last page first, if this notebook has several.
+        for _ in 1..<max(total, 1) { app.buttons["Next page"].tap() }
+        XCTAssertEqual(counter.label, "\(total) / \(total)")
+
+        let window = app.windows.firstMatch
+        let right = window.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
+        let left = window.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5))
+        // A short drag springs back.
+        right.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
+        XCTAssertEqual(counter.label, "\(total) / \(total)")
+        // A deliberate one off the last page adds a page.
+        right.press(forDuration: 0.05, thenDragTo: left)
+        XCTAssertTrue(waitForLabel(counter, equalTo: "\(total + 1) / \(total + 1)"))
+        attach(app, "notes new page")
+        // And back.
+        left.press(forDuration: 0.05, thenDragTo: right)
+        XCTAssertTrue(waitForLabel(counter, equalTo: "\(total) / \(total + 1)"))
+        // A page fits whole either way up: no vertical scrolling sideways on.
+        let shown = app.otherElements["notebook-visible-frame"]
+        XCUIDevice.shared.orientation = .landscapeLeft
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        XCTAssertTrue(waitForValue(shown) { frame in
+            frame[1] <= 0.5 && frame[1] + frame[3] >= 1753.5 && frame[0] <= 0.5 && frame[0] + frame[2] >= 1239.5
+        }, "the whole A4 page on screen in landscape: \(shown.value ?? "nil")")
+        attach(app, "notes landscape")
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(waitForValue(shown) { frame in frame[1] + frame[3] >= 1753.5 && frame[0] + frame[2] >= 1239.5 })
+
+        // Backwards from the first page: nothing.
+        for _ in 1..<max(total, 1) { app.buttons["Previous page"].tap() }
+        XCTAssertEqual(counter.label, "1 / \(total + 1)")
+        left.press(forDuration: 0.05, thenDragTo: right)
+        XCTAssertEqual(counter.label, "1 / \(total + 1)")
+    }
+
+    /// Waits for the canvas's visible frame (x, y, width, height, in canvas
+    /// units) to satisfy `check`.
+    private func waitForValue(_ element: XCUIElement, _ check: @escaping ([Double]) -> Bool) -> Bool {
+        let predicate = NSPredicate { object, _ in
+            let frame = ((object as? XCUIElement)?.value as? String ?? "").split(separator: ",").compactMap { Double($0) }
+            return frame.count == 4 && check(frame)
+        }
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 5) == .completed
+    }
+
+    private func waitForLabel(_ element: XCUIElement, equalTo value: String? = nil, notEqualTo other: String? = nil) -> Bool {
+        let format = value != nil ? "label == %@" : "label != %@"
+        let predicate = NSPredicate(format: format, value ?? other ?? "")
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 5) == .completed
+    }
+
+    private func attach(_ app: XCUIApplication, _ name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
 }

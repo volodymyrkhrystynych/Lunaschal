@@ -1,6 +1,7 @@
 import XCTest
 import PDFKit
 import PaperKit
+import PencilKit
 import UIKit
 import LunaschalCore
 @testable import Lunaschal
@@ -344,5 +345,132 @@ final class NotebookEditorTests: XCTestCase {
         session.editor = model
         XCTAssertEqual(try session.deliver(png), "Added to page 1.")
         XCTAssertThrowsError(try session.deliver(Data("not an image".utf8)))
+    }
+}
+
+@MainActor
+final class NotebookColumnConversionTests: XCTestCase {
+    private func store() throws -> NotebookStore {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return try NotebookStore(root: root)
+    }
+
+    /// An issue as the previous build left it: paged, each markup the shape
+    /// of its PDF page, with something written on page 2.
+    private func pagedIssue(_ store: NotebookStore) async throws -> Notebook {
+        let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
+        try NewspaperFixture.makeIssue(at: pdfURL)
+        let count = NewspaperFixture.shapes.count
+        var paper = try store.createNewspaper(date: "2026-10-06", pdf: pdfURL, pageCount: count)
+        paper.layout = nil
+        try JSONEncoder().encode(paper).write(to: store.root.appendingPathComponent(paper.id + ".json"))
+        let pdf = try XCTUnwrap(PDFDocument(url: XCTUnwrap(store.pdfURL(paper))))
+        var pages: [Data] = []
+        for index in 0..<count {
+            var page = PaperMarkup(bounds: NotebookPage.bounds(for: pdf.page(at: index)))
+            if index == 1 {
+                page.insertNewShape(configuration: ShapeConfiguration(type: .rectangle), frame: CGRect(x: 200, y: 300, width: 400, height: 200))
+            }
+            pages.append(try await page.dataRepresentation())
+        }
+        return try store.checkpoint(paper.id, pages: pages, marked: [1], preview: Data([1]))
+    }
+
+    func testAPagedIssueOpensAsAColumnWithItsInkStillOnPageTwo() async throws {
+        let store = try store()
+        let paged = try await pagedIssue(store)
+        XCTAssertFalse(paged.isColumn)
+        let model = NotebookEditorModel(store: store, notebook: paged)
+        XCTAssertTrue(model.isColumn)
+        XCTAssertEqual(model.pageCount, NewspaperFixture.shapes.count)
+        XCTAssertEqual(model.pages.count, 1, "one markup for the whole issue")
+        XCTAssertTrue(model.pages[0].contentsRenderFrame.intersects(model.pageRect(1)),
+                      "the mark moved down onto page 2")
+        XCTAssertFalse(model.pages[0].contentsRenderFrame.intersects(model.pageRect(0)))
+        await model.checkpoint()
+        let saved = try store.notebook(paged.id)
+        XCTAssertTrue(saved.isColumn)
+        XCTAssertEqual(saved.pageCount, NewspaperFixture.shapes.count)
+        XCTAssertEqual(saved.markedPages, [1], "page 2's mark came across with it")
+    }
+
+    func testWritingOnAPageFilesItAndRubbingItOutStopsFilingIt() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try await pagedIssue(store))
+        await model.checkpoint()
+        // Written on page 3, with page 3 on screen.
+        model.go(to: 2)
+        var written = model.pages[0]
+        written.insertNewShape(configuration: ShapeConfiguration(type: .ellipse),
+                               frame: model.pageRect(2).insetBy(dx: 400, dy: 200))
+        model.canvasChanged(written, page: 0)
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(model.notebook.id).markedPages, [1, 2])
+        // Page 2's mark erased while page 2 is on screen: it stops being filed.
+        model.go(to: 1)
+        var erased = PaperMarkup(bounds: written.bounds)
+        erased.insertNewShape(configuration: ShapeConfiguration(type: .ellipse),
+                              frame: model.pageRect(2).insetBy(dx: 400, dy: 200))
+        model.canvasChanged(erased, page: 0)
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(model.notebook.id).markedPages, [2])
+    }
+
+    func testPagesStackAtFullWidthInTheirOwnShapes() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try await pagedIssue(store))
+        var top: CGFloat = 0
+        for (index, ratio) in NewspaperFixture.shapes.enumerated() {
+            let slot = model.pageRect(index)
+            XCTAssertEqual(slot.minY, top, "page \(index + 1) starts where the last one ended")
+            XCTAssertEqual(slot.width, NotebookColumn.width)
+            XCTAssertEqual(slot.height / slot.width, ratio, accuracy: 0.01, "page \(index + 1) keeps its shape")
+            top = slot.maxY
+            let rendered = await model.render(index, width: 600)
+            let image = try XCTUnwrap(rendered)
+            XCTAssertEqual(Double(image.height) / Double(image.width), Double(ratio), accuracy: 0.01)
+        }
+        XCTAssertEqual(model.pages[0].bounds.height, top)
+    }
+
+    func testANewIssueStartsAsAColumn() throws {
+        let store = try store()
+        let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
+        try NewspaperFixture.makeIssue(at: pdfURL)
+        let paper = try store.createNewspaper(date: "2026-10-06", pdf: pdfURL, pageCount: NewspaperFixture.shapes.count)
+        let model = NotebookEditorModel(store: store, notebook: paper)
+        XCTAssertTrue(model.isColumn)
+        XCTAssertEqual(model.pages.first?.bounds.width, NotebookColumn.width)
+        XCTAssertEqual(model.pages.first?.bounds.height, model.pageRect(NewspaperFixture.shapes.count - 1).maxY)
+        XCTAssertFalse(model.canDeleteCurrent)
+    }
+
+    /// The ink lands in the same place on the page whatever size the picture
+    /// is: a 400-pixel preview used to show the page's top-left corner, and a
+    /// 2000-pixel journal picture its ink shrunk into the corner.
+    func testInkScalesWithThePicture() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        var page = model.pages[0]
+        // A mark in the bottom-right quarter of an A4 page.
+        let mark = CGRect(x: 900, y: 1400, width: 200, height: 200)
+        page.insertNewShape(configuration: ShapeConfiguration(type: .rectangle), frame: mark)
+        model.canvasChanged(page, page: 0)
+        for width: CGFloat in [400, 1240, 2000] {
+            let rendered = await model.render(0, width: width)
+            let image = try XCTUnwrap(rendered)
+            let scale = CGFloat(image.width) / NotebookPage.width
+            let centre = CGPoint(x: mark.midX * scale, y: mark.midY * scale)
+            let corner = CGPoint(x: 20 * scale, y: 20 * scale)
+            XCTAssertTrue(isDark(image, at: centre), "the mark is where it was drawn at \(width)")
+            XCTAssertFalse(isDark(image, at: corner), "and not shrunk into the corner at \(width)")
+        }
+    }
+
+    private func isDark(_ image: CGImage, at point: CGPoint) -> Bool {
+        let bytes = CFDataGetBytePtr(image.dataProvider!.data!)!
+        let offset = Int(point.y) * image.bytesPerRow + Int(point.x) * 4
+        return bytes[offset] < 80 && bytes[offset + 1] < 80 && bytes[offset + 2] < 80
     }
 }

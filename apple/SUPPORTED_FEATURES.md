@@ -38,6 +38,10 @@ and Settings; the workout log is Capture → Workout. Chat is the desktop's Chat
 tab, and Todo is the tasks card from the desktop's Lifestyle tab (see README.md). iPad also has Study and Draw, and hides the tab bar while a drawing,
 a notebook (Capture → Notes / Newspaper) or a Study annotation is open, so its toolbar doesn't overflow;
 native drawing creation/editing is iPad-only, and so are Paper previews, since they live under Study.
+A notes notebook turns pages with a finger swipe (with a **+ New page** marker past the last page) and a
+newspaper notebook is one continuous scroll fitted to the width; both passed in simulator
+(`testNotesPagesTurnWithASwipe`, `testNewspaperScrollsAsOneColumn`, portrait and landscape), and neither
+has been verified on device — in particular how a finger and a Pencil share the page.
 Library is books-only and switches between two views. Library picks a provider
 (site or file type) and sorts by the site's latest chapter date. Folders lists
 the desktop's folders plus Unsorted, and each opens with a Back button. Both have

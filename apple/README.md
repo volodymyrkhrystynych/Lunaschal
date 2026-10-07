@@ -27,17 +27,30 @@ what each device can currently do and which work remains device-only.
   Cross-platform ink conversion and PDF annotation remain outstanding.
 
 - **iPad notebooks** (Capture → **Notes** or **Newspaper**, top right). A
-  full-window, paginated PaperKit canvas with the tab bar hidden: Pencil ink,
+  full-window PaperKit canvas with the tab bar hidden: Pencil ink,
   pictures that can be moved and resized, text boxes and shapes from the tool
-  picker's **+**, and fixed pages (A4 for notes) navigated from the top bar.
+  picker's **+**.
+  **Notes** are A4 pages, one at a time, each fitted whole to the window so
+  nothing scrolls. A finger drags a page sideways and a deliberate swipe (a
+  third of the page's width) turns it; short of that it springs back. Swiping on
+  past the last page shows a **+ New page** marker and adding the page is what
+  finishing the swipe does; backwards from the first page nothing moves, and
+  zoomed in a sideways drag is panning. The top bar's arrows still work.
   **Newspaper** opens today's archived issue (by the 4am day; the newest is offered if
-  today's isn't in) with every PDF page under the ink. It downloads the PDF once
+  today's isn't in) as **one continuous scroll**: a single canvas with every PDF
+  page stacked down it at its own shape, so ink can cross from one page to the
+  next. It is always fitted to the width, either way up, so nothing scrolls
+  sideways unless zoomed in and the paper reads by scrolling down. An issue's
+  pages share that one canvas, so they can't be deleted (Add page puts a blank
+  A4 sheet at the foot). An issue opened by an earlier build (one markup per
+  page) is converted on open, each page's ink moved down to its place in the
+  column; the paged original stays as the previous checkpoint. It downloads the PDF once
   from `GET /api/newspapers/issues/<date>/pdf`, since mobile sync doesn't carry
   issue PDFs, and reopens the same unsaved notebook instead of making a second one.
   The web reader's own markup is untouched. Back autosaves (current + previous
   checkpoint, like drawings) and the notebook is listed under Draw → Notebooks to
   continue. **Save** files one journal entry: each page as a JPEG (a newspaper
-  files its cover plus the pages written on), plus the notebook's one YouTube link.
+  files its cover plus the pages written on, found from the ink itself), plus the notebook's one YouTube link.
   The text composer's draft is never touched.
   **Lock pictures on this page** (camera menu) pins a page's pictures under the
   ink so they can be written over but not selected or dragged; a lock badge
