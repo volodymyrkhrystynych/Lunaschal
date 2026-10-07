@@ -57,6 +57,7 @@ targets:
         NSLocationWhenInUseUsageDescription: Record where a journal or food entry was written, and show the weather there.
         NSLocalNetworkUsageDescription: Connect to your personal Lunaschal server.
         NSHealthShareUsageDescription: Copy your sleep, workouts, exercise minutes and other Health data to your own Lunaschal server, so wake and sleep times fill in automatically and you can analyse it there.
+        NSHealthUpdateUsageDescription: Lunaschal doesn't write to Health; it only copies your Health data to your own Lunaschal server.
         UIBackgroundModes: [audio, processing]
         BGTaskSchedulerPermittedIdentifiers: [com.lunaschal.mobile.sync]
         UISupportedInterfaceOrientations:
