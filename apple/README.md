@@ -61,10 +61,13 @@ what each device can currently do and which work remains device-only.
   another app's pixels, so the screenshot is the system's and Lunaschal cuts its
   own window out of it (the larger remaining strip with Stage Manager). With no
   setup: take a screenshot (Pencil corner swipe, or top + volume), choose **Copy
-  and Delete**, then **Paste image**. Paste crops only an image exactly the
-  screen's pixel size, and only when the part it would cut matches a snapshot of
-  Lunaschal's window, so a copied photo, or an older screenshot taken with the
-  apps the other way round, goes in whole. For one tap, a shortcut
+  and Delete**, then **Paste image**. Paste crops any image exactly the
+  screen's pixel size (by points × scale or the panel's native pixels, so
+  Display Zoom counts), so a copied photo goes in whole. A snapshot of
+  Lunaschal's window can only veto the cut, when an older screenshot clearly
+  shows Lunaschal on the other side; a snapshot that matches neither half does
+  not. A note under the title says what Paste did and why. **Insert from
+  library** adds pictures from Photos, whole. For one tap, a shortcut
   *Take Screenshot → Add Screenshot to Lunaschal Notes* run from AssistiveTouch
   or a Full Keyboard Access command does the same in the app's process (Back Tap
   is iPhone-only); with no notebook open, its screenshot waits for the next one.

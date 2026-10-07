@@ -47,21 +47,41 @@ final class NotebookCropTests: XCTestCase {
 
     func testPasteCropsOnlyAScreenSizedImage() throws {
         let ours = CGRect(x: 688, y: 0, width: 688, height: 1032)
-        // A system screenshot: exactly the screen at 2x.
+        // A system screenshot: exactly the screen at 2x. Lunaschal on the
+        // right, so the left half is what's kept.
         let screenshot = try XCTUnwrap(solid(.red, CGSize(width: 2752, height: 2064)))
         XCTAssertTrue(NotebookCrop.isScreenshot(screenshot, screen: landscape, scale: 2))
         let cropped = NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: ours, scale: 2)
-        XCTAssertEqual(cropped.width, 1376)
-        XCTAssertEqual(cropped.height, 2064)
+        XCTAssertEqual(cropped.outcome, .cropped)
+        XCTAssertEqual(cropped.image.width, 1376)
+        XCTAssertEqual(cropped.image.height, 2064)
         // A copied photo with the screen's shape but not its size goes in whole.
         let photo = try XCTUnwrap(solid(.red, CGSize(width: 1376, height: 1032)))
         XCTAssertFalse(NotebookCrop.isScreenshot(photo, screen: landscape, scale: 2))
-        XCTAssertEqual(NotebookCrop.cropIfScreenshot(photo, screen: landscape, window: ours, scale: 2).width, 1376)
+        let whole = NotebookCrop.cropIfScreenshot(photo, screen: landscape, window: ours, scale: 2)
+        XCTAssertEqual(whole.outcome, .notScreenshot(width: 1376, height: 1032))
+        XCTAssertEqual(whole.image.width, 1376)
         // Our window full-screen: a screenshot, but nothing to cut.
-        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: landscape, scale: 2).width, 2752)
+        let full = NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: landscape, scale: 2)
+        XCTAssertEqual(full.outcome, .fullScreen)
+        XCTAssertEqual(full.image.width, 2752)
     }
 
-    func testPasteChecksTheCutHalfReallyIsLunaschal() throws {
+    func testDisplayZoomScreenshotsAreRecognisedByTheNativePixels() throws {
+        // "More Space": more points than the panel has pixels at 2x, so only
+        // the native size (reported portrait) says what a screenshot is.
+        let zoomed = CGRect(x: 0, y: 0, width: 1590, height: 1192)
+        let native = CGSize(width: 2064, height: 2752)
+        let screenshot = try XCTUnwrap(solid(.red, CGSize(width: 2752, height: 2064)))
+        XCTAssertFalse(NotebookCrop.isScreenshot(screenshot, screen: zoomed, scale: 2))
+        XCTAssertTrue(NotebookCrop.isScreenshot(screenshot, screen: zoomed, scale: 2, native: native))
+        let result = NotebookCrop.cropIfScreenshot(screenshot, screen: zoomed, window: CGRect(x: 795, y: 0, width: 795, height: 1192),
+                                                   scale: 2, native: native)
+        XCTAssertEqual(result.outcome, .cropped)
+        XCTAssertEqual(result.image.width, 1376)
+    }
+
+    func testPasteCutsUnlessTheScreenshotClearlyHasLunaschalOnTheOtherSide() throws {
         let screenPixels = CGSize(width: 2752, height: 2064)
         let left = CGRect(x: 0, y: 0, width: 1376, height: 2064), right = CGRect(x: 1376, y: 0, width: 1376, height: 2064)
         // Taken with the reader on the left and Lunaschal on the right.
@@ -69,16 +89,25 @@ final class NotebookCropTests: XCTestCase {
         let ours = try XCTUnwrap(picture(CGSize(width: 172, height: 258)) { drawApp($0, CGRect(x: 0, y: 0, width: 172, height: 258), lines: false) })
         let onRight = CGRect(x: 688, y: 0, width: 688, height: 1032), onLeft = CGRect(x: 0, y: 0, width: 688, height: 1032)
 
-        XCTAssertTrue(NotebookCrop.showsWindow(screenshot, snapshot: ours, screen: landscape, window: onRight))
-        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: onRight, scale: 2, snapshot: ours).width, 1376)
-        // Lunaschal has since moved to the left: the old screenshot's left half
-        // is the reader, so nothing is cut.
-        XCTAssertFalse(NotebookCrop.showsWindow(screenshot, snapshot: ours, screen: landscape, window: onLeft))
-        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: onLeft, scale: 2, snapshot: ours).width, 2752)
-        // Two blank halves can't be told apart: paste whole rather than guess.
+        XCTAssertFalse(NotebookCrop.sidesSwapped(screenshot, snapshot: ours, screen: landscape, window: onRight))
+        let kept = NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: onRight, scale: 2, snapshot: ours)
+        XCTAssertEqual(kept.outcome, .cropped)
+        XCTAssertEqual(kept.image.width, 1376)
+        // Lunaschal has since moved to the left: the old screenshot's left
+        // half is the reader, so nothing is cut.
+        XCTAssertTrue(NotebookCrop.sidesSwapped(screenshot, snapshot: ours, screen: landscape, window: onLeft))
+        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: onLeft, scale: 2, snapshot: ours).outcome,
+                       .sidesSwapped)
+        // Two blank halves can't be told apart: that's no reason not to cut.
         let blank = try XCTUnwrap(solid(.white, screenPixels))
         let blankOurs = try XCTUnwrap(solid(.white, CGSize(width: 172, height: 258)))
-        XCTAssertFalse(NotebookCrop.showsWindow(blank, snapshot: blankOurs, screen: landscape, window: onRight))
+        XCTAssertEqual(NotebookCrop.cropIfScreenshot(blank, screen: landscape, window: onRight, scale: 2, snapshot: blankOurs).outcome,
+                       .cropped)
+        // A snapshot that resembles neither half (PaperKit's canvas drawn
+        // blank, the tool picker missing) doesn't stop the cut either.
+        let unlike = try XCTUnwrap(solid(.black, CGSize(width: 172, height: 258)))
+        XCTAssertEqual(NotebookCrop.cropIfScreenshot(screenshot, screen: landscape, window: onRight, scale: 2, snapshot: unlike).outcome,
+                       .cropped)
     }
 
     func testCropKeepsTheWholeImageWhenTheShapeDisagrees() throws {

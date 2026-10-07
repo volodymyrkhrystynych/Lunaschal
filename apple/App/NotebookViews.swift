@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 import PaperKit
 import PencilKit
 import PDFKit
@@ -69,6 +70,10 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     @Published private(set) var currentHasPictures = false
     @Published var status = "Saved on this device"
     @Published var error: String?
+    /// A passing word about the last paste. Not `status`, which the save that
+    /// follows every edit overwrites within a second.
+    @Published var notice: String?
+    private var noticeTask: Task<Void, Never>?
     /// Bumped when the pages change from outside the canvas (a screenshot, a
     /// page added or removed, a restore), so the surface reloads its markup.
     @Published private(set) var revision = 0
@@ -371,7 +376,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     /// Delete) loses Lunaschal's half on the way in, the same as one from the
     /// Shortcut; any other copied picture goes in whole.
     func pasteImage() async {
-        guard let image = UIPasteboard.general.image?.cgImage else {
+        guard let pasted = UIPasteboard.general.image, let image = Self.upright(pasted) else {
             error = "The clipboard has no image. Copy a screenshot first."
             return
         }
@@ -379,10 +384,56 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         // the snapshot of our window the screenshot is checked against.
         try? await Task.sleep(for: .milliseconds(400))
         let session = NotebookSession.shared
-        let snapshot = session.snapshot()
-        insertScreenshot(session.geometry().map {
-            NotebookCrop.cropIfScreenshot(image, screen: $0.screen, window: $0.window, scale: $0.scale, snapshot: snapshot)
-        } ?? image)
+        guard let geometry = session.geometry() else {
+            insertScreenshot(image)
+            note("Pasted whole: couldn't tell where Lunaschal's window is")
+            return
+        }
+        let result = NotebookCrop.cropIfScreenshot(image, screen: geometry.screen, window: geometry.window,
+                                                   scale: geometry.scale, native: geometry.native,
+                                                   snapshot: session.snapshot())
+        insertScreenshot(result.image)
+        switch result.outcome {
+        case .cropped: note("Pasted the other app's half")
+        case .notScreenshot(let width, let height): note("Pasted whole: \(width)×\(height) isn't a screenshot of this screen")
+        case .fullScreen: note("Pasted whole: Lunaschal fills the screen, so there's no other half")
+        case .sidesSwapped: note("Pasted whole: Lunaschal is on the other side in this screenshot")
+        }
+    }
+
+    /// Pictures chosen from the photo library, each whole and in the order
+    /// picked. Nothing here is cropped: a screenshot in the library was taken
+    /// some other time, with no telling where Lunaschal was.
+    func insertFromLibrary(_ items: [PhotosPickerItem]) async {
+        var added = 0
+        for item in items {
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let picked = UIImage(data: data), let image = Self.upright(picked) else { continue }
+            insertScreenshot(image)
+            added += 1
+        }
+        if added < items.count { error = "Couldn't load \(items.count - added) of the chosen pictures." }
+        if added > 0 { note(added == 1 ? "Inserted a picture" : "Inserted \(added) pictures") }
+    }
+
+    private func note(_ text: String) {
+        notice = text
+        noticeTask?.cancel()
+        noticeTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(6)) } catch { return }
+            self?.notice = nil
+        }
+    }
+
+    /// The pixels the way they look. A pasted image can carry an orientation
+    /// its raw pixels don't, and the crop works on raw pixels.
+    static func upright(_ image: UIImage) -> CGImage? {
+        guard image.imageOrientation != .up else { return image.cgImage }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        return UIGraphicsImageRenderer(size: image.size, format: format).image { _ in
+            image.draw(at: .zero)
+        }.cgImage
     }
 
     /// Screenshots that arrived while no notebook was open.
@@ -1131,6 +1182,8 @@ struct NotebookEditor: View {
     @State private var editingLink = false
     @State private var linkText = ""
     @State private var showHelp = false
+    @State private var choosingPhotos = false
+    @State private var photoItems: [PhotosPickerItem] = []
     @State private var confirmResave = false
     @State private var saving = false
 
@@ -1148,10 +1201,23 @@ struct NotebookEditor: View {
                 }
                 .padding(8)
             }
+            if let notice = model.notice {
+                Text(notice).font(.footnote).foregroundStyle(.secondary)
+                    .padding(6)
+                    .accessibilityIdentifier("notebook-notice")
+            }
             NotebookCanvas(model: model)
         }
         .navigationTitle(model.notebook.title)
         .navigationSubtitle(model.status)
+        // Presented from the camera menu; a PhotosPicker inside a Menu
+        // closes with the menu before it can open.
+        .photosPicker(isPresented: $choosingPhotos, selection: $photoItems, matching: .images)
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            Task { await model.insertFromLibrary(items) }
+        }
         .navigationBarTitleDisplayMode(.inline)
         // Full window: the iPad's floating tab bar would sit over the page.
         .toolbar(.hidden, for: .tabBar)
@@ -1167,6 +1233,8 @@ struct NotebookEditor: View {
                 .accessibilityIdentifier("notebook-youtube")
                 Menu {
                     Button("Paste image", systemImage: "doc.on.clipboard") { Task { await model.pasteImage() } }
+                    Button("Insert from library", systemImage: "photo.on.rectangle") { choosingPhotos = true }
+                        .accessibilityIdentifier("notebook-insert-photo")
                     if model.currentHasPictures {
                         Button("Lock pictures on this page", systemImage: "lock") { Task { await model.lockPictures() } }
                     }
