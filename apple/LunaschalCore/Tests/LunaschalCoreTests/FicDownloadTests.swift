@@ -99,6 +99,9 @@ final class FicDownloadTests: XCTestCase {
         } catch FicDownloadError.notOnServer {}
     }
 
+    // The worker verifies the file with MediaStore's real hasher, which
+    // needs CryptoKit, so this one runs on Apple platforms only.
+    #if canImport(CryptoKit)
     func testAPDFBookDownloadsAndVerifiesItsFile() async throws {
         let (_, worker, root) = try setup()
         let bytes = Data((0..<(3 * 1024 * 1024 / 2)).map { UInt8($0 % 251) })
@@ -117,6 +120,7 @@ final class FicDownloadTests: XCTestCase {
         XCTAssertEqual(progress.all.last?.doneBytes, Int64(bytes.count))
         XCTAssertEqual(progress.all.last?.totalBytes, Int64(bytes.count))
     }
+    #endif
 
     // MARK: Replica: a restarted library bootstrap keeps what is already readable
 
