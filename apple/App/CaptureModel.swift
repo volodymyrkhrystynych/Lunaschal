@@ -37,6 +37,7 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var downloadingLibrary = false
     @Published private(set) var libraryMessage: String?
     @Published private(set) var libraryBytes: Int64 = 0
+    @Published private(set) var libraryTextBytes: Int64 = 0
     /// Fics opened but not yet on the device, the one downloading first.
     @Published private(set) var ficQueue = FicQueue()
     @Published private(set) var ficDownload: FicDownloadStatus?
@@ -316,7 +317,10 @@ final class CaptureModel: ObservableObject {
 
     private func refreshLibraryBytes() {
         Task {
-            do { libraryBytes = try await libraryWorker.usedBytes() }
+            do {
+                libraryBytes = try await libraryWorker.usedBytes()
+                libraryTextBytes = try await libraryWorker.textBytes()
+            }
             catch { message = error.localizedDescription }
         }
     }
@@ -908,11 +912,28 @@ final class CaptureModel: ObservableObject {
         return local > 0 && local >= expected
     }
 
+    /// Which of these books are wholly on the device, for the library list's
+    /// badge: chapters counted for the page in one query, not one per row.
+    func ficsOnDevice(_ books: [SyncChange]) -> Set<String> {
+        let text = books.filter { $0.data?["sourceType"]?.string != "pdf" }
+        let counts = (try? replica.chapterCounts(bookIDs: text.map(\.id))) ?? [:]
+        var out = Set<String>()
+        for book in books {
+            if book.data?["sourceType"]?.string == "pdf" {
+                if (try? media.downloaded(collection: "fics", id: book.id)) != nil { out.insert(book.id) }
+            } else {
+                let local = counts[book.id] ?? 0
+                if local > 0, local >= book.data?["chapterCount"]?.number.map(Int.init) ?? 1 { out.insert(book.id) }
+            }
+        }
+        return out
+    }
+
     /// Opening a fic that isn't on the device puts it at the front of the
     /// queue and starts it now, ahead of the library download and of any fic
     /// opened before it. Over any connection: opening a book is asking for it.
     func ensureFicOnDevice(_ book: SyncChange) {
-        guard signedIn, !isFicOnDevice(book) else { return }
+        guard canDownloadFics, !isFicOnDevice(book) else { return }
         ficErrors[book.id] = nil
         let headChanged = ficQueue.prioritize(book.id, title: book.title)
         guard headChanged || ficTask == nil else { return }
@@ -925,8 +946,30 @@ final class CaptureModel: ObservableObject {
 
     /// Picks the queue back up after the app returns to the foreground.
     func resumeFicDownloads() {
-        guard ficTask == nil, !ficQueue.isEmpty, signedIn else { return }
+        guard ficTask == nil, !ficQueue.isEmpty, canDownloadFics else { return }
         restartFicDownloads()
+    }
+
+    /// Signed in, or (debug builds) talking to the library fixture's stand-in server.
+    var canDownloadFics: Bool {
+        #if DEBUG
+        if LibraryFixture.isActive { return true }
+        #endif
+        return signedIn
+    }
+
+    /// What a fic downloads from: the server, or the fixture's stand-in.
+    /// Made per fic, since `pauseFicDownloads` cancels the one in use.
+    private func ficTransport() -> (() throws -> FicDownloadTransport)? {
+        #if DEBUG
+        if LibraryFixture.isActive { return { LibraryFixture.Transport() } }
+        #endif
+        guard signedIn, let server, let token else { return nil }
+        return { [weak self] in
+            let api = try JournalAPI(server: server, token: token, allowCellular: true)
+            self?.ficAPI = api
+            return api
+        }
     }
 
     func pauseFicDownloads() {
@@ -951,14 +994,12 @@ final class CaptureModel: ObservableObject {
     private func runFicQueue() async {
         while let entry = ficQueue.head {
             guard !Task.isCancelled else { return }
-            guard signedIn, let server, let token else { break }
+            guard let transport = ficTransport() else { break }
             ficDownload = FicDownloadStatus(id: entry.id, title: entry.title, fraction: 0, doneBytes: 0, totalBytes: 0,
                                             secondsLeft: nil)
             ficEstimate = TransferEstimate(started: Date())
             do {
-                let api = try JournalAPI(server: server, token: token, allowCellular: true)
-                ficAPI = api
-                try await libraryWorker.downloadFic(entry.id, after: entry.after, using: api) { [weak self] progress in
+                try await libraryWorker.downloadFic(entry.id, after: entry.after, using: try transport()) { [weak self] progress in
                     await self?.showFicProgress(entry, progress)
                 }
                 ficQueue.remove(entry.id)
@@ -972,6 +1013,7 @@ final class CaptureModel: ObservableObject {
         ficDownload = nil
         ficAPI = nil
         ficTask = nil
+        refreshLibraryBytes()
         if resumeLibraryAfterFics, ficQueue.isEmpty {
             resumeLibraryAfterFics = false
             startLibraryDownload()

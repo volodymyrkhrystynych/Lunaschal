@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
             #if DEBUG
             try JournalFixture.seedIfAsked(root: directory)
             try JobsFixture.seedIfAsked(root: directory)
+            try LibraryFixture.seedIfAsked(root: directory)
             #endif
             return try CaptureModel(store: CaptureStore(root: directory))
         }

@@ -220,9 +220,8 @@ struct TextChapterReader: View {
                 : "Bookmarked · Syncs when connected"
             owner.requestSync()
         } catch ReplicaError.editAlreadyPending {
-            owner.message = type == "continue"
-                ? "A continue point is already waiting to sync. Try again once it has."
-                : "This chapter's bookmark is already waiting to sync."
+            // Only a favorite: a new continue point replaces one still waiting to sync.
+            owner.message = "This chapter's bookmark is already waiting to sync."
         } catch { owner.message = error.localizedDescription }
     }
 }

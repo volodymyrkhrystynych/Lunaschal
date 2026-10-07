@@ -49,6 +49,12 @@ public actor LibraryDownload {
 
     public func usedBytes() throws -> Int64 { try mediaStore().usedBytes() }
 
+    /// The library's text: books, their chapters and everything else the
+    /// library download replicates, as stored in the database.
+    public func textBytes() throws -> Int64 {
+        try replicaStore().storedBytes(collections: ["fics"] + Self.collections(knowledge: true))
+    }
+
     /// Cellular-capable text updates never bootstrap or download binary media.
     /// Limit each pass so a large backlog doesn't monopolize ordinary sync.
     @discardableResult

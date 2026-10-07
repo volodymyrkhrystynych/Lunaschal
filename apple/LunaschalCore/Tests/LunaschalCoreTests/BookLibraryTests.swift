@@ -59,6 +59,20 @@ final class BookLibraryTests: XCTestCase {
         XCTAssertEqual(resume.fraction, 0.4)
     }
 
+    func testChapterCountsCoverAPageOfBooksAndTextBytesCountTheirChapters() throws {
+        let (store, _) = try store()
+        let whole = book(1), partial = book(2), none = book(3)
+        try apply([whole, partial, none, chapter(whole, position: 0), chapter(whole, position: 1),
+                   chapter(partial, position: 0)], to: store)
+        let counts = try store.chapterCounts(bookIDs: [whole.id, partial.id, none.id])
+        XCTAssertEqual(counts, [whole.id: 2, partial.id: 1])
+        let books = try store.storedBytes(collections: ["fics"])
+        let all = try store.storedBytes(collections: ["fics", "fic_chapters"])
+        XCTAssertGreaterThan(books, 0)
+        XCTAssertGreaterThan(all, books, "chapter text counts toward what is downloaded")
+        XCTAssertEqual(try store.storedBytes(collections: []), 0)
+    }
+
     func testResumePointIsNilWithoutChapterText() throws {
         let (store, _) = try store()
         let pdf = book(1)
@@ -148,24 +162,41 @@ final class BookLibraryTests: XCTestCase {
         XCTAssertEqual(try reopened.books(filter: favorites).count, 0)
     }
 
-    func testContinueReplacementCarriesRevisionAndPendingChangeCannotBeOverwritten() throws {
+    func testContinueReplacementCarriesRevisionAndANewerOneReplacesItBeforeSync() throws {
         let (store, _) = try store()
-        let book = book(1), chapter = chapter(book)
+        let book = book(1), current = chapter(book), later = chapter(book)
         let id = ULID.make()
         let saved = SyncChange(revision: 105, collection: "fic_bookmarks", id: id, deleted: false,
-            data: ["id": .string(id), "ficId": .string(book.id), "chapterId": .string(chapter.id),
+            data: ["id": .string(id), "ficId": .string(book.id), "chapterId": .string(current.id),
                    "type": .string("continue"), "scrollPosition": .number(0)])
-        try apply([book, chapter, saved], to: store)
-        try store.queueBookmark(chapter: chapter, type: "continue", fraction: 0.8)
+        try apply([book, current, later, saved], to: store)
+        try store.queueBookmark(chapter: current, type: "continue", fraction: 0.8)
         let edit = try XCTUnwrap(store.bookmarkEdits(bookID: book.id).first)
         XCTAssertEqual(edit.operation.baseRevision, 105)
         XCTAssertEqual(edit.operation.data["previousContinueId"]?.string, id)
         XCTAssertEqual(try store.bookmarks(bookID: book.id).count, 1)
-        XCTAssertThrowsError(try store.queueBookmark(chapter: chapter, type: "continue", fraction: 0.9))
-        try store.hold(edit.operation, reply: OperationReply(operationId: nil, change: nil, conflict: true,
+
+        // Moving it again before any sync replaces the unsent one, and still
+        // names the server's continue point, not the one that never left.
+        try store.queueBookmark(chapter: later, type: "continue", fraction: 0.3)
+        let edits = try store.bookmarkEdits(bookID: book.id)
+        XCTAssertEqual(edits.count, 1)
+        let newer = try XCTUnwrap(edits.first)
+        XCTAssertNotEqual(newer.id, edit.id)
+        XCTAssertEqual(newer.operation.data["chapterId"]?.string, later.id)
+        XCTAssertEqual(newer.operation.data["scrollPosition"]?.number, 0.3)
+        XCTAssertEqual(newer.operation.baseRevision, 105)
+        XCTAssertEqual(newer.operation.data["previousContinueId"]?.string, id)
+        XCTAssertEqual(try store.bookmarks(bookID: book.id).map { $0.data?["chapterId"]?.string }, [later.id])
+
+        // One held as a conflict is replaced too, by a newer choice.
+        try store.hold(newer.operation, reply: OperationReply(operationId: nil, change: nil, conflict: true,
             current: saved, error: "Changed elsewhere", resetRequired: nil))
         XCTAssertEqual(try store.bookmarks(bookID: book.id).first?.id, id)
-        try store.resolve(try XCTUnwrap(store.bookmarkEdits(bookID: book.id).first), keepLocal: false)
+        try store.queueBookmark(chapter: current, type: "continue", fraction: 0.5)
+        let afterConflict = try store.bookmarkEdits(bookID: book.id)
+        XCTAssertEqual(afterConflict.map(\.state), ["pending"])
+        try store.resolve(try XCTUnwrap(afterConflict.first), keepLocal: false)
         XCTAssertTrue(try store.bookmarkEdits(bookID: book.id).isEmpty)
     }
 
@@ -181,6 +212,29 @@ final class BookLibraryTests: XCTestCase {
         XCTAssertEqual(try store.relatedCount(collection: "fic_chapters", field: "ficId", value: book.id), 3)
         XCTAssertEqual(try store.relatedRecords(collection: "fic_chapters", field: "ficId", values: [book.id]).count, 3)
         XCTAssertThrowsError(try store.relatedRecords(collection: "fic_chapters", field: "title", value: "x"))
+    }
+
+    func testAContinueReplacedWhileItsPredecessorWasSendingFollowsWhatTheServerKept() throws {
+        let (store, _) = try store()
+        let book = book(1), first = chapter(book), second = chapter(book)
+        try apply([book, first, second], to: store)
+        try store.queueBookmark(chapter: first, type: "continue", fraction: 0.2)
+        // The sync pass has already sent this one when the reader moves on.
+        let sending = try XCTUnwrap(store.bookmarkEdits(bookID: book.id).first)
+        try store.queueBookmark(chapter: second, type: "continue", fraction: 0.6)
+        XCTAssertEqual(try store.bookmarkEdits(bookID: book.id).first?.operation.data["previousContinueId"], .null)
+
+        let kept = SyncChange(revision: 200, collection: "fic_bookmarks", id: sending.operation.recordId,
+                              deleted: false, data: sending.original.data)
+        try store.acknowledge(sending.operation, reply: OperationReply(operationId: sending.id, change: kept,
+            conflict: nil, current: nil, error: nil, resetRequired: nil))
+
+        let newer = try XCTUnwrap(store.bookmarkEdits(bookID: book.id).first)
+        XCTAssertEqual(newer.operation.data["chapterId"]?.string, second.id)
+        XCTAssertEqual(newer.operation.data["previousContinueId"]?.string, kept.id)
+        XCTAssertEqual(newer.operation.baseRevision, 200)
+        XCTAssertEqual(newer.original.revision, 200)
+        XCTAssertEqual(try store.bookmarks(bookID: book.id).map { $0.data?["chapterId"]?.string }, [second.id])
     }
 
     func testSeveralFavoritesCanBeRemovedOfflineWithoutDuplicateDeletes() throws {
