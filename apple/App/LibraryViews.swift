@@ -214,6 +214,7 @@ struct BookView: View {
     @State private var resume: (chapter: SyncChange, fraction: Double?)?
     @State private var bookmarks: [SyncChange] = []
     @State private var bookmarkEdits: [PendingEdit] = []
+    @State private var onDevice = true
 
     var body: some View {
         List {
@@ -225,8 +226,9 @@ struct BookView: View {
                     DownloadedMediaView(model: model, collection: "fics", id: book.id,
                                         mime: "application/pdf", title: book.title)
                 }
-            } else if chapters.isEmpty {
-                Text("No chapter text downloaded. Use Settings → Library downloads on Wi-Fi.")
+            }
+            if !onDevice || model.ficDownload?.id == book.id {
+                FicDownloadState(model: model, book: book)
             }
             if let resume {
                 NavigationLink("Continue: \(resume.chapter.title)") {
@@ -281,10 +283,12 @@ struct BookView: View {
         }
         .navigationTitle(book.title)
         .task(id: model.downloadingLibrary) { refreshChapters() }
+        .onChange(of: model.ficDownloadRevision) { _, _ in refreshChapters() }
         .onAppear {
             do { try model.replica.markBookOpened(book.id) }
             catch { model.message = error.localizedDescription }
             refreshChapters()
+            model.ensureFicOnDevice(book)
         }
         .onChange(of: model.syncing) { _, syncing in if !syncing { refreshChapters() } }
     }
@@ -296,6 +300,7 @@ struct BookView: View {
             resume = try model.replica.resumePoint(bookID: book.id)
             bookmarks = try model.replica.bookmarks(bookID: book.id)
             bookmarkEdits = try model.replica.bookmarkEdits(bookID: book.id)
+            onDevice = model.isFicOnDevice(book)
         } catch { model.message = error.localizedDescription }
     }
 }
@@ -394,6 +399,9 @@ struct DownloadedMediaView: View {
                 } else {
                     ContentUnavailableView("File downloaded", systemImage: "doc", description: Text("This file type does not yet have a native reader."))
                 }
+            } else if collection == "fics", let book = try? model.replica.record(collection: "fics", id: id),
+                      model.ficDownload?.id == id || model.ficQueue.contains(id) || model.ficErrors[id] != nil {
+                FicDownloadState(model: model, book: book).padding()
             } else {
                 ContentUnavailableView(availability.title, systemImage: "arrow.down.circle",
                                        description: Text(availability.detail))
@@ -419,6 +427,7 @@ struct DownloadedMediaView: View {
             Text("The server original and your captures are kept. A future library download can download this item again.")
         }
         .task(id: model.downloadingLibrary) { refresh() }
+        .onChange(of: model.ficDownloadRevision) { _, _ in if collection == "fics" { refresh() } }
         .onDisappear { player?.pause() }
     }
 

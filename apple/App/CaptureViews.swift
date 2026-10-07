@@ -43,6 +43,7 @@ struct CaptureRoot: View {
         .onChange(of: model.syncPasses) { _, _ in Task { await todo.refresh() } }
         .task(id: scenePhase) {
             guard scenePhase == .active else { model.leaveForeground(); return }
+            model.resumeFicDownloads()
             while !Task.isCancelled {
                 model.requestSync()
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
