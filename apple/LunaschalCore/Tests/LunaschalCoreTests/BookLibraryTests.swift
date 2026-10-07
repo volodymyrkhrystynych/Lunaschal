@@ -59,6 +59,20 @@ final class BookLibraryTests: XCTestCase {
         XCTAssertEqual(resume.fraction, 0.4)
     }
 
+    func testChapterCountsCoverAPageOfBooksAndTextBytesCountTheirChapters() throws {
+        let (store, _) = try store()
+        let whole = book(1), partial = book(2), none = book(3)
+        try apply([whole, partial, none, chapter(whole, position: 0), chapter(whole, position: 1),
+                   chapter(partial, position: 0)], to: store)
+        let counts = try store.chapterCounts(bookIDs: [whole.id, partial.id, none.id])
+        XCTAssertEqual(counts, [whole.id: 2, partial.id: 1])
+        let books = try store.storedBytes(collections: ["fics"])
+        let all = try store.storedBytes(collections: ["fics", "fic_chapters"])
+        XCTAssertGreaterThan(books, 0)
+        XCTAssertGreaterThan(all, books, "chapter text counts toward what is downloaded")
+        XCTAssertEqual(try store.storedBytes(collections: []), 0)
+    }
+
     func testResumePointIsNilWithoutChapterText() throws {
         let (store, _) = try store()
         let pdf = book(1)

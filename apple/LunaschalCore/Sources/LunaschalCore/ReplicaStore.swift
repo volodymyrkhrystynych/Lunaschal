@@ -177,6 +177,34 @@ public final class ReplicaStore {
                             [collection, "$." + field, value]).first?[0] ?? "0") ?? 0
     }
 
+    /// How many chapters each of these books has on the device, in one pass:
+    /// the library list badges a page of books at a time.
+    public func chapterCounts(bookIDs: [String]) throws -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for start in stride(from: 0, to: bookIDs.count, by: 400) {
+            let chunk = Array(bookIDs[start..<min(start + 400, bookIDs.count)])
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            // Written out literally so an expression index on ficId can serve it.
+            for row in try rows("""
+                SELECT json_extract(payload,'$.ficId'),COUNT(*) FROM replica_records
+                WHERE collection='fic_chapters' AND deleted=0 AND json_extract(payload,'$.ficId') IN (\(marks))
+                GROUP BY 1
+                """, chunk) { counts[row[0]] = Int(row[1]) ?? 0 }
+        }
+        return counts
+    }
+
+    /// Bytes of record text held for these collections: what downloading the
+    /// library put in the database, beside the media files it put on disk.
+    public func storedBytes(collections: [String]) throws -> Int64 {
+        guard !collections.isEmpty else { return 0 }
+        let marks = Array(repeating: "?", count: collections.count).joined(separator: ",")
+        return Int64(try rows("""
+            SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM replica_records
+            WHERE deleted=0 AND collection IN (\(marks))
+            """, collections).first?[0] ?? "0") ?? 0
+    }
+
     public func relatedRecords(collection: String, field: String, value: String) throws -> [SyncChange] {
         guard ["ficId", "paperId", "pageId", "entryId", "conversationId"].contains(field) else { throw ReplicaError.invalidPage }
         return try recordsQuery("WHERE collection=? AND deleted=0 AND json_extract(payload,?)=? ORDER BY revision",

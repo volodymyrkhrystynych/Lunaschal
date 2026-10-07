@@ -660,8 +660,17 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 60), .completed, "The download finishes")
         XCTAssertTrue(app.staticTexts["Chapter 1"].exists, "and its chapters are there to read")
 
-        // A fic the server can't send says so, with a way to try again.
+        // Back in the list it is marked as downloaded, as the one already on
+        // the device is, and the half-downloaded one isn't.
         app.navigationBars.buttons.firstMatch.tap()
+        func badge(_ title: String) -> XCUIElement {
+            app.cells.containing(.staticText, identifier: title).descendants(matching: .any)["book-downloaded"]
+        }
+        XCTAssertTrue(badge("Ashes of the Old Guard").waitForExistence(timeout: 5))
+        XCTAssertTrue(badge("The Long Way Round").exists)
+        XCTAssertFalse(badge("Field Notes on Dragons").exists)
+
+        // A fic the server can't send says so, with a way to try again.
         let missing = app.staticTexts["Deleted Upstream"]
         if !missing.waitForExistence(timeout: 5) || !missing.isHittable { app.swipeUp() }
         missing.tap()

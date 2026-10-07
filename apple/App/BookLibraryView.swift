@@ -41,6 +41,7 @@ struct BookListView: View {
     @State private var tags: [String] = []
     @State private var limit = 50
     @State private var count = 0
+    @State private var onDevice: Set<String> = []
 
     static let providers = [
         ("", "All"), ("forums.spacebattles.com", "SpaceBattles"),
@@ -56,7 +57,7 @@ struct BookListView: View {
                 Section { FicDownloadBanner(model: model) }
             }
             ForEach(books) { book in
-                NavigationLink { BookReaderEntry(model: model, book: book) } label: { BookRow(book: book) }
+                NavigationLink { BookReaderEntry(model: model, book: book) } label: { BookRow(book: book, downloaded: onDevice.contains(book.id)) }
             }
             if books.count < count {
                 Button("Load more (\(books.count) of \(count))") { limit += 50; refresh() }
@@ -118,6 +119,8 @@ struct BookListView: View {
         .onAppear { refresh() }
         .onChange(of: model.syncing) { _, syncing in if !syncing { refresh() } }
         .onChange(of: filter) { _, _ in limit = 50; refresh() }
+        // When the fic downloading changes, the one before it has finished.
+        .onChange(of: model.ficDownload?.id) { _, _ in onDevice = model.ficsOnDevice(books) }
     }
 
     private func fresh() -> BookFilter { BookFilter() }
@@ -129,6 +132,7 @@ struct BookListView: View {
             query.folder = folder ?? ""
             let result = try model.replica.books(filter: query, limit: limit)
             books = result.records; count = result.count
+            onDevice = model.ficsOnDevice(books)
             tags = try model.replica.bookTags()
         } catch { model.message = error.localizedDescription }
     }
@@ -136,6 +140,7 @@ struct BookListView: View {
 
 struct BookRow: View {
     let book: SyncChange
+    var downloaded = false
 
     /// When the site last posted a chapter: unix seconds from the server's
     /// `latest_activity`, which is the chapters' own dates, not our download.
@@ -149,7 +154,15 @@ struct BookRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(book.title).font(.headline).lineLimit(2)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if downloaded {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .foregroundStyle(.green)
+                        .accessibilityLabel("Downloaded")
+                        .accessibilityIdentifier("book-downloaded")
+                }
+                Text(book.title).font(.headline).lineLimit(2)
+            }
             if let author = book.data?["author"]?.string, !author.isEmpty {
                 Text(author).font(.subheadline).foregroundStyle(.secondary)
             }

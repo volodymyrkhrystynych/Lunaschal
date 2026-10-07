@@ -37,6 +37,7 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var downloadingLibrary = false
     @Published private(set) var libraryMessage: String?
     @Published private(set) var libraryBytes: Int64 = 0
+    @Published private(set) var libraryTextBytes: Int64 = 0
     /// Fics opened but not yet on the device, the one downloading first.
     @Published private(set) var ficQueue = FicQueue()
     @Published private(set) var ficDownload: FicDownloadStatus?
@@ -316,7 +317,10 @@ final class CaptureModel: ObservableObject {
 
     private func refreshLibraryBytes() {
         Task {
-            do { libraryBytes = try await libraryWorker.usedBytes() }
+            do {
+                libraryBytes = try await libraryWorker.usedBytes()
+                libraryTextBytes = try await libraryWorker.textBytes()
+            }
             catch { message = error.localizedDescription }
         }
     }
@@ -878,6 +882,23 @@ final class CaptureModel: ObservableObject {
         return local > 0 && local >= expected
     }
 
+    /// Which of these books are wholly on the device, for the library list's
+    /// badge: chapters counted for the page in one query, not one per row.
+    func ficsOnDevice(_ books: [SyncChange]) -> Set<String> {
+        let text = books.filter { $0.data?["sourceType"]?.string != "pdf" }
+        let counts = (try? replica.chapterCounts(bookIDs: text.map(\.id))) ?? [:]
+        var out = Set<String>()
+        for book in books {
+            if book.data?["sourceType"]?.string == "pdf" {
+                if (try? media.downloaded(collection: "fics", id: book.id)) != nil { out.insert(book.id) }
+            } else {
+                let local = counts[book.id] ?? 0
+                if local > 0, local >= book.data?["chapterCount"]?.number.map(Int.init) ?? 1 { out.insert(book.id) }
+            }
+        }
+        return out
+    }
+
     /// Opening a fic that isn't on the device puts it at the front of the
     /// queue and starts it now, ahead of the library download and of any fic
     /// opened before it. Over any connection: opening a book is asking for it.
@@ -962,6 +983,7 @@ final class CaptureModel: ObservableObject {
         ficDownload = nil
         ficAPI = nil
         ficTask = nil
+        refreshLibraryBytes()
         if resumeLibraryAfterFics, ficQueue.isEmpty {
             resumeLibraryAfterFics = false
             startLibraryDownload()

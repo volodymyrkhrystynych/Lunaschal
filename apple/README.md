@@ -403,7 +403,11 @@ publicly to make CI work: simulator capture tests never contact it.
   downloaded record references them; unreadable manifests block removal safely.
   Partial downloads and old content versions remain until whole-media cleanup.
   Future bulk downloads can restore a removed item. Pinning is not implemented.
-  Settings → Library downloads shows current media-directory usage, including partial downloads.
+  Settings → Library downloads shows what the library takes on the device: the
+  text of books, chapters and the other library collections as stored in the
+  replica, plus media-directory usage including partial downloads. The media
+  budget still covers media only. In the book list, a green download badge marks
+  a fic whose chapters (or PDF) are all on the device. Passed in simulator.
   File readers distinguish metadata-only, pending, partial, downloaded, and
   server-unavailable states. Server observations persist across relaunch and are
   labelled as the last check; they never hide an existing verified local copy.
