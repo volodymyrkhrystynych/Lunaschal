@@ -26,7 +26,9 @@ enum NewspaperFixture {
     /// off or stretched in the column is plain to see.
     static func makeIssue(at url: URL) throws {
         let width: CGFloat = 612
-        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: width, height: width))
+        // A page whose bounds are US Letter (the last one) comes out at the
+        // renderer's default size instead, so the default is Letter too.
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: width, height: width * 11 / 8.5))
         try renderer.writePDF(to: url) { context in
             for (index, ratio) in shapes.enumerated() {
                 let page = CGRect(x: 0, y: 0, width: width, height: (width * ratio).rounded())
