@@ -27,17 +27,30 @@ what each device can currently do and which work remains device-only.
   Cross-platform ink conversion and PDF annotation remain outstanding.
 
 - **iPad notebooks** (Capture → **Notes** or **Newspaper**, top right). A
-  full-window, paginated PaperKit canvas with the tab bar hidden: Pencil ink,
+  full-window PaperKit canvas with the tab bar hidden: Pencil ink,
   pictures that can be moved and resized, text boxes and shapes from the tool
-  picker's **+**, and fixed pages (A4 for notes) navigated from the top bar.
+  picker's **+**.
+  **Notes** are A4 pages, one at a time, each fitted whole to the window so
+  nothing scrolls. A finger drags a page sideways and a deliberate swipe (a
+  third of the page's width) turns it; short of that it springs back. Swiping on
+  past the last page shows a **+ New page** marker and adding the page is what
+  finishing the swipe does; backwards from the first page nothing moves, and
+  zoomed in a sideways drag is panning. The top bar's arrows still work.
   **Newspaper** opens today's archived issue (by the 4am day; the newest is offered if
-  today's isn't in) with every PDF page under the ink. It downloads the PDF once
+  today's isn't in) as **one continuous scroll**: a single canvas with every PDF
+  page stacked down it at its own shape, so ink can cross from one page to the
+  next. It is always fitted to the width, either way up, so nothing scrolls
+  sideways unless zoomed in and the paper reads by scrolling down. An issue's
+  pages share that one canvas, so they can't be deleted (Add page puts a blank
+  A4 sheet at the foot). An issue opened by an earlier build (one markup per
+  page) is converted on open, each page's ink moved down to its place in the
+  column; the paged original stays as the previous checkpoint. It downloads the PDF once
   from `GET /api/newspapers/issues/<date>/pdf`, since mobile sync doesn't carry
   issue PDFs, and reopens the same unsaved notebook instead of making a second one.
   The web reader's own markup is untouched. Back autosaves (current + previous
   checkpoint, like drawings) and the notebook is listed under Draw → Notebooks to
   continue. **Save** files one journal entry: each page as a JPEG (a newspaper
-  files its cover plus the pages written on), plus the notebook's one YouTube link.
+  files its cover plus the pages written on, found from the ink itself), plus the notebook's one YouTube link.
   The text composer's draft is never touched.
   **Lock pictures on this page** (camera menu) pins a page's pictures under the
   ink so they can be written over but not selected or dragged; a lock badge
@@ -48,10 +61,13 @@ what each device can currently do and which work remains device-only.
   another app's pixels, so the screenshot is the system's and Lunaschal cuts its
   own window out of it (the larger remaining strip with Stage Manager). With no
   setup: take a screenshot (Pencil corner swipe, or top + volume), choose **Copy
-  and Delete**, then **Paste image**. Paste crops only an image exactly the
-  screen's pixel size, and only when the part it would cut matches a snapshot of
-  Lunaschal's window, so a copied photo, or an older screenshot taken with the
-  apps the other way round, goes in whole. For one tap, a shortcut
+  and Delete**, then **Paste image**. Paste crops any image exactly the
+  screen's pixel size (by points × scale or the panel's native pixels, so
+  Display Zoom counts), so a copied photo goes in whole. A snapshot of
+  Lunaschal's window can only veto the cut, when an older screenshot clearly
+  shows Lunaschal on the other side; a snapshot that matches neither half does
+  not. A note under the title says what Paste did and why. **Insert from
+  library** adds pictures from Photos, whole. For one tap, a shortcut
   _Take Screenshot → Add Screenshot to Lunaschal Notes_ run from AssistiveTouch
   or a Full Keyboard Access command does the same in the app's process (Back Tap
   is iPhone-only); with no notebook open, its screenshot waits for the next one.

@@ -135,7 +135,10 @@ final class NotebookTests: XCTestCase {
 
     func testCheckpointCannotDropIssuePages() throws {
         let root = try directory(), store = try NotebookStore(root: root)
-        let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3)
+        // A paged issue, as every one was before columns.
+        var notebook = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3)
+        notebook.layout = nil
+        try JSONEncoder().encode(notebook).write(to: root.appendingPathComponent(notebook.id + ".json"))
         XCTAssertThrowsError(try store.checkpoint(notebook.id, pages: [Data([1])], marked: [], preview: Data([9])))
         let saved = try store.checkpoint(notebook.id, pages: [Data([1]), Data([2]), Data([3]), Data([4])],
                                          marked: [2, 3], preview: Data([9]))
@@ -186,5 +189,169 @@ final class NotebookTests: XCTestCase {
         XCTAssertNil(NewspaperIssue(record: ["date": .string("yesterday"), "pageCount": .number(48)]))
         XCTAssertNil(NewspaperIssue(record: ["date": .string("2026-10-06"), "pageCount": .number(0)]))
         XCTAssertNil(NewspaperIssue(record: nil))
+    }
+}
+
+final class NotebookColumnStoreTests: XCTestCase {
+    private func directory() throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return root
+    }
+
+    private func pdf(in root: URL) throws -> URL {
+        let url = root.appendingPathComponent(UUID().uuidString + ".pdf")
+        try Data("%PDF-1.7\n...".utf8).write(to: url)
+        return url
+    }
+
+    func testANewIssueIsAColumnAndABlankNotebookIsNot() throws {
+        let root = try directory(), store = try NotebookStore(root: root)
+        let paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 40)
+        XCTAssertTrue(paper.isColumn)
+        XCTAssertEqual(paper.markupCount, 1)
+        XCTAssertFalse(try store.create().isColumn)
+    }
+
+    func testANotebookFromBeforeColumnsReadsAsPaged() throws {
+        // A manifest written by the previous build: no `layout` key at all.
+        let root = try directory(), store = try NotebookStore(root: root)
+        var paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 2)
+        paper.layout = nil
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(paper)) as! [String: Any]
+        json.removeValue(forKey: "layout")
+        try JSONSerialization.data(withJSONObject: json).write(to: root.appendingPathComponent(paper.id + ".json"))
+        let reopened = try store.notebook(paper.id)
+        XCTAssertFalse(reopened.isColumn)
+        XCTAssertEqual(reopened.markupCount, 2)
+    }
+
+    func testAColumnSavesOneMarkupForEveryPage() throws {
+        let root = try directory(), store = try NotebookStore(root: root)
+        let paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 40)
+        let saved = try store.checkpoint(paper.id, pages: [Data([7])], locked: [Data([8])], marked: [3, 39, 40],
+                                         preview: Data([9]), column: 41)
+        XCTAssertEqual(saved.pageCount, 41, "an added page at the foot of the column")
+        XCTAssertEqual(saved.markedPages, [3, 39, 40])
+        XCTAssertEqual(try store.pages(saved), [Data([7])])
+        XCTAssertEqual(try store.lockedLayers(saved), [Data([8])])
+    }
+
+    func testAColumnCannotDropIssuePagesOrBeSavedAsPages() throws {
+        let root = try directory(), store = try NotebookStore(root: root)
+        let paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3)
+        XCTAssertThrowsError(try store.checkpoint(paper.id, pages: [Data([1])], marked: [], preview: Data([9]), column: 2))
+        XCTAssertThrowsError(try store.checkpoint(paper.id, pages: [Data([1]), Data([2])], marked: [], preview: Data([9]), column: 3))
+        XCTAssertThrowsError(try store.checkpoint(paper.id, pages: [Data([1]), Data([2]), Data([3])], marked: [], preview: Data([9])),
+                             "pages saved over a column would be read back as one stacked markup")
+    }
+
+    func testConvertingAPagedIssueKeepsThePagedOriginalOneRestoreAway() throws {
+        let root = try directory(), store = try NotebookStore(root: root)
+        var paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3)
+        // As the previous build left it: paged, three markups.
+        paper.layout = nil
+        try JSONEncoder().encode(paper).write(to: root.appendingPathComponent(paper.id + ".json"))
+        try store.checkpoint(paper.id, pages: [Data([1]), Data([2]), Data([3])], marked: [1], preview: Data([9]))
+        let column = try store.checkpoint(paper.id, pages: [Data([4])], marked: [1], preview: Data([9]), column: 3)
+        XCTAssertTrue(column.isColumn)
+        let restored = try store.restorePrevious(paper.id)
+        XCTAssertFalse(restored.isColumn, "back to the paged pages, to be converted again on open")
+        XCTAssertEqual(restored.pageCount, 3)
+        XCTAssertEqual(try store.pages(restored), [Data([1]), Data([2]), Data([3])])
+    }
+
+    func testRestoringAColumnKeepsItsPageCount() throws {
+        let root = try directory(), store = try NotebookStore(root: root)
+        let paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3)
+        try store.checkpoint(paper.id, pages: [Data([1])], marked: [], preview: Data([9]), column: 4)
+        try store.checkpoint(paper.id, pages: [Data([2])], marked: [], preview: Data([9]), column: 4)
+        let restored = try store.restorePrevious(paper.id)
+        XCTAssertTrue(restored.isColumn)
+        XCTAssertEqual(restored.pageCount, 4)
+        XCTAssertEqual(try store.pages(restored), [Data([1])])
+    }
+}
+
+final class NotebookColumnTests: XCTestCase {
+    // A broadsheet, a wide spread and a tabloid, at the column's width.
+    private let slots = NotebookColumn.slots(heights: [2232, 868, 1612])
+
+    func testPagesStackAtFullWidthWithNothingBetweenThem() {
+        XCTAssertEqual(slots, [
+            CGRect(x: 0, y: 0, width: 1240, height: 2232),
+            CGRect(x: 0, y: 2232, width: 1240, height: 868),
+            CGRect(x: 0, y: 3100, width: 1240, height: 1612),
+        ])
+        XCTAssertEqual(NotebookColumn.bounds(of: slots), CGRect(x: 0, y: 0, width: 1240, height: 4712))
+    }
+
+    func testThePageAtAHeight() {
+        XCTAssertEqual(NotebookColumn.slot(atY: 0, in: slots), 0)
+        XCTAssertEqual(NotebookColumn.slot(atY: 2231, in: slots), 0)
+        XCTAssertEqual(NotebookColumn.slot(atY: 2232, in: slots), 1)
+        XCTAssertEqual(NotebookColumn.slot(atY: 4000, in: slots), 2)
+        XCTAssertEqual(NotebookColumn.slot(atY: 99_999, in: slots), 2)
+        XCTAssertEqual(NotebookColumn.slot(atY: -10, in: slots), 0)
+    }
+
+    func testEitherWayUpAPageFillsTheWidthFromItsTop() {
+        for view in [CGSize(width: 1032, height: 1270), CGSize(width: 1376, height: 950)] {
+            let shown = NotebookColumn.visibleFrame(slot: slots[1], view: view)
+            XCTAssertEqual(shown.minX, 0)
+            XCTAssertEqual(shown.width, 1240, "nothing off to either side")
+            XCTAssertEqual(shown.minY, 2232, "from the top of the page")
+        }
+    }
+
+    func testWhichPagesCarryInk() {
+        // Ten units a row: rows 0-223 are page 1, 224-309 page 2, the rest page 3.
+        var rows = Array(repeating: false, count: 472)
+        rows[5] = true
+        rows[400] = true
+        XCTAssertEqual(NotebookColumn.slotsWithInk(rows: rows, unitsPerRow: 10, slots: slots), [0, 2])
+        rows[250] = true
+        XCTAssertEqual(NotebookColumn.slotsWithInk(rows: rows, unitsPerRow: 10, slots: slots), [0, 1, 2])
+        XCTAssertEqual(NotebookColumn.slotsWithInk(rows: [], unitsPerRow: 10, slots: slots), [])
+    }
+}
+
+final class NotebookFitTests: XCTestCase {
+    func testAnA4PageFitsWholeInEitherOrientation() {
+        let a4 = CGRect(x: 0, y: 0, width: 1240, height: 1754)
+        for view in [CGSize(width: 1024, height: 1290), CGSize(width: 1366, height: 950)] {
+            let shown = NotebookFit.whole(a4, in: view)
+            XCTAssertTrue(shown.insetBy(dx: -0.5, dy: -0.5).contains(a4), "nothing of the page is off screen")
+            XCTAssertEqual(shown.height / shown.width, view.height / view.width, accuracy: 0.001)
+        }
+    }
+}
+
+final class PageSwipeTests: XCTestCase {
+    func testAPageTurnIsADeliberateDrag() {
+        XCTAssertEqual(PageSwipe.threshold(pageWidth: 1000), 350)
+        XCTAssertEqual(PageSwipe.threshold(pageWidth: 200), 120)
+    }
+
+    func testThePageFollowsTheFinger() {
+        let preview = PageSwipe.preview(dx: -100, index: 1, count: 3, threshold: 200)
+        XCTAssertEqual(preview, .init(offset: -100, creating: false, progress: 0.5, armed: false))
+        XCTAssertEqual(PageSwipe.outcome(dx: -100, index: 1, count: 3, threshold: 200), .stay, "springs back")
+        XCTAssertEqual(PageSwipe.outcome(dx: -250, index: 1, count: 3, threshold: 200), .next)
+        XCTAssertEqual(PageSwipe.outcome(dx: 250, index: 1, count: 3, threshold: 200), .previous)
+    }
+
+    func testFinishingTheSwipeOnTheLastPageAddsOne() {
+        let near = PageSwipe.preview(dx: -80, index: 2, count: 3, threshold: 200)
+        XCTAssertTrue(near.creating)
+        XCTAssertFalse(near.armed)
+        XCTAssertTrue(PageSwipe.preview(dx: -200, index: 2, count: 3, threshold: 200).armed)
+        XCTAssertEqual(PageSwipe.outcome(dx: -200, index: 2, count: 3, threshold: 200), .newPage)
+    }
+
+    func testBackwardsFromTheFirstPageNothingMoves() {
+        XCTAssertEqual(PageSwipe.preview(dx: 300, index: 0, count: 3, threshold: 200), .idle)
+        XCTAssertEqual(PageSwipe.outcome(dx: 300, index: 0, count: 3, threshold: 200), .stay)
     }
 }
