@@ -37,6 +37,12 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var downloadingLibrary = false
     @Published private(set) var libraryMessage: String?
     @Published private(set) var libraryBytes: Int64 = 0
+    /// Fics opened but not yet on the device, the one downloading first.
+    @Published private(set) var ficQueue = FicQueue()
+    @Published private(set) var ficDownload: FicDownloadStatus?
+    @Published private(set) var ficErrors: [String: String] = [:]
+    /// Bumped each time a fic page lands, so an open book redraws its chapters.
+    @Published private(set) var ficDownloadRevision = 0
     /// The Daily tab: what this device has logged, and the server's record of today.
     @Published private(set) var dailyLogs: [DailyLog] = []
     @Published private(set) var dailyStatus: DailyStatus?
@@ -95,6 +101,11 @@ final class CaptureModel: ObservableObject {
     private var token: String?
     private var syncingTask: Task<Void, Never>?
     private var libraryTask: Task<Void, Never>?
+    private var ficTask: Task<Void, Never>?
+    private var ficAPI: JournalAPI?
+    /// The bulk download yielded to an opened fic and picks up once the queue empties.
+    private var resumeLibraryAfterFics = false
+    private var ficEstimate = TransferEstimate(started: Date())
 
     init(store: CaptureStore) throws {
         self.store = store
@@ -629,6 +640,8 @@ final class CaptureModel: ObservableObject {
     func signOut() {
         cancelSync()
         pauseLibrary()
+        pauseFicDownloads()
+        ficQueue.removeAll()
         do {
             if let server { try SessionToken.remove(server: server) }
             token = nil
@@ -672,6 +685,7 @@ final class CaptureModel: ObservableObject {
     func leaveForeground() {
         if !backgroundSyncing { cancelSync() }
         pauseLibrary()
+        pauseFicDownloads()
         onBackgroundSyncNeeded?()
     }
 
@@ -783,6 +797,98 @@ final class CaptureModel: ObservableObject {
         libraryAPI?.cancel()
     }
 
+    // MARK: Fic downloads
+
+    /// Whether `book` can be read without the network: its PDF, or as many
+    /// chapters as the server says it has.
+    func isFicOnDevice(_ book: SyncChange) -> Bool {
+        if book.data?["sourceType"]?.string == "pdf" {
+            return (try? media.downloaded(collection: "fics", id: book.id)) != nil
+        }
+        let local = (try? replica.relatedCount(collection: "fic_chapters", field: "ficId", value: book.id)) ?? 0
+        let expected = book.data?["chapterCount"]?.number.map(Int.init) ?? 1
+        return local > 0 && local >= expected
+    }
+
+    /// Opening a fic that isn't on the device puts it at the front of the
+    /// queue and starts it now, ahead of the library download and of any fic
+    /// opened before it. Over any connection: opening a book is asking for it.
+    func ensureFicOnDevice(_ book: SyncChange) {
+        guard signedIn, !isFicOnDevice(book) else { return }
+        ficErrors[book.id] = nil
+        let headChanged = ficQueue.prioritize(book.id, title: book.title)
+        guard headChanged || ficTask == nil else { return }
+        if downloadingLibrary {
+            resumeLibraryAfterFics = true
+            pauseLibrary()
+        }
+        restartFicDownloads()
+    }
+
+    /// Picks the queue back up after the app returns to the foreground.
+    func resumeFicDownloads() {
+        guard ficTask == nil, !ficQueue.isEmpty, signedIn else { return }
+        restartFicDownloads()
+    }
+
+    func pauseFicDownloads() {
+        ficTask?.cancel()
+        ficAPI?.cancel()
+        ficTask = nil
+        ficDownload = nil
+    }
+
+    private func restartFicDownloads() {
+        let previous = ficTask, library = libraryTask
+        previous?.cancel()
+        ficAPI?.cancel()
+        ficTask = Task {
+            // Only one writer at a time: let whatever was running let go first.
+            await previous?.value
+            await library?.value
+            await runFicQueue()
+        }
+    }
+
+    private func runFicQueue() async {
+        while let entry = ficQueue.head {
+            guard !Task.isCancelled else { return }
+            guard signedIn, let server, let token else { break }
+            ficDownload = FicDownloadStatus(id: entry.id, title: entry.title, fraction: 0, doneBytes: 0, totalBytes: 0,
+                                            secondsLeft: nil)
+            ficEstimate = TransferEstimate(started: Date())
+            do {
+                let api = try JournalAPI(server: server, token: token, allowCellular: true)
+                ficAPI = api
+                try await libraryWorker.downloadFic(entry.id, after: entry.after, using: api) { [weak self] progress in
+                    await self?.showFicProgress(entry, progress)
+                }
+                ficQueue.remove(entry.id)
+            } catch {
+                if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+                ficErrors[entry.id] = error.localizedDescription
+                ficQueue.remove(entry.id)
+            }
+            ficDownloadRevision += 1
+        }
+        ficDownload = nil
+        ficAPI = nil
+        ficTask = nil
+        if resumeLibraryAfterFics, ficQueue.isEmpty {
+            resumeLibraryAfterFics = false
+            startLibraryDownload()
+        }
+    }
+
+    private func showFicProgress(_ entry: FicQueue.Entry, _ progress: FicDownloadProgress) {
+        guard ficQueue.head?.id == entry.id else { return }
+        ficQueue.record(entry.id, after: progress.after)
+        ficDownload = FicDownloadStatus(id: entry.id, title: entry.title, fraction: progress.fraction,
+            doneBytes: progress.doneBytes, totalBytes: progress.totalBytes,
+            secondsLeft: ficEstimate.secondsLeft(done: progress.doneBytes, total: progress.totalBytes, now: Date()))
+        ficDownloadRevision += 1
+    }
+
     func removeLibraryMedia() {
         guard !downloadingLibrary else { return }
         do {
@@ -839,5 +945,22 @@ final class CaptureModel: ObservableObject {
             reload()
             requestSync()
         } catch { message = error.localizedDescription }
+    }
+}
+
+/// What the fic download indicator shows.
+struct FicDownloadStatus: Equatable {
+    let id: String
+    let title: String
+    let fraction: Double
+    let doneBytes: Int64
+    let totalBytes: Int64
+    let secondsLeft: TimeInterval?
+
+    var detail: String {
+        let size = totalBytes > 0
+            ? "\(ByteCountFormatter.string(fromByteCount: doneBytes, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))"
+            : "Starting…"
+        return "\(Int((fraction * 100).rounded()))% · \(size) · \(TransferEstimate.describe(secondsLeft))"
     }
 }

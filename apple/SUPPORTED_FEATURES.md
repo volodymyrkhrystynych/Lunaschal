@@ -57,6 +57,15 @@ HTML/video sources remain read-only.
 Library download controls live under More → Settings → Library downloads. Bulk downloads
 stay on Wi-Fi and continue while switching tabs. Subsequent chapter/text updates
 follow the cellular preference; full resyncs and binary media remain Wi-Fi-only.
+
+Opening a fic that isn't on the device downloads it on its own, at the front of a
+queue and over any connection (opening a book is asking for it): its chapters through
+`GET /api/mobile/fics/<id>/download`, or its PDF in 1 MB ranges. A running bulk download
+pauses for it and resumes once the queue is empty. The library list and the book page
+show the fic downloading now, its progress, and the time left estimated from this
+session's transfer rate. A restarted bulk bootstrap no longer empties already-downloaded
+chapters; records the server no longer has are swept when the bootstrap finishes.
+Passed in simulator and in `swift test`; not yet verified on device.
 There is
 no dedicated iPad split-view navigation yet. The same app serves phone and iPad;
 Pencil drawing is intended for the iPad and still needs Pencil 2 hardware testing.

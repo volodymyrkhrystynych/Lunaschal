@@ -46,7 +46,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
 public final class JournalAPI: JournalTransport, ReplicaTransport {
     public let server: URL
     private let token: String?
-    let session: URLSession
+    let session: CancellableSession
     private let uploads: RecordingUploadStore?
 
     public init(server: URL, token: String?, allowCellular: Bool, uploads: RecordingUploadStore? = nil) throws {
@@ -63,12 +63,11 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         #endif
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 15 * 60
-        session = URLSession(configuration: config, delegate: NoRedirects(), delegateQueue: nil)
+        session = CancellableSession(configuration: config, delegate: NoRedirects())
     }
 
-    deinit { session.invalidateAndCancel() }
-
-    public func cancel() { session.invalidateAndCancel() }
+    /// Stops what is in flight; every later request throws `URLError(.cancelled)`.
+    public func cancel() { session.cancel() }
 
     public func login(password: String, code: String) async throws -> String {
         var req = request("api/auth/login", method: "POST")
