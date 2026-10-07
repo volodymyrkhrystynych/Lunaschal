@@ -350,11 +350,7 @@ public final class ReplicaStore {
     }
 
     public func bookmarks(bookID: String) throws -> [SyncChange] {
-        var saved = try relatedRecords(collection: "fic_bookmarks", field: "ficId", value: bookID)
-        // A continue replacement and its tombstone can arrive on separate pages.
-        if let latest = saved.filter({ $0.data?["type"]?.string == "continue" }).max(by: { $0.revision < $1.revision }) {
-            saved.removeAll { $0.data?["type"]?.string == "continue" && $0.id != latest.id }
-        }
+        var saved = try serverBookmarks(bookID: bookID)
         for edit in try bookmarkEdits(bookID: bookID) where edit.state == "pending" {
             if edit.operation.action == "delete" { saved.removeAll { $0.id == edit.operation.recordId } }
             else {
@@ -365,14 +361,30 @@ public final class ReplicaStore {
         return saved
     }
 
+    /// The bookmarks as the server last sent them, without edits waiting here.
+    private func serverBookmarks(bookID: String) throws -> [SyncChange] {
+        var saved = try relatedRecords(collection: "fic_bookmarks", field: "ficId", value: bookID)
+        // A continue replacement and its tombstone can arrive on separate pages.
+        if let latest = saved.filter({ $0.data?["type"]?.string == "continue" }).max(by: { $0.revision < $1.revision }) {
+            saved.removeAll { $0.data?["type"]?.string == "continue" && $0.id != latest.id }
+        }
+        return saved
+    }
+
+    /// A book has one continue point, so a new one replaces any that hasn't
+    /// synced yet (or was held as a conflict) rather than waiting for it: the
+    /// newest choice is the only one worth sending. It always names the
+    /// server's continue point as the one it replaces, never the unsent one.
     public func queueBookmark(chapter: SyncChange, type: String, fraction: Double) throws {
         guard let epoch = try epoch, chapter.collection == "fic_chapters", !chapter.deleted,
               let bookID = chapter.data?["ficId"]?.string, ["favorite", "continue"].contains(type),
               fraction.isFinite, (0...1).contains(fraction) else { throw ReplicaError.invalidEdit }
-        guard !(try bookmarkEdits(bookID: bookID)).contains(where: {
-            $0.original.data?["type"]?.string == type && (type == "continue" || $0.original.data?["chapterId"]?.string == chapter.id)
+        let waiting = try bookmarkEdits(bookID: bookID)
+        guard type == "continue" || !waiting.contains(where: {
+            $0.original.data?["type"]?.string == "favorite" && $0.original.data?["chapterId"]?.string == chapter.id
         }) else { throw ReplicaError.editAlreadyPending }
-        let previous = type == "continue" ? try bookmarks(bookID: bookID).first { $0.data?["type"]?.string == "continue" } : nil
+        let replaced = type == "continue" ? waiting.filter { $0.original.data?["type"]?.string == "continue" } : []
+        let previous = type == "continue" ? try serverBookmarks(bookID: bookID).first { $0.data?["type"]?.string == "continue" } : nil
         let id = ULID.make()
         let original = SyncChange(revision: previous?.revision ?? 0, collection: "fic_bookmarks", id: id, deleted: false,
             data: ["id": .string(id), "ficId": .string(bookID), "chapterId": .string(chapter.id),
@@ -381,8 +393,11 @@ public final class ReplicaStore {
             "type": .string(type), "scrollPosition": .number(fraction),
             "previousContinueId": previous.map { .string($0.id) } ?? .null]
         let operation = ReplicaOperation(epoch: epoch, record: original, action: "create", data: data)
-        try execute("INSERT INTO replica_outbox(id,operation,original) VALUES (?,?,?)",
-                    [operation.id, try json(operation), try json(original)])
+        try transaction {
+            for edit in replaced { try execute("DELETE FROM replica_outbox WHERE id=?", [edit.id]) }
+            try execute("INSERT INTO replica_outbox(id,operation,original) VALUES (?,?,?)",
+                        [operation.id, try json(operation), try json(original)])
+        }
     }
 
     public func deleteBookmark(_ bookmark: SyncChange) throws {
@@ -427,6 +442,31 @@ public final class ReplicaStore {
         try transaction {
             try put(change)
             try execute("DELETE FROM replica_outbox WHERE id=?", [operation.id])
+            try repointContinue(after: change)
+        }
+    }
+
+    /// A continue point replaced while its predecessor was already on its way
+    /// still names the server's older one, which the predecessor has just
+    /// replaced, so it would come back as a conflict. Point it at the one the
+    /// server now has instead.
+    private func repointContinue(after change: SyncChange) throws {
+        guard change.collection == "fic_bookmarks", change.data?["type"]?.string == "continue",
+              let bookID = change.data?["ficId"]?.string else { return }
+        for edit in try bookmarkEdits(bookID: bookID) where edit.state == "pending" && edit.operation.action == "create"
+            && edit.original.data?["type"]?.string == "continue" && edit.operation.recordId != change.id
+            && edit.operation.data["previousContinueId"]?.string != change.id {
+            guard var operation = try JSONSerialization.jsonObject(with: Data(try json(edit.operation).utf8)) as? [String: Any],
+                  var data = operation["data"] as? [String: Any],
+                  var original = try JSONSerialization.jsonObject(with: Data(try json(edit.original).utf8)) as? [String: Any]
+            else { continue }
+            data["previousContinueId"] = change.id
+            operation["data"] = data
+            operation["baseRevision"] = change.revision
+            original["revision"] = change.revision
+            try execute("UPDATE replica_outbox SET operation=?,original=? WHERE id=?",
+                        [String(decoding: try JSONSerialization.data(withJSONObject: operation), as: UTF8.self),
+                         String(decoding: try JSONSerialization.data(withJSONObject: original), as: UTF8.self), edit.id])
         }
     }
 

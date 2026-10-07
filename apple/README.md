@@ -221,6 +221,13 @@ what each device can currently do and which work remains device-only.
   under Study. Download controls remain in More → Settings → Library downloads.
   Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:
   continue bookmark, then this device's last read, then the server's, then chapter 1),
+  or, for a book with no chapters on the device, its page, which downloads it ahead of
+  everything else and shows the progress. That page used to stay blank: the opening view
+  had nothing in it before it loaded, so its load never ran (fixed; covered by a UI test).
+  Debug builds launched with `-libraryFixture` fill the Library with made-up books in every
+  download state (on the device, half on it, not on it, a PDF book, one the server can't
+  send) and download from an in-app stand-in server slowly enough to watch, so the Library
+  and its download states can be seen without a server. Each launch resets them,
   and the reader moves between chapters with Previous/Next. The reader's bottom-left menu has Text and
   Transcribe commentary (a journal capture carrying `ficID`/`chapterID`: typed text
   is posted as `raw_content` and then linked, a recording links in its upload),
@@ -229,8 +236,11 @@ what each device can currently do and which work remains device-only.
   chapter queues it as last read. Both go through `FicActivityStore`. Chapter
   readers create Favorite or Continue-reading bookmarks offline, and
   saved bookmarks can be reopened or removed from a book. Bookmark changes sync
-  with the desktop, using replay receipts and conflict checks. One pending
-  Continue change per book is retained until it syncs or is resolved.
+  with the desktop, using replay receipts and conflict checks. A book keeps one
+  unsent Continue change: moving the continue point again replaces it (one held
+  as a conflict too) instead of waiting for a sync, and still names the server's
+  continue point as the one it replaces. If the replaced change was already on its
+  way, the newer one is re-pointed at what the server kept when that lands.
   Native drawing editing is iPad-only.
 - Study (iPad-only) contains Documents, Paper previews, newspapers, and Knowledge.
   The iPhone has no Study tab, so none of these are reachable there.

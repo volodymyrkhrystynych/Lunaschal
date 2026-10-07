@@ -643,6 +643,55 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["SpaceBattles"].waitForExistence(timeout: 5))
     }
 
+    /// Opening a fic that isn't on the device downloads it in front of
+    /// everything else, saying so, until its chapters are there to read. The
+    /// fixture's stand-in server answers slowly so the progress can be seen.
+    func testOpeningAFicThatIsNotDownloadedShowsItDownloading() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["Ashes of the Old Guard"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let progress = app.descendants(matching: .any)["fic-download-progress"]
+        XCTAssertTrue(progress.waitForExistence(timeout: 10), "The book says it is downloading")
+        let finished = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: progress)
+        XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 60), .completed, "The download finishes")
+        XCTAssertTrue(app.staticTexts["Chapter 1"].exists, "and its chapters are there to read")
+
+        // A fic the server can't send says so, with a way to try again.
+        app.navigationBars.buttons.firstMatch.tap()
+        let missing = app.staticTexts["Deleted Upstream"]
+        if !missing.waitForExistence(timeout: 5) || !missing.isHittable { app.swipeUp() }
+        missing.tap()
+        XCTAssertTrue(app.buttons["Try again"].waitForExistence(timeout: 15))
+    }
+
+    /// The continue point can be moved again before the last move has synced:
+    /// with no server, nothing ever syncs, so the second move used to be refused.
+    func testContinuePointMovesAgainBeforeItSyncs() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let menu = app.buttons["reader-menu"]
+        let saved = app.staticTexts["Continue point saved here · Syncs when connected"]
+        for _ in 0..<2 {
+            XCTAssertTrue(menu.waitForExistence(timeout: 10))
+            menu.tap()
+            let item = app.buttons["Continue"]
+            XCTAssertTrue(item.waitForExistence(timeout: 5))
+            item.tap()
+            XCTAssertTrue(saved.waitForExistence(timeout: 5))
+            XCTAssertFalse(app.alerts.firstMatch.exists, "a second move isn't refused")
+            if app.buttons["Next"].exists { app.buttons["Next"].tap() }
+        }
+    }
+
     func testDrawingWorkspaceReopensWithoutAServer() {
         let app = XCUIApplication()
         app.launch()

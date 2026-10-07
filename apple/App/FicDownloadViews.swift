@@ -53,7 +53,7 @@ struct FicDownloadState: View {
                 Text(error).foregroundStyle(.secondary)
                 Button("Try again") { model.ensureFicOnDevice(book) }
             }
-        } else if !model.signedIn {
+        } else if !model.canDownloadFics {
             Text("Sign in to download this fic.").foregroundStyle(.secondary)
         }
     }

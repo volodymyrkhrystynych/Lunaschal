@@ -882,7 +882,7 @@ final class CaptureModel: ObservableObject {
     /// queue and starts it now, ahead of the library download and of any fic
     /// opened before it. Over any connection: opening a book is asking for it.
     func ensureFicOnDevice(_ book: SyncChange) {
-        guard signedIn, !isFicOnDevice(book) else { return }
+        guard canDownloadFics, !isFicOnDevice(book) else { return }
         ficErrors[book.id] = nil
         let headChanged = ficQueue.prioritize(book.id, title: book.title)
         guard headChanged || ficTask == nil else { return }
@@ -895,8 +895,30 @@ final class CaptureModel: ObservableObject {
 
     /// Picks the queue back up after the app returns to the foreground.
     func resumeFicDownloads() {
-        guard ficTask == nil, !ficQueue.isEmpty, signedIn else { return }
+        guard ficTask == nil, !ficQueue.isEmpty, canDownloadFics else { return }
         restartFicDownloads()
+    }
+
+    /// Signed in, or (debug builds) talking to the library fixture's stand-in server.
+    var canDownloadFics: Bool {
+        #if DEBUG
+        if LibraryFixture.isActive { return true }
+        #endif
+        return signedIn
+    }
+
+    /// What a fic downloads from: the server, or the fixture's stand-in.
+    /// Made per fic, since `pauseFicDownloads` cancels the one in use.
+    private func ficTransport() -> (() throws -> FicDownloadTransport)? {
+        #if DEBUG
+        if LibraryFixture.isActive { return { LibraryFixture.Transport() } }
+        #endif
+        guard signedIn, let server, let token else { return nil }
+        return { [weak self] in
+            let api = try JournalAPI(server: server, token: token, allowCellular: true)
+            self?.ficAPI = api
+            return api
+        }
     }
 
     func pauseFicDownloads() {
@@ -921,14 +943,12 @@ final class CaptureModel: ObservableObject {
     private func runFicQueue() async {
         while let entry = ficQueue.head {
             guard !Task.isCancelled else { return }
-            guard signedIn, let server, let token else { break }
+            guard let transport = ficTransport() else { break }
             ficDownload = FicDownloadStatus(id: entry.id, title: entry.title, fraction: 0, doneBytes: 0, totalBytes: 0,
                                             secondsLeft: nil)
             ficEstimate = TransferEstimate(started: Date())
             do {
-                let api = try JournalAPI(server: server, token: token, allowCellular: true)
-                ficAPI = api
-                try await libraryWorker.downloadFic(entry.id, after: entry.after, using: api) { [weak self] progress in
+                try await libraryWorker.downloadFic(entry.id, after: entry.after, using: try transport()) { [weak self] progress in
                     await self?.showFicProgress(entry, progress)
                 }
                 ficQueue.remove(entry.id)

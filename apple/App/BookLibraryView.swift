@@ -234,6 +234,11 @@ struct BookReaderEntry: View {
             } else if loaded {
                 // No chapter text on this device: the book page says why.
                 BookView(model: model, book: book)
+            } else {
+                // Never empty: a Group with no view in it runs no `.task`, so
+                // the book never loaded, never started downloading, and the
+                // screen stayed blank.
+                ProgressView()
             }
         }
         .task {
