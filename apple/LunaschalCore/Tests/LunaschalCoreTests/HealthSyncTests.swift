@@ -46,8 +46,10 @@ private func samples(_ n: Int, type: String = "HKQuantityTypeIdentifierHeartRate
 
 @MainActor
 final class HealthSyncTests: XCTestCase {
-    private var root: URL!
-    private var store: HealthStateStore!
+    // Set up and torn down outside the main actor (Linux XCTest's setUp is
+    // nonisolated), strictly before and after each test touches them.
+    nonisolated(unsafe) private var root: URL!
+    nonisolated(unsafe) private var store: HealthStateStore!
     private var calendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/Toronto")!
