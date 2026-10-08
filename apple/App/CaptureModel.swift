@@ -16,6 +16,8 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var syncing = false
     @Published private(set) var signingIn = false
     @Published var message: String?
+    @Published var refreshingFics = false
+    @Published var importingFic = false
     @Published private(set) var syncMessage: String?
     @Published var backgroundStatus = "Background sync is idle."
     var onBackgroundSyncNeeded: (() -> Void)?
@@ -74,6 +76,7 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var todoQueue: [TodoOp] = []
     @Published var todoRefusals: [String] = []
     let todoOutbox: TodoOutbox
+    let ficImports: FicImportOutbox
     private let todoSyncer: TodoSync
     /// Jobs feed decisions the server hasn't had yet, and what it last turned down.
     @Published private(set) var jobQueue: [JobDecisionOp] = []
@@ -150,6 +153,9 @@ final class CaptureModel: ObservableObject {
         calendarSyncer = CalendarSyncer(outbox: calendarOutbox)
         ficActivity = try FicActivityStore(root: store.root.appendingPathComponent("fic-activity", isDirectory: true))
         ficActivitySyncer = FicActivitySync(store: ficActivity)
+        // Shared with the share extension when the App Group is there.
+        ficImports = try FicImportOutbox(root: SharedSignIn.importOutboxRoot()
+            ?? store.root.appendingPathComponent("fic-imports", isDirectory: true))
         try chatRecordings.recoverInterrupted()
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store, pomodoros: pomodoros)
@@ -161,6 +167,8 @@ final class CaptureModel: ObservableObject {
         server = try store.server
         if let server { token = try SessionToken.read(server: server) }
         signedIn = token != nil
+        // Signed in before the share extension existed: give it the session now.
+        if let server, let token { SharedSignIn.save(server: server, token: token) } else { SharedSignIn.remove() }
         captures = try store.list()
         draft = try store.draft()
         entryDrafts = try store.entryDrafts()
@@ -558,6 +566,50 @@ final class CaptureModel: ObservableObject {
         todoQueue = (try? todoOutbox.list()) ?? todoQueue
     }
 
+    /// Links shared or typed while the server was out of reach. One the server
+    /// refuses is reported once and dropped; a server error waits for the next
+    /// pass without holding up the uploads after it.
+    private func sendFicImports(using api: JournalAPI) async throws {
+        guard !((try? ficImports.list()) ?? []).isEmpty else { return }
+        do {
+            let outcome = try await FicImportSync(outbox: ficImports).run(using: api)
+            if !outcome.refused.isEmpty {
+                message = "The server couldn’t import:\n" + outcome.refused.joined(separator: "\n")
+            }
+        } catch {
+            if Task.isCancelled || error is CancellationError || error is URLError { throw error }
+            // The session ended: the same as any other route saying so.
+            if let failure = error as? FicServerFailure, [401, 403].contains(failure.status) {
+                signedIn = false
+                throw failure
+            }
+        }
+    }
+
+    /// Imports the fic `text` links to, from Settings. The server does the
+    /// work; out of reach, the link waits and goes with the next sync.
+    @discardableResult
+    func importFic(_ text: String) async -> Bool {
+        guard let link = FicImportLink.find(in: text) else {
+            message = "That isn’t a link to a fic. Supported: \(FicImportLink.siteNames.joined(separator: ", "))."
+            return false
+        }
+        guard let api = chatAPI() else { message = "Sign in to import fics."; return false }
+        importingFic = true
+        defer { importingFic = false }
+        do {
+            message = try await api.importFic(link.url).summary(site: link.site)
+            requestSync()
+            return true
+        } catch let error as URLError where error.isUnreachable {
+            do {
+                try ficImports.append(link)
+                message = "The server can’t be reached, so the \(link.site) link is saved. It’s imported with the next sync."
+                return true
+            } catch { message = error.localizedDescription; return false }
+        } catch { message = error.localizedDescription; return false }
+    }
+
     /// Queues a Queue or Dismiss from the jobs feed and starts sending it.
     func decideJob(_ job: FeedJob, _ decision: JobDecision) {
         do {
@@ -710,6 +762,7 @@ final class CaptureModel: ObservableObject {
             try store.bind(to: url)
             server = url
             try SessionToken.save(value, server: url)
+            SharedSignIn.save(server: url, token: value)
             try transfers.resumeAuthentication(now: Date())
             token = value
             signedIn = true
@@ -726,6 +779,7 @@ final class CaptureModel: ObservableObject {
         ficQueue.removeAll()
         do {
             if let server { try SessionToken.remove(server: server) }
+            SharedSignIn.remove()
             token = nil
             signedIn = false
             onBackgroundSyncNeeded?()
@@ -798,6 +852,7 @@ final class CaptureModel: ObservableObject {
             try await timed("chat voice") { try await chatRecordingSyncer.run(using: api) }
             try await timed("to-dos") { try await sendTodoChanges(using: api) }
             try await timed("job decisions") { try await sendJobDecisions(using: api) }
+            try await timed("fic imports") { try await sendFicImports(using: api) }
             try await timed("calendar changes") { try await sendCalendarEvents(using: api) }
             try await timed("uploads") { try await syncer.run(using: api) }
             try await timed("daily") { try await dailySyncer.run(using: api) }
@@ -950,6 +1005,23 @@ final class CaptureModel: ObservableObject {
             }
         }
         return out
+    }
+
+    /// Asks the server to read the forums' alerts and queue whatever they
+    /// mention. The chapters it fetches arrive through the next sync.
+    func refreshFicsOnServer() async {
+        guard let api = chatAPI() else { message = "Sign in to refresh the library on the server."; return }
+        refreshingFics = true
+        defer { refreshingFics = false }
+        do { message = try await api.refreshFicAlerts().summary } catch { message = error.localizedDescription }
+    }
+
+    /// Queues one fic for an update on the server, or takes it back out if it
+    /// was already waiting. `deep` also re-reads chapters the author edited.
+    func checkFicForUpdates(_ book: SyncChange, deep: Bool) async {
+        guard let api = chatAPI() else { message = "Sign in to update fics on the server."; return }
+        do { message = try await api.checkFicForUpdates(book.id, deep: deep).summary(title: book.title) }
+        catch { message = error.localizedDescription }
     }
 
     /// Opening a fic that isn't on the device puts it at the front of the

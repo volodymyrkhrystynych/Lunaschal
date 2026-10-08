@@ -3,7 +3,7 @@ import datetime as dt
 import hashlib
 import unittest
 
-from release import APP_GROUP, BUNDLES, GROUPED, configuration, validate_profile
+from release import APP_GROUPS, BUNDLES, configuration, validate_profile
 
 
 class ReleaseTests(unittest.TestCase):
@@ -19,7 +19,7 @@ class ReleaseTests(unittest.TestCase):
                 "application-identifier": f"LEGACYPREF.{bundle}",
                 "com.apple.developer.team-identifier": self.team,
                 "get-task-allow": False,
-                **({"com.apple.security.application-groups": [APP_GROUP]} if bundle in GROUPED else {}),
+                **({"com.apple.security.application-groups": [APP_GROUPS[bundle]]} if bundle in APP_GROUPS else {}),
             }) for i, bundle in enumerate(BUNDLES)]
 
     def test_generates_target_specific_profiles_and_matching_identity(self):
@@ -29,14 +29,16 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(options["destination"], "export")
         self.assertEqual(len(set(options["provisioningProfiles"].values())), len(BUNDLES))
         self.assertIn("LUNASCHAL_COMPLICATIONS_PROFILE_UUID = 00000000-0000-0000-0000-000000000002\n", config)
+        self.assertIn("LUNASCHAL_SHARE_PROFILE_UUID = 00000000-0000-0000-0000-000000000003\n", config)
 
-    def test_watch_and_complication_profiles_need_the_app_group(self):
-        for index in (1, 2):
+    def test_every_grouped_profile_needs_its_app_group(self):
+        for index, bundle in enumerate(BUNDLES):
+            if bundle not in APP_GROUPS:
+                continue
             profile = copy.deepcopy(self.profiles[index])
-            del profile["Entitlements"]["com.apple.security.application-groups"]
-            with self.subTest(bundle=BUNDLES[index]), self.assertRaisesRegex(ValueError, "App Group"):
-                validate_profile(profile, self.team, BUNDLES[index])
-        validate_profile(self.profiles[0], self.team, BUNDLES[0])
+            profile["Entitlements"]["com.apple.security.application-groups"] = ["group.other"]
+            with self.subTest(bundle=bundle), self.assertRaises(ValueError):
+                validate_profile(profile, self.team, bundle)
 
     def test_rejects_wrong_expired_and_non_distribution_profiles(self):
         mutations = [

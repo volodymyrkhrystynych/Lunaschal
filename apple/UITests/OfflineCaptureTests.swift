@@ -643,6 +643,58 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["SpaceBattles"].waitForExistence(timeout: 5))
     }
 
+    /// The filter menu has no tag picker (fics bring hundreds of user tags),
+    /// the server refresh sits beside it, and only a fic from a site can be
+    /// asked to update.
+    func testLibraryOffersServerUpdatesButNoTagFilter() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        XCTAssertTrue(app.buttons["Refresh library on server"].waitForExistence(timeout: 10))
+        app.buttons["Filter books"].tap()
+        XCTAssertTrue(app.buttons["Reset filters"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["All tags"].exists)
+        XCTAssertFalse(app.staticTexts["All tags"].exists)
+        app.buttons["Reset filters"].tap()
+
+        let forumFic = app.staticTexts["Ashes of the Old Guard"]
+        XCTAssertTrue(forumFic.waitForExistence(timeout: 10))
+        forumFic.press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Check for updates"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Re-read edited chapters"].exists)
+    }
+
+    /// Settings → Library downloads imports a fic by its link: a page that
+    /// isn't one is turned away on the phone, and a fic link needs a server.
+    func testSettingsImportsAFicByLink() {
+        let app = XCUIApplication()
+        app.launch()
+        openMore(app, "Settings")
+        let downloads = app.buttons["Library downloads"]
+        XCTAssertTrue(downloads.waitForExistence(timeout: 5))
+        downloads.tap()
+        let field = app.textFields["fic-import-link"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Paste"].exists)
+        let importButton = app.buttons["Import"]
+        XCTAssertFalse(importButton.isEnabled, "nothing to import yet")
+
+        field.tap()
+        field.typeText("https://example.com/threads/1")
+        importButton.tap()
+        XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "That isn’t a link to a fic"))
+            .firstMatch.waitForExistence(timeout: 5))
+        app.alerts.buttons["OK"].tap()
+
+        // At the end of the text, so the deletes take all of it.
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 40))
+        field.typeText("https://archiveofourown.org/works/42")
+        importButton.tap()
+        XCTAssertTrue(app.alerts.staticTexts["Sign in to import fics."].waitForExistence(timeout: 5))
+    }
+
     /// Opening a fic that isn't on the device downloads it in front of
     /// everything else, saying so, until its chapters are there to read. The
     /// fixture's stand-in server answers slowly so the progress can be seen.

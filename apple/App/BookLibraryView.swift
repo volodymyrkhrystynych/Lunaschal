@@ -38,7 +38,6 @@ struct BookListView: View {
     var showsProviders = false
     @State private var filter = BookFilter()
     @State private var books: [SyncChange] = []
-    @State private var tags: [String] = []
     @State private var limit = 50
     @State private var count = 0
     @State private var onDevice: Set<String> = []
@@ -58,6 +57,16 @@ struct BookListView: View {
             }
             ForEach(books) { book in
                 NavigationLink { BookReaderEntry(model: model, book: book) } label: { BookRow(book: book, downloaded: onDevice.contains(book.id)) }
+                    .contextMenu {
+                        if FicSources.isUpdatable(book.data?["sourceType"]?.string) {
+                            Button("Check for updates", systemImage: "arrow.clockwise") {
+                                Task { await model.checkFicForUpdates(book, deep: false) }
+                            }
+                            Button("Re-read edited chapters", systemImage: "arrow.triangle.2.circlepath") {
+                                Task { await model.checkFicForUpdates(book, deep: true) }
+                            }
+                        }
+                    }
             }
             if books.count < count {
                 Button("Load more (\(books.count) of \(count))") { limit += 50; refresh() }
@@ -93,11 +102,16 @@ struct BookListView: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Picker("Tag", selection: $filter.tag) {
-                        Text("All tags").tag("")
-                        ForEach(tags, id: \.self) { Text($0).tag($0) }
+                if model.refreshingFics {
+                    ProgressView()
+                } else {
+                    Button("Refresh library on server", systemImage: "arrow.clockwise") {
+                        Task { await model.refreshFicsOnServer() }
                     }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
                     Picker("Bookmarks", selection: $filter.bookmark) {
                         Text("All books").tag("")
                         Text("Favorites").tag("favorite")
@@ -124,7 +138,7 @@ struct BookListView: View {
         .task(id: filter) {
             try? await Task.sleep(nanoseconds: Self.typingPause)
             guard !Task.isCancelled else { return }
-            refresh(tags: false)
+            refresh()
         }
         // When the fic downloading changes, the one before it has finished.
         .onChange(of: model.ficDownload?.id) { _, _ in onDevice = model.ficsOnDevice(books) }
@@ -134,7 +148,7 @@ struct BookListView: View {
 
     static let typingPause: UInt64 = 300_000_000
 
-    private func refresh(tags refreshTags: Bool = true) {
+    private func refresh() {
         do {
             // The folder is where this list is, not a filter to clear.
             var query = filter
@@ -142,9 +156,6 @@ struct BookListView: View {
             let result = try model.replica.books(filter: query, limit: limit)
             books = result.records; count = result.count
             onDevice = model.ficsOnDevice(books)
-            // The tag menu lists every tag in the library, whatever is typed.
-            guard refreshTags else { return }
-            tags = try model.replica.bookTags()
         } catch { model.message = error.localizedDescription }
     }
 }

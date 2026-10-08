@@ -85,6 +85,7 @@ jobs:
           IOS_PROFILE: ${{ secrets.APPLE_IOS_PROFILE_BASE64 }}
           WATCH_PROFILE: ${{ secrets.APPLE_WATCH_PROFILE_BASE64 }}
           COMPLICATIONS_PROFILE: ${{ secrets.APPLE_COMPLICATIONS_PROFILE_BASE64 }}
+          SHARE_PROFILE: ${{ secrets.APPLE_SHARE_PROFILE_BASE64 }}
         run: |
           set -euo pipefail
           umask 077
@@ -92,7 +93,7 @@ jobs:
           python3 - <<'PY'
           import base64, os, pathlib
           root = pathlib.Path(os.environ['SIGNING_DIR'])
-          for name, variable in [('certificate.p12', 'CERTIFICATE'), ('ios.mobileprovision', 'IOS_PROFILE'), ('watch.mobileprovision', 'WATCH_PROFILE'), ('complications.mobileprovision', 'COMPLICATIONS_PROFILE')]:
+          for name, variable in [('certificate.p12', 'CERTIFICATE'), ('ios.mobileprovision', 'IOS_PROFILE'), ('watch.mobileprovision', 'WATCH_PROFILE'), ('complications.mobileprovision', 'COMPLICATIONS_PROFILE'), ('share.mobileprovision', 'SHARE_PROFILE')]:
               value = os.environ[variable]
               if not value:
                   raise SystemExit(f'Missing {variable} secret')
@@ -109,6 +110,7 @@ jobs:
           security cms -D -i "$SIGNING_DIR/ios.mobileprovision" > "$SIGNING_DIR/ios.plist"
           security cms -D -i "$SIGNING_DIR/watch.mobileprovision" > "$SIGNING_DIR/watch.plist"
           security cms -D -i "$SIGNING_DIR/complications.mobileprovision" > "$SIGNING_DIR/complications.plist"
+          security cms -D -i "$SIGNING_DIR/share.mobileprovision" > "$SIGNING_DIR/share.plist"
           python3 apple/tools/release.py --directory "$SIGNING_DIR" --team "$TEAM_ID" --build "$BUILD_NUMBER"
           python3 - <<'PY'
           import os, pathlib, plistlib, shutil
@@ -116,7 +118,7 @@ jobs:
           destination = pathlib.Path.home() / 'Library/Developer/Xcode/UserData/Provisioning Profiles'
           destination.mkdir(parents=True, exist_ok=True)
           installed = []
-          for name in ('ios', 'watch', 'complications'):
+          for name in ('ios', 'watch', 'complications', 'share'):
               profile = plistlib.loads((root / f'{name}.plist').read_bytes())
               target = destination / (profile['UUID'] + '.mobileprovision')
               if target.exists():

@@ -29,21 +29,21 @@ its registered App ID cannot get a distribution profile.
 | Lunaschal Watch          | `com.lunaschal.mobile.watchkitapp`         | `LunaschalWatch`        |
 | Watch face complications | `com.lunaschal.mobile.watchkitapp.widgets` | `LunaschalWatchWidgets` |
 | iPhone widgets           | `com.lunaschal.mobile.widgets`             | Not built yet           |
-| Share sheet              | `com.lunaschal.mobile.share`               | Not built yet           |
+| Share sheet              | `com.lunaschal.mobile.share`               | `LunaschalShare`        |
 
-The last two are reserved for an iPhone widget extension and a share
-extension. When one is built it needs its own App Store profile, a matching
+`com.lunaschal.mobile.widgets` is reserved for an iPhone widget extension.
+When it is built it needs its own App Store profile, a matching
 entry in `apple/tools/release.py`'s `BUNDLES` and `PROFILES`, a check in
 `apple/tools/check_archive.py`, and a secret in the release workflow, as the
-complications have.
+complications and the share sheet have.
 
 Two App Groups are registered in the team (confirmed by the user on
 2026-10-07):
 
-| Registered as   | App Group                          | Used by                                             |
-| --------------- | ---------------------------------- | --------------------------------------------------- |
-| Lunaschal Watch | `group.com.lunaschal.mobile.watch` | `LunaschalWatch` and `LunaschalWatchWidgets`        |
-| Lunaschal       | `group.com.lunaschal.mobile`       | Nothing yet; for the iPhone widgets and share sheet |
+| Registered as   | App Group                          | Used by                                      |
+| --------------- | ---------------------------------- | -------------------------------------------- |
+| Lunaschal Watch | `group.com.lunaschal.mobile.watch` | `LunaschalWatch` and `LunaschalWatchWidgets` |
+| Lunaschal       | `group.com.lunaschal.mobile`       | `Lunaschal` and `LunaschalShare`             |
 
 The Watch app and its complications extension share
 `group.com.lunaschal.mobile.watch`: the pomodoro timer and the recording status
@@ -54,11 +54,17 @@ made. A Watch profile made before the complications lacks the group and must be
 regenerated. `apple/tools/release.py` refuses a Watch or complications profile
 without it.
 
-`group.com.lunaschal.mobile` is the iPhone side's. Leave it off the iPhone
-target until something reads it: adding an entitlement means regenerating the
-iPhone profile, and a profile without it fails the archive. When the iPhone
-widgets or the share sheet are built, give that extension and the app this
-group, and teach `release.py` to require it, as it does for the Watch.
+The share extension (`LunaschalShare`, embedded in the iPhone app) imports a
+fic from a shared link. It signs in with the session the app copies into the
+**`group.com.lunaschal.mobile`** App Group (`apple/Shared/SharedSignIn.swift`),
+and links shared while the server is out of reach wait in that group's
+container for the app's next sync. So both `com.lunaschal.mobile` and
+`com.lunaschal.mobile.share` need App Groups enabled with that group selected,
+**before** their profiles are made: a profile records the capabilities its App
+ID had when it was created, so an iPhone profile made before the group was
+selected must be regenerated. `apple/tools/release.py` refuses either profile
+without the group, rather than letting it sign an extension that can only say
+"sign in first".
 
 Distribution profiles the user has created (as reported on 2026-10-07; the
 profile files themselves live only in the release environment's secrets):
@@ -68,11 +74,13 @@ profile files themselves live only in the release environment's secrets):
 | Lunaschal iOS App Store   | `com.lunaschal.mobile`             | App Store | 2027-10-03 | App Groups and HealthKit among its enabled capabilities |
 | Lunaschal Watch App Store | `com.lunaschal.mobile.watchkitapp` | App Store | 2027-10-03 | App Groups and HealthKit among its enabled capabilities |
 
-Still needed for the complications: an App Store profile for
+Still needed: an App Store profile for
 `com.lunaschal.mobile.watchkitapp.widgets` with
-`group.com.lunaschal.mobile.watch`. The portal lists a profile's capabilities
-but not which group each selects; `release.py` checks that the Watch and
-complications profiles carry that group before anything is archived. A profile can
+`group.com.lunaschal.mobile.watch`, one for `com.lunaschal.mobile.share` with
+`group.com.lunaschal.mobile`, and the iPhone profile regenerated once that
+group is selected on its App ID. The portal lists a profile's capabilities
+but not which group each selects; `release.py` checks that every profile
+carries its group before anything is archived. A profile can
 enable more capabilities than the app uses; it is the reverse that fails the
 archive. `release.py` rejects an expired profile, so regenerate these before
 2027-10-03.
@@ -123,8 +131,8 @@ secrets (base64 values must be a single unwrapped line):
 
 - `APPLE_DISTRIBUTION_P12_BASE64` and `APPLE_DISTRIBUTION_P12_PASSWORD`.
 - `APPLE_IOS_PROFILE_BASE64`, `APPLE_WATCH_PROFILE_BASE64` and
-  `APPLE_COMPLICATIONS_PROFILE_BASE64`: App Store distribution profiles using
-  the same certificate.
+  `APPLE_COMPLICATIONS_PROFILE_BASE64` and `APPLE_SHARE_PROFILE_BASE64`: App
+  Store distribution profiles using the same certificate.
 - For upload only: `APPSTORECONNECT_API_KEY_P8_BASE64`,
   `APPSTORECONNECT_KEY_ID`, and `APPSTORECONNECT_ISSUER_ID`.
 
@@ -144,7 +152,7 @@ archive, but that cannot verify your certificates, profile entitlements, export,
 or App Store Connect acceptance.
 
 Signing needs an Apple Distribution identity and App Store Connect provisioning
-profiles matching the app and Watch identifiers, or an authenticated Xcode
+profiles matching the app, Watch and share identifiers, or an authenticated Xcode
 provisioning flow that creates those assets. Distribution profiles select an
 App ID and distribution certificate. See Apple's
 [profile instructions](https://developer.apple.com/help/account/provisioning-profiles/create-an-app-store-provisioning-profile).

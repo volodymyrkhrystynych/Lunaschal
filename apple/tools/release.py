@@ -11,13 +11,17 @@ import plistlib
 import re
 
 BUNDLES = ("com.lunaschal.mobile", "com.lunaschal.mobile.watchkitapp",
-           "com.lunaschal.mobile.watchkitapp.widgets")
+           "com.lunaschal.mobile.watchkitapp.widgets", "com.lunaschal.mobile.share")
 # File stems on the runner and the xcconfig variable each profile fills, in BUNDLES order.
-PROFILES = (("ios", "IOS"), ("watch", "WATCH"), ("complications", "COMPLICATIONS"))
-# The Watch app hands its timer to the complications through this group, so a
-# profile without it archives fine and then signs an app whose face never updates.
-APP_GROUP = "group.com.lunaschal.mobile.watch"
-GROUPED = {"com.lunaschal.mobile.watchkitapp", "com.lunaschal.mobile.watchkitapp.widgets"}
+PROFILES = (("ios", "IOS"), ("watch", "WATCH"), ("complications", "COMPLICATIONS"), ("share", "SHARE"))
+# The App Group each profile must carry. The Watch app hands its timer to the
+# complications through the Watch group, and the share extension imports with
+# the session the app leaves in the iPhone group; a profile without its group
+# archives fine and then signs something that silently cannot work.
+APP_GROUPS = {"com.lunaschal.mobile": "group.com.lunaschal.mobile",
+              "com.lunaschal.mobile.share": "group.com.lunaschal.mobile",
+              "com.lunaschal.mobile.watchkitapp": "group.com.lunaschal.mobile.watch",
+              "com.lunaschal.mobile.watchkitapp.widgets": "group.com.lunaschal.mobile.watch"}
 
 
 def validate_profile(profile, team, bundle, now=None):
@@ -31,8 +35,9 @@ def validate_profile(profile, team, bundle, now=None):
             or entitlements.get("application-identifier") not in
             [f"{prefix}.{bundle}" for prefix in prefixes]):
         raise ValueError("Profile team or app identifier does not match")
-    if bundle in GROUPED and APP_GROUP not in entitlements.get("com.apple.security.application-groups", []):
-        raise ValueError(f"Profile for {bundle} lacks the {APP_GROUP} App Group")
+    group = APP_GROUPS.get(bundle)
+    if group and group not in entitlements.get("com.apple.security.application-groups", []):
+        raise ValueError(f"Profile for {bundle} lacks the {group} App Group")
     expiry = profile.get("ExpirationDate")
     if not isinstance(expiry, dt.datetime) or expiry.replace(tzinfo=dt.timezone.utc) <= now:
         raise ValueError("Profile is expired or missing expiration")
