@@ -29,10 +29,16 @@ struct PaperPreviewView: View {
         }
         .navigationTitle(paper.title).navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $editing) { page in DrawingEditor(owner: model, page: page) }
-        .task(id: model.downloadingLibrary) {
-            do { pages = try model.replica.paperPages(paperID: paper.id) }
-            catch { model.message = error.localizedDescription }
+        .task(id: model.downloadingLibrary) { await loadPages() }
+        .onChange(of: model.syncChanges) { _, changes in
+            if changes.touches(["paper_pages", "paper_native_ink"]) { Task { await loadPages() } }
         }
+    }
+
+    private func loadPages() async {
+        let id = paper.id
+        do { pages = try await model.reader.read { try $0.paperPages(paperID: id) } }
+        catch { model.message = error.localizedDescription }
     }
 
     private func openDrawing(_ page: SyncChange, native: SyncChange) {

@@ -274,7 +274,7 @@ Mac and install it on both devices without the old MacBook building the app.
 - [x] Existing password/display-code login with session token in Keychain.
 - [x] Bind the local capture store to its authenticated HTTPS server.
 - [x] Foreground automatic upload/retry with configurable cellular access.
-- [x] Read back server titles/transcripts for the most recent 30 synced captures.
+- [x] Server titles/transcripts for synced captures, from the replica rather than a request per capture.
 - [x] Local audio playback/export and explicit interrupted-recording review.
 - [x] Add optional `capturedAt` support to existing text/recording routes.
 - [x] Test restart, lost-response retry, rejected uploads, auth expiry, and retained audio.
@@ -427,7 +427,8 @@ claim that the current foreground uploader follows redirects.
 
 **Implemented scope:** 17 allowlisted collections, SQLite FTS5 search, journal
 text/title/tag update and deletion operations, explicit conflict preservation,
-and manual sync-log compaction/restore epoch rotation. See the
+sync-log compaction (nightly, after the morning briefing, 90 days) and restore
+epoch rotation, latest-version-only deltas, and a one-request status check. See the
 [protocol notes](../backend/mobile_sync/README.md). Capture manifests remain
 separate from the replica; broad feature inventory, media/drawing mutations,
 automatic maintenance, device reset, and capture-outbox migration remain open.
@@ -847,6 +848,7 @@ These are staged decisions, not reasons to pause unrelated implementation.
 | 2026-09-28 | Sync-log compaction and restore epochs                  | 41 sync/seeder tests passed                                                                                                                                                      | Maintenance commands tested on isolated databases only                                            |
 | 2026-09-29 | Native drawing recovery and Apple builds, `e71830d`     | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36503732880): 35 Linux / 36 Mac core tests, Watch build, two iPhone relaunch tests                    | Unsigned simulator validation; Pencil and paired Watch hardware unverified                        |
 | 2026-09-29 | Drawing import, `1e8b624`                               | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616): 37 Linux / 38 Mac core tests, four native import tests, two relaunch tests, Watch build | Source bytes preserved; blank imports rejected; Files-provider and Pencil hardware checks pending |
+| 2026-10-07 | Replica lock fix and incremental sync                   | 381 core tests on macOS, on both FTS5 paths (contentless, and the pre-3.43 fallback); 4,494 backend tests (sync, status check, nightly compaction included); 38 app unit and 30 UI tests in the iPhone 17 Pro simulator from a clean install; Watch build | Passed in simulator; not verified on device. Linux core run is CI's. Five backend tests fail and three WeasyPrint files crash on this Mac, identically on `main` |
 
 ### Implementation entry points
 

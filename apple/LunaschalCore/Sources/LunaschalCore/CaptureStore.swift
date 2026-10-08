@@ -6,6 +6,13 @@ import Foundation
 public final class CaptureStore {
     public let root: URL
     private let fm = FileManager.default
+    /// Each manifest as last decoded, by file name, with the modification date
+    /// it had then. `list` runs several times a sync pass and decoded every
+    /// capture the device ever made each time; now only a changed file is read.
+    /// Keyed by the file rather than invalidated by `save`, because the Watch
+    /// receipts write and remove manifests directly.
+    private var decoded: [String: (modified: Date, capture: Capture)] = [:]
+    private let lock = NSLock()
 
     public init(root: URL) throws {
         self.root = root
@@ -13,11 +20,63 @@ public final class CaptureStore {
     }
 
     public func list() throws -> [Capture] {
-        try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        lock.lock(); defer { lock.unlock() }
+        let files = try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey])
             .filter { $0.pathExtension == "json" && $0.lastPathComponent != "server.json"
                 && !$0.lastPathComponent.hasPrefix("draft") }
-            .map { try JSONDecoder().decode(Capture.self, from: Data(contentsOf: $0)) }
-            .sorted { $0.createdAt > $1.createdAt }
+        var fresh: [String: (modified: Date, capture: Capture)] = [:]
+        for file in files {
+            let modified = try file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantPast
+            if let known = decoded[file.lastPathComponent], known.modified == modified {
+                fresh[file.lastPathComponent] = known
+            } else {
+                fresh[file.lastPathComponent] = (modified, try JSONDecoder().decode(Capture.self, from: Data(contentsOf: file)))
+            }
+        }
+        decoded = fresh
+        return fresh.values.map(\.capture).sorted { $0.createdAt > $1.createdAt }
+    }
+
+    /// What the replica says about a synced capture's journal entry.
+    public enum EntryOnServer { case present, removed, unknown }
+
+    public static let removedOnServer = "Removed on server. This device still holds its original capture."
+
+    /// Settles synced journal captures against the replica's copy of their
+    /// entries, which sync already brings (they were once fetched again, one
+    /// request each, every pass). An entry deleted on another device marks its
+    /// capture, which is kept and never sent again. An entry that is there
+    /// stands in for the capture, which the feed then hides, so after a week's
+    /// grace the capture is removed: the file only made every `list` slower.
+    /// Kept regardless: meals (the feed shows them from here), anything not
+    /// synced, and a Watch recording whose receipt the Watch hasn't confirmed.
+    /// Receipt files stay, so a replayed delivery is still recognised.
+    /// Returns how many captures it changed.
+    @discardableResult
+    public func tidySynced(entry: (String) throws -> EntryOnServer, olderThan: TimeInterval = 7 * 86_400,
+                           now: Date = Date()) throws -> Int {
+        var changed = 0
+        for var capture in try list() where capture.state == .synced && capture.kind == .journal && capture.entryID == nil {
+            switch try entry(capture.snapshot?.id ?? capture.id) {
+            case .unknown: continue
+            case .removed:
+                guard capture.lastError != Self.removedOnServer else { continue }
+                capture.lastError = Self.removedOnServer
+                try save(capture)
+                changed += 1
+            case .present:
+                let origin = root.appendingPathComponent(capture.id + ".watch-origin").path
+                let confirmed = root.appendingPathComponent(capture.id + ".watch-server-confirmed").path
+                guard now.timeIntervalSince(capture.createdAt) > olderThan,
+                      !fm.fileExists(atPath: origin) || fm.fileExists(atPath: confirmed) else { continue }
+                if capture.attachmentID != nil { try? fm.removeItem(at: audioURL(capture)) }
+                for file in capture.files { try? fm.removeItem(at: fileURL(file)) }
+                for clip in capture.clips { try? fm.removeItem(at: clipURL(clip)) }
+                try fm.removeItem(at: manifest(capture.id))
+                changed += 1
+            }
+        }
+        return changed
     }
 
     public func save(_ capture: Capture) throws {

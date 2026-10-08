@@ -7,6 +7,8 @@ public final class CaptureSync {
     private let uploads: RecordingUploadStore?
     private let transfers: TransferStore?
     private let now: () -> Date
+    /// When each meal's weather was last asked for, this launch.
+    private var weatherAsked: [String: Date] = [:]
 
     public init(store: CaptureStore, uploads: RecordingUploadStore? = nil,
                 transfers: TransferStore? = nil, now: @escaping () -> Date = Date.init) {
@@ -61,30 +63,21 @@ public final class CaptureSync {
             try uploads?.discardAfterSync(try store.load(capture.id))
             try transfers?.discardAfterSync(try store.load(capture.id))
         }
-        // Read back server titles and transcripts for this device's recent
-        // captures. This is deliberately not historical library replication.
-        // A meal is not a journal entry, and asking the journal for it would
-        // read as "deleted on the server".
-        // An addition has no entry of its own to read back: its entry's
-        // replica record shows what landed.
-        // A meal's weather arrives a moment after it is saved; ask until it has some.
-        for var capture in try store.list().filter({ $0.state == .synced && $0.kind == .food && $0.entryID == nil && $0.weather == nil }).prefix(30) {
+        // A meal's weather arrives a moment after it is saved; ask until it has
+        // some, but only for a day, and no more than every ten minutes each: a
+        // meal saved with no location never gets any, and was asked about on
+        // every pass forever.
+        for var capture in try store.list().filter({ $0.state == .synced && $0.kind == .food && $0.entryID == nil && $0.weather == nil
+            && now().timeIntervalSince($0.createdAt) < 86_400 }) {
             try Task.checkCancellation()
+            if let asked = weatherAsked[capture.id], now().timeIntervalSince(asked) < 600 { continue }
+            weatherAsked[capture.id] = now()
             guard let weather = try? await transport.foodWeather(capture.id) else { continue }
             capture.weather = weather
             try store.save(capture)
         }
-        for var capture in try store.list().filter({ $0.state == .synced && $0.kind == .journal && $0.entryID == nil }).prefix(30) {
-            try Task.checkCancellation()
-            do {
-                capture.snapshot = try await transport.fetch(capture.id)
-                capture.lastError = nil
-                try store.save(capture)
-            } catch let error as HTTPFailure where error.status == 404 {
-                // Never resurrect an entry deleted on another device.
-                capture.lastError = "Removed on server. This device still holds its original capture."
-                try store.save(capture)
-            }
-        }
+        // A journal capture's title, polished text and transcripts are read from
+        // the replica's copy of its entry, which sync already brings; they used
+        // to be fetched again here, thirty requests every pass.
     }
 }

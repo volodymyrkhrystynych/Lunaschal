@@ -8,6 +8,10 @@ import SwiftUI
 struct JournalFeedView: View {
     @ObservedObject var model: CaptureModel
     @State private var query = ""
+    /// The card at the top of the screen. Held by id, so an entry arriving
+    /// above it (a sync, a capture becoming its server entry) doesn't move
+    /// what is being read.
+    @State private var anchor: String?
 
     private var searching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
@@ -15,9 +19,11 @@ struct JournalFeedView: View {
     /// addition to an entry is shown on that entry, never as one of its own.
     private var localCaptures: [Capture] {
         let onServer = Set(model.journalRecords.map(\.id) + model.foodRecords.map(\.id))
+        // Once the server's entry (or meal) is here it stands in for the
+        // capture, which shares its id, so the card keeps its place in the list.
         return model.captures.filter { capture in
             capture.entryID == nil && capture.matchesSearch(query)
-                && !(capture.state == .synced && onServer.contains(capture.snapshot?.id ?? capture.id))
+                && !onServer.contains(capture.snapshot?.id ?? capture.id)
         }
     }
 
@@ -63,7 +69,9 @@ struct JournalFeedView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
+            .scrollTargetLayout()
         }
+        .scrollPosition(id: $anchor, anchor: .top)
         .background(Color(.systemGroupedBackground))
         .overlay {
             if localCaptures.isEmpty && model.journalRecords.isEmpty && model.foodRecords.isEmpty && model.pendingEdits.isEmpty {
@@ -71,9 +79,21 @@ struct JournalFeedView: View {
             }
         }
         .navigationTitle("Journal")
+        #if DEBUG
+        .toolbar {
+            if JournalFixture.arrivalEnabled {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Arrive") { model.fixtureArrival() }.accessibilityIdentifier("fixture-arrive")
+                }
+            }
+        }
+        #endif
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search saved journal")
         .onAppear { model.searchJournal(query) }
-        .onChange(of: query) { _, value in model.searchJournal(value) }
+        .onChange(of: query) { _, value in
+            anchor = nil
+            model.searchJournal(value)
+        }
     }
 
     @ViewBuilder private func card(_ item: FeedItem) -> some View {
@@ -95,7 +115,10 @@ struct JournalFeedView: View {
             switch self {
             case .entry(let record, _): return record.id
             case .meal(let record, _): return "meal:" + record.id
-            case .capture(let capture): return "capture:" + capture.id
+            // The entry's own id: the same card before and after it syncs.
+            case .capture(let capture):
+                let id = capture.snapshot?.id ?? capture.id
+                return capture.kind == .food ? "meal:" + id : id
             }
         }
         var time: Date {
@@ -112,7 +135,8 @@ struct JournalFeedView: View {
         var id: String {
             switch self {
             case .item(let item): return item.id
-            case .event(let occurrence, let items): return "event:\(occurrence.id):\(items.first?.id ?? "")"
+            // The occurrence alone: an entry joining the run mustn't make it a new view.
+            case .event(let occurrence, _): return "event:\(occurrence.id)"
             }
         }
     }

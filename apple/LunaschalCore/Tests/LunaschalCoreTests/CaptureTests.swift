@@ -161,6 +161,7 @@ private final class FakeServer: JournalTransport {
     var loseFirstResponse = false
     var reject: [String: Int] = [:]
     var deleted = Set<String>()
+    var fetches = 0
 
     func send(_ capture: Capture, audioURL: URL?) async throws {
         attempts.append(capture.id)
@@ -173,6 +174,7 @@ private final class FakeServer: JournalTransport {
     }
 
     func fetch(_ id: String) async throws -> JournalSnapshot {
+        fetches += 1
         if deleted.contains(id) { throw HTTPFailure(status: 404) }
         return try JSONDecoder().decode(JournalSnapshot.self, from: Data("{\"id\":\"\(id)\",\"content\":\"Server transcript\",\"title\":\"A thought\"}".utf8))
     }
@@ -201,7 +203,8 @@ final class SyncTests: XCTestCase {
         XCTAssertEqual(server.received, [capture.id])
         XCTAssertEqual(server.attempts, [capture.id, capture.id])
         XCTAssertEqual(try reopened.load(capture.id).state, .synced)
-        XCTAssertEqual(try reopened.load(capture.id).snapshot?.content, "Server transcript")
+        // The entry's text comes back through the replica, not a fetch per capture.
+        XCTAssertEqual(server.fetches, 0)
         XCTAssertEqual(try Data(contentsOf: store.audioURL(capture)), bytes)
     }
 
@@ -254,6 +257,10 @@ final class SyncTests: XCTestCase {
         try await CaptureSync(store: store).run(using: server)
         XCTAssertTrue(server.attempts.isEmpty)
         XCTAssertEqual(try store.load(capture.id).state, .synced)
-        XCTAssertNotNil(try store.load(capture.id).lastError)
+        XCTAssertEqual(server.fetches, 0, "the replica says it was deleted, not a request")
+        // The replica's tombstone for the entry marks the capture, which stays.
+        XCTAssertEqual(try store.tidySynced(entry: { _ in .removed }), 1)
+        XCTAssertEqual(try store.load(capture.id).lastError, CaptureStore.removedOnServer)
+        XCTAssertEqual(try store.tidySynced(entry: { _ in .removed }), 0, "marked once")
     }
 }

@@ -41,7 +41,10 @@ struct DrawingLibraryView: View {
         }
         .navigationTitle("Drawings")
         .onAppear { reload() }
-        .onChange(of: model.syncing) { _, _ in reload() }
+        // A publication sent or answered changes what each page says about it.
+        .onChange(of: model.syncChanges) { _, changes in
+            if changes.touches([SyncChanges.drawings]) { reload() }
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { result in
             do {
                 let url = try result.get()

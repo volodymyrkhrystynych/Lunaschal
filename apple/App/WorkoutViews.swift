@@ -76,6 +76,8 @@ struct WorkoutView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .refreshable { model.requestSync(manual: true) }
+        // The server's recent workouts, when the page is shown rather than every pass.
+        .task { await model.refreshServerWorkouts() }
         .sheet(item: $rating) { session in
             RateWorkout(model: model, session: session)
         }

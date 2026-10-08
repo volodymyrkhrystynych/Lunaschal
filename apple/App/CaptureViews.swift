@@ -42,13 +42,21 @@ struct CaptureRoot: View {
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
-        .onChange(of: model.syncPasses) { _, _ in Task { await todo.refresh(); await learning.refresh() } }
+        // The Todo badge stays current, but neither list is fetched again for a
+        // pass that didn't touch it.
+        .onChange(of: model.syncChanges) { _, changes in
+            if changes.touches([SyncChanges.todos]) { Task { await todo.refresh() } }
+            if changes.full { Task { await learning.refresh() } }
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active else { model.leaveForeground(); return }
             model.resumeFicDownloads()
+            // Everything once on the way in, then one small question every
+            // 30 seconds: has the server anything new? Only what it names is pulled.
+            model.syncOnForeground()
             while !Task.isCancelled {
-                model.requestSync()
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                model.checkIn()
             }
         }
     }

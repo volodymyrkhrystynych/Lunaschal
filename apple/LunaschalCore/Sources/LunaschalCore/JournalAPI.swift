@@ -310,6 +310,19 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return try JSONDecoder().decode(SyncPage.self, from: data)
     }
 
+    public func syncStatus(cursors: [String]) async throws -> [ScopeStatus]? {
+        struct Body: Encodable { let cursors: [String] }
+        struct Reply: Decodable { let cursors: [ScopeStatus] }
+        var req = request("api/mobile/sync/status", method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(Body(cursors: cursors))
+        let (data, response) = try await session.data(for: req)
+        // A server from before the check: every scope is pulled instead.
+        if let http = response as? HTTPURLResponse, [404, 405].contains(http.statusCode) { return nil }
+        try check(data, response)
+        return try JSONDecoder().decode(Reply.self, from: data).cursors
+    }
+
     public func applyOperation(_ operation: ReplicaOperation) async throws -> OperationReply {
         var req = request("api/mobile/operations", method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -322,10 +335,15 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
 
     /// The replica collections this server can sync.
     public func syncCollections() async throws -> [String] {
-        struct Capabilities: Decodable { let collections: [String] }
+        try await serverCapabilities().collections
+    }
+
+    /// What this server's sync offers: its collections, and whether it can
+    /// answer `syncStatus` (a server from before the check can't).
+    public func serverCapabilities() async throws -> SyncCapabilities {
         let (data, response) = try await session.data(for: request("api/mobile/capabilities"))
         try check(data, response)
-        return try JSONDecoder().decode(Capabilities.self, from: data).collections
+        return try JSONDecoder().decode(SyncCapabilities.self, from: data)
     }
 
     /// A day's wake and sleep. Derived on the server from what was done that
@@ -810,5 +828,23 @@ extension JournalAPI {
         guard NewspaperIssue.isDate(date) else { throw NotebookError.invalidIssue }
         let (data, response) = try await session.data(for: request("api/newspapers/issues/\(date)/opened", method: "POST"))
         try check(data, response)
+    }
+}
+
+public struct SyncCapabilities: Decodable, Sendable {
+    public let collections: [String]
+    public let syncStatus: Bool
+
+    enum CodingKeys: String, CodingKey { case collections, syncStatus }
+
+    public init(collections: [String], syncStatus: Bool) {
+        self.collections = collections
+        self.syncStatus = syncStatus
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        collections = try c.decode([String].self, forKey: .collections)
+        syncStatus = try c.decodeIfPresent(Bool.self, forKey: .syncStatus) ?? false
     }
 }

@@ -10,9 +10,19 @@ Recursive triggers are required for replacement/cascade deletion tombstones.
 Projection changes rotate the server epoch and rebuild history during init.
 
 Bootstrap fixes a revision watermark and pages the latest version of each row
-at that watermark. Delta windows use the same immutable log. Cursors fix their
-collection set. Clients commit each batch and its cursor together. HTTP 410
-requires a new bootstrap while retaining local pending work.
+at that watermark. Delta windows use the same immutable log and the same rule:
+each record's latest version inside the window, never the versions it passed
+through on the way (a delta once sent every one, and the device wrote each only
+to keep the last). Cursors fix their collection set. Clients commit each batch
+and its cursor together. HTTP 410 requires a new bootstrap of that scope while
+retaining local pending work; other scopes' cursors are unaffected.
+
+`POST /sync/status` takes `{"cursors": [...]}` (up to 16) and answers, per
+cursor, `{"changed", "resetRequired"}` without sending any records. A device
+holds several scopes and almost always finds nothing new, so it asks this once
+instead of fetching an empty page per scope. `changed` is true partway through
+a window or when any of the scope's collections has a row past the cursor.
+Capabilities advertise it as `"syncStatus": true`.
 
 Journal update/delete operations carry a stable ULID, server epoch, and base
 revision. Mutation and durable receipt share one independent SQLite transaction.
@@ -39,18 +49,23 @@ These commands change sync metadata in the configured database. Run them only
 as part of an authorized server maintenance operation:
 
 ```sh
-python -m backend.mobile_sync compact --keep-days 30
+python -m backend.mobile_sync compact --keep-days 90
 python -m backend.mobile_sync rotate-epoch
 ```
 
 Compaction retains the latest baseline for every key (including tombstones) and
 all newer revisions. Older cursors expire explicitly. Operation receipts are
-retained, so delayed retries cannot repeat an acknowledged mutation.
+retained, so delayed retries cannot repeat an acknowledged mutation. It runs by
+itself once a day, right after the morning briefing in the briefing window
+(`backend/briefing_scheduler.py`, `SYNC_HISTORY_DAYS = 90`), and also on days
+the briefing is turned off. Ninety days because a device that hasn't synced in
+longer must bootstrap again, which for downloaded library text means a Wi-Fi
+re-download; the app starts that download itself once it sees the 410.
 
 After restoring a server database, rotate its epoch **before** accepting device
 sync. Revision comparisons alone cannot detect a restored timeline which has
-grown past an old cursor. There is no automatic restore detector or compaction
-scheduler yet. Neither command deletes domain records or media.
+grown past an old cursor. There is no automatic restore detector. Neither
+command deletes domain records or media.
 
 Run `backend/tests/test_mobile_sync.py` and `test_seed_test_db.py` after changing
 the protocol/schema. Native transaction and conflict tests live in

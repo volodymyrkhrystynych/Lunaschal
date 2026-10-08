@@ -83,7 +83,6 @@ final class WatchPipelineTests: XCTestCase {
         XCTAssertEqual(upload.fields["capturedAt"], ISO8601DateFormatter().string(from: capture.createdAt))
         XCTAssertNotNil(upload.body.range(of: audio))
         XCTAssertEqual(try phone.load(capture.id).state, .synced)
-        XCTAssertEqual(try phone.load(capture.id).snapshot?.content, server.transcript(for: mode))
         XCTAssertEqual(try phone.draft().clips.map(\.attachmentID), [draftClip.attachmentID])
 
         // Phone → Watch: the receipt, persisted on the Watch, then confirmed back.

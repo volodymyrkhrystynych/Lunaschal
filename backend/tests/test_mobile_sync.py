@@ -257,9 +257,10 @@ def test_replace_and_cascade_deletes_are_visible(client):
     db.execute('INSERT OR REPLACE INTO papers(id,title,created_at,updated_at) VALUES (?,\'replacement\',2,2)', (paper,))
     db.commit()
     delta = client.get('/api/mobile/sync', query_string={'cursor': initial['cursor']}).json['changes']
-    deleted = {row['id'] for row in delta if row['deleted']}
-    assert deleted == {paper, page}
-    assert delta[-1]['id'] == paper and delta[-1]['deleted'] is False
+    # The replace's own delete is superseded by the row it re-inserted (a delta
+    # sends each record's latest version); the cascade's delete is not.
+    assert {row['id']: row['deleted'] for row in delta} == {paper: False, page: True}
+    assert next(r for r in delta if r['id'] == paper)['data']['title'] == 'replacement'
 
 
 def test_compaction_retains_bootstrap_baseline_and_rejects_expired_cursors(client):
@@ -326,3 +327,108 @@ def test_calendar_series_and_exceptions_replicate_read_only(client):
     edit = {'id': str(ULID()), 'epoch': page['epoch'], 'collection': 'calendar_events', 'recordId': id,
             'baseRevision': page['changes'][0]['revision'], 'action': 'update', 'data': {'title': 'x'}}
     assert client.post('/api/mobile/operations', json=edit).status_code == 400
+
+
+def test_a_delta_sends_only_each_records_latest_version(client):
+    id = entry(client)
+    initial = start(client).json
+    for text in ('second', 'third', 'fourth'):
+        client.patch(f'/api/journal/{id}', json={'content': text})
+    delta = client.get('/api/mobile/sync', query_string={'cursor': initial['cursor']}).json
+    assert [(r['id'], r['data']['content']) for r in delta['changes']] == [(id, 'fourth')]
+
+
+def test_a_paged_delta_still_reaches_every_record(client):
+    ids = [entry(client, f'e{n}') for n in range(3)]
+    initial = start(client).json
+    for id in ids:
+        client.patch(f'/api/journal/{id}', json={'content': 'edited ' + id})
+    client.patch(f'/api/journal/{ids[0]}', json={'content': 'edited again'})
+    seen, cursor = {}, initial['cursor']
+    while True:
+        page = client.get('/api/mobile/sync', query_string={'cursor': cursor, 'limit': 1}).json
+        seen.update({r['id']: r['data']['content'] for r in page['changes']})
+        cursor = page['cursor']
+        if not page['hasMore']:
+            break
+    assert seen == {ids[0]: 'edited again', ids[1]: 'edited ' + ids[1], ids[2]: 'edited ' + ids[2]}
+
+
+def status(client, *cursors):
+    return client.post('/api/mobile/sync/status', json={'cursors': list(cursors)})
+
+
+def test_status_says_whether_a_scope_has_anything_new_without_sending_it(client):
+    id = entry(client)
+    journal_scope = start(client).json['cursor']
+    fics_scope = client.get('/api/mobile/sync', query_string={'collections': 'fics'}).json['cursor']
+    assert status(client, journal_scope, fics_scope).json['cursors'] == [
+        {'changed': False, 'resetRequired': False}, {'changed': False, 'resetRequired': False}]
+    client.patch(f'/api/journal/{id}', json={'content': 'edited'})
+    assert status(client, journal_scope, fics_scope).json['cursors'] == [
+        {'changed': True, 'resetRequired': False}, {'changed': False, 'resetRequired': False}]
+    caught_up = client.get('/api/mobile/sync', query_string={'cursor': journal_scope}).json['cursor']
+    assert status(client, caught_up).json['cursors'] == [{'changed': False, 'resetRequired': False}]
+
+
+def test_status_reports_a_scope_partway_through_a_window(client):
+    entry(client), entry(client)
+    partway = start(client, limit=1).json
+    assert partway['hasMore'] is True
+    assert status(client, partway['cursor']).json['cursors'] == [{'changed': True, 'resetRequired': False}]
+
+
+def test_status_reports_an_expired_or_foreign_cursor_as_needing_a_bootstrap(client):
+    from backend.mobile_sync.maintenance import compact, rotate_epoch
+    id = entry(client)
+    original = start(client).json['cursor']
+    client.patch(f'/api/journal/{id}', json={'content': 'latest'})
+    db = get_db()
+    db.execute('UPDATE mobile_sync_changes SET created_at=1')
+    db.commit()
+    compact(keep_days=1, now=200000)
+    assert status(client, original).json['cursors'] == [{'changed': True, 'resetRequired': True}]
+    fresh = start(client).json['cursor']
+    rotate_epoch()
+    assert status(client, fresh).json['cursors'] == [{'changed': True, 'resetRequired': True}]
+
+
+@pytest.mark.parametrize('body', [None, {}, {'cursors': []}, {'cursors': ['nope']}, {'cursors': ['x'] * 17}])
+def test_status_rejects_malformed_requests(client, body):
+    assert client.post('/api/mobile/sync/status', json=body).status_code == 400
+
+
+def test_capabilities_advertise_the_status_check(client):
+    assert client.get('/api/mobile/capabilities').json['syncStatus'] is True
+
+
+def test_the_morning_job_compacts_after_the_briefing_once_a_day(client, monkeypatch):
+    from datetime import datetime
+    from backend import briefing_scheduler
+    order = []
+    monkeypatch.setattr(briefing_scheduler, '_briefing_settings', lambda: (True, 4))
+    monkeypatch.setattr(briefing_scheduler, 'run_nightly', lambda: order.append('briefing'))
+    monkeypatch.setattr('backend.mobile_sync.maintenance.compact',
+                        lambda keep_days: order.append(('compact', keep_days)) or 0)
+    assert briefing_scheduler._tick(datetime(2026, 10, 8, 3, 59), None) is None
+    ran = briefing_scheduler._tick(datetime(2026, 10, 8, 4, 0), None)
+    assert order == ['briefing', ('compact', 90)]
+    assert briefing_scheduler._tick(datetime(2026, 10, 8, 4, 30), ran) == ran
+    assert order == ['briefing', ('compact', 90)], 'once a day'
+
+
+def test_compaction_runs_even_when_the_briefing_is_off_or_fails(client, monkeypatch):
+    from datetime import datetime
+    from backend import briefing_scheduler
+    compacted = []
+    monkeypatch.setattr('backend.mobile_sync.maintenance.compact',
+                        lambda keep_days: compacted.append(keep_days) or 0)
+    monkeypatch.setattr(briefing_scheduler, '_briefing_settings', lambda: (False, 4))
+    briefing_scheduler._tick(datetime(2026, 10, 8, 4, 0), None)
+
+    def explode():
+        raise RuntimeError('briefing failed')
+    monkeypatch.setattr(briefing_scheduler, '_briefing_settings', lambda: (True, 4))
+    monkeypatch.setattr(briefing_scheduler, 'run_nightly', explode)
+    briefing_scheduler._tick(datetime(2026, 10, 9, 4, 0), None)
+    assert compacted == [90, 90]
