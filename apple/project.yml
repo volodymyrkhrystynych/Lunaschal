@@ -74,13 +74,25 @@ targets:
     platform: watchOS
     sources:
       - Watch
+      - WatchShared
       - App/Recorder.swift
     dependencies:
       - package: LunaschalCore
+      - target: LunaschalWatchWidgets
+        embed: true
+    # The App Group carries the timer's state to the complications, which run
+    # in their own process. Release profiles for both bundles must include it.
+    entitlements:
+      path: Generated/Watch.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.lunaschal.mobile.watch]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile.watchkitapp
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # WatchShared/WatchIntents.swift is compiled into both Watch targets;
+        # only the app has a recorder for the recording intent to drive.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) WATCH_APP
         CURRENT_PROJECT_VERSION: 4
         MARKETING_VERSION: '1'
         TARGETED_DEVICE_FAMILY: '4'
@@ -104,6 +116,36 @@ targets:
         WKRunsIndependentlyOfCompanionApp: false
         NSMicrophoneUsageDescription: Record thoughts for your journal, even while your phone is unavailable.
         UIBackgroundModes: [audio]
+  LunaschalWatchWidgets:
+    type: app-extension
+    platform: watchOS
+    sources: [WatchWidgets, WatchShared]
+    dependencies:
+      - package: LunaschalCore
+    entitlements:
+      path: Generated/WatchWidgets.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.lunaschal.mobile.watch]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile.watchkitapp.widgets
+        CURRENT_PROJECT_VERSION: 4
+        MARKETING_VERSION: '1'
+        TARGETED_DEVICE_FAMILY: '4'
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          DEVELOPMENT_TEAM: $(APPLE_TEAM_ID)
+          CODE_SIGN_IDENTITY: $(APPLE_SIGNING_IDENTITY)
+          PROVISIONING_PROFILE_SPECIFIER: $(LUNASCHAL_COMPLICATIONS_PROFILE_UUID)
+    info:
+      path: Generated/WatchWidgets-Info.plist
+      properties:
+        CFBundleDisplayName: Lunaschal
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
   LunaschalAppTests:
     type: bundle.unit-test
     platform: iOS

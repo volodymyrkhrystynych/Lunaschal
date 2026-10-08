@@ -7,7 +7,7 @@ from check_archive import check_archive
 
 
 class CheckArchiveTests(unittest.TestCase):
-    def archive(self, version="0.1.0", build="2"):
+    def archive(self, version="0.1.0", build="2", complication_build=None):
         root = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(lambda: __import__("shutil").rmtree(root))
         app = root / "Products/Applications/Lunaschal.app"
@@ -26,7 +26,19 @@ class CheckArchiveTests(unittest.TestCase):
                 NSPrivacyAccessedAPIType="NSPrivacyAccessedAPICategoryDiskSpace",
                 NSPrivacyAccessedAPITypeReasons=["E174.1"])])
             (bundle / "PrivacyInfo.xcprivacy").write_bytes(plistlib.dumps(privacy))
+        appex = app / "Watch/LunaschalWatch.app/PlugIns/LunaschalWatchWidgets.appex"
+        appex.mkdir(parents=True)
+        (appex / "Info.plist").write_bytes(plistlib.dumps(dict(
+            CFBundleIdentifier="com.lunaschal.mobile.watchkitapp.widgets",
+            CFBundleSupportedPlatforms=["WatchOS"], CFBundleShortVersionString=version,
+            CFBundleVersion=complication_build or build,
+            NSExtension=dict(NSExtensionPointIdentifier="com.apple.widgetkit-extension"))))
+        (appex / "PrivacyInfo.xcprivacy").write_bytes(b"manifest")
         return root
+
+    def test_rejects_complications_built_with_another_number(self):
+        with self.assertRaisesRegex(ValueError, "complication versions differ"):
+            check_archive(self.archive(build="2", complication_build="1"), "2")
 
     def test_accepts_the_requested_build(self):
         check_archive(self.archive(build="1.4"), "1.4")

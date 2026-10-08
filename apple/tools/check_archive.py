@@ -1,4 +1,4 @@
-"""Check the built device archive, including the embedded Watch bundle."""
+"""Check the built device archive, including the embedded Watch bundle and its complications."""
 import pathlib
 import plistlib
 import re
@@ -36,6 +36,16 @@ def check_archive(root, build=None):
             raise ValueError("Archive is missing its reviewed privacy declarations")
     if versions[0] != versions[1]:
         raise ValueError("Phone and Watch versions differ")
+    complications = watch / "PlugIns/LunaschalWatchWidgets.appex"
+    info = plistlib.loads((complications / "Info.plist").read_bytes())
+    if (info["CFBundleIdentifier"] != "com.lunaschal.mobile.watchkitapp.widgets"
+            or info["CFBundleSupportedPlatforms"] != ["WatchOS"]
+            or info.get("NSExtension", {}).get("NSExtensionPointIdentifier") != "com.apple.widgetkit-extension"):
+        raise ValueError("Unexpected complication extension identity or platform")
+    if (info["CFBundleShortVersionString"], info["CFBundleVersion"]) != versions[1]:
+        raise ValueError("Watch and complication versions differ")
+    if not (complications / "PrivacyInfo.xcprivacy").is_file():
+        raise ValueError("Complication extension is missing its privacy manifest")
     watch_info = plistlib.loads((watch / "Info.plist").read_bytes())
     if watch_info.get("WKCompanionAppBundleIdentifier") != "com.lunaschal.mobile":
         raise ValueError("Watch companion points to another app")
