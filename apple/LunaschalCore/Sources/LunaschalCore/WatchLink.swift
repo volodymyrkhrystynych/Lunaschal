@@ -57,8 +57,14 @@ public enum WatchComplication {
     public static let recordControl = "control.record"
     public static let transcribeControl = "control.transcribe"
 
+    /// App Groups exist only on Apple platforms; on Linux (where the core's
+    /// tests also run) there is no shared container.
     public static var container: URL? {
+        #if canImport(Darwin)
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
+        #else
+        nil
+        #endif
     }
     /// The timer's state and its outbox, owned by whichever process changed it last.
     public static var pomodoroRoot: URL? { container?.appendingPathComponent("Pomodoro", isDirectory: true) }
