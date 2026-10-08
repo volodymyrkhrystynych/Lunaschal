@@ -216,8 +216,15 @@ what each device can currently do and which work remains device-only.
   holds Library, Learning and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
   Library/Folders switch. Library mode has provider pills and sorts by the site's latest
   chapter date (`latest_activity`), not the download time. Folders mode lists folders and Unsorted,
-  and each pushes its books with a Back button. Both have title/tag search, tag and
-  Favorite/Continue-reading filters, and recent/title sorting. Other saved material is grouped
+  and each pushes its books with a Back button. Both have title/tag search,
+  Favorite/Continue-reading filters, and recent/title sorting; there is no tag filter, since
+  fics carry hundreds of user tags. The toolbar's refresh calls `POST /api/fanfic/refresh-alerts`,
+  and long-pressing a site's fic calls `POST /api/fanfic/<id>/check-updates` (shallow or deep);
+  both only queue work for the server, and new chapters arrive by sync. Importing goes through
+  `POST /api/fanfic/import` from two places: the share extension (`Share/`, a link shared from
+  any app) and Settings → Library downloads → Import a fic. A link sent while the server is
+  unreachable waits in `FicImportOutbox`, in the App Group container the two share, and the
+  app's sync pass sends it. Other saved material is grouped
   under Study. Download controls remain in More → Settings → Library downloads.
   Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:
   continue bookmark, then this device's last read, then the server's, then chapter 1),

@@ -48,7 +48,17 @@ has been verified on device — in particular how a finger and a Pencil share th
 Library is books-only and switches between two views. Library picks a provider
 (site or file type) and sorts by the site's latest chapter date. Folders lists
 the desktop's folders plus Unsorted, and each opens with a Back button. Both have
-title/tag search, tag/bookmark filters and recent/title sorting. Opening a book
+title/tag search, bookmark filters and recent/title sorting (no tag filter: fics
+carry hundreds of user tags). The toolbar's refresh asks the server to read the
+forums' alerts and queue those fics; long-pressing a fic from a site queues it
+for an update, or a deep re-read of edited chapters. Both need the server, and
+the new chapters arrive with the next sync. A fic is imported by sharing its
+link to Lunaschal from Safari or any app, or by pasting it into More → Settings
+→ Library downloads → Import a fic; either way the server imports it (the three
+forums, FanFiction.net, AO3, Patreon), and a link shared while the server is
+out of reach waits and goes with the next sync. The share extension passed its
+build and archive checks only: it needs a signed build to reach the shared
+sign-in, so it is not yet verified on a device. Opening a book
 resumes it the way the desktop does (continue bookmark, then last read, then the
 first chapter). The reader's bottom-left menu takes typed or spoken commentary
 (a journal entry linked to the chapter) and Continue/Favorite bookmarks. Scrolling

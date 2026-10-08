@@ -138,6 +138,16 @@ struct LibraryCategoryView: View {
 struct LibraryDownloadSettings: View {
     private func size(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 
+    private func importFic() {
+        let text = importLink
+        Task {
+            if await model.importFic(text) { importLink = "" }
+            countWaitingImports()
+        }
+    }
+
+    private func countWaitingImports() { waitingImports = (try? model.ficImports.list().count) ?? 0 }
+
     @ObservedObject var model: CaptureModel
     @State private var confirmingRemoval = false
     @AppStorage("libraryBudgetGB") private var budget = 20
@@ -149,9 +159,44 @@ struct LibraryDownloadSettings: View {
     @AppStorage("download-paper_page_images") private var paperImages = true
     @AppStorage("download-newspaper_frontpages") private var frontpages = true
     @AppStorage("download-fics") private var pdfBooks = true
+    @State private var importLink = ""
+    @State private var waitingImports = 0
 
     var body: some View {
         List {
+            Section {
+                TextField("Link to a fic", text: $importLink)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.go)
+                    .onSubmit(importFic)
+                    .accessibilityIdentifier("fic-import-link")
+                HStack {
+                    // Borderless, or a tap anywhere in the row presses both.
+                    PasteButton(payloadType: String.self) { strings in
+                        Task { @MainActor in importLink = strings.first ?? importLink }
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .buttonStyle(.borderless)
+                    Spacer()
+                    if model.importingFic {
+                        ProgressView()
+                    } else {
+                        Button("Import", action: importFic)
+                            .buttonStyle(.borderless)
+                            .disabled(importLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                if waitingImports > 0 {
+                    Text("\(waitingImports) \(waitingImports == 1 ? "link is" : "links are") waiting for the server.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Import a fic")
+            } footer: {
+                Text("\(FicImportLink.siteNames.joined(separator: ", ")). Sharing a link to Lunaschal from Safari or another app imports it too.")
+            }
             Section {
                 Button("Download library over Wi-Fi") { model.startLibraryDownload() }
                     .disabled(model.downloadingLibrary || !model.signedIn)
@@ -186,6 +231,8 @@ struct LibraryDownloadSettings: View {
         }
         .navigationTitle("Library downloads")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear(perform: countWaitingImports)
+        .onChange(of: model.syncing) { _, _ in countWaitingImports() }
         .confirmationDialog("Remove all downloaded media copies from this device?", isPresented: $confirmingRemoval) {
             Button("Remove downloaded media", role: .destructive) { model.removeLibraryMedia() }
         } message: {

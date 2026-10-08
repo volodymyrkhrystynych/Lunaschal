@@ -25,6 +25,19 @@ The current bundle identifiers still need registration in that team:
 | --------------- | ---------------------------------- |
 | iPhone/iPad     | `com.lunaschal.mobile`             |
 | Watch companion | `com.lunaschal.mobile.watchkitapp` |
+| Share sheet     | `com.lunaschal.mobile.share`       |
+
+The share extension (`LunaschalShare`, embedded in the iPhone app) imports a
+fic from a shared link. It signs in with the session the app copies into the
+**`group.com.lunaschal.mobile`** App Group (`apple/Shared/SharedSignIn.swift`),
+and links shared while the server is out of reach wait in that group's
+container for the app's next sync. So both `com.lunaschal.mobile` and
+`com.lunaschal.mobile.share` need App Groups enabled with that group selected,
+**before** their profiles are made: a profile records the capabilities its App
+ID had when it was created, so an iPhone profile made before the group was
+selected must be regenerated. `apple/tools/release.py` refuses either profile
+without the group, rather than letting it sign an extension that can only say
+"sign in first".
 
 The iPhone App ID needs the **HealthKit** capability enabled (Certificates,
 Identifiers & Profiles → Identifiers → `com.lunaschal.mobile`), and any
@@ -71,8 +84,9 @@ variable named `APPLE_TEAM_ID` can override it. Configure these environment
 secrets (base64 values must be a single unwrapped line):
 
 - `APPLE_DISTRIBUTION_P12_BASE64` and `APPLE_DISTRIBUTION_P12_PASSWORD`.
-- `APPLE_IOS_PROFILE_BASE64` and `APPLE_WATCH_PROFILE_BASE64`: App Store
-  distribution profiles using the same certificate.
+- `APPLE_IOS_PROFILE_BASE64`, `APPLE_WATCH_PROFILE_BASE64` and
+  `APPLE_SHARE_PROFILE_BASE64`: App Store distribution profiles using the same
+  certificate.
 - For upload only: `APPSTORECONNECT_API_KEY_P8_BASE64`,
   `APPSTORECONNECT_KEY_ID`, and `APPSTORECONNECT_ISSUER_ID`.
 
@@ -92,7 +106,7 @@ archive, but that cannot verify your certificates, profile entitlements, export,
 or App Store Connect acceptance.
 
 Signing needs an Apple Distribution identity and App Store Connect provisioning
-profiles matching the app and Watch identifiers, or an authenticated Xcode
+profiles matching the app, Watch and share identifiers, or an authenticated Xcode
 provisioning flow that creates those assets. Distribution profiles select an
 App ID and distribution certificate. See Apple's
 [profile instructions](https://developer.apple.com/help/account/provisioning-profiles/create-an-app-store-provisioning-profile).

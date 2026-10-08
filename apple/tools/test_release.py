@@ -3,7 +3,7 @@ import datetime as dt
 import hashlib
 import unittest
 
-from release import BUNDLES, configuration, validate_profile
+from release import APP_GROUPS, BUNDLES, configuration, validate_profile
 
 
 class ReleaseTests(unittest.TestCase):
@@ -19,6 +19,7 @@ class ReleaseTests(unittest.TestCase):
                 "application-identifier": f"LEGACYPREF.{bundle}",
                 "com.apple.developer.team-identifier": self.team,
                 "get-task-allow": False,
+                **({"com.apple.security.application-groups": [APP_GROUPS[bundle]]} if bundle in APP_GROUPS else {}),
             }) for i, bundle in enumerate(BUNDLES)]
 
     def test_generates_target_specific_profiles_and_matching_identity(self):
@@ -26,7 +27,17 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("CURRENT_PROJECT_VERSION = 12.2\n", config)
         self.assertEqual(options["signingCertificate"], self.identity)
         self.assertEqual(options["destination"], "export")
-        self.assertNotEqual(*options["provisioningProfiles"].values())
+        self.assertEqual(len(set(options["provisioningProfiles"].values())), len(BUNDLES))
+        self.assertIn("LUNASCHAL_SHARE_PROFILE_UUID = 00000000-0000-0000-0000-000000000002\n", config)
+
+    def test_app_and_share_profiles_need_the_shared_app_group(self):
+        for index, bundle in enumerate(BUNDLES):
+            if bundle not in APP_GROUPS:
+                continue
+            profile = copy.deepcopy(self.profiles[index])
+            profile["Entitlements"]["com.apple.security.application-groups"] = ["group.other"]
+            with self.subTest(bundle=bundle), self.assertRaises(ValueError):
+                validate_profile(profile, self.team, bundle)
 
     def test_rejects_wrong_expired_and_non_distribution_profiles(self):
         mutations = [
