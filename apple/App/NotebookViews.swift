@@ -564,24 +564,35 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 
     /// Draws `region` of the markups so it fills a `size`-pixel picture.
     ///
-    /// PaperKit's `frame` is the part of the markup to draw, in the markup's
-    /// own units, not where in the picture to put it: scale and position have
-    /// to go on the context. Passed the picture's pixel rect instead, it drew
-    /// the markup unscaled from its top-left corner — so a preview showed a
-    /// corner of the page, and anything rendered wider than the page's 1240
-    /// units got its ink too small and in the wrong place.
+    /// The content itself is moved into the picture's pixels, and PaperKit
+    /// then draws a markup exactly the picture's size at one unit per pixel.
+    /// Scaling on the context instead was right in the simulator and wrong on
+    /// an iPad: there the ink came out at its own units, so a newspaper page
+    /// filed at 2000 pixels had its writing shrunk to 62% towards the top-left
+    /// corner, as if written on a smaller page. Nothing here asks PaperKit to
+    /// honour a scale, so the two can't differ.
     static func draw(_ markups: [PaperMarkup?], region: CGRect, into context: CGContext, size: CGSize) async {
         guard region.width > 0 else { return }
+        let picture = CGRect(origin: .zero, size: size)
+        let toPixels = pixelTransform(region: region, width: size.width)
         context.saveGState()
         defer { context.restoreGState() }
         // PaperKit draws in UIKit's top-left space.
         context.translateBy(x: 0, y: size.height)
         context.scaleBy(x: 1, y: -1)
-        let scale = size.width / region.width
-        context.scaleBy(x: scale, y: scale)
-        context.translateBy(x: -region.minX, y: -region.minY)
-        context.clip(to: region)
-        for case let markup? in markups { await markup.draw(in: context, frame: markup.bounds) }
+        context.clip(to: picture)
+        for case var markup? in markups {
+            markup.transformContent(toPixels)
+            var sized = PaperMarkup(bounds: picture)
+            sized.append(contentsOf: markup)
+            await sized.draw(in: context, frame: picture)
+        }
+    }
+
+    /// Canvas units in `region` to pixels of a picture `width` wide.
+    static func pixelTransform(region: CGRect, width: CGFloat) -> CGAffineTransform {
+        let scale = width / region.width
+        return CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: -region.minX * scale, ty: -region.minY * scale)
     }
 
     /// One page of the column as a picture of its own shape: the newspaper
