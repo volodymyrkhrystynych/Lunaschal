@@ -136,7 +136,8 @@ final class TransferTests: XCTestCase {
             try await CaptureSync(store: captures, transfers: transfers, now: { self.time }).run(using: transport)
             XCTFail("Obsolete completion should be ignored")
         } catch is CancellationError {}
-        XCTAssertEqual(try captures.load(capture.id), capture)
+        // Unchanged, except that the interrupted send may have landed.
+        XCTAssertEqual(try captures.load(capture.id), sent(capture))
         XCTAssertEqual(try transfers.load(capture.id), newer)
         XCTAssertEqual(newer?.state, .sending)
     }
@@ -158,7 +159,8 @@ final class TransferTests: XCTestCase {
             try await CaptureSync(store: captures, transfers: transfers, now: { self.time }).run(using: transport)
             XCTFail("Obsolete rejection should be ignored")
         } catch is CancellationError {}
-        XCTAssertEqual(try captures.load(capture.id), capture)
+        // Unchanged, except that the interrupted send may have landed.
+        XCTAssertEqual(try captures.load(capture.id), sent(capture))
         XCTAssertEqual(try transfers.load(capture.id), newer)
         XCTAssertEqual(newer?.state, .sending)
     }
@@ -173,7 +175,8 @@ final class TransferTests: XCTestCase {
         transport.error = URLError(.cancelled)
         let sync = CaptureSync(store: captures, transfers: transfers, now: { self.time })
         do { try await sync.run(using: transport); XCTFail("Expected cancellation") } catch {}
-        XCTAssertEqual(try captures.load(capture.id), capture)
+        // Unchanged, except that the interrupted send may have landed.
+        XCTAssertEqual(try captures.load(capture.id), sent(capture))
         XCTAssertEqual(try transfers.load(capture.id)?.attempts, 0)
         transport.error = nil
         try await sync.run(using: transport)
@@ -193,4 +196,11 @@ private final class RetryTransport: JournalTransport {
     func fetch(_ id: String) async throws -> JournalSnapshot {
         try JSONDecoder().decode(JournalSnapshot.self, from: Data("{\"id\":\"\(id)\",\"content\":\"Saved\"}".utf8))
     }
+}
+
+/// A capture as stored once a send of it began: possibly on the server.
+private func sent(_ capture: Capture) -> Capture {
+    var capture = capture
+    capture.mayBeOnServer = true
+    return capture
 }

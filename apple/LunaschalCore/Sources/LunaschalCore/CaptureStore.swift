@@ -121,6 +121,15 @@ public final class CaptureStore {
         try JSONEncoder().encode(capture).write(to: manifest(capture.id), options: .atomic)
     }
 
+    /// Replaces a waiting entry's words. Refused once a send may have reached
+    /// the server, where the old words would win (see `mayBeOnServer`).
+    public func editText(_ id: String, to text: String, attempt: TransferAttempt?) throws {
+        var capture = try load(id)
+        guard capture.canEditText(attempt: attempt) else { throw CaptureError.alreadySent }
+        capture.text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        try save(capture)
+    }
+
     public func load(_ id: String) throws -> Capture {
         guard ULID.isValid(id) else { throw CaptureError.invalidID }
         return try JSONDecoder().decode(Capture.self, from: Data(contentsOf: manifest(id)))
@@ -304,8 +313,9 @@ public final class CaptureStore {
         return capture
     }
 
-    /// Cancel on an edited entry: everything staged for it, bytes included.
-    public func discardDraft(for entryID: String) throws {
+    /// Cancel on an edited entry, or Discard on the composer (nil): everything
+    /// staged there, bytes included.
+    public func discardDraft(for entryID: String?) throws {
         let staged = try draft(for: entryID)
         for file in staged.files { try? fm.removeItem(at: fileURL(file)) }
         for clip in staged.clips { try? fm.removeItem(at: clipURL(clip)) }

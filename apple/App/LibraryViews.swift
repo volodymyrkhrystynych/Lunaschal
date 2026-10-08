@@ -422,13 +422,14 @@ struct JournalRecordView: View {
                     Button("Save edit on this device") { save() }.disabled(!canSave)
                     Button("Cancel", role: .cancel) { cancel() }
                 }
+                Section {
+                    Button("Delete entry", role: .destructive) { confirmingDelete = true }
+                }
             } else {
                 Text(record.data?["content"]?.string ?? "").textSelection(.enabled)
                 if let original = record.data?["rawContent"]?.string, !original.isEmpty {
                     DisclosureGroup("Original text and dictation") { Text(original).textSelection(.enabled) }
                 }
-                Button("Edit") { startEditing() }
-                Button("Delete entry", role: .destructive) { confirmingDelete = true }
                 PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
                 Section("Attachments") {
                     ForEach(attachments) { attachment in
@@ -446,14 +447,24 @@ struct JournalRecordView: View {
             }
         }
         .navigationTitle(record.title).navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !editing { ToolbarItem(placement: .primaryAction) { Button("Edit") { startEditing() } } }
+        }
         // An edit left with something staged (the app was closed mid-edit)
         // opens where it was rather than hiding the staged clips.
         .onAppear { if !editing && !staged.isEmpty { startEditing() } }
         .task(id: model.syncing) {
             attachments = (try? model.replica.relatedRecords(collection: "journal_attachments", field: "entryId", value: record.id)) ?? []
         }
-        .confirmationDialog("Delete this journal entry when the server reconnects?", isPresented: $confirmingDelete) {
-            Button("Delete entry", role: .destructive) { model.delete(record); dismiss() }
+        .alert("Delete this entry?", isPresented: $confirmingDelete) {
+            Button("Delete", role: .destructive) {
+                // Whatever was staged for it goes too: it has nowhere left to upload.
+                model.discardEdit(record.id)
+                model.delete(record); dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("It is deleted on the server the next time this device syncs. This cannot be undone.")
         }
     }
 

@@ -92,7 +92,10 @@ final class BackgroundSyncTests: XCTestCase {
         transport.resume?()
         await work?.value
         XCTAssertEqual(lease.completions, [false])
-        XCTAssertEqual(try store.load(capture.id), capture)
+        // Unchanged, except that a send cut off mid-flight may have landed.
+        var expected = capture
+        expected.mayBeOnServer = true
+        XCTAssertEqual(try store.load(capture.id), expected)
         XCTAssertEqual(try transfers.load(capture.id)?.state, .waiting)
         XCTAssertEqual(try transfers.load(capture.id)?.attempts, 0)
     }

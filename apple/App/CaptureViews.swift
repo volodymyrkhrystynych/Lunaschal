@@ -50,6 +50,7 @@ struct CaptureRoot: View {
         }
         .task(id: scenePhase) {
             guard scenePhase == .active else { model.leaveForeground(); return }
+            model.takeSharedLinks()
             model.resumeFicDownloads()
             // Everything once on the way in, then one small question every
             // 30 seconds: has the server anything new? Only what it names is pulled.
@@ -195,9 +196,10 @@ private struct CaptureComposer: View {
     // Preserve an unfinished draft across app termination: text and links
     // here, recordings, photos and files in the capture store's draft.
     @AppStorage("journalDraft") private var text = ""
-    @AppStorage("youtubeDraftLinks") private var draftLinks = ""
+    @AppStorage(CaptureModel.draftLinksKey) private var draftLinks = ""
     @AppStorage("youtubeDraftURL") private var youtubeURL = ""
     @State private var saved = false
+    @State private var confirmingDiscard = false
     @FocusState private var typing: Bool
 
     private var links: [String] { draftLinks.split(separator: "\n").map(String.init) }
@@ -209,6 +211,8 @@ private struct CaptureComposer: View {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !links.isEmpty || !model.draft.isEmpty || !typedURL.isEmpty
     }
+    /// Anything at all to lose: the draft is kept until saved or discarded.
+    private var hasDraft: Bool { !text.isEmpty || canSave }
     /// A meal needs words, a photo or a clip; YouTube links stay behind for
     /// the next journal entry, and a non-media file cannot go to the food log.
     private var canSaveFood: Bool {
@@ -233,6 +237,14 @@ private struct CaptureComposer: View {
         // however far the form has scrolled.
         .safeAreaInset(edge: .bottom) {
             HStack {
+                // Icon only, so three fit on a phone; it asks before clearing anything.
+                Button(role: .destructive) { confirmingDiscard = true } label: {
+                    Label("Discard draft", systemImage: "trash")
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.glass)
+                .disabled(!hasDraft || recorder.activeID != nil)
+                Spacer()
                 // Glass rather than a plain tint: the form scrolls under this
                 // bar, and an unblurred button prints the rows through itself.
                 Button { saveFood() } label: { Label("Save food entry", systemImage: "fork.knife") }
@@ -249,6 +261,17 @@ private struct CaptureComposer: View {
             .padding()
         }
         .onChange(of: text) { _, value in if !value.isEmpty { saved = false } }
+        .alert("Discard this draft?", isPresented: $confirmingDiscard) {
+            Button("Discard", role: .destructive) { discard() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Its text, links, recordings, photos and files are removed from this device. This cannot be undone.")
+        }
+    }
+
+    private func discard() {
+        guard model.discardComposerDraft() else { return }
+        text = ""; draftLinks = ""; youtubeURL = ""; saved = false; typing = false
     }
 
     private func save() {
@@ -294,26 +317,27 @@ struct AttachmentButtons: View {
                     Label("Stop recording", systemImage: "stop.circle.fill")
                 }
             } else {
+                // Most-used last: the right end of the row is under the thumb.
                 HStack {
-                    Button { onUse(); Task { await recorder.startClip(transcribe: true, into: entryID) } } label: {
-                        Label("Transcribe", systemImage: "mic")
-                    }.disabled(recorder.isStarting)
-                    Spacer()
-                    Button { onUse(); Task { await recorder.startClip(transcribe: false, into: entryID) } } label: {
-                        Label("Record", systemImage: "record.circle")
-                    }.disabled(recorder.isStarting)
-                    Spacer()
-                    Button { onUse(); showCamera = true } label: {
-                        Label("Take photo", systemImage: "camera")
-                    }.disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                    Button { onUse(); showFiles = true } label: {
+                        Label("Attach file", systemImage: "paperclip")
+                    }
                     Spacer()
                     PhotosPicker(selection: $photoItems, matching: .images) {
                         Label("Choose photo", systemImage: "photo.on.rectangle")
                     }
                     Spacer()
-                    Button { onUse(); showFiles = true } label: {
-                        Label("Attach file", systemImage: "paperclip")
-                    }
+                    Button { onUse(); showCamera = true } label: {
+                        Label("Take photo", systemImage: "camera")
+                    }.disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                    Spacer()
+                    Button { onUse(); Task { await recorder.startClip(transcribe: false, into: entryID) } } label: {
+                        Label("Record", systemImage: "record.circle")
+                    }.disabled(recorder.isStarting)
+                    Spacer()
+                    Button { onUse(); Task { await recorder.startClip(transcribe: true, into: entryID) } } label: {
+                        Label("Transcribe", systemImage: "mic")
+                    }.disabled(recorder.isStarting)
                 }
                 .labelStyle(.iconOnly).font(.title2)
                 // Without this a tap anywhere on the row fires every button in it.
@@ -542,66 +566,99 @@ func captureStatus(_ item: Capture) -> String {
 struct CaptureDetail: View {
     @ObservedObject var model: CaptureModel
     let id: String
+    @State private var editing = false
+    @State private var text = ""
+    @FocusState private var typing: Bool
 
     var body: some View {
         if let capture = model.captures.first(where: { $0.id == id }) {
             List {
-                Section {
-                    if capture.kind == .food { Label("Food log entry", systemImage: "fork.knife") }
-                    Text(capture.createdAt, format: .dateTime)
-                    Text(captureStatus(capture))
-                    if let error = capture.lastError { Text(error).foregroundStyle(.orange) }
-                }
-                if let snapshot = capture.snapshot, !snapshot.content.isEmpty {
-                    Section("Journal entry") { Text(snapshot.content).textSelection(.enabled) }
-                }
-                if !capture.text.isEmpty {
-                    Section("Original text") { Text(capture.text).textSelection(.enabled) }
-                }
-                if let raw = capture.snapshot?.rawContent, !raw.isEmpty, raw != capture.text {
-                    Section("Server original text") { Text(raw).textSelection(.enabled) }
-                }
-                if let transcript = capture.recordingTranscript?.transcript, !transcript.isEmpty {
-                    Section("Recording transcript") { Text(transcript).textSelection(.enabled) }
-                }
-                ForEach(capture.clips) { clip in
-                    if let url = try? model.store.clipURL(clip) {
-                        Section(clip.transcribe ? "Transcription audio" : "Recording") {
-                            AudioPreview(url: url, recordingActive: model.recorder.activeID != nil)
+                if editing {
+                    Section {
+                        TextEditor(text: $text).frame(minHeight: 240).focused($typing)
+                            .accessibilityLabel("Entry text")
+                    }
+                    Section {
+                        Button("Save edit on this device") {
+                            // Kept open on a refusal, so the words can still be copied out.
+                            if model.editText(capture, to: text) { editing = false }
                         }
+                        .disabled(text == capture.text
+                            || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                && capture.files.isEmpty && capture.clips.isEmpty))
+                        Button("Cancel", role: .cancel) { editing = false }
                     }
-                }
-                if !capture.files.isEmpty {
-                    Section("Attachments") {
-                        ForEach(capture.files) { file in StagedFileRow(model: model, file: file) }
-                    }
-                }
-                if !capture.links.isEmpty {
-                    Section(capture.links.count == 1 ? "Saved YouTube link" : "Saved YouTube links") {
-                        ForEach(capture.links, id: \.attachmentID) { link in
-                            if let url = URL(string: link.url) { Link(link.url, destination: url) }
-                        }
-                    }
-                }
-                if capture.attachmentID != nil, capture.state != .recording,
-                   let url = try? model.store.audioURL(capture) {
-                    Section("Original recording") {
-                        AudioPreview(url: url, recordingActive: model.recorder.activeID != nil)
-                        ShareLink("Export audio", item: url)
-                        if capture.mode == .transcribe {
-                            Text("Transcription: \(capture.recordingTranscript?.transcriptStatus ?? "waiting for server")")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                if capture.state == .interrupted || capture.state == .failed {
-                    Button(capture.state == .interrupted ? "Keep recovered recording and sync" : "Retry upload") {
-                        model.retry(capture)
-                    }
+                } else {
+                    details(capture)
                 }
             }
             .navigationTitle(capture.snapshot?.title ?? (capture.kind == .food ? "Meal" : "Capture"))
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                // Only while the server certainly has none of it: a re-sent
+                // entry is ignored there, so later words would be lost.
+                if !editing && model.canEditText(capture) {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Edit") { text = capture.text; editing = true; typing = true }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func details(_ capture: Capture) -> some View {
+        Section {
+            if capture.kind == .food { Label("Food log entry", systemImage: "fork.knife") }
+            Text(capture.createdAt, format: .dateTime)
+            Text(captureStatus(capture))
+            if let error = capture.lastError { Text(error).foregroundStyle(.orange) }
+        }
+        if let snapshot = capture.snapshot, !snapshot.content.isEmpty {
+            Section("Journal entry") { Text(snapshot.content).textSelection(.enabled) }
+        }
+        if !capture.text.isEmpty {
+            Section("Original text") { Text(capture.text).textSelection(.enabled) }
+        }
+        if let raw = capture.snapshot?.rawContent, !raw.isEmpty, raw != capture.text {
+            Section("Server original text") { Text(raw).textSelection(.enabled) }
+        }
+        if let transcript = capture.recordingTranscript?.transcript, !transcript.isEmpty {
+            Section("Recording transcript") { Text(transcript).textSelection(.enabled) }
+        }
+        ForEach(capture.clips) { clip in
+            if let url = try? model.store.clipURL(clip) {
+                Section(clip.transcribe ? "Transcription audio" : "Recording") {
+                    AudioPreview(url: url, recordingActive: model.recorder.activeID != nil)
+                }
+            }
+        }
+        if !capture.files.isEmpty {
+            Section("Attachments") {
+                ForEach(capture.files) { file in StagedFileRow(model: model, file: file) }
+            }
+        }
+        if !capture.links.isEmpty {
+            Section(capture.links.count == 1 ? "Saved YouTube link" : "Saved YouTube links") {
+                ForEach(capture.links, id: \.attachmentID) { link in
+                    if let url = URL(string: link.url) { Link(link.url, destination: url) }
+                }
+            }
+        }
+        if capture.attachmentID != nil, capture.state != .recording,
+           let url = try? model.store.audioURL(capture) {
+            Section("Original recording") {
+                AudioPreview(url: url, recordingActive: model.recorder.activeID != nil)
+                ShareLink("Export audio", item: url)
+                if capture.mode == .transcribe {
+                    Text("Transcription: \(capture.recordingTranscript?.transcriptStatus ?? "waiting for server")")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        if capture.state == .interrupted || capture.state == .failed {
+            Button(capture.state == .interrupted ? "Keep recovered recording and sync" : "Retry upload") {
+                model.retry(capture)
+            }
         }
     }
 }

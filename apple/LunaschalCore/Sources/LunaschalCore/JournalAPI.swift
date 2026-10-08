@@ -92,8 +92,31 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         guard files.count == capture.files.count else { throw CaptureError.missingFile }
         guard clips.count == capture.clips.count else { throw CaptureError.missingAudio }
         if capture.kind == .food { return try await sendFood(capture, files: files, clips: clips) }
-        if capture.entryID == nil { try await createEntry(capture, audioURL: audioURL) }
+        if capture.entryID == nil {
+            do { try await createEntry(capture, audioURL: audioURL) }
+            catch let error as URLError where Self.neverConnected.contains(error.code) {
+                // Still a URLError, so everything that reads one is unchanged;
+                // the mark says this failed before the entry was sent.
+                var info = error.userInfo
+                info[Self.failedBeforeSendingKey] = true
+                throw URLError(error.code, userInfo: info)
+            }
+        }
         try await sendAttachments(capture, files: files, clips: clips)
+    }
+
+    /// Failures that happen before a request is written, so the server cannot
+    /// have it. A timeout is not one: the request may have arrived.
+    static let neverConnected: Set<URLError.Code> = [
+        .notConnectedToInternet, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
+        .dataNotAllowed, .internationalRoamingOff, .secureConnectionFailed,
+    ]
+    static let failedBeforeSendingKey = "LunaschalFailedBeforeSending"
+
+    /// Whether `error` came from creating an entry that never left the device.
+    /// Only the create is marked: a later step failing proves nothing about it.
+    public static func failedBeforeSending(_ error: Error) -> Bool {
+        (error as? URLError)?.userInfo[failedBeforeSendingKey] as? Bool == true
     }
 
     /// The entry itself, with the standalone recording if it is one. An
