@@ -19,12 +19,63 @@ Reassess it if encryption implementations or dependencies change; see
 The user supplied Apple Developer Team ID **`4AG98Q33RQ`**. It is now the
 default in the Xcode project and hosted release workflow. Actual membership and
 profile ownership are verified when real distribution profiles are supplied.
-The current bundle identifiers still need registration in that team:
+These bundle identifiers are registered in that team (confirmed by the user
+on 2026-10-07). Use them as they are: a target whose identifier differs from
+its registered App ID cannot get a distribution profile.
 
-| Target          | Bundle identifier                  |
-| --------------- | ---------------------------------- |
-| iPhone/iPad     | `com.lunaschal.mobile`             |
-| Watch companion | `com.lunaschal.mobile.watchkitapp` |
+| Registered as            | Bundle identifier                          | Target in `project.yml` |
+| ------------------------ | ------------------------------------------ | ----------------------- |
+| Lunaschal                | `com.lunaschal.mobile`                     | `Lunaschal`             |
+| Lunaschal Watch          | `com.lunaschal.mobile.watchkitapp`         | `LunaschalWatch`        |
+| Watch face complications | `com.lunaschal.mobile.watchkitapp.widgets` | `LunaschalWatchWidgets` |
+| iPhone widgets           | `com.lunaschal.mobile.widgets`             | Not built yet           |
+| Share sheet              | `com.lunaschal.mobile.share`               | Not built yet           |
+
+The last two are reserved for an iPhone widget extension and a share
+extension. When one is built it needs its own App Store profile, a matching
+entry in `apple/tools/release.py`'s `BUNDLES` and `PROFILES`, a check in
+`apple/tools/check_archive.py`, and a secret in the release workflow, as the
+complications have.
+
+Two App Groups are registered in the team (confirmed by the user on
+2026-10-07):
+
+| Registered as   | App Group                          | Used by                                             |
+| --------------- | ---------------------------------- | --------------------------------------------------- |
+| Lunaschal Watch | `group.com.lunaschal.mobile.watch` | `LunaschalWatch` and `LunaschalWatchWidgets`        |
+| Lunaschal       | `group.com.lunaschal.mobile`       | Nothing yet; for the iPhone widgets and share sheet |
+
+The Watch app and its complications extension share
+`group.com.lunaschal.mobile.watch`: the pomodoro timer and the recording status
+live there, so the complications and Controls can read and start them. Enable
+App Groups on both App IDs with that group selected, and only then create their
+profiles, because a profile records the capabilities its App ID had when it was
+made. A Watch profile made before the complications lacks the group and must be
+regenerated. `apple/tools/release.py` refuses a Watch or complications profile
+without it.
+
+`group.com.lunaschal.mobile` is the iPhone side's. Leave it off the iPhone
+target until something reads it: adding an entitlement means regenerating the
+iPhone profile, and a profile without it fails the archive. When the iPhone
+widgets or the share sheet are built, give that extension and the app this
+group, and teach `release.py` to require it, as it does for the Watch.
+
+Distribution profiles the user has created (as reported on 2026-10-07; the
+profile files themselves live only in the release environment's secrets):
+
+| Profile                   | For                                | Type      | Expires    | Notes                                                   |
+| ------------------------- | ---------------------------------- | --------- | ---------- | ------------------------------------------------------- |
+| Lunaschal iOS App Store   | `com.lunaschal.mobile`             | App Store | 2027-10-03 | App Groups and HealthKit among its enabled capabilities |
+| Lunaschal Watch App Store | `com.lunaschal.mobile.watchkitapp` | App Store | 2027-10-03 | App Groups and HealthKit among its enabled capabilities |
+
+Still needed for the complications: an App Store profile for
+`com.lunaschal.mobile.watchkitapp.widgets` with
+`group.com.lunaschal.mobile.watch`. The portal lists a profile's capabilities
+but not which group each selects; `release.py` checks that the Watch and
+complications profiles carry that group before anything is archived. A profile can
+enable more capabilities than the app uses; it is the reverse that fails the
+archive. `release.py` rejects an expired profile, so regenerate these before
+2027-10-03.
 
 The Watch target's `WKCompanionAppBundleIdentifier` must continue to match the
 iPhone target. If the identifiers change, update both target settings and that
@@ -64,8 +115,9 @@ variable named `APPLE_TEAM_ID` can override it. Configure these environment
 secrets (base64 values must be a single unwrapped line):
 
 - `APPLE_DISTRIBUTION_P12_BASE64` and `APPLE_DISTRIBUTION_P12_PASSWORD`.
-- `APPLE_IOS_PROFILE_BASE64` and `APPLE_WATCH_PROFILE_BASE64`: App Store
-  distribution profiles using the same certificate.
+- `APPLE_IOS_PROFILE_BASE64`, `APPLE_WATCH_PROFILE_BASE64` and
+  `APPLE_COMPLICATIONS_PROFILE_BASE64`: App Store distribution profiles using
+  the same certificate.
 - For upload only: `APPSTORECONNECT_API_KEY_P8_BASE64`,
   `APPSTORECONNECT_KEY_ID`, and `APPSTORECONNECT_ISSUER_ID`.
 

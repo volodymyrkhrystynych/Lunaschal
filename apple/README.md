@@ -52,7 +52,7 @@ what each device can currently do and which work remains device-only.
   screen's pixel size, and only when the part it would cut matches a snapshot of
   Lunaschal's window, so a copied photo, or an older screenshot taken with the
   apps the other way round, goes in whole. For one tap, a shortcut
-  *Take Screenshot → Add Screenshot to Lunaschal Notes* run from AssistiveTouch
+  _Take Screenshot → Add Screenshot to Lunaschal Notes_ run from AssistiveTouch
   or a Full Keyboard Access command does the same in the app's process (Back Tap
   is iPhone-only); with no notebook open, its screenshot waits for the next one.
 
@@ -363,6 +363,37 @@ publicly to make CI work: simulator capture tests never contact it.
   checking the simulator without tapping. The countdown, end-of-timer choices and
   relaunch passed in the watchOS simulator; notification buttons and the
   Watch-to-phone transfer need paired devices.
+- Watch complications and Controls (`apple/WatchWidgets`, a WidgetKit
+  extension embedded in the Watch app, plus `apple/WatchShared`, compiled into
+  both). **A complication on the face cannot act without opening the app** —
+  watchOS has no interactive complications — so each one opens it and does
+  its job at once: **Focus 25** and **Timeout 10** start their timer (pressed
+  again while it runs, or while it waits for Continue / Break, they only show
+  the timer: `PomodoroTimer.press`), and **Record** and **Transcribe** start a
+  clip, or stop and save the one going. **Pomodoro** shows the run (a ring,
+  corner, inline or long), and **Lunaschal** is a row of all four buttons for
+  the long slot on the Modular faces, each its own `Link`. Taps arrive as
+  `lunaschal-watch://` URLs (`WatchLink`) through `onOpenURL`. **Controls** —
+  Control Center, the Smart Stack, the Action button — are the one place a
+  press acts without opening the app, so the same four exist there: Focus and
+  Timeout (`StartTimerIntent`; a second press calls `continueInForeground` and
+  leaves a pending link so the app opens on the timer) and Record and
+  Transcribe as toggles (`ToggleRecordingIntent`, an `AudioRecordingIntent`
+  so it runs in the app's process, where the recorder and the clips are). A
+  Control's timer intent may run in the extension's process with the app
+  asleep, so the timer's state, its outbox and the end-of-run notification
+  live in `PomodoroEngine`, over the `group.com.lunaschal.mobile.watch` App
+  Group container; a timer kept in the app's own container by an earlier
+  build moves there once. The app writes `recording.json` there for the
+  recording buttons. Without the App Group (an unsigned build) everything falls
+  back to the app's own container and the face shows idle glyphs. Debug builds
+  take `-WatchLink <url>[,<url>…]` (taps three seconds apart) since the watchOS
+  simulator cannot open URLs. Passed in the simulator: the move into the App
+  Group, the first and second Focus press, Transcribe on then off saving a
+  pending clip, and the system finding all four Controls. Needs a device: how
+  they look, whether the launcher's links are separately tappable on a face,
+  whether a Control's notification and recording start with the app asleep
+  (the recording toggle may be refused by watchOS without the app in front).
 - Settings checks the actual Foundation Models text-model and locale availability,
   including disabled/ineligible/not-ready states. Generation and local speech
   recognition remain optional later layers. Server transcription is the only

@@ -58,7 +58,7 @@ The CI equivalent is `.github/workflows/apple.yml`. Match it rather than inventi
 
 ## Things that must change together
 
-- **Bundle identifiers** live in `project.yml` (both targets, plus the Watch's `WKCompanionAppBundleIdentifier`), `tools/release.py`'s `BUNDLES` and `tools/check_archive.py`.
+- **Bundle identifiers** live in `project.yml` (every target, plus the Watch's `WKCompanionAppBundleIdentifier`), `tools/release.py`'s `BUNDLES` and `tools/check_archive.py`. **Use only the ones registered in the team, listed in [SIGNING.md](SIGNING.md)** (app, Watch, Watch complications, and the reserved iPhone-widgets and share-sheet IDs), and the same goes for App Groups: `group.com.lunaschal.mobile.watch` for the Watch side, `group.com.lunaschal.mobile` for the iPhone side. Never invent one for a new target: an unregistered ID cannot get a profile, and the release fails only after a whole archive has been built.
 - **The background task id** lives in `project.yml`'s `BGTaskSchedulerPermittedIdentifiers` and `AppDelegate.syncIdentifier`.
 - **Scope changes** go into README.md, SUPPORTED_FEATURES.md and the implementation tracker. Those documents make claims about what is and isn't verified, so keep "passed in simulator" and "verified on device" separate when updating them.
 
