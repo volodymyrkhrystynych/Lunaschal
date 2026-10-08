@@ -13,13 +13,17 @@ public struct JournalAttachmentItem: Hashable, Identifiable {
     public let importStatus: String?
     public let transcript: String?
     public let description: String?
+    /// The replica (and media) collection the row came from: a journal
+    /// attachment, or a meal's `food_media`.
+    public let collection: String
 
     public init(id: String, entryID: String, kind: String, name: String = "", mime: String = "",
                 position: Int = 0, sourceURL: String? = nil, importStatus: String? = nil,
-                transcript: String? = nil, description: String? = nil) {
+                transcript: String? = nil, description: String? = nil,
+                collection: String = "journal_attachments") {
         self.id = id; self.entryID = entryID; self.kind = kind; self.name = name; self.mime = mime
         self.position = position; self.sourceURL = sourceURL; self.importStatus = importStatus
-        self.transcript = transcript; self.description = description
+        self.transcript = transcript; self.description = description; self.collection = collection
     }
 
     public init?(record: SyncChange) {

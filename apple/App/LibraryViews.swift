@@ -149,6 +149,7 @@ struct LibraryDownloadSettings: View {
     @AppStorage("download-paper_page_images") private var paperImages = true
     @AppStorage("download-newspaper_frontpages") private var frontpages = true
     @AppStorage("download-fics") private var pdfBooks = true
+    @AppStorage("download-food_media") private var foodMedia = true
 
     var body: some View {
         List {
@@ -173,6 +174,7 @@ struct LibraryDownloadSettings: View {
             Section("Include in future downloads") {
                 Toggle("PDF books", isOn: $pdfBooks)
                 Toggle("Journal attachments", isOn: $journalMedia)
+                Toggle("Food photos and recordings", isOn: $foodMedia)
                 Toggle("Study documents", isOn: $studyMedia)
                 Toggle("Paper previews", isOn: $paperPreviews)
                 Toggle("Editable native drawings", isOn: $nativeInk)
@@ -321,28 +323,50 @@ struct JournalRecordView: View {
     @State private var editing = false
     @State private var confirmingDelete = false
     @State private var attachments: [SyncChange] = []
+    @State private var links: [String] = []
+    @State private var typedLink = ""
+    @FocusState private var typing: Bool
     @Environment(\.dismiss) private var dismiss
+
+    private var staged: CaptureDraft { model.entryDrafts[record.id] ?? CaptureDraft() }
+    private var changes: [String: JSONValue] {
+        var out: [String: JSONValue] = [:]
+        if content != record.data?["content"]?.string ?? "" { out["content"] = .string(content) }
+        if title != record.data?["title"]?.string ?? "" { out["title"] = .string(title) }
+        return out
+    }
+    private var canSave: Bool {
+        !changes.isEmpty || !staged.isEmpty || !links.isEmpty
+            || !typedLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         Form {
             if editing {
-                TextField("Title", text: $title)
-                TextEditor(text: $content).frame(minHeight: 240)
-                Button("Save edit on this device") {
-                    if model.edit(record, content: content, title: title) { dismiss() }
+                Section {
+                    TextField("Title", text: $title).focused($typing)
+                    TextEditor(text: $content).frame(minHeight: 240).focused($typing)
+                        .accessibilityLabel("Entry text")
+                    // The Capture tab's buttons: everything they make waits in
+                    // this entry's draft until Save.
+                    AttachmentButtons(model: model, recorder: model.recorder, entryID: record.id) { typing = false }
                 }
-                Button("Cancel", role: .cancel) { editing = false }
+                if !staged.isEmpty {
+                    Section("Adding") { StagedAttachmentRows(model: model, recorder: model.recorder, draft: staged) }
+                }
+                YouTubeLinksSection(model: model, links: $links, typed: $typedLink, typing: $typing)
+                Section {
+                    Button("Save edit on this device") { save() }.disabled(!canSave)
+                    Button("Cancel", role: .cancel) { cancel() }
+                }
             } else {
                 Text(record.data?["content"]?.string ?? "").textSelection(.enabled)
                 if let original = record.data?["rawContent"]?.string, !original.isEmpty {
                     DisclosureGroup("Original text and dictation") { Text(original).textSelection(.enabled) }
                 }
-                Button("Edit") {
-                    content = record.data?["content"]?.string ?? ""
-                    title = record.data?["title"]?.string ?? ""
-                    editing = true
-                }
+                Button("Edit") { startEditing() }
                 Button("Delete entry", role: .destructive) { confirmingDelete = true }
+                PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
                 Section("Attachments") {
                     ForEach(attachments) { attachment in
                         NavigationLink(attachment.data?["name"]?.string ?? "Attachment") {
@@ -359,11 +383,51 @@ struct JournalRecordView: View {
             }
         }
         .navigationTitle(record.title).navigationBarTitleDisplayMode(.inline)
-        .task {
+        // An edit left with something staged (the app was closed mid-edit)
+        // opens where it was rather than hiding the staged clips.
+        .onAppear { if !editing && !staged.isEmpty { startEditing() } }
+        .task(id: model.syncing) {
             attachments = (try? model.replica.relatedRecords(collection: "journal_attachments", field: "entryId", value: record.id)) ?? []
         }
         .confirmationDialog("Delete this journal entry when the server reconnects?", isPresented: $confirmingDelete) {
             Button("Delete entry", role: .destructive) { model.delete(record); dismiss() }
+        }
+    }
+
+    private func startEditing() {
+        content = record.data?["content"]?.string ?? ""
+        title = record.data?["title"]?.string ?? ""
+        editing = true
+    }
+
+    private func save() {
+        // A URL typed but not yet added still belongs to this edit.
+        guard YouTubeLinksSection.add(typed: $typedLink, to: $links, model: model) else { return }
+        if model.saveEdit(record, changes: changes, youtubeURLs: links) { dismiss() }
+    }
+
+    private func cancel() {
+        model.discardEdit(record.id)
+        links = []; typedLink = ""; editing = false
+    }
+}
+
+/// How many saved additions to an entry are still waiting to upload.
+struct PendingAdditionsRow: View {
+    let additions: [Capture]
+
+    var body: some View {
+        let count = additions.reduce(0) { $0 + $1.files.count + $1.clips.count + $1.links.count }
+        if count > 0 {
+            let failed = additions.contains { $0.state == .failed }
+            let text = "\(count) added \(count == 1 ? "item" : "items") "
+                + (failed ? "could not upload" : "waiting to upload")
+            Label(text, systemImage: failed ? "exclamationmark.triangle" : "arrow.up.circle")
+                .font(.footnote).foregroundStyle(failed ? .orange : .secondary)
+                // Read as the sentence, not the icon's name.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(text)
+                .accessibilityIdentifier("pending-additions")
         }
     }
 }
@@ -540,13 +604,13 @@ struct PendingEditView: View {
     var body: some View {
         List {
             Section("Your saved change") {
-                Text(edit.operation.action == "delete" ? "Delete entry" : edit.operation.data["content"]?.string ?? "Title or tags changed")
+                Text(edit.operation.action == "delete" ? "Delete entry" : Self.summary(edit.operation.data))
                     .textSelection(.enabled)
             }
             if let error = edit.error { Text(error).foregroundStyle(.orange) }
             if let current = edit.conflict {
                 Section("Server version") {
-                    Text(current.deleted ? "Deleted on server" : current.data?["content"]?.string ?? "").textSelection(.enabled)
+                    Text(current.deleted ? "Deleted on server" : current.data.map(Self.summary) ?? "").textSelection(.enabled)
                 }
             }
             if edit.state != "pending" {
@@ -560,5 +624,12 @@ struct PendingEditView: View {
                 Button("Discard my pending change", role: .destructive) { model.resolve(edit, keepLocal: false); dismiss() }
             } else { Text("This edit is saved locally and will sync when connected.") }
         }.navigationTitle("Saved edit")
+    }
+
+    /// An entry's words, or a meal's dish, place and notes.
+    static func summary(_ data: [String: JSONValue]) -> String {
+        if let content = data["content"]?.string { return content }
+        let meal = ["dish", "place", "notes"].compactMap { data[$0]?.string }.filter { !$0.isEmpty }
+        return meal.isEmpty ? "Title or tags changed" : meal.joined(separator: "\n")
     }
 }

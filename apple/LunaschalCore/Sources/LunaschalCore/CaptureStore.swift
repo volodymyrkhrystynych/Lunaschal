@@ -14,7 +14,8 @@ public final class CaptureStore {
 
     public func list() throws -> [Capture] {
         try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension == "json" && !["server.json", "draft.json"].contains($0.lastPathComponent) }
+            .filter { $0.pathExtension == "json" && $0.lastPathComponent != "server.json"
+                && !$0.lastPathComponent.hasPrefix("draft") }
             .map { try JSONDecoder().decode(Capture.self, from: Data(contentsOf: $0)) }
             .sorted { $0.createdAt > $1.createdAt }
     }
@@ -43,9 +44,18 @@ public final class CaptureStore {
             let size = try clipURL(clip).resourceValues(forKeys: [.fileSizeKey]).fileSize
             guard (size ?? 0) > 0 else { throw CaptureError.missingAudio }
         }
+        if let entryID = capture.entryID {
+            // An addition carries attachments only: the entry's words are
+            // edited through the replica, where a conflict can be seen.
+            guard ULID.isValid(entryID), capture.mode == .text, capture.text.isEmpty, capture.ficID == nil
+            else { throw CaptureError.invalidID }
+            guard !(capture.files.isEmpty && capture.clips.isEmpty && capture.links.isEmpty) else {
+                throw CaptureError.nothingToAdd
+            }
+        }
         // A photo or a clip with nothing written about it is still an entry; the
         // server accepts an empty body when it is told attachments are on the way.
-        if capture.mode == .text && capture.files.isEmpty && capture.clips.isEmpty
+        else if capture.mode == .text && capture.files.isEmpty && capture.clips.isEmpty
             && capture.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw CaptureError.emptyText
         }
@@ -77,22 +87,60 @@ public final class CaptureStore {
 
     // MARK: Draft
 
-    public func draft() throws -> CaptureDraft {
-        let url = root.appendingPathComponent("draft.json")
+    /// The Capture tab stages into `draft.json`; editing a server entry stages
+    /// into a draft of its own, named for the entry, so a half-made addition
+    /// waits on that entry and the composer's draft is never touched by it.
+    private func draftURL(_ entryID: String?) throws -> URL {
+        guard let entryID else { return root.appendingPathComponent("draft.json") }
+        guard ULID.isValid(entryID) else { throw CaptureError.invalidID }
+        return root.appendingPathComponent("draft-\(entryID).json")
+    }
+
+    /// The composer's draft, or with `entryID` the one staged for that entry.
+    public func draft(for entryID: String? = nil) throws -> CaptureDraft {
+        let url = try draftURL(entryID)
         guard fm.fileExists(atPath: url.path) else { return CaptureDraft() }
         return try JSONDecoder().decode(CaptureDraft.self, from: Data(contentsOf: url))
     }
 
-    private func updateDraft(_ change: (inout CaptureDraft) throws -> Void) throws {
-        var value = try draft()
+    /// Every entry with something staged for it, by entry id.
+    public func entryDrafts() throws -> [String: CaptureDraft] {
+        var out: [String: CaptureDraft] = [:]
+        for url in try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
+            let name = url.deletingPathExtension().lastPathComponent
+            guard url.pathExtension == "json", name.hasPrefix("draft-") else { continue }
+            let entryID = String(name.dropFirst("draft-".count))
+            guard ULID.isValid(entryID) else { continue }
+            let value = try draft(for: entryID)
+            if !value.isEmpty { out[entryID] = value }
+        }
+        return out
+    }
+
+    private func updateDraft(_ entryID: String? = nil, _ change: (inout CaptureDraft) throws -> Void) throws {
+        var value = try draft(for: entryID)
         try change(&value)
-        try JSONEncoder().encode(value).write(to: root.appendingPathComponent("draft.json"), options: .atomic)
+        let url = try draftURL(entryID)
+        // An entry's emptied draft goes away rather than lingering as a file.
+        if entryID != nil && value.isEmpty {
+            if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
+            return
+        }
+        try JSONEncoder().encode(value).write(to: url, options: .atomic)
+    }
+
+    /// The draft (nil for the composer's) holding this clip or file.
+    private func draftKey(holding attachmentID: String) throws -> String?? {
+        if try draft().holds(attachmentID) { return .some(nil) }
+        return try entryDrafts().first { $0.value.holds(attachmentID) }.map { .some($0.key) }
     }
 
     /// Copies a picked file into the draft, so it survives the picker's
     /// temporary URL going away and the app being closed before Save.
     @discardableResult
-    public func stageFile(from source: URL, name: String, contentType: String?, now: Date = Date()) throws -> CaptureFile {
+    public func stageFile(from source: URL, name: String, contentType: String?, into entryID: String? = nil,
+                          now: Date = Date()) throws -> CaptureFile {
+        _ = try draftURL(entryID)
         let file = CaptureFile(name: name, contentType: contentType, now: now)
         let destination = try fileURL(file)
         try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -101,34 +149,37 @@ public final class CaptureStore {
             try? fm.removeItem(at: destination)
             throw CaptureError.missingFile
         }
-        try updateDraft { $0.files.append(file) }
+        try updateDraft(entryID) { $0.files.append(file) }
         return file
     }
 
     @discardableResult
-    public func stageFile(data: Data, name: String, contentType: String?, now: Date = Date()) throws -> CaptureFile {
+    public func stageFile(data: Data, name: String, contentType: String?, into entryID: String? = nil,
+                          now: Date = Date()) throws -> CaptureFile {
         guard !data.isEmpty else { throw CaptureError.missingFile }
+        _ = try draftURL(entryID)
         let file = CaptureFile(name: name, contentType: contentType, now: now)
         let destination = try fileURL(file)
         try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: destination, options: .atomic)
-        try updateDraft { $0.files.append(file) }
+        try updateDraft(entryID) { $0.files.append(file) }
         return file
     }
 
     /// Records the clip in the draft before any audio is written, so a crash
     /// mid-recording still leaves a draft entry explaining whose file it is.
-    public func beginClip(transcribe: Bool, now: Date = Date()) throws -> CaptureClip {
+    public func beginClip(transcribe: Bool, into entryID: String? = nil, now: Date = Date()) throws -> CaptureClip {
         let clip = CaptureClip(transcribe: transcribe, now: now)
+        _ = try draftURL(entryID)
         try fm.createDirectory(at: clipURL(clip).deletingLastPathComponent(), withIntermediateDirectories: true)
-        try updateDraft { $0.clips.append(clip) }
+        try updateDraft(entryID) { $0.clips.append(clip) }
         return clip
     }
 
     /// A clip that captured nothing is dropped rather than kept as an empty row.
     public func finishClip(_ id: String) throws {
-        let clip = try draft().clips.first { $0.attachmentID == id }
-        guard let clip else { return }
+        guard let key = try draftKey(holding: id),
+              let clip = try draft(for: key).clips.first(where: { $0.attachmentID == id }) else { return }
         let size = (try? clipURL(clip).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? nil
         guard (size ?? 0) > 0 else {
             try discard(clip)
@@ -140,7 +191,8 @@ public final class CaptureStore {
     public func interruptClip(_ id: String) throws { try setClipState(id, .interrupted) }
 
     private func setClipState(_ id: String, _ state: CaptureClip.State) throws {
-        try updateDraft { draft in
+        guard let key = try draftKey(holding: id) else { return }
+        try updateDraft(key) { draft in
             if let index = draft.clips.firstIndex(where: { $0.attachmentID == id }) { draft.clips[index].state = state }
         }
     }
@@ -149,13 +201,15 @@ public final class CaptureStore {
     public func discardStaged(_ file: CaptureFile) throws {
         let url = try fileURL(file)
         if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
-        try updateDraft { $0.files.removeAll { $0.attachmentID == file.attachmentID } }
+        guard let key = try draftKey(holding: file.attachmentID) else { return }
+        try updateDraft(key) { $0.files.removeAll { $0.attachmentID == file.attachmentID } }
     }
 
     public func discard(_ clip: CaptureClip) throws {
         let url = try clipURL(clip)
         if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
-        try updateDraft { $0.clips.removeAll { $0.attachmentID == clip.attachmentID } }
+        guard let key = try draftKey(holding: clip.attachmentID) else { return }
+        try updateDraft(key) { $0.clips.removeAll { $0.attachmentID == clip.attachmentID } }
     }
 
     /// Save entry (or Save food entry): turns the typed text plus everything
@@ -173,6 +227,35 @@ public final class CaptureStore {
                                  clips: staged.clips, location: location, now: now)
         try updateDraft { $0 = CaptureDraft() }
         return capture
+    }
+
+    /// Save on an edited server entry: what is staged for it, plus `youtubeURLs`
+    /// (journal only), becomes one addition queued for upload under that entry,
+    /// and the entry's draft is emptied. Nil when there was nothing to add.
+    @discardableResult
+    public func commitAdditions(to entryID: String, kind: CaptureKind, youtubeURLs: [String] = [],
+                                now: Date = Date()) throws -> Capture? {
+        let staged = try draft(for: entryID)
+        let links = kind == .food ? [] : try youtubeURLs.map(YouTubeLink.canonical)
+        guard !(staged.isEmpty && links.isEmpty) else { return nil }
+        let capture = Capture(kind: kind, now: now, youtubeURLs: links, files: staged.files,
+                              clips: staged.clips, entryID: entryID)
+        try save(capture)
+        try updateDraft(entryID) { $0 = CaptureDraft() }
+        return capture
+    }
+
+    /// Cancel on an edited entry: everything staged for it, bytes included.
+    public func discardDraft(for entryID: String) throws {
+        let staged = try draft(for: entryID)
+        for file in staged.files { try? fm.removeItem(at: fileURL(file)) }
+        for clip in staged.clips { try? fm.removeItem(at: clipURL(clip)) }
+        try updateDraft(entryID) { $0 = CaptureDraft() }
+    }
+
+    /// The additions queued for one entry that have not landed yet.
+    public func pendingAdditions(to entryID: String) throws -> [Capture] {
+        try list().filter { $0.entryID == entryID && $0.state != .synced }
     }
 
     /// A journal entry made of pictures that were never staged: the iPad
@@ -234,9 +317,11 @@ public final class CaptureStore {
         }
         // A draft clip is only uploaded once Save entry is pressed, which is
         // the explicit keep; it just stays marked so the row can say so.
-        try updateDraft { draft in
-            for index in draft.clips.indices where draft.clips[index].state == .recording {
-                draft.clips[index].state = .interrupted
+        for key in [nil] + (try entryDrafts().keys.map { Optional($0) }) {
+            try updateDraft(key) { draft in
+                for index in draft.clips.indices where draft.clips[index].state == .recording {
+                    draft.clips[index].state = .interrupted
+                }
             }
         }
     }

@@ -91,6 +91,9 @@ public struct CaptureDraft: Codable, Equatable {
 
     public init() {}
     public var isEmpty: Bool { files.isEmpty && clips.isEmpty }
+    func holds(_ attachmentID: String) -> Bool {
+        files.contains { $0.attachmentID == attachmentID } || clips.contains { $0.attachmentID == attachmentID }
+    }
 }
 
 public struct Capture: Codable, Identifiable, Equatable {
@@ -117,6 +120,14 @@ public struct Capture: Codable, Identifiable, Equatable {
     /// chapter is fixed when the capture starts, not when it uploads.
     public let ficID: String?
     public let chapterID: String?
+    /// Set when this adds to an entry already on the server (opened from the
+    /// Journal and edited): its clips, links and files go up under that
+    /// entry, and no entry of its own is created. The capture keeps its own
+    /// id, so several additions to one entry are separate uploads.
+    public let entryID: String?
+
+    /// The entry everything here is filed under.
+    public var targetID: String { entryID ?? id }
 
     /// The weather to show, once the server has looked it up.
     public var entryWeather: EntryWeather? { EntryWeather.parse(weather ?? snapshot?.weather) }
@@ -140,8 +151,9 @@ public struct Capture: Codable, Identifiable, Equatable {
 
     public init(text: String = "", mode: CaptureMode = .text, kind: CaptureKind = .journal, now: Date = Date(),
                 youtubeURLs: [String] = [], files: [CaptureFile] = [], clips: [CaptureClip] = [],
-                ficID: String? = nil, chapterID: String? = nil) {
+                ficID: String? = nil, chapterID: String? = nil, entryID: String? = nil) {
         id = ULID.make(now: now)
+        self.entryID = entryID
         self.ficID = ficID
         self.chapterID = ficID == nil ? nil : chapterID
         attachmentID = mode == .text ? nil : ULID.make(now: now)
@@ -157,7 +169,7 @@ public struct Capture: Codable, Identifiable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, attachmentID, createdAt, mode, kind, text, links, files, clips, state, lastError, snapshot
-        case latitude, longitude, weather, ficID, chapterID
+        case latitude, longitude, weather, ficID, chapterID, entryID
     }
 
     // Manifests written before an entry could hold several links stored one
@@ -181,6 +193,7 @@ public struct Capture: Codable, Identifiable, Equatable {
         weather = try c.decodeIfPresent(String.self, forKey: .weather)
         ficID = try c.decodeIfPresent(String.self, forKey: .ficID)
         chapterID = try c.decodeIfPresent(String.self, forKey: .chapterID)
+        entryID = try c.decodeIfPresent(String.self, forKey: .entryID)
         files = try c.decodeIfPresent([CaptureFile].self, forKey: .files) ?? []
         clips = try c.decodeIfPresent([CaptureClip].self, forKey: .clips) ?? []
         if let links = try c.decodeIfPresent([CaptureLink].self, forKey: .links) {
@@ -252,12 +265,13 @@ public enum ULID {
 }
 
 public enum CaptureError: LocalizedError {
-    case invalidID, emptyText, missingAudio, missingFile, notFoodMedia, stillRecording, invalidServer, differentServer, invalidResponse
+    case invalidID, emptyText, nothingToAdd, missingAudio, missingFile, notFoodMedia, stillRecording, invalidServer, differentServer, invalidResponse
 
     public var errorDescription: String? {
         switch self {
         case .invalidID: return "The saved capture has an invalid identifier."
         case .emptyText: return "Write something before saving."
+        case .nothingToAdd: return "Record, photograph or attach something before saving."
         case .missingAudio: return "The recording is missing or empty. Its saved entry has been kept."
         case .missingFile: return "The attached file is missing or empty."
         case .notFoodMedia: return "A food entry can hold photos, videos and recordings only. Remove other files first."

@@ -507,8 +507,14 @@ public final class ReplicaStore {
 
     public func queue(record: SyncChange, data: [String: JSONValue], delete: Bool = false) throws -> ReplicaOperation {
         guard let epoch = try epoch else { throw ReplicaError.needsBootstrap }
-        guard record.collection == "journal_entries", !record.deleted,
-              (delete ? data.isEmpty : !data.isEmpty), Set(data.keys).isSubset(of: ["content", "title", "tags"]) else {
+        let editable: Set<String>
+        switch record.collection {
+        case "journal_entries": editable = ["content", "title", "tags"]
+        // A meal's words only, and never a delete: the server refuses both.
+        case "food_entries" where !delete: editable = FoodSync.editableFields
+        default: throw ReplicaError.invalidEdit
+        }
+        guard !record.deleted, (delete ? data.isEmpty : !data.isEmpty), Set(data.keys).isSubset(of: editable) else {
             throw ReplicaError.invalidEdit
         }
         guard !(try edits()).contains(where: { $0.operation.collection == record.collection && $0.operation.recordId == record.id }) else {
@@ -599,7 +605,7 @@ public final class ReplicaStore {
     }
 
     private func searchBody(_ data: [String: JSONValue]) -> String {
-        ["content", "rawContent", "contentText", "description", "summary", "transcript"]
+        ["content", "rawContent", "contentText", "description", "summary", "transcript", "dish", "place", "notes"]
             .compactMap { data[$0]?.string }.joined(separator: "\n")
     }
 

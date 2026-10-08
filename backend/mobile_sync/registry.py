@@ -28,6 +28,10 @@ COLLECTIONS = {
     # the template rows and their per-occurrence exceptions, not instances.
     'calendar_events': 'id title description date time end_time all_day tags category_tags repeat_freq repeat_interval repeat_byweekday repeat_until created_at',
     'calendar_event_exceptions': 'id event_id date action new_date new_time new_end_time created_at',
+    # The food log, so a meal logged anywhere can be read and added to on the
+    # phone. `generated_notes` and the weather check time are server bookkeeping.
+    'food_entries': 'id raw_content dish place notes rating tags latitude longitude weather created_at updated_at',
+    'food_media': 'id entry_id kind mime position transcript transcript_status description description_status created_at',
 }
 COLLECTIONS = {name: tuple(columns.split()) for name, columns in COLLECTIONS.items()}
 SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, 'book-metadata-v1'], sort_keys=True).encode()).hexdigest()

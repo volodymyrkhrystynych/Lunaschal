@@ -9,6 +9,8 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var captures: [Capture] = []
     /// What the Capture tab has staged (clips, photos, files) and not yet saved.
     @Published private(set) var draft = CaptureDraft()
+    /// What is staged on server entries being edited, by entry id.
+    @Published private(set) var entryDrafts: [String: CaptureDraft] = [:]
     @Published private(set) var server: URL?
     @Published private(set) var signedIn = false
     @Published private(set) var syncing = false
@@ -22,6 +24,9 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var journalCount = 0
     /// Each loaded journal entry's attachments, in the server's order.
     @Published private(set) var journalAttachments: [String: [JournalAttachmentItem]] = [:]
+    /// The food log's meals in the feed, and each one's media.
+    @Published private(set) var foodRecords: [SyncChange] = []
+    @Published private(set) var foodMedia: [String: [JournalAttachmentItem]] = [:]
     /// Calendar occurrences that can border a run of the journal feed, as on the web.
     @Published private(set) var journalOccurrences: [CalendarOccurrence] = []
     /// Series templates and their exceptions; the calendar expands them per view.
@@ -158,6 +163,7 @@ final class CaptureModel: ObservableObject {
         signedIn = token != nil
         captures = try store.list()
         draft = try store.draft()
+        entryDrafts = try store.entryDrafts()
         dailyLogs = try daily.list()
         healthStatus = healthState.status()
         workoutLogs = try workouts.list()
@@ -167,7 +173,7 @@ final class CaptureModel: ObservableObject {
         recentExercises = (try? JSONDecoder().decode([RecentExercise].self, from: Data(contentsOf: workoutCache("recent")))) ?? []
         recentWorkouts = (try? JSONDecoder().decode([WorkoutSession].self, from: Data(contentsOf: workoutCache("sessions")))) ?? []
         weather = try? JSONDecoder().decode(WeatherDay.self, from: Data(contentsOf: weatherCache))
-        pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
+        pendingEdits = try replica.edits().filter { Self.feedCollections.contains($0.operation.collection) }
         try loadJournal()
         try loadCalendar()
         refreshLibraryBytes()
@@ -249,13 +255,14 @@ final class CaptureModel: ObservableObject {
         do {
             captures = try store.list()
             draft = try store.draft()
+            entryDrafts = try store.entryDrafts()
             dailyLogs = try daily.list()
             workoutLogs = try workouts.list()
             chatRecordingQueue = try chatRecordings.list()
             todoQueue = try todoOutbox.list()
             jobQueue = try jobStore.pending()
             try loadJournal()
-            pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
+            pendingEdits = try replica.edits().filter { Self.feedCollections.contains($0.operation.collection) }
             try loadCalendar()
         } catch { message = error.localizedDescription }
     }
@@ -265,7 +272,13 @@ final class CaptureModel: ObservableObject {
         journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
         journalAttachments = JournalAttachmentItem.grouped(
             try replica.relatedRecords(collection: "journal_attachments", field: "entryId", values: journalRecords.map(\.id)))
+        foodRecords = try replica.newestRecords(collection: "food_entries", query: journalQuery, limit: journalLimit)
+        foodMedia = JournalAttachmentItem.groupedFood(
+            try replica.relatedRecords(collection: "food_media", field: "entryId", values: foodRecords.map(\.id)))
     }
+
+    /// The collections whose saved edits the Journal feed lists.
+    static let feedCollections: Set<String> = ["journal_entries", "food_entries"]
 
     /// The categorised calendar occurrences around the days the feed covers,
     /// for its borders. A search shows matches, not a day, so it has none, as
@@ -478,9 +491,10 @@ final class CaptureModel: ObservableObject {
     func journalMediaFile(_ item: JournalAttachmentItem, thumbnail: Bool = false) async -> URL? {
         // A WebM clip downloaded with the library is the original, which the
         // phone cannot play; the server's AAC copy is fetched instead.
-        let playable = !thumbnail && item.media == .audio && !item.phonePlayable
+        // A meal's media has no converted copy to ask for.
+        let playable = !thumbnail && item.media == .audio && !item.phonePlayable && item.collection != "food_media"
         if !thumbnail, !playable,
-           let saved = try? media.downloaded(collection: "journal_attachments", id: item.id) { return saved }
+           let saved = try? media.downloaded(collection: item.collection, id: item.id) { return saved }
         let name = item.id + (thumbnail ? ".poster" : playable ? ".m4a" : "")
         let file = journalMediaRoot.appendingPathComponent(name)
         if FileManager.default.fileExists(atPath: file.path) { return file }
@@ -488,7 +502,7 @@ final class CaptureModel: ObservableObject {
         guard let api = chatAPI() else { return nil }
         let fetch = Task<URL?, Never> {
             do {
-                try await api.downloadJournalAttachment(item.id, thumbnail: thumbnail, playable: playable, to: file)
+                try await api.downloadAttachment(item, thumbnail: thumbnail, playable: playable, to: file)
                 return file
             } catch { return nil }
         }
@@ -511,11 +525,11 @@ final class CaptureModel: ObservableObject {
             guard let file = await journalMediaFile(item) else { return nil }
             return player(file, mime: item.playerMIME)
         }
-        if item.media == .video, let saved = try? media.downloaded(collection: "journal_attachments", id: item.id) {
+        if item.media == .video, let saved = try? media.downloaded(collection: item.collection, id: item.id) {
             return player(saved, mime: item.mime)
         }
         guard signedIn, let server, let token, let api = chatAPI(),
-              let url = try? api.journalAttachmentURL(item.id),
+              let url = try? api.attachmentURL(item),
               let cookie = HTTPCookie(properties: [.name: "lunaschal_token", .value: token,
                                                    .domain: server.host ?? "", .path: "/"]) else { return nil }
         return player(url, mime: item.playerMIME,
@@ -800,8 +814,14 @@ final class CaptureModel: ObservableObject {
                 ])
             }
             // Its own scope, so a server without it never fails the journal's sync.
+            let serverCollections = try await api.syncCollections()
+            try await timed("food log") {
+                if FoodSync.supported(by: serverCollections) {
+                    try await replicaSyncer.run(using: api, collections: FoodSync.collections)
+                }
+            }
             try await timed("calendar") {
-                if CalendarSync.supported(by: try await api.syncCollections()) {
+                if CalendarSync.supported(by: serverCollections) {
                     try await replicaSyncer.run(using: api, collections: CalendarSync.collections, sendEdits: false)
                     await refreshSleep(DayKey.of(Date()))
                 }
@@ -1056,6 +1076,41 @@ final class CaptureModel: ObservableObject {
             _ = try replica.queue(record: record, data: ["content": .string(content), "title": .string(title)])
             reload(); requestSync(); return true
         } catch { message = error.localizedDescription; return false }
+    }
+
+    /// Save on an edited server entry (a journal entry or a meal): the changed
+    /// words go to the replica's outbox, revision-checked, and whatever was
+    /// recorded, photographed or attached goes up under the entry. `changes`
+    /// holds only the fields that differ from the record. A recording still
+    /// running is stopped into the entry's draft first.
+    func saveEdit(_ record: SyncChange, changes: [String: JSONValue], youtubeURLs: [String] = []) -> Bool {
+        if recorder.activeID != nil { recorder.stop() }
+        let kind: CaptureKind = record.collection == "food_entries" ? .food : .journal
+        do {
+            // Checked before anything is written, so a refused addition never
+            // leaves the words queued without it, or the reverse.
+            if !changes.isEmpty, try replica.edits().contains(where: {
+                $0.operation.collection == record.collection && $0.operation.recordId == record.id
+            }) { throw ReplicaError.editAlreadyPending }
+            if kind == .food, try !store.draft(for: record.id).files.allSatisfy(\.isFoodMedia) {
+                throw CaptureError.notFoodMedia
+            }
+            try store.commitAdditions(to: record.id, kind: kind, youtubeURLs: youtubeURLs)
+            if !changes.isEmpty { _ = try replica.queue(record: record, data: changes) }
+            reload(); requestSync(); return true
+        } catch { message = error.localizedDescription; reload(); return false }
+    }
+
+    /// Cancel on an edited entry: drops what was staged for it.
+    func discardEdit(_ entryID: String) {
+        if recorder.activeID != nil { recorder.stop() }
+        do { try store.discardDraft(for: entryID) } catch { message = error.localizedDescription }
+        reload()
+    }
+
+    /// What this device has queued to add to `entryID` and not yet uploaded.
+    func pendingAdditions(to entryID: String) -> [Capture] {
+        captures.filter { $0.entryID == entryID && $0.state != .synced }
     }
 
     func delete(_ record: SyncChange) {

@@ -908,6 +908,72 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Fixture later"].waitForExistence(timeout: 5), "an entry still opens")
     }
 
+    /// Editing a server entry offers the Capture tab's buttons, and what they
+    /// make is saved with the edit, queued under that entry, never into the
+    /// composer's draft. A meal's editor offers them too, without YouTube.
+    func testEditingAnEntryOrMealOffersTheCaptureButtons() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-journalFeedFixture")
+        app.launch()
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        pages.buttons["Journal"].tap()
+
+        let later = app.staticTexts["Fixture later"]
+        XCTAssertTrue(later.waitForExistence(timeout: 10))
+        later.tap()
+        XCTAssertTrue(app.navigationBars["Fixture later"].waitForExistence(timeout: 5))
+        app.buttons["Edit"].tap()
+        let names = ["Transcribe", "Record", "Take photo", "Choose photo", "Attach file"]
+        let first = app.buttons[names[0]]
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        for name in names {
+            XCTAssertTrue(app.buttons[name].exists, name)
+            XCTAssertEqual(app.buttons[name].frame.midY, first.frame.midY, accuracy: 4, "\(name) sits in the same line")
+        }
+        XCTAssertTrue(app.textFields["YouTube video URL"].exists)
+        let save = app.buttons["Save edit on this device"]
+        XCTAssertFalse(save.isEnabled, "nothing changed yet")
+
+        app.buttons["Choose photo"].tap()
+        let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
+        guard photo.waitForExistence(timeout: 30) else { return XCTFail("Photo picker did not open") }
+        photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let done = app.buttons["Done"]
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"),
+                                                                      object: done)], timeout: 5) == .completed)
+        done.tap()
+        XCTAssertTrue(app.staticTexts["Adding"].waitForExistence(timeout: 60), "the photo waits in this edit")
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        XCTAssertTrue(app.navigationBars["Journal"].waitForExistence(timeout: 5) || pages.waitForExistence(timeout: 5))
+        let waiting = app.descendants(matching: .any).matching(identifier: "pending-additions").firstMatch
+        XCTAssertTrue(waiting.waitForExistence(timeout: 10), "the feed says the photo is on its way")
+        XCTAssertTrue(waiting.label.hasSuffix("waiting to upload"), waiting.label)
+
+        let meal = app.staticTexts["Fixture ramen"]
+        for _ in 0..<6 where !meal.isHittable {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -150)))
+        }
+        XCTAssertTrue(meal.waitForExistence(timeout: 5))
+        meal.tap()
+        XCTAssertTrue(app.navigationBars["Fixture ramen"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Rich broth."].exists)
+        app.buttons["Edit"].tap()
+        XCTAssertTrue(app.textFields["Dish"].waitForExistence(timeout: 5))
+        for name in names { XCTAssertTrue(app.buttons[name].exists, "meal: \(name)") }
+        XCTAssertFalse(app.textFields["YouTube video URL"].exists, "a meal takes no links")
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5))
+
+        // The composer's own draft was never touched.
+        selectTab(app, "Capture")
+        XCTAssertTrue(app.buttons["Transcribe"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Attachments"].exists)
+    }
+
     func testYouTubeLinksAttachToTheEntryAndSaveStaysPinned() {
         let app = XCUIApplication()
         app.launch()

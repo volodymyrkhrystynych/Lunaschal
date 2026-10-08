@@ -41,6 +41,7 @@ public struct SyncChange: Codable, Equatable, Identifiable {
             let label = [data?["paper"]?.string, data?["date"]?.string].compactMap { $0 }.joined(separator: " · ")
             return label.isEmpty ? "Front page" : label
         }
+        if collection == "food_entries" { return data?["dish"]?.string ?? "Meal" }
         return data?["title"]?.string ?? data?["name"]?.string ?? data?["content"]?.string ?? collection
     }
 }

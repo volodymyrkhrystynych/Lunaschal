@@ -4,6 +4,7 @@ import mimetypes
 from functools import lru_cache
 from pathlib import Path
 
+from backend.food import storage as food
 from backend.journal import storage as journal
 from backend.paper import storage as paper
 from backend.study import storage as study
@@ -30,6 +31,7 @@ MEDIA = {
     'study_sources': ('file_path', study.resolve_stored_path),
     'newspaper_frontpages': ('image_path', newspapers.resolve_stored_path),
     'fics': ('id', _fic_pdf_path),
+    'food_media': ('path', food.resolve_stored_path),
 }
 
 
