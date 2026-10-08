@@ -821,8 +821,8 @@ final class CaptureModel: ObservableObject {
             }
             try await timed("health") { try await syncHealth(using: api) }
             // Once per device, after everything else has synced: never at launch,
-            // where building them on a large library outlasted the watchdog.
-            try await timed("lookup indexes") { try await replicaSyncer.buildIndexes() }
+            // where building the indexes on a large library outlasted the watchdog.
+            try await timed("replica upkeep") { try await replicaSyncer.maintain() }
             // Anything ticked off while this pass was busy uploading.
             try await timed("to-dos") { try await sendTodoChanges(using: api) }
             let retry = try transfers.all().compactMap(\.retryAt).min()

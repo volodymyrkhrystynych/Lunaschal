@@ -38,10 +38,10 @@ public actor ReplicaSync {
         }
     }
 
-    /// Builds the replica's lookup indexes on this worker's connection, off
-    /// the UI thread and after launch. A no-op once they exist.
-    public func buildIndexes() throws {
-        try store.buildIndexes { !Task.isCancelled }
+    /// The replica's one-time upgrade work (`ReplicaStore.maintain`) on this
+    /// worker's connection, off the UI thread and after launch. A no-op once done.
+    public func maintain() throws {
+        try store.maintain { !Task.isCancelled }
     }
 
     public func run(using transport: ReplicaTransport, collections: [String], sendEdits: Bool = true) async throws {
