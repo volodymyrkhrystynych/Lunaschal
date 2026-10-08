@@ -137,6 +137,20 @@ targets:
         CURRENT_PROJECT_VERSION: 4
         MARKETING_VERSION: '1'
         TARGETED_DEVICE_FAMILY: '4'
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          DEVELOPMENT_TEAM: $(APPLE_TEAM_ID)
+          CODE_SIGN_IDENTITY: $(APPLE_SIGNING_IDENTITY)
+          PROVISIONING_PROFILE_SPECIFIER: $(LUNASCHAL_COMPLICATIONS_PROFILE_UUID)
+    info:
+      path: Generated/WatchWidgets-Info.plist
+      properties:
+        CFBundleDisplayName: Lunaschal
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
   LunaschalShare:
     type: app-extension
     platform: iOS
@@ -175,20 +189,6 @@ targets:
               NSExtensionActivationSupportsWebURLWithMaxCount: 1
               NSExtensionActivationSupportsWebPageWithMaxCount: 1
               NSExtensionActivationSupportsText: true
-      configs:
-        Release:
-          CODE_SIGN_STYLE: Manual
-          DEVELOPMENT_TEAM: $(APPLE_TEAM_ID)
-          CODE_SIGN_IDENTITY: $(APPLE_SIGNING_IDENTITY)
-          PROVISIONING_PROFILE_SPECIFIER: $(LUNASCHAL_COMPLICATIONS_PROFILE_UUID)
-    info:
-      path: Generated/WatchWidgets-Info.plist
-      properties:
-        CFBundleDisplayName: Lunaschal
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.widgetkit-extension
   LunaschalAppTests:
     type: bundle.unit-test
     platform: iOS

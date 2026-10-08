@@ -337,8 +337,7 @@ final class CaptureModel: ObservableObject {
     static let feedCollections: Set<String> = ["journal_entries", "food_entries"]
 
     /// What a sync pass has to touch for the Journal feed to read again.
-    static let feedScope: Set<String> = ["journal_entries", "journal_attachments"]
-        .union(FoodSync.collections)
+    static let feedScope = Set(["journal_entries", "journal_attachments"] + FoodSync.collections)
 
     /// The categorised calendar occurrences around the days the feed covers,
     /// for its borders. A search shows matches, not a day, so it has none, as

@@ -65,4 +65,4 @@ def check_archive(root, build=None):
 
 if __name__ == "__main__":
     check_archive(pathlib.Path(sys.argv[1]), sys.argv[2] if len(sys.argv) > 2 else None)
-    print("Device archive contains matching phone/Watch/share bundles, assets, and privacy manifests.")
+    print("Device archive contains matching phone, Watch, complication and share bundles, assets, and privacy manifests.")
