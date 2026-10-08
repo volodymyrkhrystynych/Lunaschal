@@ -116,8 +116,8 @@ what each device can currently do and which work remains device-only.
   (`backend/weather/entry.py`, woken by each save) looks the weather up for the
   entry's own place and capture hour, so an entry saved offline still gets the
   weather from when it was written. The Journal list shows it on server entries
-  (from the replica) and on this device's captures (read back after upload; meals
-  through `GET /api/food/<id>`).
+  (from the replica) and on meals (asked through `GET /api/food/<id>` for a day
+  after saving, at most every ten minutes).
 - Offline typed journal entries. On the phone, **Transcribe** and **Record**
   add clips to the Capture tab's draft; stopping keeps the clip there, and
   only **Save entry** turns the draft into one entry. Clips upload through the
@@ -257,8 +257,11 @@ what each device can currently do and which work remains device-only.
   audio lives beside them. A separate SQLite replica stores server records,
   full-text search, sync cursors, and revision-checked journal edits.
 - Stable client ULIDs, original capture timestamps, sequential retry-safe
-  uploads, server acknowledgement validation, and read-back of titles and
-  transcripts for the 30 most recent synced captures on this device.
+  uploads and server acknowledgement validation. A synced capture's title and
+  transcripts come from the replica's copy of its entry, not a request per
+  capture; once that entry has been in the replica for a week the capture file
+  is removed (meals and unconfirmed Watch recordings are kept). An entry deleted
+  on another device marks its capture instead, which is never sent again.
 - Persistent recording upload bodies with destination/identity checks and
   SHA-256 verification. Retries reuse the same multipart file and boundary;
   missing or damaged staging is rebuilt from retained audio before sending.
@@ -273,8 +276,14 @@ what each device can currently do and which work remains device-only.
   local session token and retains captures and that binding.
 - Cellular text/audio sync enabled by default with a per-device switch. Turning
   it off cancels an in-flight sync; subsequent requests prohibit cellular and
-  expensive-network access. The app checks for work every 30 seconds while
-  active. Capture upload failures use persisted exponential backoff from 30
+  expensive-network access. Coming to the foreground (and Sync, and a
+  background task) runs a full pass. While active, a local change syncs a
+  second after the last tap, and every 30 seconds one `POST
+  /api/mobile/sync/status` asks whether any replica scope has news; only the
+  scopes it names are pulled, and outboxes with nothing waiting make no
+  request. Screens fetched rather than replicated (To-do, Daily, Workout
+  history, sleep) refresh when shown or after their own changes upload. One
+  long-lived connection per network setting is reused across passes. Capture upload failures use persisted exponential backoff from 30
   seconds to 30 minutes; Sync retries waiting uploads immediately. Authentication
   failures pause uploads until login, and a capture-specific 4xx rejection
   requires Retry upload. Interrupted foreground attempts recover at the next

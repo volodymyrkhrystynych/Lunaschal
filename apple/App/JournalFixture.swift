@@ -18,6 +18,23 @@ enum JournalFixture {
     static let clip = "01K6ZZZZZZZZZZZZZZZZZZZZ04"
     static let video = "01K6ZZZZZZZZZZZZZZZZZZZZ05"
     static let event = "01K6ZZZZZZZZZZZZZZZZZZZZ06"
+    /// With `-journalFeedArrival` too: thirty older entries to scroll through,
+    /// and a button that brings a new entry in above them all, as a sync would.
+    static let arrivalArgument = "-journalFeedArrival"
+    static let arrival = "01K6ZZZZZZZZZZZZZZZZZZZZ07"
+    static var arrivalEnabled: Bool { ProcessInfo.processInfo.arguments.contains(arrivalArgument) }
+
+    /// The newest entry, as one delta page.
+    static func arrivalPage() throws -> SyncPage {
+        let page: [String: Any] = [
+            "protocolVersion": 1, "epoch": epoch, "mode": "delta", "hasMore": false, "cursor": "arrival",
+            "collections": ["journal_entries"],
+            "changes": [["revision": 2, "collection": "journal_entries", "id": arrival, "deleted": false,
+                         "data": ["id": arrival, "title": "Fixture arrival", "content": "Just synced.",
+                                  "createdAt": ISO8601DateFormatter().string(from: Date())]]],
+        ]
+        return try JSONDecoder().decode(SyncPage.self, from: JSONSerialization.data(withJSONObject: page))
+    }
 
     static func seedIfAsked(root: URL) throws {
         guard ProcessInfo.processInfo.arguments.contains(argument) else { return }
@@ -51,7 +68,11 @@ enum JournalFixture {
             change("calendar_events", event, ["title": "Walk by the river", "date": date, "time": time,
                                               "endTime": endTime, "allDay": 0, "repeatInterval": 1,
                                               "categoryTags": "[\"outside\",\"exercise\"]"]),
-        ]
+        ] + (arrivalEnabled ? (10..<40).map { n in
+            change("journal_entries", "01K6ZZZZZZZZZZZZZZZZZZZY\(n)",
+                   ["title": "Filler \(n - 9)", "content": "An older entry to scroll past.",
+                    "createdAt": iso.string(from: now.addingTimeInterval(-Double(n) * 6 * 3600))])
+        } : [])
         let page: [String: Any] = ["protocolVersion": 1, "epoch": epoch, "mode": "bootstrap", "changes": changes,
                                    "hasMore": false, "cursor": "fixture",
                                    "collections": ["journal_entries", "journal_attachments", "calendar_events"]]

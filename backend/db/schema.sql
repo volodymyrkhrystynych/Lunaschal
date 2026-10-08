@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS mobile_sync_changes (
 );
 CREATE INDEX IF NOT EXISTS idx_mobile_sync_record
     ON mobile_sync_changes(collection, record_id, sequence);
+-- A device's scopes are read by collection and sequence: a delta page, and the
+-- status check that asks whether a scope has anything past its cursor.
+CREATE INDEX IF NOT EXISTS idx_mobile_sync_collection
+    ON mobile_sync_changes(collection, sequence);
 -- Operation identity and acknowledgement are committed with the domain write.
 CREATE TABLE IF NOT EXISTS mobile_sync_operations (
     id TEXT PRIMARY KEY,

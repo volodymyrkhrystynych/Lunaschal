@@ -6,7 +6,7 @@ from ulid import ULID
 from .feed import database
 
 
-def compact(*, keep_days=30, now=None):
+def compact(*, keep_days=90, now=None):
     if type(keep_days) is not int or keep_days < 1:
         raise ValueError('keep_days must be a positive integer')
     cutoff_time = int(time.time() if now is None else now) - keep_days * 86400

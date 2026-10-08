@@ -42,7 +42,13 @@ struct TodoView: View {
             todo.capture.requestSync(manual: true)
             await todo.refresh()
         }
-        .task { await todo.refresh() }
+        // Fresh while it's on screen; a pass that touches to-dos refreshes it too.
+        .task {
+            while !Task.isCancelled {
+                await todo.refresh()
+                do { try await Task.sleep(for: .seconds(120)) } catch { return }
+            }
+        }
         .sheet(isPresented: $creating) {
             TodoEditor(heading: "New to-do", draft: TodoDraft()) { todo.create($0) }
         }

@@ -60,6 +60,7 @@ struct LibraryCategoryView: View {
     @State private var records: [SyncChange] = []
     @State private var limit = 50
     @State private var count = 0
+    @State private var loads = 0
 
     var body: some View {
         List {
@@ -87,7 +88,7 @@ struct LibraryCategoryView: View {
                 }
             }
             if records.count < count {
-                Button("Load more (\(records.count) of \(count))") { limit += 50; refresh() }
+                Button("Load more (\(records.count) of \(count))") { limit += 50; Task { await refresh() } }
             }
             if category == .newspapers {
                 Text("Front-page images only. Complete newspaper PDFs and annotations are not available here yet.")
@@ -98,14 +99,17 @@ struct LibraryCategoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "Search \(category.rawValue.lowercased())")
-        .task(id: model.downloadingLibrary) { refresh() }
-        .onChange(of: model.syncing) { _, syncing in if !syncing { refresh() } }
+        .task(id: model.downloadingLibrary) { await refresh() }
+        .onChange(of: model.syncChanges) { _, changes in
+            if changes.touches([category.collection]) { Task { await refresh() } }
+        }
         .onChange(of: query) { _, _ in limit = 50 }
         .task(id: query) {
-            guard !query.isEmpty else { return refresh() }
-            try? await Task.sleep(nanoseconds: BookListView.typingPause)
-            guard !Task.isCancelled else { return }
-            refresh()
+            if !query.isEmpty {
+                try? await Task.sleep(nanoseconds: BookListView.typingPause)
+                guard !Task.isCancelled else { return }
+            }
+            await refresh()
         }
     }
 
@@ -127,10 +131,18 @@ struct LibraryCategoryView: View {
         }
     }
 
-    private func refresh() {
+    /// Reads and decodes off the main thread; an older read finishing after
+    /// a newer one (typing) is dropped.
+    private func refresh() async {
+        loads += 1
+        let load = loads, collection = category.collection, query = query, limit = limit
         do {
-            records = try model.replica.records(collection: category.collection, query: query, limit: limit)
-            count = try model.replica.count(collection: category.collection, query: query)
+            let (found, total) = try await model.reader.read { store in
+                (try store.records(collection: collection, query: query, limit: limit),
+                 try store.count(collection: collection, query: query))
+            }
+            guard load == loads else { return }
+            records = found; count = total
         } catch { model.message = error.localizedDescription }
     }
 }
@@ -257,7 +269,7 @@ struct BookView: View {
                             }
                             .swipeActions {
                                 Button("Remove", role: .destructive) {
-                                    do { try model.replica.deleteBookmark(bookmark); refreshChapters(); model.requestSync() }
+                                    do { try model.replica.deleteBookmark(bookmark); Task { await refreshChapters() }; model.requestSync() }
                                     catch { model.message = error.localizedDescription }
                                 }.disabled(bookmarkEdits.contains {
                                     $0.operation.recordId == bookmark.id ||
@@ -277,7 +289,7 @@ struct BookView: View {
                         Text(edit.state == "pending" ? "Bookmark saved on device · Waiting to sync" : edit.error ?? "Bookmark needs review")
                         if edit.state != "pending" {
                             Button("Keep server version and discard this pending change", role: .destructive) {
-                                do { try model.replica.resolve(edit, keepLocal: false); refreshChapters() }
+                                do { try model.replica.resolve(edit, keepLocal: false); Task { await refreshChapters() } }
                                 catch { model.message = error.localizedDescription }
                             }
                         }
@@ -291,23 +303,27 @@ struct BookView: View {
             }
         }
         .navigationTitle(book.title)
-        .task(id: model.downloadingLibrary) { refreshChapters() }
-        .onChange(of: model.ficDownloadRevision) { _, _ in refreshChapters() }
+        .task(id: model.downloadingLibrary) { await refreshChapters() }
+        .onChange(of: model.ficDownloadRevision) { _, _ in Task { await refreshChapters() } }
         .onAppear {
             do { try model.replica.markBookOpened(book.id) }
             catch { model.message = error.localizedDescription }
-            refreshChapters()
             model.ensureFicOnDevice(book)
         }
-        .onChange(of: model.syncing) { _, syncing in if !syncing { refreshChapters() } }
+        .onChange(of: model.syncChanges) { _, changes in
+            if changes.touches(["fics", "fic_chapters", "fic_bookmarks"]) { Task { await refreshChapters() } }
+        }
     }
 
-    private func refreshChapters() {
+    /// The chapter list, resume point and bookmarks, read off the main thread.
+    private func refreshChapters() async {
+        let id = book.id
         do {
-            chapters = try model.replica.chapterOutline(bookID: book.id)
-            resume = try model.replica.resumePoint(bookID: book.id)
-            bookmarks = try model.replica.bookmarks(bookID: book.id)
-            bookmarkEdits = try model.replica.bookmarkEdits(bookID: book.id)
+            let loaded = try await model.reader.read { store in
+                (try store.chapterOutline(bookID: id), try store.resumePoint(bookID: id),
+                 try store.bookmarks(bookID: id), try store.bookmarkEdits(bookID: id))
+            }
+            (chapters, resume, bookmarks, bookmarkEdits) = loaded
             onDevice = model.isFicOnDevice(book)
         } catch { model.message = error.localizedDescription }
     }

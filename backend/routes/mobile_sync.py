@@ -2,7 +2,7 @@ import json
 
 from flask import Blueprint, jsonify, request, send_file
 
-from backend.mobile_sync.feed import PROTOCOL_VERSION, ResetRequired, page
+from backend.mobile_sync.feed import PROTOCOL_VERSION, ResetRequired, page, status
 from backend.mobile_sync.registry import COLLECTIONS
 from backend.mobile_sync.operations import apply
 from backend.mobile_sync import media
@@ -18,7 +18,7 @@ def capabilities():
                     'captureTimestamp': True, 'maxPageSize': 200,
                     'editableCollections': ['journal_entries', 'fic_bookmarks'],
                     'mediaCollections': list(media.MEDIA), 'nativeDrawingFormat': 'pencilkit-v1',
-                    'ficDownload': True})
+                    'ficDownload': True, 'syncStatus': True})
 
 
 @bp.post('/drawings')
@@ -100,5 +100,14 @@ def sync():
         return jsonify(result)
     except ResetRequired as exc:
         return jsonify({'error': str(exc), 'resetRequired': True}), 410
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+
+@bp.post('/sync/status')
+def sync_status():
+    body = request.get_json(silent=True)
+    try:
+        return jsonify({'cursors': status(body.get('cursors') if isinstance(body, dict) else None)})
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400

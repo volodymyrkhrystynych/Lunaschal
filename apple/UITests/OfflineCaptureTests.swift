@@ -851,6 +851,38 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Original text"].exists)
     }
 
+    /// An entry a sync brings in above where the reader is doesn't move what
+    /// they're reading: the feed holds its place by the card at the top.
+    func testAnEntryArrivingAboveKeepsTheFeedWhereItWas() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-journalFeedFixture", "-journalFeedArrival"]
+        app.launch()
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        pages.buttons["Journal"].tap()
+        XCTAssertTrue(app.staticTexts["Fixture later"].waitForExistence(timeout: 10))
+
+        // Down among the older entries; whichever is on screen is the one being read.
+        app.swipeUp(); app.swipeUp()
+        let filler = NSPredicate(format: "label BEGINSWITH 'Filler '")
+        let onScreen = app.staticTexts.matching(filler).allElementsBoundByIndex.filter { $0.isHittable }
+        XCTAssertGreaterThan(onScreen.count, 1, "scrolled down to the older entries")
+        guard onScreen.count > 1 else { return }
+        let reading = app.staticTexts[onScreen[1].label]
+        let before = reading.frame.minY
+
+        app.buttons["fixture-arrive"].tap()
+        // Give the reload time to land and lay out.
+        let moved = NSPredicate(format: "frame.minY != %f", before)
+        _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: moved, object: reading)], timeout: 3)
+        XCTAssertEqual(reading.frame.minY, before, accuracy: 2, "the card being read stayed put")
+
+        // And the entry really did arrive, at the top.
+        for _ in 0..<10 where !app.staticTexts["Fixture arrival"].exists { app.swipeDown() }
+        XCTAssertTrue(app.staticTexts["Fixture arrival"].exists)
+    }
+
     /// The feed reads like the desktop's: the event's border around what was
     /// written during it, and the entry's photo, clip and video on its card.
     func testJournalFeedShowsMediaInsideTheCalendarBorder() {

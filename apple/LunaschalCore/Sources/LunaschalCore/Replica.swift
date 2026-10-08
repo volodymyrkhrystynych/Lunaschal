@@ -1,6 +1,6 @@
 import Foundation
 
-public enum JSONValue: Codable, Equatable {
+public enum JSONValue: Codable, Equatable, Sendable {
     case null, bool(Bool), number(Double), string(String), array([JSONValue]), object([String: JSONValue])
 
     public init(from decoder: Decoder) throws {
@@ -29,7 +29,7 @@ public enum JSONValue: Codable, Equatable {
     public var number: Double? { if case .number(let value) = self { return value }; return nil }
 }
 
-public struct SyncChange: Codable, Equatable, Identifiable {
+public struct SyncChange: Codable, Equatable, Identifiable, Sendable {
     public let revision: Int64
     public let collection: String
     public let id: String

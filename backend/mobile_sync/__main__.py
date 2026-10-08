@@ -9,7 +9,7 @@ def main():
     subcommands = parser.add_subparsers(dest='command', required=True)
     subcommands.add_parser('rotate-epoch', help='Invalidate device cursors after a database restore')
     cleanup = subcommands.add_parser('compact', help='Retain latest records and recent changes')
-    cleanup.add_argument('--keep-days', type=int, default=30)
+    cleanup.add_argument('--keep-days', type=int, default=90)
     args = parser.parse_args()
     if args.command == 'rotate-epoch':
         print(f'Sync epoch: {rotate_epoch()}')
