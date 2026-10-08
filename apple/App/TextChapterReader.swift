@@ -13,7 +13,13 @@ struct TextChapterReader: View {
     @State private var chapters: [SyncChange] = []
     @State private var position: Int?
     @State private var version = ""
-    @State private var status = "Reading position stays on this device."
+    @State private var blocks: [ChapterBlock] = []
+    /// A moment's confirmation above the menu button ("Continue point saved
+    /// here"), gone again after a few seconds; nothing sits there otherwise.
+    @State private var status: String?
+    @State private var statusClear: Task<Void, Never>?
+    /// Points, kept on this device only, like the reading position.
+    @AppStorage("readerTextSize") private var textSize = ReaderTextSize.standard
     @State private var fraction = 0.0
     @State private var userScrolling = false
     @State private var spans = ReadingSpanState()
@@ -33,20 +39,36 @@ struct TextChapterReader: View {
         _pendingFraction = State(initialValue: initialFraction)
     }
 
-    private var paragraphs: [String] {
-        (current.data?["contentText"]?.string ?? "").components(separatedBy: "\n\n")
-    }
-
     private var index: Int? { chapters.firstIndex { $0.id == current.id } }
 
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 16) {
-                ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, text in
-                    Text(text).font(.system(.body, design: .serif)).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading).id(index)
+    var body: some View { lifecycle(chrome) }
+
+    private var chrome: some View {
+        page
+        // Floating rather than in a bar, so the text runs to the bottom edge.
+        .overlay(alignment: .bottomLeading) { floatingControls }
+        .navigationTitle(current.title).navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { textSizeMenu }
+            if let book {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink { BookView(model: owner, book: book) } label: {
+                        Label("Chapters", systemImage: "list.bullet")
+                    }
                 }
-                chapterButtons.padding(.vertical, 24)
+            }
+        }
+    }
+
+    private var page: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: textSize * 0.85) {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                    ChapterBlockView(block: block, size: textSize).id(index)
+                }
+                chapterButtons.padding(.top, 24)
+                    // Clear of the menu button, which floats over the bottom left.
+                    .padding(.bottom, 80)
             }
             .scrollTargetLayout()
             .frame(maxWidth: 760, alignment: .leading).padding()
@@ -68,29 +90,31 @@ struct TextChapterReader: View {
             fraction = value
             if userScrolling { recordScroll(value) }
         }
-        .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 10) {
-                readerMenu
-                Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var floatingControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let status {
+                Text(status).font(.caption).lineLimit(2)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule())
+                    .transition(.opacity)
             }
-            .padding(.horizontal).padding(.vertical, 6)
-            .background(.bar)
+            readerMenu
         }
-        .navigationTitle(current.title).navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if let book {
-                NavigationLink { BookView(model: owner, book: book) } label: {
-                    Label("Chapters", systemImage: "list.bullet")
-                }
-            }
-        }
+        .padding(.horizontal).padding(.bottom, 8)
+        .animation(.default, value: status)
+    }
+
+    /// Sheets, loading and saving: what the reader does around the page.
+    private func lifecycle<Content: View>(_ content: Content) -> some View {
+        content
         .sheet(item: $sheet) { which in
             switch which {
             case .text:
                 CommentaryTextSheet(chapterTitle: current.title) { text in
                     guard let ficID, owner.saveCommentary(text, ficID: ficID, chapterID: current.id) else { return false }
-                    status = "Commentary saved · Goes to the journal when connected"
+                    show("Commentary saved · Goes to the journal when connected")
                     return true
                 }
             case .transcribe:
@@ -98,7 +122,7 @@ struct TextChapterReader: View {
                     guard let ficID else { return }
                     await owner.startCommentaryRecording(ficID: ficID, chapterID: current.id)
                 } onSaved: {
-                    status = "Recording saved · The transcript arrives in the journal"
+                    show("Recording saved · The transcript arrives in the journal")
                 }
             }
         }
@@ -111,7 +135,7 @@ struct TextChapterReader: View {
             if let due = spans.takeFlush(now: now, force: true) { owner.queueReading(.span(due)) }
         }
         .onChange(of: position) { _, value in
-            guard let value, !version.isEmpty, paragraphs.indices.contains(value) else { return }
+            guard let value, !version.isEmpty, blocks.indices.contains(value) else { return }
             // At most once a second while scrolling, and on the way out: each
             // save is a disk-flushed write on the UI thread, and one per
             // paragraph made scrolling wait on any download writing meanwhile.
@@ -122,6 +146,34 @@ struct TextChapterReader: View {
                 guard !Task.isCancelled else { return }
                 savePosition()
             }
+        }
+    }
+
+    private var textSizeMenu: some View {
+        Menu {
+            Button("Larger text", systemImage: "textformat.size.larger") { textSize = ReaderTextSize.larger(textSize) }
+                .disabled(textSize >= ReaderTextSize.range.upperBound)
+                .accessibilityIdentifier("reader-text-larger")
+            Button("Smaller text", systemImage: "textformat.size.smaller") { textSize = ReaderTextSize.smaller(textSize) }
+                .disabled(textSize <= ReaderTextSize.range.lowerBound)
+                .accessibilityIdentifier("reader-text-smaller")
+            Button("Default size", systemImage: "arrow.counterclockwise") { textSize = ReaderTextSize.standard }
+                .disabled(textSize == ReaderTextSize.standard)
+        } label: {
+            Label("Text size", systemImage: "textformat.size")
+        }
+        .menuActionDismissBehavior(.disabled)
+        .accessibilityIdentifier("reader-text-size")
+        .accessibilityValue("\(Int(textSize)) points")
+    }
+
+    private func show(_ message: String) {
+        status = message
+        statusClear?.cancel()
+        statusClear = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            status = nil
         }
     }
 
@@ -166,19 +218,23 @@ struct TextChapterReader: View {
                let whole = try store.record(collection: "fic_chapters", id: current.id), !whole.deleted {
                 current = whole
             }
+            blocks = ChapterText.blocks(html: current.data?["contentHtml"]?.string,
+                                        text: current.data?["contentText"]?.string)
             if let ficID {
                 if book == nil { book = try store.record(collection: "fics", id: ficID) }
                 if chapters.isEmpty { chapters = try store.chapterOutline(bookID: ficID) }
                 // The desktop's last-read pointer, so it resumes here too.
                 owner.queueReading(.progress(ficId: ficID, chapterId: current.id))
             }
-            version = "\(try store.epoch ?? "unknown"):\(current.revision)"
+            // "b": positions count formatted blocks now, not the old plain-text
+            // paragraphs, so a position saved before means nothing here.
+            version = "\(try store.epoch ?? "unknown"):\(current.revision):b"
             let saved = try store.readingPosition(collection: "fic_chapters", id: current.id, version: version) ?? 0
             if let fraction = pendingFraction, fraction.isFinite {
-                position = Int((min(1, max(0, fraction)) * Double(max(0, paragraphs.count - 1))).rounded())
-            } else { position = paragraphs.indices.contains(saved) ? saved : 0 }
+                position = Int((min(1, max(0, fraction)) * Double(max(0, blocks.count - 1))).rounded())
+            } else { position = blocks.indices.contains(saved) ? saved : 0 }
             pendingFraction = nil
-        } catch { status = "Could not restore reading position: \(error.localizedDescription)" }
+        } catch { show("Could not restore reading position: \(error.localizedDescription)") }
     }
 
     private func move(to chapter: SyncChange) {
@@ -196,7 +252,7 @@ struct TextChapterReader: View {
         do {
             try store.saveReadingPosition(collection: "fic_chapters", id: chapterID, version: version,
                                           offset: offset, bookID: bookID)
-        } catch { status = "Could not save reading position: \(error.localizedDescription)" }
+        } catch { show("Could not save reading position: \(error.localizedDescription)") }
     }
 
     private func recordScroll(_ value: Double) {
@@ -215,14 +271,88 @@ struct TextChapterReader: View {
     private func bookmark(_ type: String) {
         do {
             try store.queueBookmark(chapter: current, type: type, fraction: min(1, max(0, fraction)))
-            status = type == "continue"
+            show(type == "continue"
                 ? "Continue point saved here · Syncs when connected"
-                : "Bookmarked · Syncs when connected"
+                : "Bookmarked · Syncs when connected")
             owner.requestSync()
         } catch ReplicaError.editAlreadyPending {
             // Only a favorite: a new continue point replaces one still waiting to sync.
             owner.message = "This chapter's bookmark is already waiting to sync."
         } catch { owner.message = error.localizedDescription }
+    }
+}
+
+/// The reader's text size in points: one setting for every book, saved on
+/// this device.
+enum ReaderTextSize {
+    static let standard = 19.0
+    static let range = 13.0...35.0
+    static let step = 2.0
+    static func larger(_ size: Double) -> Double { min(range.upperBound, size + step) }
+    static func smaller(_ size: Double) -> Double { max(range.lowerBound, size - step) }
+}
+
+/// One formatted block of a chapter: its italics, bold and links kept, quotes
+/// indented with a bar, scene breaks centred.
+private struct ChapterBlockView: View {
+    let block: ChapterBlock
+    let size: Double
+
+    var body: some View {
+        content
+            .padding(.leading, CGFloat(block.quoteDepth) * 16)
+            .overlay(alignment: .leading) {
+                if block.quoteDepth > 0 {
+                    Rectangle().fill(.tertiary).frame(width: 3)
+                        .padding(.leading, CGFloat(block.quoteDepth - 1) * 16)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch block.kind {
+        case .rule:
+            Divider().padding(.vertical, size * 0.5)
+        case .sceneBreak:
+            Text(block.text).font(.system(size: size, design: .serif)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, size * 0.4)
+        case .heading(let level):
+            text.font(.system(size: size * (level <= 2 ? 1.4 : 1.15), weight: .bold, design: .serif))
+                .padding(.top, size * 0.5)
+        case .listItem(let marker):
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(marker).font(.system(size: size, design: .serif)).foregroundStyle(.secondary)
+                text.font(.system(size: size, design: .serif)).lineSpacing(size * 0.3)
+            }
+            .padding(.leading, 8)
+        case .preformatted:
+            text.font(.system(size: size * 0.85, design: .monospaced))
+        case .paragraph:
+            text.font(.system(size: size, design: .serif)).lineSpacing(size * 0.3)
+        }
+    }
+
+    private var text: some View {
+        Text(attributed).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var attributed: AttributedString {
+        var out = AttributedString()
+        for run in block.runs {
+            var piece = AttributedString(run.text)
+            var intent: InlinePresentationIntent = []
+            if run.style.contains(.bold) { intent.insert(.stronglyEmphasized) }
+            if run.style.contains(.italic) { intent.insert(.emphasized) }
+            if run.style.contains(.strikethrough) { intent.insert(.strikethrough) }
+            if run.style.contains(.code) { intent.insert(.code) }
+            if !intent.isEmpty { piece.inlinePresentationIntent = intent }
+            if run.style.contains(.underline) { piece.underlineStyle = .single }
+            if run.style.contains(.small) { piece.font = .system(size: size * 0.8, design: .serif) }
+            if let link = run.link, let url = URL(string: link) { piece.link = url }
+            out += piece
+        }
+        return out
     }
 }
 
