@@ -36,7 +36,10 @@ struct ChatView: View {
         }
         // Polls only while the tab is on screen, quickly while a reply is running.
         .task { await chat.poll() }
-        .onChange(of: capture.syncPasses) { _, _ in Task { await chat.refresh() } }
+        // A voice message just uploaded, or a conversation that changed on the server.
+        .onChange(of: capture.syncChanges) { _, changes in
+            if changes.touches([SyncChanges.chat, "conversations", "messages"]) { Task { await chat.refresh() } }
+        }
     }
 }
 

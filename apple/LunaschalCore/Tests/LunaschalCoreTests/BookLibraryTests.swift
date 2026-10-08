@@ -206,11 +206,11 @@ final class BookLibraryTests: XCTestCase {
         try apply([book] + (0..<3).map { chapter(book, position: $0) }, to: store)
         // Opening never builds them: on a large library that outlasted the
         // launch watchdog. Lookups work without them, only slower.
-        XCTAssertEqual(try store.missingIndexes().count, ReplicaStore.relatedFields.count)
+        XCTAssertEqual(try store.missingIndexes().count, ReplicaStore.indexes.count)
         XCTAssertEqual(try store.relatedCount(collection: "fic_chapters", field: "ficId", value: book.id), 3)
         var asked = 0
         try store.buildIndexes { asked += 1; return asked <= 2 }
-        XCTAssertEqual(try store.missingIndexes().count, ReplicaStore.relatedFields.count - 2, "each one built is kept")
+        XCTAssertEqual(try store.missingIndexes().count, ReplicaStore.indexes.count - 2, "each one built is kept")
         try store.buildIndexes()
         XCTAssertEqual(try store.missingIndexes(), [])
         for field in ReplicaStore.relatedFields {

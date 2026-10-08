@@ -130,8 +130,8 @@ final class ReplicaTests: XCTestCase {
         store = nil
         var connection: OpaquePointer?
         XCTAssertEqual(sqlite3_open(url.path, &connection), SQLITE_OK)
-        // Recreate the old index representation, preserving records and cursors.
-        XCTAssertEqual(sqlite3_exec(connection, "UPDATE replica_search SET title='newspaper_frontpages'; PRAGMA user_version=1", nil, nil, nil), SQLITE_OK)
+        // An older version's index, out of date, preserving records and cursors.
+        XCTAssertEqual(sqlite3_exec(connection, "DELETE FROM replica_find; PRAGMA user_version=1", nil, nil, nil), SQLITE_OK)
         sqlite3_close(connection)
         let reopened = try ReplicaStore(url: url)
         XCTAssertEqual(try reopened.records(collection: "newspaper_frontpages", query: "Planet").map(\.id), [id])

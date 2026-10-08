@@ -100,6 +100,8 @@ struct DailyView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .refreshable { model.requestSync(manual: true) }
+        // Today's record on the server, when the page is shown rather than every pass.
+        .task { await model.refreshDailyStatus() }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker(front: true) { _ = model.logSelfie($0) }.ignoresSafeArea()
         }

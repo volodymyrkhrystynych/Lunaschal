@@ -92,6 +92,13 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         guard files.count == capture.files.count else { throw CaptureError.missingFile }
         guard clips.count == capture.clips.count else { throw CaptureError.missingAudio }
         if capture.kind == .food { return try await sendFood(capture, files: files, clips: clips) }
+        if capture.entryID == nil { try await createEntry(capture, audioURL: audioURL) }
+        try await sendAttachments(capture, files: files, clips: clips)
+    }
+
+    /// The entry itself, with the standalone recording if it is one. An
+    /// addition to an entry already on the server skips this.
+    private func createEntry(_ capture: Capture, audioURL: URL?) async throws {
         let data: Data
         let response: URLResponse
         if capture.mode == .text {
@@ -137,11 +144,14 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
             // and failing the capture over its link would only strand it.
             catch let failure as HTTPFailure where failure.status == 404 {}
         }
+    }
+
+    private func sendAttachments(_ capture: Capture, files: [URL], clips: [URL]) async throws {
         // Clips first, one at a time: the server appends each transcript to the
         // entry as it lands, so upload order is the order the words appear in.
         // The recordings route treats an existing entry id as "attach here".
         for (clip, url) in zip(capture.clips, clips) {
-            let body = try RecordingMultipart(entryID: capture.id, attachmentID: clip.attachmentID,
+            let body = try RecordingMultipart(entryID: capture.targetID, attachmentID: clip.attachmentID,
                                               capturedAt: clip.createdAt, transcribe: clip.transcribe, audioURL: url)
             defer { try? FileManager.default.removeItem(at: body.url) }
             var req = request("api/journal/recordings", method: "POST")
@@ -153,7 +163,7 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         // Each link is replay-safe on its own attachment id, so a send that
         // failed partway through simply re-posts the ones already attached.
         for link in capture.links {
-            var req = request("api/journal/\(capture.id)/attachments/link", method: "POST")
+            var req = request("api/journal/\(capture.targetID)/attachments/link", method: "POST")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONEncoder().encode([
                 "url": link.url, "attachmentId": link.attachmentID,
@@ -168,7 +178,7 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         for (file, url) in zip(capture.files, files) {
             let body = try AttachmentMultipart(capture: capture, file: file, fileURL: url)
             defer { try? FileManager.default.removeItem(at: body.url) }
-            var req = request("api/journal/\(capture.id)/attachments", method: "POST")
+            var req = request("api/journal/\(capture.targetID)/attachments", method: "POST")
             req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
             let (fileData, fileResponse) = try await session.upload(for: req, fromFile: body.url)
             try check(fileData, fileResponse)
@@ -179,16 +189,23 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
     /// The meal and its photos go up in one request, each photo under the id
     /// minted for it here, so a replay re-sends them and the server skips the
     /// ones it already holds. Clips follow one at a time, like the journal's.
+    /// An addition to a meal already on the server sends its photos to that
+    /// meal's media route instead, under the same ids, and lets the server
+    /// place each clip after whatever the meal already holds.
     private func sendFood(_ capture: Capture, files: [URL], clips: [URL]) async throws {
-        let body = try FoodMultipart(capture: capture, files: files)
-        defer { try? FileManager.default.removeItem(at: body.url) }
-        var req = request("api/food", method: "POST")
-        req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await session.upload(for: req, fromFile: body.url)
-        try check(data, response)
-        try Self.validateFoodAcknowledgement(data, for: capture)
+        if capture.entryID == nil || !capture.files.isEmpty {
+            let body = try FoodMultipart(capture: capture, files: files)
+            defer { try? FileManager.default.removeItem(at: body.url) }
+            let path = capture.entryID == nil ? "api/food" : "api/food/\(capture.targetID)/media"
+            var req = request(path, method: "POST")
+            req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+            let (data, response) = try await session.upload(for: req, fromFile: body.url)
+            try check(data, response)
+            try Self.validateFoodAcknowledgement(data, for: capture)
+        }
         for (index, (clip, url)) in zip(capture.clips, clips).enumerated() {
-            let body = try FoodRecordingMultipart(capture: capture, clip: clip, position: files.count + index, audioURL: url)
+            let body = try FoodRecordingMultipart(capture: capture, clip: clip,
+                                                  position: capture.entryID == nil ? files.count + index : nil, audioURL: url)
             defer { try? FileManager.default.removeItem(at: body.url) }
             var req = request("api/food/recordings", method: "POST")
             req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
@@ -208,7 +225,7 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         }
         let ack = try JSONDecoder().decode(Ack.self, from: data)
         let stored = Set(ack.media.map(\.id))
-        guard ack.id == capture.id, capture.files.allSatisfy({ stored.contains($0.attachmentID) }) else {
+        guard ack.id == capture.targetID, capture.files.allSatisfy({ stored.contains($0.attachmentID) }) else {
             throw CaptureError.invalidResponse
         }
     }
@@ -220,7 +237,7 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
             struct Media: Decodable { let id: String }
         }
         let ack = try JSONDecoder().decode(Ack.self, from: data)
-        guard ack.id == capture.id, ack.media.id == clip.attachmentID else { throw CaptureError.invalidResponse }
+        guard ack.id == capture.targetID, ack.media.id == clip.attachmentID else { throw CaptureError.invalidResponse }
     }
 
     public static func validateClipAcknowledgement(_ data: Data, for capture: Capture, clip: CaptureClip) throws {
@@ -230,19 +247,19 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
             struct Attachment: Decodable { let id: String }
         }
         let ack = try JSONDecoder().decode(Ack.self, from: data)
-        guard ack.id == capture.id, ack.attachment.id == clip.attachmentID else { throw CaptureError.invalidResponse }
+        guard ack.id == capture.targetID, ack.attachment.id == clip.attachmentID else { throw CaptureError.invalidResponse }
     }
 
     public static func validateFileAcknowledgement(_ data: Data, for capture: Capture, file: CaptureFile) throws {
         struct Ack: Decodable { let id: String; let entryId: String }
         let ack = try JSONDecoder().decode(Ack.self, from: data)
-        guard ack.id == file.attachmentID, ack.entryId == capture.id else { throw CaptureError.invalidResponse }
+        guard ack.id == file.attachmentID, ack.entryId == capture.targetID else { throw CaptureError.invalidResponse }
     }
 
     public static func validateLinkAcknowledgement(_ data: Data, for capture: Capture, link: CaptureLink) throws {
         struct Ack: Decodable { let id: String; let entryId: String }
         let ack = try JSONDecoder().decode(Ack.self, from: data)
-        guard ack.id == link.attachmentID, ack.entryId == capture.id else { throw CaptureError.invalidResponse }
+        guard ack.id == link.attachmentID, ack.entryId == capture.targetID else { throw CaptureError.invalidResponse }
     }
 
     public static func validateAcknowledgement(_ data: Data, for capture: Capture) throws {
@@ -293,6 +310,19 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return try JSONDecoder().decode(SyncPage.self, from: data)
     }
 
+    public func syncStatus(cursors: [String]) async throws -> [ScopeStatus]? {
+        struct Body: Encodable { let cursors: [String] }
+        struct Reply: Decodable { let cursors: [ScopeStatus] }
+        var req = request("api/mobile/sync/status", method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(Body(cursors: cursors))
+        let (data, response) = try await session.data(for: req)
+        // A server from before the check: every scope is pulled instead.
+        if let http = response as? HTTPURLResponse, [404, 405].contains(http.statusCode) { return nil }
+        try check(data, response)
+        return try JSONDecoder().decode(Reply.self, from: data).cursors
+    }
+
     public func applyOperation(_ operation: ReplicaOperation) async throws -> OperationReply {
         var req = request("api/mobile/operations", method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -305,10 +335,15 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
 
     /// The replica collections this server can sync.
     public func syncCollections() async throws -> [String] {
-        struct Capabilities: Decodable { let collections: [String] }
+        try await serverCapabilities().collections
+    }
+
+    /// What this server's sync offers: its collections, and whether it can
+    /// answer `syncStatus` (a server from before the check can't).
+    public func serverCapabilities() async throws -> SyncCapabilities {
         let (data, response) = try await session.data(for: request("api/mobile/capabilities"))
         try check(data, response)
-        return try JSONDecoder().decode(Capabilities.self, from: data).collections
+        return try JSONDecoder().decode(SyncCapabilities.self, from: data)
     }
 
     /// A day's wake and sleep. Derived on the server from what was done that
@@ -382,12 +417,31 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return parts.url ?? url
     }
 
+    /// Where a feed attachment's bytes are: a journal attachment's routes, or
+    /// a meal's media file, which has no poster or converted copy.
+    public func attachmentURL(_ item: JournalAttachmentItem, thumbnail: Bool = false, playable: Bool = false) throws -> URL {
+        guard item.collection == "food_media" else {
+            return try journalAttachmentURL(item.id, thumbnail: thumbnail, playable: playable)
+        }
+        guard ULID.isValid(item.id), !thumbnail else { throw CaptureError.invalidID }
+        return server.appendingPathComponent("api/food/media/\(item.id)")
+    }
+
     /// Saves a journal attachment's file, or its poster, to `destination`,
     /// replacing whatever was there only once the whole file has arrived.
     public func downloadJournalAttachment(_ id: String, thumbnail: Bool = false, playable: Bool = false,
                                           to destination: URL) async throws {
+        try await download(journalAttachmentURL(id, thumbnail: thumbnail, playable: playable), to: destination)
+    }
+
+    public func downloadAttachment(_ item: JournalAttachmentItem, thumbnail: Bool = false, playable: Bool = false,
+                                   to destination: URL) async throws {
+        try await download(attachmentURL(item, thumbnail: thumbnail, playable: playable), to: destination)
+    }
+
+    private func download(_ url: URL, to destination: URL) async throws {
         var req = request("")
-        req.url = try journalAttachmentURL(id, thumbnail: thumbnail, playable: playable)
+        req.url = url
         req.setValue(nil, forHTTPHeaderField: "Accept")
         let (file, response) = try await session.download(for: req)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -651,7 +705,7 @@ public struct FoodMultipart {
     public let boundary: String
 
     public init(capture: Capture, files: [URL]) throws {
-        guard capture.kind == .food, ULID.isValid(capture.id), files.count == capture.files.count,
+        guard capture.kind == .food, ULID.isValid(capture.targetID), files.count == capture.files.count,
               capture.files.allSatisfy({ ULID.isValid($0.attachmentID) }) else { throw CaptureError.invalidID }
         var parts: [MultipartFile] = []
         for (file, source) in zip(capture.files, files) {
@@ -662,6 +716,12 @@ public struct FoodMultipart {
             parts.append(MultipartFile(field: "media", filename: file.name, contentType: type, source: source))
         }
         let ids = String(decoding: try JSONEncoder().encode(capture.files.map(\.attachmentID)), as: UTF8.self)
+        // An addition goes to `POST /api/food/<id>/media`, which reads the ids
+        // alone: the meal and its words are already there.
+        if capture.entryID != nil {
+            (url, boundary) = try writeMultipart(fields: [("mediaIds", ids)], files: parts)
+            return
+        }
         var fields = [
             ("id", capture.id), ("text", capture.text),
             ("capturedAt", ISO8601DateFormatter().string(from: capture.createdAt)),
@@ -680,14 +740,15 @@ public struct FoodRecordingMultipart {
     public let url: URL
     public let boundary: String
 
-    public init(capture: Capture, clip: CaptureClip, position: Int, audioURL: URL) throws {
-        guard ULID.isValid(capture.id), ULID.isValid(clip.attachmentID) else { throw CaptureError.invalidID }
+    /// With no `position` the server puts the clip after the meal's other media.
+    public init(capture: Capture, clip: CaptureClip, position: Int?, audioURL: URL) throws {
+        guard ULID.isValid(capture.targetID), ULID.isValid(clip.attachmentID) else { throw CaptureError.invalidID }
         guard (try audioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
             throw CaptureError.missingAudio
         }
-        (url, boundary) = try writeMultipart(fields: [
-            ("id", capture.id), ("mediaId", clip.attachmentID), ("position", String(position))
-        ], files: [MultipartFile(field: "audio", filename: "recording.m4a", contentType: "audio/mp4", source: audioURL)])
+        var fields = [("id", capture.targetID), ("mediaId", clip.attachmentID)]
+        if let position { fields.append(("position", String(position))) }
+        (url, boundary) = try writeMultipart(fields: fields, files: [MultipartFile(field: "audio", filename: "recording.m4a", contentType: "audio/mp4", source: audioURL)])
     }
 }
 
@@ -767,5 +828,23 @@ extension JournalAPI {
         guard NewspaperIssue.isDate(date) else { throw NotebookError.invalidIssue }
         let (data, response) = try await session.data(for: request("api/newspapers/issues/\(date)/opened", method: "POST"))
         try check(data, response)
+    }
+}
+
+public struct SyncCapabilities: Decodable, Sendable {
+    public let collections: [String]
+    public let syncStatus: Bool
+
+    enum CodingKeys: String, CodingKey { case collections, syncStatus }
+
+    public init(collections: [String], syncStatus: Bool) {
+        self.collections = collections
+        self.syncStatus = syncStatus
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        collections = try c.decode([String].self, forKey: .collections)
+        syncStatus = try c.decodeIfPresent(Bool.self, forKey: .syncStatus) ?? false
     }
 }

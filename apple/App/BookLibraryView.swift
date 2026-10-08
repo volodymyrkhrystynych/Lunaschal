@@ -38,10 +38,14 @@ struct BookListView: View {
     var showsProviders = false
     @State private var filter = BookFilter()
     @State private var books: [SyncChange] = []
-    @State private var tags: [String] = []
     @State private var limit = 50
     @State private var count = 0
     @State private var onDevice: Set<String> = []
+    /// Bumped per refresh; an older one finishing late is dropped.
+    @State private var loads = 0
+
+    /// What a pass has to touch for this list to read the library again.
+    static let shows: Set<String> = ["fics", "fic_folders", "fic_bookmarks", "fic_chapters"]
 
     static let providers = [
         ("", "All"), ("forums.spacebattles.com", "SpaceBattles"),
@@ -58,9 +62,19 @@ struct BookListView: View {
             }
             ForEach(books) { book in
                 NavigationLink { BookReaderEntry(model: model, book: book) } label: { BookRow(book: book, downloaded: onDevice.contains(book.id)) }
+                    .contextMenu {
+                        if FicSources.isUpdatable(book.data?["sourceType"]?.string) {
+                            Button("Check for updates", systemImage: "arrow.clockwise") {
+                                Task { await model.checkFicForUpdates(book, deep: false) }
+                            }
+                            Button("Re-read edited chapters", systemImage: "arrow.triangle.2.circlepath") {
+                                Task { await model.checkFicForUpdates(book, deep: true) }
+                            }
+                        }
+                    }
             }
             if books.count < count {
-                Button("Load more (\(books.count) of \(count))") { limit += 50; refresh() }
+                Button("Load more (\(books.count) of \(count))") { limit += 50; Task { await refresh() } }
             }
         }
         .overlay {
@@ -93,11 +107,16 @@ struct BookListView: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Picker("Tag", selection: $filter.tag) {
-                        Text("All tags").tag("")
-                        ForEach(tags, id: \.self) { Text($0).tag($0) }
+                if model.refreshingFics {
+                    ProgressView()
+                } else {
+                    Button("Refresh library on server", systemImage: "arrow.clockwise") {
+                        Task { await model.refreshFicsOnServer() }
                     }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
                     Picker("Bookmarks", selection: $filter.bookmark) {
                         Text("All books").tag("")
                         Text("Favorites").tag("favorite")
@@ -115,16 +134,18 @@ struct BookListView: View {
                 }
             }
         }
-        .task(id: model.downloadingLibrary) { refresh() }
-        .onAppear { refresh() }
-        .onChange(of: model.syncing) { _, syncing in if !syncing { refresh() } }
+        .task(id: model.downloadingLibrary) { await refresh() }
+        // Only when a pass changed books, folders, bookmarks or chapters. The
+        // list's rows keep their ids, so it stays where it was scrolled to.
+        .onChange(of: model.syncChanges) { _, changes in
+            if changes.touches(Self.shows) { Task { await refresh() } }
+        }
         .onChange(of: filter) { _, _ in limit = 50 }
-        // Typing searches once it pauses, not on every keystroke: each search
-        // reads the whole book list on the UI thread.
+        // Typing searches once it pauses, not on every keystroke.
         .task(id: filter) {
             try? await Task.sleep(nanoseconds: Self.typingPause)
             guard !Task.isCancelled else { return }
-            refresh(tags: false)
+            await refresh()
         }
         // When the fic downloading changes, the one before it has finished.
         .onChange(of: model.ficDownload?.id) { _, _ in onDevice = model.ficsOnDevice(books) }
@@ -134,17 +155,22 @@ struct BookListView: View {
 
     static let typingPause: UInt64 = 300_000_000
 
-    private func refresh(tags refreshTags: Bool = true) {
+    /// Reads and decodes off the main thread.
+    private func refresh() async {
+        loads += 1
+        let load = loads, limit = limit
+        // The folder is where this list is, not a filter to clear.
+        var query = filter
+        query.folder = folder ?? ""
         do {
-            // The folder is where this list is, not a filter to clear.
-            var query = filter
-            query.folder = folder ?? ""
-            let result = try model.replica.books(filter: query, limit: limit)
+            let (result, counts) = try await model.reader.read { store in
+                let result = try store.books(filter: query, limit: limit)
+                let text = result.records.filter { $0.data?["sourceType"]?.string != "pdf" }
+                return (result, try store.chapterCounts(bookIDs: text.map(\.id)))
+            }
+            guard load == loads else { return }
             books = result.records; count = result.count
-            onDevice = model.ficsOnDevice(books)
-            // The tag menu lists every tag in the library, whatever is typed.
-            guard refreshTags else { return }
-            tags = try model.replica.bookTags()
+            onDevice = model.ficsOnDevice(books, chapterCounts: counts)
         } catch { model.message = error.localizedDescription }
     }
 }
@@ -210,9 +236,10 @@ struct FolderListView: View {
                     description: Text("Folders made in the desktop library appear here after a sync."))
             }
         }
-        .task(id: model.downloadingLibrary) { refresh() }
-        .onAppear { refresh() }
-        .onChange(of: model.syncing) { _, syncing in if !syncing { refresh() } }
+        .task(id: model.downloadingLibrary) { await refresh() }
+        .onChange(of: model.syncChanges) { _, changes in
+            if changes.touches(["fics", "fic_folders"]) { Task { await refresh() } }
+        }
     }
 
     private func link(id: String, title: String, icon: String) -> some View {
@@ -230,11 +257,13 @@ struct FolderListView: View {
         .accessibilityIdentifier("folder-\(id)")
     }
 
-    private func refresh() {
+    private func refresh() async {
         do {
-            folders = try model.replica.records(collection: "fic_folders", limit: 10_000)
-                .sorted { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }
-            counts = try model.replica.folderCounts()
+            (folders, counts) = try await model.reader.read { store in
+                (try store.records(collection: "fic_folders", limit: 10_000)
+                    .sorted { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) },
+                 try store.folderCounts())
+            }
         } catch { model.message = error.localizedDescription }
     }
 }

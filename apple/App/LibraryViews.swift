@@ -60,6 +60,7 @@ struct LibraryCategoryView: View {
     @State private var records: [SyncChange] = []
     @State private var limit = 50
     @State private var count = 0
+    @State private var loads = 0
 
     var body: some View {
         List {
@@ -87,7 +88,7 @@ struct LibraryCategoryView: View {
                 }
             }
             if records.count < count {
-                Button("Load more (\(records.count) of \(count))") { limit += 50; refresh() }
+                Button("Load more (\(records.count) of \(count))") { limit += 50; Task { await refresh() } }
             }
             if category == .newspapers {
                 Text("Front-page images only. Complete newspaper PDFs and annotations are not available here yet.")
@@ -98,14 +99,17 @@ struct LibraryCategoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "Search \(category.rawValue.lowercased())")
-        .task(id: model.downloadingLibrary) { refresh() }
-        .onChange(of: model.syncing) { _, syncing in if !syncing { refresh() } }
+        .task(id: model.downloadingLibrary) { await refresh() }
+        .onChange(of: model.syncChanges) { _, changes in
+            if changes.touches([category.collection]) { Task { await refresh() } }
+        }
         .onChange(of: query) { _, _ in limit = 50 }
         .task(id: query) {
-            guard !query.isEmpty else { return refresh() }
-            try? await Task.sleep(nanoseconds: BookListView.typingPause)
-            guard !Task.isCancelled else { return }
-            refresh()
+            if !query.isEmpty {
+                try? await Task.sleep(nanoseconds: BookListView.typingPause)
+                guard !Task.isCancelled else { return }
+            }
+            await refresh()
         }
     }
 
@@ -127,16 +131,34 @@ struct LibraryCategoryView: View {
         }
     }
 
-    private func refresh() {
+    /// Reads and decodes off the main thread; an older read finishing after
+    /// a newer one (typing) is dropped.
+    private func refresh() async {
+        loads += 1
+        let load = loads, collection = category.collection, query = query, limit = limit
         do {
-            records = try model.replica.records(collection: category.collection, query: query, limit: limit)
-            count = try model.replica.count(collection: category.collection, query: query)
+            let (found, total) = try await model.reader.read { store in
+                (try store.records(collection: collection, query: query, limit: limit),
+                 try store.count(collection: collection, query: query))
+            }
+            guard load == loads else { return }
+            records = found; count = total
         } catch { model.message = error.localizedDescription }
     }
 }
 
 struct LibraryDownloadSettings: View {
     private func size(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+
+    private func importFic() {
+        let text = importLink
+        Task {
+            if await model.importFic(text) { importLink = "" }
+            countWaitingImports()
+        }
+    }
+
+    private func countWaitingImports() { waitingImports = (try? model.ficImports.list().count) ?? 0 }
 
     @ObservedObject var model: CaptureModel
     @State private var confirmingRemoval = false
@@ -149,9 +171,45 @@ struct LibraryDownloadSettings: View {
     @AppStorage("download-paper_page_images") private var paperImages = true
     @AppStorage("download-newspaper_frontpages") private var frontpages = true
     @AppStorage("download-fics") private var pdfBooks = true
+    @AppStorage("download-food_media") private var foodMedia = true
+    @State private var importLink = ""
+    @State private var waitingImports = 0
 
     var body: some View {
         List {
+            Section {
+                TextField("Link to a fic", text: $importLink)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.go)
+                    .onSubmit(importFic)
+                    .accessibilityIdentifier("fic-import-link")
+                HStack {
+                    // Borderless, or a tap anywhere in the row presses both.
+                    PasteButton(payloadType: String.self) { strings in
+                        Task { @MainActor in importLink = strings.first ?? importLink }
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .buttonStyle(.borderless)
+                    Spacer()
+                    if model.importingFic {
+                        ProgressView()
+                    } else {
+                        Button("Import", action: importFic)
+                            .buttonStyle(.borderless)
+                            .disabled(importLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                if waitingImports > 0 {
+                    Text("\(waitingImports) \(waitingImports == 1 ? "link is" : "links are") waiting for the server.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Import a fic")
+            } footer: {
+                Text("\(FicImportLink.siteNames.joined(separator: ", ")). Sharing a link to Lunaschal from Safari or another app imports it too.")
+            }
             Section {
                 Button("Download library over Wi-Fi") { model.startLibraryDownload() }
                     .disabled(model.downloadingLibrary || !model.signedIn)
@@ -173,6 +231,7 @@ struct LibraryDownloadSettings: View {
             Section("Include in future downloads") {
                 Toggle("PDF books", isOn: $pdfBooks)
                 Toggle("Journal attachments", isOn: $journalMedia)
+                Toggle("Food photos and recordings", isOn: $foodMedia)
                 Toggle("Study documents", isOn: $studyMedia)
                 Toggle("Paper previews", isOn: $paperPreviews)
                 Toggle("Editable native drawings", isOn: $nativeInk)
@@ -186,6 +245,8 @@ struct LibraryDownloadSettings: View {
         }
         .navigationTitle("Library downloads")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear(perform: countWaitingImports)
+        .onChange(of: model.syncing) { _, _ in countWaitingImports() }
         .confirmationDialog("Remove all downloaded media copies from this device?", isPresented: $confirmingRemoval) {
             Button("Remove downloaded media", role: .destructive) { model.removeLibraryMedia() }
         } message: {
@@ -257,7 +318,7 @@ struct BookView: View {
                             }
                             .swipeActions {
                                 Button("Remove", role: .destructive) {
-                                    do { try model.replica.deleteBookmark(bookmark); refreshChapters(); model.requestSync() }
+                                    do { try model.replica.deleteBookmark(bookmark); Task { await refreshChapters() }; model.requestSync() }
                                     catch { model.message = error.localizedDescription }
                                 }.disabled(bookmarkEdits.contains {
                                     $0.operation.recordId == bookmark.id ||
@@ -277,7 +338,7 @@ struct BookView: View {
                         Text(edit.state == "pending" ? "Bookmark saved on device · Waiting to sync" : edit.error ?? "Bookmark needs review")
                         if edit.state != "pending" {
                             Button("Keep server version and discard this pending change", role: .destructive) {
-                                do { try model.replica.resolve(edit, keepLocal: false); refreshChapters() }
+                                do { try model.replica.resolve(edit, keepLocal: false); Task { await refreshChapters() } }
                                 catch { model.message = error.localizedDescription }
                             }
                         }
@@ -291,23 +352,27 @@ struct BookView: View {
             }
         }
         .navigationTitle(book.title)
-        .task(id: model.downloadingLibrary) { refreshChapters() }
-        .onChange(of: model.ficDownloadRevision) { _, _ in refreshChapters() }
+        .task(id: model.downloadingLibrary) { await refreshChapters() }
+        .onChange(of: model.ficDownloadRevision) { _, _ in Task { await refreshChapters() } }
         .onAppear {
             do { try model.replica.markBookOpened(book.id) }
             catch { model.message = error.localizedDescription }
-            refreshChapters()
             model.ensureFicOnDevice(book)
         }
-        .onChange(of: model.syncing) { _, syncing in if !syncing { refreshChapters() } }
+        .onChange(of: model.syncChanges) { _, changes in
+            if changes.touches(["fics", "fic_chapters", "fic_bookmarks"]) { Task { await refreshChapters() } }
+        }
     }
 
-    private func refreshChapters() {
+    /// The chapter list, resume point and bookmarks, read off the main thread.
+    private func refreshChapters() async {
+        let id = book.id
         do {
-            chapters = try model.replica.chapterOutline(bookID: book.id)
-            resume = try model.replica.resumePoint(bookID: book.id)
-            bookmarks = try model.replica.bookmarks(bookID: book.id)
-            bookmarkEdits = try model.replica.bookmarkEdits(bookID: book.id)
+            let loaded = try await model.reader.read { store in
+                (try store.chapterOutline(bookID: id), try store.resumePoint(bookID: id),
+                 try store.bookmarks(bookID: id), try store.bookmarkEdits(bookID: id))
+            }
+            (chapters, resume, bookmarks, bookmarkEdits) = loaded
             onDevice = model.isFicOnDevice(book)
         } catch { model.message = error.localizedDescription }
     }
@@ -321,28 +386,50 @@ struct JournalRecordView: View {
     @State private var editing = false
     @State private var confirmingDelete = false
     @State private var attachments: [SyncChange] = []
+    @State private var links: [String] = []
+    @State private var typedLink = ""
+    @FocusState private var typing: Bool
     @Environment(\.dismiss) private var dismiss
+
+    private var staged: CaptureDraft { model.entryDrafts[record.id] ?? CaptureDraft() }
+    private var changes: [String: JSONValue] {
+        var out: [String: JSONValue] = [:]
+        if content != record.data?["content"]?.string ?? "" { out["content"] = .string(content) }
+        if title != record.data?["title"]?.string ?? "" { out["title"] = .string(title) }
+        return out
+    }
+    private var canSave: Bool {
+        !changes.isEmpty || !staged.isEmpty || !links.isEmpty
+            || !typedLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         Form {
             if editing {
-                TextField("Title", text: $title)
-                TextEditor(text: $content).frame(minHeight: 240)
-                Button("Save edit on this device") {
-                    if model.edit(record, content: content, title: title) { dismiss() }
+                Section {
+                    TextField("Title", text: $title).focused($typing)
+                    TextEditor(text: $content).frame(minHeight: 240).focused($typing)
+                        .accessibilityLabel("Entry text")
+                    // The Capture tab's buttons: everything they make waits in
+                    // this entry's draft until Save.
+                    AttachmentButtons(model: model, recorder: model.recorder, entryID: record.id) { typing = false }
                 }
-                Button("Cancel", role: .cancel) { editing = false }
+                if !staged.isEmpty {
+                    Section("Adding") { StagedAttachmentRows(model: model, recorder: model.recorder, draft: staged) }
+                }
+                YouTubeLinksSection(model: model, links: $links, typed: $typedLink, typing: $typing)
+                Section {
+                    Button("Save edit on this device") { save() }.disabled(!canSave)
+                    Button("Cancel", role: .cancel) { cancel() }
+                }
             } else {
                 Text(record.data?["content"]?.string ?? "").textSelection(.enabled)
                 if let original = record.data?["rawContent"]?.string, !original.isEmpty {
                     DisclosureGroup("Original text and dictation") { Text(original).textSelection(.enabled) }
                 }
-                Button("Edit") {
-                    content = record.data?["content"]?.string ?? ""
-                    title = record.data?["title"]?.string ?? ""
-                    editing = true
-                }
+                Button("Edit") { startEditing() }
                 Button("Delete entry", role: .destructive) { confirmingDelete = true }
+                PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
                 Section("Attachments") {
                     ForEach(attachments) { attachment in
                         NavigationLink(attachment.data?["name"]?.string ?? "Attachment") {
@@ -359,11 +446,51 @@ struct JournalRecordView: View {
             }
         }
         .navigationTitle(record.title).navigationBarTitleDisplayMode(.inline)
-        .task {
+        // An edit left with something staged (the app was closed mid-edit)
+        // opens where it was rather than hiding the staged clips.
+        .onAppear { if !editing && !staged.isEmpty { startEditing() } }
+        .task(id: model.syncing) {
             attachments = (try? model.replica.relatedRecords(collection: "journal_attachments", field: "entryId", value: record.id)) ?? []
         }
         .confirmationDialog("Delete this journal entry when the server reconnects?", isPresented: $confirmingDelete) {
             Button("Delete entry", role: .destructive) { model.delete(record); dismiss() }
+        }
+    }
+
+    private func startEditing() {
+        content = record.data?["content"]?.string ?? ""
+        title = record.data?["title"]?.string ?? ""
+        editing = true
+    }
+
+    private func save() {
+        // A URL typed but not yet added still belongs to this edit.
+        guard YouTubeLinksSection.add(typed: $typedLink, to: $links, model: model) else { return }
+        if model.saveEdit(record, changes: changes, youtubeURLs: links) { dismiss() }
+    }
+
+    private func cancel() {
+        model.discardEdit(record.id)
+        links = []; typedLink = ""; editing = false
+    }
+}
+
+/// How many saved additions to an entry are still waiting to upload.
+struct PendingAdditionsRow: View {
+    let additions: [Capture]
+
+    var body: some View {
+        let count = additions.reduce(0) { $0 + $1.files.count + $1.clips.count + $1.links.count }
+        if count > 0 {
+            let failed = additions.contains { $0.state == .failed }
+            let text = "\(count) added \(count == 1 ? "item" : "items") "
+                + (failed ? "could not upload" : "waiting to upload")
+            Label(text, systemImage: failed ? "exclamationmark.triangle" : "arrow.up.circle")
+                .font(.footnote).foregroundStyle(failed ? .orange : .secondary)
+                // Read as the sentence, not the icon's name.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(text)
+                .accessibilityIdentifier("pending-additions")
         }
     }
 }
@@ -540,13 +667,13 @@ struct PendingEditView: View {
     var body: some View {
         List {
             Section("Your saved change") {
-                Text(edit.operation.action == "delete" ? "Delete entry" : edit.operation.data["content"]?.string ?? "Title or tags changed")
+                Text(edit.operation.action == "delete" ? "Delete entry" : Self.summary(edit.operation.data))
                     .textSelection(.enabled)
             }
             if let error = edit.error { Text(error).foregroundStyle(.orange) }
             if let current = edit.conflict {
                 Section("Server version") {
-                    Text(current.deleted ? "Deleted on server" : current.data?["content"]?.string ?? "").textSelection(.enabled)
+                    Text(current.deleted ? "Deleted on server" : current.data.map(Self.summary) ?? "").textSelection(.enabled)
                 }
             }
             if edit.state != "pending" {
@@ -560,5 +687,12 @@ struct PendingEditView: View {
                 Button("Discard my pending change", role: .destructive) { model.resolve(edit, keepLocal: false); dismiss() }
             } else { Text("This edit is saved locally and will sync when connected.") }
         }.navigationTitle("Saved edit")
+    }
+
+    /// An entry's words, or a meal's dish, place and notes.
+    static func summary(_ data: [String: JSONValue]) -> String {
+        if let content = data["content"]?.string { return content }
+        let meal = ["dish", "place", "notes"].compactMap { data[$0]?.string }.filter { !$0.isEmpty }
+        return meal.isEmpty ? "Title or tags changed" : meal.joined(separator: "\n")
     }
 }

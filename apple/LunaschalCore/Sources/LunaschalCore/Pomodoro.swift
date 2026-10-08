@@ -17,6 +17,15 @@ public enum PomodoroKind: String, Codable, CaseIterable {
     /// break, another timeout after a timeout.
     public var next: PomodoroKind { self == .timeout ? .timeout : .work }
 
+    /// SF Symbol, shared by the timer screen and the complications.
+    public var symbol: String {
+        switch self {
+        case .work: return "brain.head.profile"
+        case .break: return "figure.walk"
+        case .timeout: return "cup.and.saucer"
+        }
+    }
+
     public var label: String {
         switch self {
         case .work: return "Focus"
@@ -135,6 +144,38 @@ public struct PomodoroTimer: Codable, Equatable {
     private func session(_ run: Run, endedAt: Date, completed: Bool) -> PomodoroSession {
         PomodoroSession(id: run.id, kind: run.kind, startedAt: run.startedAt, endedAt: endedAt,
                         plannedSeconds: Int(run.endsAt.timeIntervalSince(run.startedAt)), completed: completed)
+    }
+
+    /// What pressing a Focus or Timeout button did.
+    public enum Press: Equatable {
+        /// Nothing was going, so `kind` started.
+        case started
+        /// A run is going, or one has ended and is waiting for a choice: the
+        /// press opens the timer instead. A button on the face or in Control
+        /// Center is easy to brush, so a press never replaces a run.
+        case alreadyGoing
+    }
+
+    @discardableResult
+    public mutating func press(_ kind: PomodoroKind, now: Date = Date()) -> (Press, [PomodoroSession]) {
+        let closed = expire(now: now)
+        guard state == .idle else { return (.alreadyGoing, closed) }
+        return (.started, closed + start(kind, now: now))
+    }
+
+    /// One state a complication shows, from `date` on.
+    public struct Glance: Equatable {
+        public let date: Date
+        public let state: State
+    }
+
+    /// What a complication shows from `now` on. The Watch app is suspended
+    /// when a run ends, so the timeline has to carry the end itself rather
+    /// than wait for the app to say so.
+    public func glances(now: Date = Date()) -> [Glance] {
+        guard let run else { return [Glance(date: now, state: state)] }
+        guard now < run.endsAt else { return [Glance(date: now, state: .finished(run.kind))] }
+        return [Glance(date: now, state: state), Glance(date: run.endsAt, state: .finished(run.kind))]
     }
 
     public static func load(from url: URL) -> PomodoroTimer? {

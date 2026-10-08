@@ -8,32 +8,33 @@ import LunaschalCore
 /// LunaschalCore; this owns the clock, the end-of-timer notification and
 /// handing finished runs to the phone.
 ///
-/// The notification is what tells you the time is up: an app with the wrist
-/// down is suspended, so nothing in-process can be relied on to fire. Its
-/// buttons are the same Continue / Break / Cancel as the screen.
+/// The notification (scheduled by `PomodoroEngine`) is what tells you the
+/// time is up: an app with the wrist down is suspended, so nothing in-process
+/// can be relied on to fire. Its buttons are the same Continue / Break /
+/// Cancel as the screen.
 @MainActor
 final class PomodoroModel: ObservableObject {
-    static let notificationID = "pomodoro"
     enum Action: String { case `continue` = "pomodoro.continue", takeBreak = "pomodoro.break", cancel = "pomodoro.cancel" }
 
     @Published private(set) var timer: PomodoroTimer
     @Published var message: String?
-    let outbox: PomodoroStore
-    private let stateURL: URL
+    /// State, outbox and notification live here, shared with the Controls,
+    /// which can change the timer while this app is asleep.
+    let engine: PomodoroEngine
+    var outbox: PomodoroStore { engine.outbox }
+    private let shortenedTo: TimeInterval?
     private var tick: Task<Void, Never>?
 
-    init(root: URL) throws {
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        stateURL = root.appendingPathComponent("timer.json")
-        outbox = try PomodoroStore(root: root.appendingPathComponent("outbox", isDirectory: true))
-        timer = PomodoroTimer.load(from: stateURL) ?? PomodoroTimer()
+    init(engine: PomodoroEngine) {
+        self.engine = engine
         #if DEBUG
         // `-PomodoroSeconds 10` as a launch argument, to see the end without waiting.
         let shortened = UserDefaults.standard.double(forKey: "PomodoroSeconds")
-        timer.shortenedTo = shortened > 0 ? shortened : nil
+        shortenedTo = shortened > 0 ? shortened : nil
         #else
-        timer.shortenedTo = nil
+        shortenedTo = nil
         #endif
+        timer = engine.load()
         refresh()
     }
 
@@ -56,56 +57,61 @@ final class PomodoroModel: ObservableObject {
         ])
     }
 
-    func start(_ kind: PomodoroKind) {
+    static func requestAuthorization() {
         Task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) }
-        apply { $0.start(kind) }
+    }
+
+    func start(_ kind: PomodoroKind) {
+        Self.requestAuthorization()
+        apply { ((), $0.start(kind)) }
+    }
+
+    /// A Focus or Timeout button on the face: starts unless something is
+    /// already going, in which case it only shows the timer.
+    @discardableResult
+    func press(_ kind: PomodoroKind) -> PomodoroTimer.Press {
+        Self.requestAuthorization()
+        return apply { $0.press(kind) } ?? .alreadyGoing
     }
 
     func perform(_ action: Action) {
         switch action {
-        case .continue: apply { $0.continue() }
-        case .takeBreak: apply { $0.takeBreak() }
-        case .cancel: apply { $0.cancel() }
+        case .continue: apply { ((), $0.continue()) }
+        case .takeBreak: apply { ((), $0.takeBreak()) }
+        case .cancel: apply { ((), $0.cancel()) }
         }
     }
 
-    /// Catches up with the clock: on launch, on returning to the screen.
+    /// Catches up with the clock and with the Controls: on launch, on
+    /// returning to the screen.
     func refresh() {
-        let wasRunning = timer.run != nil
-        apply { $0.expire() }
+        let wasRunning = engine.load().run != nil || timer.run != nil
+        apply { ((), $0.expire()) }
         if wasRunning, timer.run == nil, WKApplication.shared().applicationState == .active {
             WKInterfaceDevice.current().play(.notification)
         }
     }
 
-    private func apply(_ change: (inout PomodoroTimer) -> [PomodoroSession]) {
-        var next = timer
-        let closed = change(&next)
-        timer = next
+    @discardableResult
+    private func apply<T>(_ change: (inout PomodoroTimer) -> (T, [PomodoroSession])) -> T? {
         do {
-            try timer.save(to: stateURL)
-            for run in closed { try outbox.save(run) }
-        } catch { message = error.localizedDescription }
-        schedule()
-        if !closed.isEmpty { sendPending() }
+            let (next, result, closed) = try engine.apply(change, shortenedTo: shortenedTo)
+            timer = next
+            wake()
+            if !closed.isEmpty { sendPending() }
+            return result
+        } catch {
+            message = error.localizedDescription
+            return nil
+        }
     }
 
-    /// One pending notification at most, for the run on screen, plus an
-    /// in-process wake-up so an open screen moves on without a tap.
-    private func schedule() {
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [Self.notificationID])
-        center.removeDeliveredNotifications(withIdentifiers: [Self.notificationID])
+    /// An in-process wake-up at the end of the run, so an open screen moves
+    /// on without a tap. The notification covers the app being asleep.
+    private func wake() {
         tick?.cancel()
         guard let run = timer.run else { return }
-        let content = UNMutableNotificationContent()
-        content.title = run.kind == .break ? "Break's over" : "\(run.kind.label) done"
-        content.body = run.kind == .work ? "Continue, take a break, or stop." : "Continue or stop."
-        content.sound = .default
-        content.categoryIdentifier = run.kind.rawValue
         let wait = max(1, run.endsAt.timeIntervalSinceNow)
-        center.add(UNNotificationRequest(identifier: Self.notificationID, content: content,
-                                         trigger: UNTimeIntervalNotificationTrigger(timeInterval: wait, repeats: false)))
         tick = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
             guard !Task.isCancelled else { return }
@@ -137,8 +143,8 @@ struct PomodoroView: View {
             VStack(spacing: 8) {
                 switch model.timer.state {
                 case .idle:
-                    Button("Focus 25 / 5", systemImage: "brain.head.profile") { model.start(.work) }
-                    Button("Timeout 10", systemImage: "cup.and.saucer") { model.start(.timeout) }
+                    Button("Focus 25 / 5", systemImage: PomodoroKind.work.symbol) { model.start(.work) }
+                    Button("Timeout 10", systemImage: PomodoroKind.timeout.symbol) { model.start(.timeout) }
                 case .running(let run):
                     Text(run.kind.label).font(.headline)
                     Text(timerInterval: run.startedAt...run.endsAt, countsDown: true)

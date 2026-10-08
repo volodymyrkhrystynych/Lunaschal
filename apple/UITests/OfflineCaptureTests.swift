@@ -643,6 +643,58 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["SpaceBattles"].waitForExistence(timeout: 5))
     }
 
+    /// The filter menu has no tag picker (fics bring hundreds of user tags),
+    /// the server refresh sits beside it, and only a fic from a site can be
+    /// asked to update.
+    func testLibraryOffersServerUpdatesButNoTagFilter() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        XCTAssertTrue(app.buttons["Refresh library on server"].waitForExistence(timeout: 10))
+        app.buttons["Filter books"].tap()
+        XCTAssertTrue(app.buttons["Reset filters"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["All tags"].exists)
+        XCTAssertFalse(app.staticTexts["All tags"].exists)
+        app.buttons["Reset filters"].tap()
+
+        let forumFic = app.staticTexts["Ashes of the Old Guard"]
+        XCTAssertTrue(forumFic.waitForExistence(timeout: 10))
+        forumFic.press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Check for updates"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Re-read edited chapters"].exists)
+    }
+
+    /// Settings → Library downloads imports a fic by its link: a page that
+    /// isn't one is turned away on the phone, and a fic link needs a server.
+    func testSettingsImportsAFicByLink() {
+        let app = XCUIApplication()
+        app.launch()
+        openMore(app, "Settings")
+        let downloads = app.buttons["Library downloads"]
+        XCTAssertTrue(downloads.waitForExistence(timeout: 5))
+        downloads.tap()
+        let field = app.textFields["fic-import-link"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Paste"].exists)
+        let importButton = app.buttons["Import"]
+        XCTAssertFalse(importButton.isEnabled, "nothing to import yet")
+
+        field.tap()
+        field.typeText("https://example.com/threads/1")
+        importButton.tap()
+        XCTAssertTrue(app.alerts.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "That isn’t a link to a fic"))
+            .firstMatch.waitForExistence(timeout: 5))
+        app.alerts.buttons["OK"].tap()
+
+        // At the end of the text, so the deletes take all of it.
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 40))
+        field.typeText("https://archiveofourown.org/works/42")
+        importButton.tap()
+        XCTAssertTrue(app.alerts.staticTexts["Sign in to import fics."].waitForExistence(timeout: 5))
+    }
+
     /// Opening a fic that isn't on the device downloads it in front of
     /// everything else, saying so, until its chapters are there to read. The
     /// fixture's stand-in server answers slowly so the progress can be seen.
@@ -851,6 +903,38 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Original text"].exists)
     }
 
+    /// An entry a sync brings in above where the reader is doesn't move what
+    /// they're reading: the feed holds its place by the card at the top.
+    func testAnEntryArrivingAboveKeepsTheFeedWhereItWas() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-journalFeedFixture", "-journalFeedArrival"]
+        app.launch()
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        pages.buttons["Journal"].tap()
+        XCTAssertTrue(app.staticTexts["Fixture later"].waitForExistence(timeout: 10))
+
+        // Down among the older entries; whichever is on screen is the one being read.
+        app.swipeUp(); app.swipeUp()
+        let filler = NSPredicate(format: "label BEGINSWITH 'Filler '")
+        let onScreen = app.staticTexts.matching(filler).allElementsBoundByIndex.filter { $0.isHittable }
+        XCTAssertGreaterThan(onScreen.count, 1, "scrolled down to the older entries")
+        guard onScreen.count > 1 else { return }
+        let reading = app.staticTexts[onScreen[1].label]
+        let before = reading.frame.minY
+
+        app.buttons["fixture-arrive"].tap()
+        // Give the reload time to land and lay out.
+        let moved = NSPredicate(format: "frame.minY != %f", before)
+        _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: moved, object: reading)], timeout: 3)
+        XCTAssertEqual(reading.frame.minY, before, accuracy: 2, "the card being read stayed put")
+
+        // And the entry really did arrive, at the top.
+        for _ in 0..<10 where !app.staticTexts["Fixture arrival"].exists { app.swipeDown() }
+        XCTAssertTrue(app.staticTexts["Fixture arrival"].exists)
+    }
+
     /// The feed reads like the desktop's: the event's border around what was
     /// written during it, and the entry's photo, clip and video on its card.
     func testJournalFeedShowsMediaInsideTheCalendarBorder() {
@@ -906,6 +990,72 @@ final class OfflineCaptureTests: XCTestCase {
         }
         later.tap()
         XCTAssertTrue(app.navigationBars["Fixture later"].waitForExistence(timeout: 5), "an entry still opens")
+    }
+
+    /// Editing a server entry offers the Capture tab's buttons, and what they
+    /// make is saved with the edit, queued under that entry, never into the
+    /// composer's draft. A meal's editor offers them too, without YouTube.
+    func testEditingAnEntryOrMealOffersTheCaptureButtons() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-journalFeedFixture")
+        app.launch()
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        pages.buttons["Journal"].tap()
+
+        let later = app.staticTexts["Fixture later"]
+        XCTAssertTrue(later.waitForExistence(timeout: 10))
+        later.tap()
+        XCTAssertTrue(app.navigationBars["Fixture later"].waitForExistence(timeout: 5))
+        app.buttons["Edit"].tap()
+        let names = ["Transcribe", "Record", "Take photo", "Choose photo", "Attach file"]
+        let first = app.buttons[names[0]]
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        for name in names {
+            XCTAssertTrue(app.buttons[name].exists, name)
+            XCTAssertEqual(app.buttons[name].frame.midY, first.frame.midY, accuracy: 4, "\(name) sits in the same line")
+        }
+        XCTAssertTrue(app.textFields["YouTube video URL"].exists)
+        let save = app.buttons["Save edit on this device"]
+        XCTAssertFalse(save.isEnabled, "nothing changed yet")
+
+        app.buttons["Choose photo"].tap()
+        let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
+        guard photo.waitForExistence(timeout: 30) else { return XCTFail("Photo picker did not open") }
+        photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let done = app.buttons["Done"]
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"),
+                                                                      object: done)], timeout: 5) == .completed)
+        done.tap()
+        XCTAssertTrue(app.staticTexts["Adding"].waitForExistence(timeout: 60), "the photo waits in this edit")
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        XCTAssertTrue(app.navigationBars["Journal"].waitForExistence(timeout: 5) || pages.waitForExistence(timeout: 5))
+        let waiting = app.descendants(matching: .any).matching(identifier: "pending-additions").firstMatch
+        XCTAssertTrue(waiting.waitForExistence(timeout: 10), "the feed says the photo is on its way")
+        XCTAssertTrue(waiting.label.hasSuffix("waiting to upload"), waiting.label)
+
+        let meal = app.staticTexts["Fixture ramen"]
+        for _ in 0..<6 where !meal.isHittable {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -150)))
+        }
+        XCTAssertTrue(meal.waitForExistence(timeout: 5))
+        meal.tap()
+        XCTAssertTrue(app.navigationBars["Fixture ramen"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Rich broth."].exists)
+        app.buttons["Edit"].tap()
+        XCTAssertTrue(app.textFields["Dish"].waitForExistence(timeout: 5))
+        for name in names { XCTAssertTrue(app.buttons[name].exists, "meal: \(name)") }
+        XCTAssertFalse(app.textFields["YouTube video URL"].exists, "a meal takes no links")
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5))
+
+        // The composer's own draft was never touched.
+        selectTab(app, "Capture")
+        XCTAssertTrue(app.buttons["Transcribe"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Attachments"].exists)
     }
 
     func testYouTubeLinksAttachToTheEntryAndSaveStaysPinned() {

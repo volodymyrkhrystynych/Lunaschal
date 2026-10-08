@@ -5,8 +5,9 @@ import UIKit
 
 /// What the Journal feed's UI test reads, since UI tests run with no server:
 /// launched with `-journalFeedFixture`, the replica gets an entry carrying a
-/// photo, a clip and a watched video, written during a categorised event, and
-/// the photo, poster and clip are placed where a fetch would have put them.
+/// photo, a clip and a watched video, written during a categorised event, plus
+/// a meal with a photo, and the photos, poster and clip are placed where a
+/// fetch would have put them.
 /// Debug builds only.
 enum JournalFixture {
     static let argument = "-journalFeedFixture"
@@ -18,6 +19,25 @@ enum JournalFixture {
     static let clip = "01K6ZZZZZZZZZZZZZZZZZZZZ04"
     static let video = "01K6ZZZZZZZZZZZZZZZZZZZZ05"
     static let event = "01K6ZZZZZZZZZZZZZZZZZZZZ06"
+    static let meal = "01K6ZZZZZZZZZZZZZZZZZZZZ07"
+    static let mealPhoto = "01K6ZZZZZZZZZZZZZZZZZZZZ08"
+    /// With `-journalFeedArrival` too: thirty older entries to scroll through,
+    /// and a button that brings a new entry in above them all, as a sync would.
+    static let arrivalArgument = "-journalFeedArrival"
+    static let arrival = "01K6ZZZZZZZZZZZZZZZZZZZZ09"
+    static var arrivalEnabled: Bool { ProcessInfo.processInfo.arguments.contains(arrivalArgument) }
+
+    /// The newest entry, as one delta page.
+    static func arrivalPage() throws -> SyncPage {
+        let page: [String: Any] = [
+            "protocolVersion": 1, "epoch": epoch, "mode": "delta", "hasMore": false, "cursor": "arrival",
+            "collections": ["journal_entries"],
+            "changes": [["revision": 2, "collection": "journal_entries", "id": arrival, "deleted": false,
+                         "data": ["id": arrival, "title": "Fixture arrival", "content": "Just synced.",
+                                  "createdAt": ISO8601DateFormatter().string(from: Date())]]],
+        ]
+        return try JSONDecoder().decode(SyncPage.self, from: JSONSerialization.data(withJSONObject: page))
+    }
 
     static func seedIfAsked(root: URL) throws {
         guard ProcessInfo.processInfo.arguments.contains(argument) else { return }
@@ -48,13 +68,21 @@ enum JournalFixture {
                                                   "position": 2, "importStatus": "done",
                                                   "sourceUrl": "https://www.youtube.com/watch?v=fixture",
                                                   "description": "A film about rivers."]),
+            change("food_entries", meal, ["dish": "Fixture ramen", "place": "Kitchen", "notes": "Rich broth.",
+                                          "createdAt": iso.string(from: now.addingTimeInterval(-30 * 60))]),
+            change("food_media", mealPhoto, ["entryId": meal, "kind": "image", "mime": "image/jpeg", "position": 0]),
             change("calendar_events", event, ["title": "Walk by the river", "date": date, "time": time,
                                               "endTime": endTime, "allDay": 0, "repeatInterval": 1,
                                               "categoryTags": "[\"outside\",\"exercise\"]"]),
-        ]
+        ] + (arrivalEnabled ? (10..<40).map { n in
+            change("journal_entries", "01K6ZZZZZZZZZZZZZZZZZZZY\(n)",
+                   ["title": "Filler \(n - 9)", "content": "An older entry to scroll past.",
+                    "createdAt": iso.string(from: now.addingTimeInterval(-Double(n) * 6 * 3600))])
+        } : [])
         let page: [String: Any] = ["protocolVersion": 1, "epoch": epoch, "mode": "bootstrap", "changes": changes,
                                    "hasMore": false, "cursor": "fixture",
-                                   "collections": ["journal_entries", "journal_attachments", "calendar_events"]]
+                                   "collections": ["journal_entries", "journal_attachments", "calendar_events",
+                                                   "food_entries", "food_media"]]
         let decoded = try JSONDecoder().decode(SyncPage.self, from: JSONSerialization.data(withJSONObject: page))
         try ReplicaStore(url: root.appendingPathComponent("replica.sqlite")).apply(decoded, startingBootstrap: true)
 
@@ -62,6 +90,7 @@ enum JournalFixture {
             .appendingPathComponent("journal-media", isDirectory: true)
         try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
         try picture(.systemTeal).write(to: media.appendingPathComponent(photo))
+        try picture(.systemOrange).write(to: media.appendingPathComponent(mealPhoto))
         try picture(.systemIndigo).write(to: media.appendingPathComponent(video + ".poster"))
         try silence(seconds: 2).write(to: media.appendingPathComponent(clip))
     }

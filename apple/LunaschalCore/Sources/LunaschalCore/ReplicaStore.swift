@@ -21,33 +21,69 @@ public final class ReplicaStore {
         do {
             try execute("PRAGMA journal_mode=WAL")
             try execute("PRAGMA synchronous=FULL")
-            let version = Int(try rows("PRAGMA user_version").first?.first ?? "0") ?? 0
-            guard version <= 3 else { throw ReplicaError.database("This database needs a newer app.") }
-            try transaction {
+            // Only a database that needs migrating takes the write lock: one
+            // opened while another connection is writing (a sync page, the
+            // library download) would otherwise wait out the busy timeout and
+            // fail with "database is locked" just to find nothing to do.
+            let opened = Int(try rows("PRAGMA user_version").first?.first ?? "0") ?? 0
+            guard opened <= 4 else { throw ReplicaError.database("This database needs a newer app.") }
+            if opened < 4 { try transaction {
+                // Read under the write lock: three connections open this file,
+                // and two that both saw version 3 would both rebuild the index.
+                let version = Int(try rows("PRAGMA user_version").first?.first ?? "0") ?? 0
+                guard version <= 4 else { throw ReplicaError.database("This database needs a newer app.") }
                 try execute("CREATE TABLE IF NOT EXISTS replica_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
-                try execute("CREATE TABLE IF NOT EXISTS replica_records(collection TEXT NOT NULL,id TEXT NOT NULL,revision INTEGER NOT NULL,deleted INTEGER NOT NULL,payload TEXT,PRIMARY KEY(collection,id))")
+                try execute("CREATE TABLE IF NOT EXISTS replica_records(collection TEXT NOT NULL,id TEXT NOT NULL,revision INTEGER NOT NULL,deleted INTEGER NOT NULL,payload TEXT,body TEXT,PRIMARY KEY(collection,id))")
                 try execute("CREATE TABLE IF NOT EXISTS replica_outbox(id TEXT PRIMARY KEY,operation TEXT NOT NULL,original TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',error TEXT,conflict TEXT)")
-                try execute("CREATE VIRTUAL TABLE IF NOT EXISTS replica_search USING fts5(collection UNINDEXED,id UNINDEXED,title,body)")
                 try execute("CREATE TABLE IF NOT EXISTS replica_sweep(collection TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(collection,id))")
-                if version < 2 {
-                    for record in try recordsQuery("WHERE collection='newspaper_frontpages' AND deleted=0", []) {
-                        try execute("UPDATE replica_search SET title=? WHERE collection=? AND id=?",
-                                    [record.title, record.collection, record.id])
-                    }
+                if !(try rows("PRAGMA table_info(replica_records)").contains { $0[1] == "body" }) {
+                    try execute("ALTER TABLE replica_records ADD COLUMN body TEXT")
                 }
-                if version < 3 {
-                    for record in try recordsQuery("WHERE collection='journal_entries' AND deleted=0", []) {
-                        try execute("UPDATE replica_search SET body=? WHERE collection=? AND id=?",
-                                    [searchBody(record.data ?? [:]), record.collection, record.id])
+                try execute(Self.createSearch)
+                if version < 4 {
+                    // Rebuilt from the records rather than copied from the old
+                    // `replica_search`, which `maintain` drops off the UI thread.
+                    let marks = Array(repeating: "?", count: Self.searchable.count).joined(separator: ",")
+                    for row in try rows("SELECT rowid,collection,id,revision,COALESCE(payload,'') FROM replica_records WHERE deleted=0 AND collection IN (\(marks))",
+                                        Self.searchable.sorted()) where !row[4].isEmpty {
+                        try index(row[0], SyncChange(revision: Int64(row[3])!, collection: row[1], id: row[2], deleted: false,
+                                                     data: try decode([String: JSONValue].self, row[4])))
                     }
                 }
                 // The lookup indexes are not built here: see `buildIndexes`.
-                try execute("PRAGMA user_version=3")
-            }
+                try execute("PRAGMA user_version=4")
+            } }
         } catch { sqlite3_close(db); db = nil; throw error }
     }
 
     deinit { sqlite3_close(db) }
+
+    /// The collections a search box reads through the index: the Journal's
+    /// entries and meals, and Study's four lists. The Library's books are matched by
+    /// substring in `books` instead. Nothing else is indexed: the old index
+    /// held every chapter's text, which no search ever read.
+    static let searchable: Set<String> = ["journal_entries", "food_entries", "study_sources", "papers",
+                                          "newspaper_frontpages", "wiki_articles"]
+
+    /// Fields kept in `body` rather than `payload`: a chapter's text is most
+    /// of its size, and every lookup into the payload (`json_extract`, the
+    /// outline, the lookup indexes) would otherwise parse it. `record` puts
+    /// them back, so a caller sees the same record either way.
+    static let bodyFields: [String: [String]] = ["fic_chapters": ["contentHtml", "contentText"]]
+
+    /// The search index holds no copy of the text, only the index, and its
+    /// rows are the records' own rowids, so a record's entry is found
+    /// directly. The old one was looked up by `collection` and `id`, columns
+    /// FTS5 can't index, so every record a sync page wrote scanned the whole
+    /// index: every chapter's text, a hundred times a page. That held the
+    /// write lock long enough for the other connections to give up with
+    /// "database is locked". `contentless_delete` needs SQLite 3.43; on an
+    /// older one (CI's Linux image) the index keeps its own copy of the text,
+    /// which is small now that chapters are out of it.
+    static var createSearch: String {
+        let contentless = sqlite3_libversion_number() >= 3_043_000 ? ",content='',contentless_delete=1" : ""
+        return "CREATE VIRTUAL TABLE IF NOT EXISTS replica_find USING fts5(title,body\(contentless))"
+    }
 
     public var epoch: String? { get throws { try value("epoch") } }
 
@@ -71,7 +107,11 @@ public final class ReplicaStore {
         try execute("DELETE FROM replica_meta WHERE key LIKE 'ready:%'")
     }
 
-    public func apply(_ page: SyncPage, startingBootstrap: Bool, expectedCursor: String? = nil) throws {
+    /// Applies one page and returns the collections whose records it changed:
+    /// a page of versions this device already holds changes nothing, and the
+    /// screens showing those collections need not reload.
+    @discardableResult
+    public func apply(_ page: SyncPage, startingBootstrap: Bool, expectedCursor: String? = nil) throws -> Set<String> {
         guard page.protocolVersion == 1, ULID.isValid(page.epoch),
               ["bootstrap", "delta"].contains(page.mode), !page.cursor.isEmpty,
               !page.collections.isEmpty, Set(page.collections).count == page.collections.count,
@@ -79,6 +119,7 @@ public final class ReplicaStore {
                   !$0.id.isEmpty && ($0.deleted ? $0.data == nil : $0.data?["id"]?.string == $0.id) }) else {
             throw ReplicaError.invalidPage
         }
+        var changed: Set<String> = []
         try transaction {
             // Another connection can reset history while a request is in flight.
             // Validate under the same write transaction as the page commit.
@@ -91,10 +132,11 @@ public final class ReplicaStore {
                 try execute("DELETE FROM replica_meta WHERE key LIKE 'cursor:%'")
                 try execute("DELETE FROM replica_meta WHERE key LIKE 'ready:%'")
                 try execute("DELETE FROM replica_records")
-                try execute("DELETE FROM replica_search")
+                try execute("DELETE FROM replica_find")
                 try execute("DELETE FROM replica_sweep")
                 try execute("UPDATE replica_outbox SET state='conflict',error='Server history changed. Review this saved edit.' WHERE state='pending'")
                 try set("epoch", page.epoch)
+                changed.formUnion(page.collections)
             } else if startingBootstrap {
                 try execute("DELETE FROM replica_meta WHERE key=?", ["ready:" + scope(page.collections)])
                 // A complete bootstrap is a replacement for its chosen scope;
@@ -106,17 +148,25 @@ public final class ReplicaStore {
                     try execute("INSERT OR IGNORE INTO replica_sweep(collection,id) SELECT collection,id FROM replica_records WHERE collection=?", [collection])
                 }
             }
-            for change in page.changes { try put(change) }
+            for change in page.changes {
+                if try put(change) { changed.insert(change.collection) }
+            }
             try set(scope(page.collections), page.cursor)
             if !page.hasMore {
                 try set("ready:" + scope(page.collections), "1")
                 for collection in page.collections {
-                    try execute("DELETE FROM replica_search WHERE collection=? AND id IN (SELECT id FROM replica_sweep WHERE collection=?)", [collection, collection])
+                    if Self.searchable.contains(collection) {
+                        for row in try rows("SELECT r.rowid FROM replica_records r JOIN replica_sweep s ON s.collection=r.collection AND s.id=r.id WHERE r.collection=?", [collection]) {
+                            try execute("DELETE FROM replica_find WHERE rowid=CAST(? AS INTEGER)", [row[0]])
+                        }
+                    }
                     try execute("DELETE FROM replica_records WHERE collection=? AND id IN (SELECT id FROM replica_sweep WHERE collection=?)", [collection, collection])
+                    if sqlite3_changes(db) > 0 { changed.insert(collection) }
                     try execute("DELETE FROM replica_sweep WHERE collection=?", [collection])
                 }
             }
         }
+        return changed
     }
 
     /// Records fetched outside any cursor — one fic, ahead of the library
@@ -153,8 +203,7 @@ public final class ReplicaStore {
     public func newestRecords(collection: String, query: String = "", limit: Int = 200) throws -> [SyncChange] {
         guard limit > 0 else { throw ReplicaError.invalidPage }
         let (filter, parameters) = recordFilter(collection: collection, query: query)
-        return try recordsQuery(filter + " ORDER BY json_extract(payload,'$.createdAt') DESC,id DESC LIMIT ?",
-                                parameters + [String(limit)])
+        return try recordsQuery(filter + " ORDER BY \(Self.newestOrder) LIMIT ?", parameters + [String(limit)])
     }
 
     public func count(collection: String, query: String = "") throws -> Int {
@@ -164,11 +213,19 @@ public final class ReplicaStore {
 
     private func recordFilter(collection: String, query: String) -> (String, [String]) {
         let filter = "WHERE collection=? AND deleted=0"
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return (filter, [collection]) }
-        let terms = query.split(whereSeparator: { $0.isWhitespace }).map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"*" }.joined(separator: " AND ")
-        return (filter + " AND id IN (SELECT id FROM replica_search WHERE replica_search MATCH ? AND collection=?)",
-                [collection, terms, collection])
+        guard let terms = Self.matchTerms(query) else { return (filter, [collection]) }
+        return (filter + " AND " + Self.matching, [collection, terms])
     }
+
+    /// Every word, as a prefix, quoted so FTS5 reads none of it as syntax.
+    static func matchTerms(_ query: String) -> String? {
+        let words = query.split(whereSeparator: { $0.isWhitespace })
+        guard !words.isEmpty else { return nil }
+        return words.map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"*" }.joined(separator: " AND ")
+    }
+
+    /// The records the bound `MATCH` terms find.
+    static let matching = "rowid IN (SELECT rowid FROM replica_find WHERE replica_find MATCH ?)"
 
     /// `relatedRecords(...).count` without reading every payload: a long fic's
     /// chapters are megabytes of text, and this is asked on every book opened.
@@ -185,10 +242,22 @@ public final class ReplicaStore {
         return Self.extract(field)
     }
 
+    /// The journal's timeline order, indexed so the newest entries are read
+    /// first rather than every entry sorted on each refresh. Written exactly as
+    /// `newestRecords` writes it, or SQLite won't use it.
+    static let newestOrder = "\(extract("createdAt")) DESC,id DESC"
+
+    /// Every lookup index `buildIndexes` makes: one per related field, and the
+    /// journal's sort.
+    static var indexes: [(name: String, columns: String)] {
+        relatedFields.map { ("replica_by_\($0)", "collection,\(extract($0))") }
+            + [("replica_by_createdAt", "collection,\(extract("createdAt")),id")]
+    }
+
     /// The lookup indexes not yet built, by name.
     public func missingIndexes() throws -> [String] {
         let present = Set(try rows("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='replica_records'").map { $0[0] })
-        return Self.relatedFields.map { "replica_by_\($0)" }.filter { !present.contains($0) }
+        return Self.indexes.map(\.name).filter { !present.contains($0) }
     }
 
     /// A record's children (a fic's chapters, an entry's attachments) are
@@ -202,10 +271,55 @@ public final class ReplicaStore {
     /// built is kept even if the app is stopped partway through the rest.
     /// No version bump: an older build reads a database with them fine.
     public func buildIndexes(while shouldContinue: () -> Bool = { true }) throws {
-        for field in Self.relatedFields where try missingIndexes().contains("replica_by_\(field)") {
+        for index in Self.indexes where try missingIndexes().contains(index.name) {
             guard shouldContinue() else { return }
-            try execute("CREATE INDEX IF NOT EXISTS replica_by_\(field) ON replica_records(collection,\(Self.extract(field)))")
+            try execute("CREATE INDEX IF NOT EXISTS \(index.name) ON replica_records(\(index.columns))")
         }
+    }
+
+    /// The one-time work an upgraded database still owes, in steps short
+    /// enough that no write from the UI waits long on one, and never at launch
+    /// (see `buildIndexes`): the old search index is dropped, each chapter's
+    /// text moves out of its payload into `body`, then the lookup indexes are
+    /// built, over payloads that no longer carry the text. Stops between steps
+    /// when `shouldContinue` says so and picks up where it left off next time.
+    public func maintain(while shouldContinue: () -> Bool = { true }) throws {
+        if shouldContinue(), !(try rows("SELECT 1 FROM sqlite_master WHERE name='replica_search'")).isEmpty {
+            try execute("DROP TABLE replica_search")
+        }
+        var after = "0"
+        while shouldContinue() {
+            // By rowid from where the last batch ended, so the whole pass reads
+            // each record once. `body IS NULL` is answered from the row header.
+            let batch = try rows("""
+                SELECT rowid,payload FROM replica_records WHERE rowid>CAST(? AS INTEGER) AND collection='fic_chapters'
+                AND deleted=0 AND body IS NULL AND payload IS NOT NULL ORDER BY rowid LIMIT 25
+                """, [after])
+            guard let last = batch.last else { break }
+            try transaction {
+                for row in batch {
+                    let (payload, body) = Self.split("fic_chapters", try decode([String: JSONValue].self, row[1]))
+                    try execute("UPDATE replica_records SET payload=?,body=? WHERE rowid=CAST(? AS INTEGER)",
+                                [try json(payload), try body.map(json), row[0]])
+                }
+            }
+            after = last[0]
+        }
+        try buildIndexes(while: shouldContinue)
+    }
+
+    /// The fields `bodyFields` holds apart, taken out of `data`.
+    static func split(_ collection: String, _ data: [String: JSONValue]) -> ([String: JSONValue], [String: JSONValue]?) {
+        guard let fields = bodyFields[collection] else { return (data, nil) }
+        var payload = data, body: [String: JSONValue] = [:]
+        for field in fields { body[field] = payload.removeValue(forKey: field) }
+        return (payload, body)
+    }
+
+    /// How SQLite would run `newestRecords`, for the test that keeps it indexed.
+    func newestQueryPlan(collection: String) throws -> String {
+        try rows("EXPLAIN QUERY PLAN SELECT id FROM replica_records WHERE collection=? AND deleted=0 ORDER BY \(Self.newestOrder) LIMIT 200",
+                 [collection]).map { $0.last ?? "" }.joined(separator: "\n")
     }
 
     /// How SQLite would run `relatedRecords`, for the test that keeps it indexed.
@@ -244,7 +358,7 @@ public final class ReplicaStore {
         guard !collections.isEmpty else { return 0 }
         let marks = Array(repeating: "?", count: collections.count).joined(separator: ",")
         return Int64(try rows("""
-            SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM replica_records
+            SELECT COALESCE(SUM(length(CAST(payload AS BLOB))+COALESCE(length(CAST(body AS BLOB)),0)),0) FROM replica_records
             WHERE deleted=0 AND collection IN (\(marks))
             """, collections).first?[0] ?? "0") ?? 0
     }
@@ -507,8 +621,14 @@ public final class ReplicaStore {
 
     public func queue(record: SyncChange, data: [String: JSONValue], delete: Bool = false) throws -> ReplicaOperation {
         guard let epoch = try epoch else { throw ReplicaError.needsBootstrap }
-        guard record.collection == "journal_entries", !record.deleted,
-              (delete ? data.isEmpty : !data.isEmpty), Set(data.keys).isSubset(of: ["content", "title", "tags"]) else {
+        let editable: Set<String>
+        switch record.collection {
+        case "journal_entries": editable = ["content", "title", "tags"]
+        // A meal's words only, and never a delete: the server refuses both.
+        case "food_entries" where !delete: editable = FoodSync.editableFields
+        default: throw ReplicaError.invalidEdit
+        }
+        guard !record.deleted, (delete ? data.isEmpty : !data.isEmpty), Set(data.keys).isSubset(of: editable) else {
             throw ReplicaError.invalidEdit
         }
         guard !(try edits()).contains(where: { $0.operation.collection == record.collection && $0.operation.recordId == record.id }) else {
@@ -585,28 +705,51 @@ public final class ReplicaStore {
         }
     }
 
-    private func put(_ change: SyncChange) throws {
+    /// Whether the record was written: false when this device already held
+    /// that revision or a newer one.
+    @discardableResult
+    private func put(_ change: SyncChange) throws -> Bool {
         // Seen by the server's current history, so a running bootstrap keeps it.
         try execute("DELETE FROM replica_sweep WHERE collection=? AND id=?", [change.collection, change.id])
-        if let current = try record(collection: change.collection, id: change.id), current.revision >= change.revision { return }
-        try execute("INSERT OR REPLACE INTO replica_records(collection,id,revision,deleted,payload) VALUES (?,?,?,?,?)",
-                    [change.collection, change.id, String(change.revision), change.deleted ? "1" : "0", try change.data.map(json)])
-        try execute("DELETE FROM replica_search WHERE collection=? AND id=?", [change.collection, change.id])
-        if let data = change.data, !change.deleted {
-            let body = searchBody(data)
-            try execute("INSERT INTO replica_search(collection,id,title,body) VALUES (?,?,?,?)", [change.collection, change.id, change.title, body])
-        }
+        // The revision alone: reading the whole record decoded a chapter's text
+        // just to compare two numbers.
+        let current = try rows("SELECT rowid,revision FROM replica_records WHERE collection=? AND id=?",
+                               [change.collection, change.id]).first
+        if let current, Int64(current[1])! >= change.revision { return false }
+        let (payload, body) = change.data.map { Self.split(change.collection, $0) } ?? (nil, nil)
+        // An upsert rather than INSERT OR REPLACE, which deletes the row and
+        // gives it a new rowid: the search index is keyed by the rowid.
+        try execute("""
+            INSERT INTO replica_records(collection,id,revision,deleted,payload,body) VALUES (?,?,?,?,?,?)
+            ON CONFLICT(collection,id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted,
+                payload=excluded.payload,body=excluded.body
+            """, [change.collection, change.id, String(change.revision), change.deleted ? "1" : "0",
+                  try payload.map(json), try body.map(json)])
+        guard Self.searchable.contains(change.collection) else { return true }
+        let rowid = current?[0] ?? String(sqlite3_last_insert_rowid(db))
+        if current != nil { try execute("DELETE FROM replica_find WHERE rowid=CAST(? AS INTEGER)", [rowid]) }
+        if !change.deleted { try index(rowid, change) }
+        return true
     }
 
-    private func searchBody(_ data: [String: JSONValue]) -> String {
-        ["content", "rawContent", "contentText", "description", "summary", "transcript"]
-            .compactMap { data[$0]?.string }.joined(separator: "\n")
+    /// One record's search entry: its title, and the text a search should
+    /// also find it by (an entry's text and tags, an article's summary and text, a meal's
+    /// dish, place and notes).
+    private func index(_ rowid: String, _ change: SyncChange) throws {
+        guard let data = change.data else { return }
+        var text = ["content", "rawContent", "description", "summary", "dish", "place", "notes"].compactMap { data[$0]?.string }
+        text += data["tags"]?.array?.compactMap(\.string) ?? []
+        try execute("INSERT INTO replica_find(rowid,title,body) VALUES (CAST(? AS INTEGER),?,?)",
+                    [rowid, change.title, text.joined(separator: "\n")])
     }
 
     private func recordsQuery(_ suffix: String, _ arguments: [String?]) throws -> [SyncChange] {
-        try rows("SELECT collection,id,revision,deleted,COALESCE(payload,'') FROM replica_records \(suffix)", arguments).map {
-            SyncChange(revision: Int64($0[2])!, collection: $0[0], id: $0[1], deleted: $0[3] == "1",
-                       data: $0[4].isEmpty ? nil : try decode([String: JSONValue].self, $0[4]))
+        try rows("SELECT collection,id,revision,deleted,COALESCE(payload,''),COALESCE(body,'') FROM replica_records \(suffix)", arguments).map {
+            var data = $0[4].isEmpty ? nil : try decode([String: JSONValue].self, $0[4])
+            if !$0[5].isEmpty, data != nil {
+                data!.merge(try decode([String: JSONValue].self, $0[5])) { _, held in held }
+            }
+            return SyncChange(revision: Int64($0[2])!, collection: $0[0], id: $0[1], deleted: $0[3] == "1", data: data)
         }
     }
 

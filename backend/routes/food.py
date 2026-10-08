@@ -704,17 +704,29 @@ def add_media(id):
     if not db.execute('SELECT 1 FROM food_entries WHERE id=?', (id,)).fetchone():
         return jsonify({'error': 'Not found'}), 404
     files = request.files.getlist('media')
+    # The phone adds photos to a meal it is editing offline and re-POSTs them
+    # until they land, so its ids (positional, as on create) make a replay
+    # answer with the stored row rather than store the picture again.
+    media_ids = _parse_media_ids(request.form.get('mediaIds'))
     saved = []
     pos = _next_media_position(db, id)
-    for f in files:
-        if f and f.filename:
-            res = _save_media_file(id, f, pos)
+    for i, f in enumerate(files):
+        media_id = media_ids[i] if i < len(media_ids) else None
+        existing = media_id and db.execute(
+            'SELECT id, kind, position, transcript, transcript_status, transcript_error,'
+            ' description, description_status, description_error FROM food_media WHERE id=?',
+            (media_id,),
+        ).fetchone()
+        if existing:
+            saved.append(_media_dict(existing))
+        elif f and f.filename:
+            res = _save_media_file(id, f, pos, media_id)
             if res:
                 saved.append(res[0])
                 pos += 1
     db.execute('UPDATE food_entries SET updated_at=? WHERE id=?', (int(time.time()), id))
     db.commit()
-    return jsonify({'media': saved}), 201
+    return jsonify({'id': id, 'media': saved}), 201
 
 
 @bp.delete('/media/<media_id>')

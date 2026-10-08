@@ -3,6 +3,7 @@ import WatchKit
 import WatchConnectivity
 import AVFoundation
 import UserNotifications
+import WidgetKit
 import LunaschalCore
 
 @main
@@ -34,21 +35,61 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     @Published var received: Set<String> = []
     @Published var uploaded: Set<String> = []
     @Published var message: String?
+    /// What the recorder is making, so the face and the Controls can show it.
+    private var recordingMode: CaptureMode?
 
     private init(store: CaptureStore) throws {
         self.store = store
         receiptRoot = store.root
         recorder = Recorder(store: store)
-        pomodoro = try PomodoroModel(root: store.root.deletingLastPathComponent()
-            .appendingPathComponent("Pomodoro", isDirectory: true))
+        pomodoro = PomodoroModel(engine: try PomodoroEngine(fallback: store.root.deletingLastPathComponent()
+            .appendingPathComponent("Pomodoro", isDirectory: true)))
         pomodoroOutbox = pomodoro.outbox.root
         super.init()
         try store.recoverInterruptedRecordings()
-        recorder.onChange = { [weak self] in self?.reload(); self?.sendPending() }
+        recorder.onChange = { [weak self] in self?.reload(); self?.sendPending(); self?.publishRecording() }
         recorder.onError = { [weak self] in self?.message = $0.localizedDescription }
         reload()
+        publishRecording() // clears a status left behind by a crash mid-clip
         WCSession.default.delegate = self
         WCSession.default.activate()
+    }
+
+    /// Starts a clip in `mode`, or stops and saves the one going. One press
+    /// does both, from the list, the face or a Control.
+    func toggleRecording(_ mode: CaptureMode) async {
+        if recorder.activeID != nil { recorder.stop(); return }
+        guard !recorder.isStarting else { return }
+        recordingMode = mode
+        await recorder.start(mode: mode)
+    }
+
+    /// A Record or Transcribe Control: `on` is the toggle's new value, so a
+    /// press that arrives after the clip already stopped does nothing.
+    static func toggleRecording(_ mode: CaptureMode, on: Bool) async throws {
+        guard case .success(let model) = startup else { throw RecordingIntentError.needsApp }
+        if on == (model.recorder.activeID != nil) { return }
+        await model.toggleRecording(mode)
+        if on, model.recorder.activeID == nil {
+            throw model.message.map { RecorderError.message($0) } ?? RecordingIntentError.needsApp
+        }
+    }
+
+    /// Tells the complications and Controls whether a clip is going.
+    private func publishRecording() {
+        let status = recorder.activeID.map { _ in RecordingStatus(mode: recordingMode ?? .record, startedAt: Date()) }
+        if let url = WatchComplication.recordingURL {
+            // Keep the start time of the clip already going rather than restamping it.
+            let current = RecordingStatus.load(from: url)
+            if (status == nil) != (current == nil) || status?.mode != current?.mode {
+                try? RecordingStatus.save(status, to: url)
+            }
+        }
+        if recorder.activeID == nil { recordingMode = nil }
+        for kind in WatchComplication.recordingKinds { WidgetCenter.shared.reloadTimelines(ofKind: kind) }
+        WidgetCenter.shared.reloadTimelines(ofKind: WatchComplication.launcherKind)
+        ControlCenter.shared.reloadControls(ofKind: WatchComplication.recordControl)
+        ControlCenter.shared.reloadControls(ofKind: WatchComplication.transcribeControl)
     }
 
     func reload() {
@@ -155,6 +196,41 @@ private struct WatchCaptureView: View {
             if let kind = PomodoroModel.launchStart, model.pomodoro.timer.run == nil {
                 model.pomodoro.start(kind); showTimer = true
             }
+            #if DEBUG
+            // `-WatchLink lunaschal-watch://record,lunaschal-watch://record`:
+            // complication taps, three seconds apart, since the watchOS
+            // simulator cannot open URLs.
+            if let text = UserDefaults.standard.string(forKey: "WatchLink") {
+                let links = text.split(separator: ",").compactMap { URL(string: String($0)).flatMap(WatchLink.init(url:)) }
+                Task {
+                    for (index, link) in links.enumerated() {
+                        if index > 0 { try? await Task.sleep(nanoseconds: 3_000_000_000) }
+                        open(link)
+                    }
+                }
+            }
+            #endif
+            if let link = PomodoroEngine.takePendingLink() { open(link) }
+        }
+        .onOpenURL { url in
+            if let link = WatchLink(url: url) { open(link) }
+        }
+    }
+
+    /// A tap on a complication, or a screen a Control asked for. The face
+    /// cannot act without opening the app, so the tap does the thing at once:
+    /// Focus and Timeout start (or, pressed again, show the timer), and
+    /// Record and Transcribe start or stop a clip.
+    private func open(_ link: WatchLink) {
+        switch link {
+        case .timer:
+            showTimer = true
+        case .start(let kind):
+            model.pomodoro.press(kind)
+            showTimer = true
+        case .record, .transcribe:
+            showTimer = false
+            Task { await model.toggleRecording(link == .record ? .record : .transcribe) }
         }
     }
 
@@ -165,9 +241,9 @@ private struct WatchCaptureView: View {
                 Text("Recording…").foregroundStyle(.red)
                 Button("Stop and save", role: .destructive) { recorder.stop() }
             } else {
-                Button("Transcribe", systemImage: "waveform") { Task { await recorder.start(mode: .transcribe) } }
+                Button("Transcribe", systemImage: "waveform") { Task { await model.toggleRecording(.transcribe) } }
                     .disabled(recorder.isStarting)
-                Button("Record", systemImage: "mic") { Task { await recorder.start(mode: .record) } }
+                Button("Record", systemImage: "mic") { Task { await model.toggleRecording(.record) } }
                     .disabled(recorder.isStarting)
             }
             if let message = model.message { Text(message).font(.footnote) }
@@ -193,7 +269,10 @@ private struct WatchCaptureView: View {
                 .font(.footnote)
         }
         .onChange(of: phase) { _, value in
-            if value == .active { model.reload(); model.sendPending(); model.pomodoro.refresh(); model.pomodoro.sendPending() }
+            if value == .active {
+                model.reload(); model.sendPending(); model.pomodoro.refresh(); model.pomodoro.sendPending()
+                if let link = PomodoroEngine.takePendingLink() { open(link) }
+            }
         }
         .confirmationDialog("Remove this Watch recording?", isPresented: Binding(
             get: { removing != nil }, set: { if !$0 { removing = nil } })) {

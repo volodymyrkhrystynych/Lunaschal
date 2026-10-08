@@ -55,6 +55,19 @@ public actor LibraryDownload {
         try replicaStore().storedBytes(collections: ["fics"] + Self.collections(knowledge: true))
     }
 
+    /// The collections the last `updateText` changed, taken once.
+    private var textChanges: Set<String> = []
+    public func takeTextChanges() -> Set<String> {
+        defer { textChanges = [] }
+        return textChanges
+    }
+
+    /// Set when the server stopped accepting the library's own cursor, so the
+    /// downloaded text can only be brought up to date by a Wi-Fi bootstrap.
+    /// Only that: fics opened one at a time put chapter text here without the
+    /// library ever being bootstrapped, and that is no reason to download it all.
+    public private(set) var needsBootstrap = false
+
     /// Cellular-capable text updates never bootstrap or download binary media.
     /// Limit each pass so a large backlog doesn't monopolize ordinary sync.
     @discardableResult
@@ -63,6 +76,10 @@ public actor LibraryDownload {
         guard !running else { return false }
         running = true
         defer { running = false }
+        return try await updateTextPages(using: transport, collections: collections, maxPages: maxPages)
+    }
+
+    private func updateTextPages(using transport: ReplicaTransport, collections: [String], maxPages: Int) async throws -> Bool {
         let store = try replicaStore()
         guard try store.isBootstrapped(collections: collections) else { return false }
         for _ in 0..<max(0, maxPages) {
@@ -75,12 +92,14 @@ public actor LibraryDownload {
                       page.epoch == (try store.epoch),
                       cursor == (try store.cursor(collections: collections)) else {
                     try store.resetCursor(collections: collections)
+                    needsBootstrap = true
                     return false
                 }
-                try store.apply(page, startingBootstrap: false, expectedCursor: cursor)
+                textChanges.formUnion(try store.apply(page, startingBootstrap: false, expectedCursor: cursor))
                 if !page.hasMore { return true }
             } catch let error as HTTPFailure where error.status == 410 {
                 try store.resetCursor(collections: collections)
+                needsBootstrap = true
                 return false
             }
         }
@@ -121,6 +140,7 @@ public actor LibraryDownload {
                 try store.resetCursor(collections: collections)
             }
         }
+        needsBootstrap = false
         let supported = try await transport.mediaCollections()
         for collection in supported where mediaCollections.contains(collection) {
             var after = ""

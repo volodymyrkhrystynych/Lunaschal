@@ -42,13 +42,21 @@ struct CaptureRoot: View {
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
-        .onChange(of: model.syncPasses) { _, _ in Task { await todo.refresh(); await learning.refresh() } }
+        // The Todo badge stays current, but neither list is fetched again for a
+        // pass that didn't touch it.
+        .onChange(of: model.syncChanges) { _, changes in
+            if changes.touches([SyncChanges.todos]) { Task { await todo.refresh() } }
+            if changes.full { Task { await learning.refresh() } }
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active else { model.leaveForeground(); return }
             model.resumeFicDownloads()
+            // Everything once on the way in, then one small question every
+            // 30 seconds: has the server anything new? Only what it names is pulled.
+            model.syncOnForeground()
             while !Task.isCancelled {
-                model.requestSync()
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                model.checkIn()
             }
         }
     }
@@ -190,12 +198,12 @@ private struct CaptureComposer: View {
     @AppStorage("youtubeDraftLinks") private var draftLinks = ""
     @AppStorage("youtubeDraftURL") private var youtubeURL = ""
     @State private var saved = false
-    @State private var showCamera = false
-    @State private var showFiles = false
-    @State private var photoItems: [PhotosPickerItem] = []
     @FocusState private var typing: Bool
 
     private var links: [String] { draftLinks.split(separator: "\n").map(String.init) }
+    private var linkList: Binding<[String]> {
+        Binding(get: { links }, set: { draftLinks = $0.joined(separator: "\n") })
+    }
     private var typedURL: String { youtubeURL.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var canSave: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -213,37 +221,13 @@ private struct CaptureComposer: View {
             Section {
                 TextEditor(text: $text).frame(minHeight: 160).accessibilityLabel("Journal text")
                     .focused($typing)
-                actions
+                AttachmentButtons(model: model, recorder: recorder) { saved = false; typing = false }
                 if saved { Text("Saved on this device").foregroundStyle(.secondary) }
             }
             if !model.draft.isEmpty {
-                Section("Attachments") {
-                    ForEach(model.draft.clips) { clip in
-                        ClipRow(clip: clip, url: try? model.store.clipURL(clip),
-                                recording: recorder.activeID == clip.attachmentID)
-                    }
-                    .onDelete { offsets in offsets.map { model.draft.clips[$0] }.forEach(model.discard) }
-                    ForEach(model.draft.files) { file in StagedFileRow(model: model, file: file) }
-                        .onDelete { offsets in offsets.map { model.draft.files[$0] }.forEach(model.discard) }
-                }
+                Section("Attachments") { StagedAttachmentRows(model: model, recorder: recorder, draft: model.draft) }
             }
-            Section("YouTube") {
-                ForEach(links, id: \.self) { link in
-                    Label(link, systemImage: "play.rectangle").lineLimit(1).truncationMode(.middle)
-                }
-                .onDelete { offsets in
-                    var kept = links
-                    kept.remove(atOffsets: offsets)
-                    draftLinks = kept.joined(separator: "\n")
-                }
-                HStack {
-                    TextField("YouTube video URL", text: $youtubeURL)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                        .focused($typing)
-                        .onSubmit { _ = addTypedLink() }
-                    Button("Add link") { _ = addTypedLink() }.disabled(typedURL.isEmpty)
-                }
-            }
+            YouTubeLinksSection(model: model, links: linkList, typed: $youtubeURL, typing: $typing) { saved = false }
         }
         // Pinned rather than inside a section, so it stays in the same place
         // however far the form has scrolled.
@@ -265,96 +249,11 @@ private struct CaptureComposer: View {
             .padding()
         }
         .onChange(of: text) { _, value in if !value.isEmpty { saved = false } }
-        .fullScreenCover(isPresented: $showCamera) {
-            CameraPicker { image in
-                guard let data = image.jpegData(compressionQuality: 0.9) else { return }
-                model.stage { try $0.stageFile(data: data, name: photoName("jpg"), contentType: "image/jpeg") }
-                saved = false
-            }.ignoresSafeArea()
-        }
-        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-            guard case .success(let urls) = result else { return }
-            for url in urls {
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                let type = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-                model.stage { try $0.stageFile(from: url, name: url.lastPathComponent, contentType: type) }
-                saved = false
-            }
-        }
-        .onChange(of: photoItems) { _, items in
-            guard !items.isEmpty else { return }
-            photoItems = []
-            Task { for item in items { await stagePhoto(item) } }
-        }
-    }
-
-    /// One line of icon buttons: the two microphone modes, then the three ways
-    /// to attach something. While recording, the line becomes the Stop button,
-    /// which keeps the clip in the draft rather than saving an entry.
-    @ViewBuilder private var actions: some View {
-        if recorder.activeID != nil {
-            Button(role: .destructive) { recorder.stop() } label: {
-                Label("Stop recording", systemImage: "stop.circle.fill")
-            }
-        } else {
-            HStack {
-                Button { saved = false; Task { await recorder.startClip(transcribe: true) } } label: {
-                    Label("Transcribe", systemImage: "mic")
-                }.disabled(recorder.isStarting)
-                Spacer()
-                Button { saved = false; Task { await recorder.startClip(transcribe: false) } } label: {
-                    Label("Record", systemImage: "record.circle")
-                }.disabled(recorder.isStarting)
-                Spacer()
-                Button { typing = false; showCamera = true } label: {
-                    Label("Take photo", systemImage: "camera")
-                }.disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-                Spacer()
-                PhotosPicker(selection: $photoItems, matching: .images) {
-                    Label("Choose photo", systemImage: "photo.on.rectangle")
-                }
-                Spacer()
-                Button { typing = false; showFiles = true } label: {
-                    Label("Attach file", systemImage: "paperclip")
-                }
-            }
-            .labelStyle(.iconOnly).font(.title2)
-            // Without this a tap anywhere on the row fires every button in it.
-            .buttonStyle(.borderless)
-            .overlay { if recorder.isStarting { ProgressView() } }
-        }
-    }
-
-    private func stagePhoto(_ item: PhotosPickerItem) async {
-        do {
-            guard let data = try await item.loadTransferable(type: Data.self) else { return }
-            let type = item.supportedContentTypes.first { $0.conforms(to: .image) }
-            model.stage { try $0.stageFile(data: data, name: photoName(type?.preferredFilenameExtension ?? "jpg"),
-                                           contentType: type?.preferredMIMEType) }
-            saved = false
-        } catch { model.message = error.localizedDescription }
-    }
-
-    private func photoName(_ ext: String) -> String {
-        "Photo \(Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))).\(ext)"
-    }
-
-    /// Validates the typed URL and moves it into the entry's link list.
-    private func addTypedLink() -> Bool {
-        guard !typedURL.isEmpty else { return true }
-        do {
-            let link = try YouTubeLink.canonical(typedURL)
-            if !links.contains(link) { draftLinks = (links + [link]).joined(separator: "\n") }
-            youtubeURL = ""
-            saved = false
-            return true
-        } catch { model.message = error.localizedDescription; return false }
     }
 
     private func save() {
         // A URL typed but not yet added still belongs to this entry.
-        guard addTypedLink() else { return }
+        guard YouTubeLinksSection.add(typed: $youtubeURL, to: linkList, model: model) else { return }
         if model.saveEntry(text, youtubeURLs: links) {
             text = ""; draftLinks = ""; saved = true; typing = false
         }
@@ -365,6 +264,157 @@ private struct CaptureComposer: View {
         if model.saveEntry(text, youtubeURLs: [], kind: .food) {
             text = ""; saved = true; typing = false
         }
+    }
+}
+
+/// The composer's one line of icon buttons: the two microphone modes, then the
+/// three ways to attach something. While recording, the line becomes the Stop
+/// button, which keeps the clip in the draft rather than saving anything.
+///
+/// Shared by the Capture tab (`entryID` nil, its own draft) and by editing a
+/// journal entry or a meal, where everything lands in that entry's draft and
+/// is sent only when the edit is saved. `foodOnly` limits Attach file to what
+/// the food log keeps: pictures, videos and voice memos.
+struct AttachmentButtons: View {
+    @ObservedObject var model: CaptureModel
+    @ObservedObject var recorder: Recorder
+    var entryID: String? = nil
+    var foodOnly = false
+    /// Called when a button is used: the composer clears its "Saved" note and
+    /// drops the keyboard.
+    var onUse: () -> Void = {}
+    @State private var showCamera = false
+    @State private var showFiles = false
+    @State private var photoItems: [PhotosPickerItem] = []
+
+    var body: some View {
+        Group {
+            if recorder.activeID != nil {
+                Button(role: .destructive) { recorder.stop() } label: {
+                    Label("Stop recording", systemImage: "stop.circle.fill")
+                }
+            } else {
+                HStack {
+                    Button { onUse(); Task { await recorder.startClip(transcribe: true, into: entryID) } } label: {
+                        Label("Transcribe", systemImage: "mic")
+                    }.disabled(recorder.isStarting)
+                    Spacer()
+                    Button { onUse(); Task { await recorder.startClip(transcribe: false, into: entryID) } } label: {
+                        Label("Record", systemImage: "record.circle")
+                    }.disabled(recorder.isStarting)
+                    Spacer()
+                    Button { onUse(); showCamera = true } label: {
+                        Label("Take photo", systemImage: "camera")
+                    }.disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                    Spacer()
+                    PhotosPicker(selection: $photoItems, matching: .images) {
+                        Label("Choose photo", systemImage: "photo.on.rectangle")
+                    }
+                    Spacer()
+                    Button { onUse(); showFiles = true } label: {
+                        Label("Attach file", systemImage: "paperclip")
+                    }
+                }
+                .labelStyle(.iconOnly).font(.title2)
+                // Without this a tap anywhere on the row fires every button in it.
+                .buttonStyle(.borderless)
+                .overlay { if recorder.isStarting { ProgressView() } }
+            }
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { image in
+                guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+                model.stage { try $0.stageFile(data: data, name: photoName("jpg"), contentType: "image/jpeg", into: entryID) }
+                onUse()
+            }.ignoresSafeArea()
+        }
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: foodOnly ? [.image, .movie, .audio] : [.item],
+                      allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            for url in urls {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                let type = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+                model.stage { try $0.stageFile(from: url, name: url.lastPathComponent, contentType: type, into: entryID) }
+                onUse()
+            }
+        }
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            Task { for item in items { await stagePhoto(item) } }
+        }
+    }
+
+    private func stagePhoto(_ item: PhotosPickerItem) async {
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else { return }
+            let type = item.supportedContentTypes.first { $0.conforms(to: .image) }
+            model.stage { try $0.stageFile(data: data, name: photoName(type?.preferredFilenameExtension ?? "jpg"),
+                                           contentType: type?.preferredMIMEType, into: entryID) }
+            onUse()
+        } catch { model.message = error.localizedDescription }
+    }
+
+    private func photoName(_ ext: String) -> String {
+        "Photo \(Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))).\(ext)"
+    }
+}
+
+/// A draft's clips and files, each removable with a swipe.
+struct StagedAttachmentRows: View {
+    @ObservedObject var model: CaptureModel
+    @ObservedObject var recorder: Recorder
+    let draft: CaptureDraft
+
+    var body: some View {
+        ForEach(draft.clips) { clip in
+            ClipRow(clip: clip, url: try? model.store.clipURL(clip),
+                    recording: recorder.activeID == clip.attachmentID)
+        }
+        .onDelete { offsets in offsets.map { draft.clips[$0] }.forEach(model.discard) }
+        ForEach(draft.files) { file in StagedFileRow(model: model, file: file) }
+            .onDelete { offsets in offsets.map { draft.files[$0] }.forEach(model.discard) }
+    }
+}
+
+/// The YouTube links going onto an entry, and the field a new one is typed in.
+struct YouTubeLinksSection: View {
+    @ObservedObject var model: CaptureModel
+    @Binding var links: [String]
+    @Binding var typed: String
+    var typing: FocusState<Bool>.Binding
+    var onChange: () -> Void = {}
+
+    var body: some View {
+        Section("YouTube") {
+            ForEach(links, id: \.self) { link in
+                Label(link, systemImage: "play.rectangle").lineLimit(1).truncationMode(.middle)
+            }
+            .onDelete { offsets in links.remove(atOffsets: offsets) }
+            HStack {
+                TextField("YouTube video URL", text: $typed)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                    .focused(typing)
+                    .onSubmit { if Self.add(typed: $typed, to: $links, model: model) { onChange() } }
+                Button("Add link") { if Self.add(typed: $typed, to: $links, model: model) { onChange() } }
+                    .disabled(typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    /// Validates the typed URL and moves it into the link list. False, with
+    /// the reason shown, when it is not a YouTube video link.
+    @MainActor
+    static func add(typed: Binding<String>, to links: Binding<[String]>, model: CaptureModel) -> Bool {
+        let value = typed.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return true }
+        do {
+            let link = try YouTubeLink.canonical(value)
+            if !links.wrappedValue.contains(link) { links.wrappedValue.append(link) }
+            typed.wrappedValue = ""
+            return true
+        } catch { model.message = error.localizedDescription; return false }
     }
 }
 

@@ -31,7 +31,7 @@ final class JournalSearchTests: XCTestCase {
         store = nil
         var connection: OpaquePointer?
         XCTAssertEqual(sqlite3_open(url.path, &connection), SQLITE_OK)
-        XCTAssertEqual(sqlite3_exec(connection, "UPDATE replica_search SET body='A polished entry'; PRAGMA user_version=2", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(connection, "DELETE FROM replica_find; PRAGMA user_version=2", nil, nil, nil), SQLITE_OK)
         sqlite3_close(connection)
         let reopened = try ReplicaStore(url: url)
         XCTAssertEqual(try reopened.records(collection: "journal_entries", query: "constell").map(\.id), [id])

@@ -8,24 +8,34 @@ import SwiftUI
 struct JournalFeedView: View {
     @ObservedObject var model: CaptureModel
     @State private var query = ""
+    /// The card at the top of the screen. Held by id, so an entry arriving
+    /// above it (a sync, a capture becoming its server entry) doesn't move
+    /// what is being read.
+    @State private var anchor: String?
 
     private var searching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
-    /// What this device holds that the server's record doesn't show yet.
+    /// What this device holds that the server's record doesn't show yet. An
+    /// addition to an entry is shown on that entry, never as one of its own.
     private var localCaptures: [Capture] {
-        let onServer = Set(model.journalRecords.map(\.id))
+        let onServer = Set(model.journalRecords.map(\.id) + model.foodRecords.map(\.id))
+        // Once the server's entry (or meal) is here it stands in for the
+        // capture, which shares its id, so the card keeps its place in the list.
         return model.captures.filter { capture in
-            capture.matchesSearch(query)
-                && !(capture.state == .synced && onServer.contains(capture.snapshot?.id ?? capture.id))
+            capture.entryID == nil && capture.matchesSearch(query)
+                && !onServer.contains(capture.snapshot?.id ?? capture.id)
         }
     }
 
-    /// Server entries and this device's captures, as one timeline.
+    /// Server entries, meals and this device's captures, as one timeline.
     private var items: [FeedItem] {
         let records = model.journalRecords.map {
             FeedItem.entry($0, JournalTimestamp.parse($0.data?["createdAt"]?.string) ?? .distantPast)
         }
-        return (records + localCaptures.map { FeedItem.capture($0) }).sorted { $0.time > $1.time }
+        let meals = model.foodRecords.map {
+            FeedItem.meal($0, JournalTimestamp.parse($0.data?["createdAt"]?.string) ?? .distantPast)
+        }
+        return (records + meals + localCaptures.map { FeedItem.capture($0) }).sorted { $0.time > $1.time }
     }
 
     var body: some View {
@@ -59,22 +69,37 @@ struct JournalFeedView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
+            .scrollTargetLayout()
         }
+        .scrollPosition(id: $anchor, anchor: .top)
         .background(Color(.systemGroupedBackground))
         .overlay {
-            if localCaptures.isEmpty && model.journalRecords.isEmpty && model.pendingEdits.isEmpty {
+            if localCaptures.isEmpty && model.journalRecords.isEmpty && model.foodRecords.isEmpty && model.pendingEdits.isEmpty {
                 ContentUnavailableView(searching ? "No matching entries" : "No captures yet", systemImage: "book.closed")
             }
         }
         .navigationTitle("Journal")
+        #if DEBUG
+        .toolbar {
+            if JournalFixture.arrivalEnabled {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Arrive") { model.fixtureArrival() }.accessibilityIdentifier("fixture-arrive")
+                }
+            }
+        }
+        #endif
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search saved journal")
         .onAppear { model.searchJournal(query) }
-        .onChange(of: query) { _, value in model.searchJournal(value) }
+        .onChange(of: query) { _, value in
+            anchor = nil
+            model.searchJournal(value)
+        }
     }
 
     @ViewBuilder private func card(_ item: FeedItem) -> some View {
         switch item {
         case .entry(let record, _): EntryCard(model: model, record: record)
+        case .meal(let record, _): FoodEntryCard(model: model, record: record)
         case .capture(let capture):
             NavigationLink { CaptureDetail(model: model, id: capture.id) } label: {
                 LocalCaptureCard(model: model, capture: capture)
@@ -84,16 +109,21 @@ struct JournalFeedView: View {
 
     private enum FeedItem {
         case entry(SyncChange, Date)
+        case meal(SyncChange, Date)
         case capture(Capture)
         var id: String {
             switch self {
             case .entry(let record, _): return record.id
-            case .capture(let capture): return "capture:" + capture.id
+            case .meal(let record, _): return "meal:" + record.id
+            // The entry's own id: the same card before and after it syncs.
+            case .capture(let capture):
+                let id = capture.snapshot?.id ?? capture.id
+                return capture.kind == .food ? "meal:" + id : id
             }
         }
         var time: Date {
             switch self {
-            case .entry(_, let time): return time
+            case .entry(_, let time), .meal(_, let time): return time
             case .capture(let capture): return capture.createdAt
             }
         }
@@ -105,7 +135,8 @@ struct JournalFeedView: View {
         var id: String {
             switch self {
             case .item(let item): return item.id
-            case .event(let occurrence, let items): return "event:\(occurrence.id):\(items.first?.id ?? "")"
+            // The occurrence alone: an entry joining the run mustn't make it a new view.
+            case .event(let occurrence, _): return "event:\(occurrence.id)"
             }
         }
     }
@@ -282,6 +313,7 @@ private struct EntryCard: View {
                     if !content.isEmpty {
                         Text(content).font(.body).lineLimit(10).multilineTextAlignment(.leading)
                     }
+                    PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -305,6 +337,131 @@ private struct EntryCard: View {
                 .font(.subheadline)
             }
         }
+    }
+}
+
+// MARK: Meals
+
+/// One meal from the food log: what was eaten, where, and its photos and clips.
+private struct FoodEntryCard: View {
+    @ObservedObject var model: CaptureModel
+    let record: SyncChange
+
+    private var meal: FoodEntryRecord? { FoodEntryRecord(record: record) }
+    private var media: [JournalAttachmentItem] { model.foodMedia[record.id] ?? [] }
+
+    var body: some View {
+        FeedCard {
+            NavigationLink { FoodRecordView(model: model, record: record) } label: {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Label(meal?.heading ?? "Meal", systemImage: "fork.knife").font(.headline).lineLimit(2)
+                        Spacer()
+                        if let created = meal?.createdAt {
+                            Text(created, format: .dateTime.month(.abbreviated).day().hour().minute())
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if let place = meal?.place { Text(place).font(.subheadline).foregroundStyle(.secondary) }
+                    EntryWeatherText(weather: EntryWeather.parse(meal?.weather))
+                    if let body = meal?.body {
+                        Text(body).font(.body).lineLimit(6).multilineTextAlignment(.leading)
+                    }
+                    PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("food-entry")
+            MealMedia(model: model, media: media)
+        }
+    }
+}
+
+private struct MealMedia: View {
+    @ObservedObject var model: CaptureModel
+    let media: [JournalAttachmentItem]
+
+    var body: some View {
+        let photos = media.filter { $0.media == .image }
+        if !photos.isEmpty { PhotoStrip(model: model, photos: photos) }
+        ForEach(media.filter { $0.media == .video }) { item in VideoCard(model: model, item: item) }
+        ForEach(media.filter { $0.media == .audio }) { item in AudioRow(model: model, item: item) }
+    }
+}
+
+/// A meal opened from the Journal: read it, or edit its dish, place and notes
+/// and add photos, videos and recordings with the Capture tab's own buttons.
+/// Everything is saved on the device first and sent when it can be.
+struct FoodRecordView: View {
+    @ObservedObject var model: CaptureModel
+    let record: SyncChange
+    @State private var editing = false
+    @State private var dish = ""
+    @State private var place = ""
+    @State private var notes = ""
+    @FocusState private var typing: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    private var meal: FoodEntryRecord? { FoodEntryRecord(record: record) }
+    private var staged: CaptureDraft { model.entryDrafts[record.id] ?? CaptureDraft() }
+    private var changes: [String: JSONValue] {
+        var out: [String: JSONValue] = [:]
+        if dish != meal?.dish ?? "" { out["dish"] = .string(dish) }
+        if place != meal?.place ?? "" { out["place"] = .string(place) }
+        if notes != meal?.notes ?? "" { out["notes"] = .string(notes) }
+        return out
+    }
+
+    var body: some View {
+        Form {
+            if editing {
+                Section {
+                    TextField("Dish", text: $dish).focused($typing)
+                    TextField("Place", text: $place).focused($typing)
+                    TextEditor(text: $notes).frame(minHeight: 160).focused($typing)
+                        .accessibilityLabel("Meal notes")
+                    AttachmentButtons(model: model, recorder: model.recorder, entryID: record.id,
+                                      foodOnly: true) { typing = false }
+                }
+                if !staged.isEmpty {
+                    Section("Adding") { StagedAttachmentRows(model: model, recorder: model.recorder, draft: staged) }
+                }
+                Section {
+                    Button("Save edit on this device") {
+                        if model.saveEdit(record, changes: changes) { dismiss() }
+                    }
+                    .disabled(changes.isEmpty && staged.isEmpty)
+                    Button("Cancel", role: .cancel) { model.discardEdit(record.id); editing = false }
+                }
+            } else {
+                Section {
+                    if let place = meal?.place { LabeledContent("Place", value: place) }
+                    if let rating = meal?.rating {
+                        LabeledContent("Rating", value: String(repeating: "★", count: rating))
+                    }
+                    if let created = meal?.createdAt { LabeledContent("Eaten", value: created.formatted()) }
+                    if let notes = meal?.notes { Text(notes).textSelection(.enabled) }
+                    if let raw = meal?.rawContent, raw != meal?.notes {
+                        DisclosureGroup("What was written and said") { Text(raw).textSelection(.enabled) }
+                    }
+                    Button("Edit") { startEditing() }
+                    PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
+                }
+                let media = model.foodMedia[record.id] ?? []
+                if !media.isEmpty {
+                    Section("Photos and recordings") { MealMedia(model: model, media: media) }
+                }
+            }
+        }
+        .navigationTitle(meal?.heading ?? "Meal").navigationBarTitleDisplayMode(.inline)
+        .onAppear { if !editing && !staged.isEmpty { startEditing() } }
+    }
+
+    private func startEditing() {
+        dish = meal?.dish ?? ""; place = meal?.place ?? ""; notes = meal?.notes ?? ""
+        editing = true
     }
 }
 

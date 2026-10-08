@@ -104,21 +104,52 @@ def page(*, token=None, collections=None, limit=100):
             cursor = {'v': PROTOCOL_VERSION, 'epoch': epoch, 'after': 0, 'through': high,
                       'mode': 'bootstrap', 'collections': names}
         slots = ','.join('?' for _ in cursor['collections'])
-        args = [*cursor['collections'], cursor['after'], cursor['through'], limit + 1]
-        latest = '''AND sequence=(SELECT MAX(c.sequence) FROM mobile_sync_changes c
-                    WHERE c.collection=mobile_sync_changes.collection
-                    AND c.record_id=mobile_sync_changes.record_id AND c.sequence<=?)'''
-        if cursor['mode'] == 'bootstrap':
-            args.insert(-1, cursor['through'])
+        # Only each record's latest version inside the window, in a delta as in
+        # a bootstrap: a delta used to send every version a record went through
+        # since the cursor, and the device wrote each one only to keep the last.
+        # The window is fixed by the cursor, so paging through it stays exact.
         rows = db.execute(f'''
             SELECT * FROM mobile_sync_changes WHERE collection IN ({slots})
             AND sequence>? AND sequence<=?
-            {latest if cursor['mode'] == 'bootstrap' else ''}
+            AND sequence=(SELECT MAX(c.sequence) FROM mobile_sync_changes c
+                WHERE c.collection=mobile_sync_changes.collection
+                AND c.record_id=mobile_sync_changes.record_id AND c.sequence<=?)
             ORDER BY sequence LIMIT ?
-        ''', args).fetchall()
+        ''', [*cursor['collections'], cursor['after'], cursor['through'], cursor['through'], limit + 1]).fetchall()
         more = len(rows) > limit
         rows = rows[:limit]
         cursor['after'] = rows[-1]['sequence'] if more else cursor['through']
         return {'protocolVersion': PROTOCOL_VERSION, 'epoch': epoch, 'mode': cursor['mode'],
                 'changes': [change_dict(r) for r in rows], 'hasMore': more,
                 'cursor': encode_cursor(cursor), 'collections': cursor['collections']}
+
+
+def status(tokens):
+    """Whether each cursor has anything to fetch, without fetching it.
+
+    A device checks in often and almost always finds nothing new; this answers
+    every scope it holds in one request instead of an empty page per scope.
+    """
+    if not isinstance(tokens, list) or not tokens or len(tokens) > 16:
+        raise ValueError('Send between 1 and 16 cursors')
+    cursors = [decode_cursor(token) for token in tokens]
+    with database() as db:
+        state = db.execute('SELECT id,history_floor FROM mobile_sync_state').fetchone()
+        high = db.execute('SELECT COALESCE(MAX(sequence),0) FROM mobile_sync_changes').fetchone()[0]
+        out = []
+        for cursor in cursors:
+            if (cursor['epoch'] != state['id'] or cursor['through'] > high
+                    or cursor['through'] < state['history_floor']
+                    or (cursor['mode'] == 'delta' and cursor['after'] < state['history_floor'])):
+                out.append({'changed': True, 'resetRequired': True})
+                continue
+            if cursor['after'] < cursor['through']:
+                # Partway through a window: the rest of it is still to come.
+                out.append({'changed': True, 'resetRequired': False})
+                continue
+            slots = ','.join('?' for _ in cursor['collections'])
+            newer = db.execute(f'''
+                SELECT 1 FROM mobile_sync_changes WHERE collection IN ({slots}) AND sequence>? LIMIT 1
+            ''', [*cursor['collections'], cursor['through']]).fetchone()
+            out.append({'changed': newer is not None, 'resetRequired': False})
+        return out

@@ -503,6 +503,80 @@ final class NotebookColumnConversionTests: XCTestCase {
         }
     }
 
+    /// Pencil ink on every page of a column lands where it was written in the
+    /// picture of that page, at the preview's size, the page's own and the
+    /// journal's. On an iPad the journal pictures had it shrunk towards the
+    /// top-left corner, as if written on a smaller page.
+    func testPencilInkLandsWhereItWasWrittenOnEveryPageAtEverySize() async throws {
+        let store = try store()
+        let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
+        try NewspaperFixture.makeIssue(at: pdfURL)
+        let paper = try store.createNewspaper(date: "2026-10-06", pdf: pdfURL, pageCount: NewspaperFixture.shapes.count)
+        let model = NotebookEditorModel(store: store, notebook: paper)
+        let pages = 0..<NewspaperFixture.shapes.count
+        let widths: [CGFloat] = [400, 1240, 2000]
+        var blank: [CGFloat: [CGImage]] = [:]
+        for width in widths {
+            for index in pages {
+                let rendered = await model.render(index, width: width)
+                blank[width, default: []].append(try XCTUnwrap(rendered))
+            }
+        }
+        // A box in the lower right of each page, where shrinking shows.
+        let marks = pages.map { index -> CGRect in
+            let slot = model.pageRect(index)
+            return CGRect(x: 900, y: slot.minY + slot.height * 0.6, width: 200, height: 100)
+        }
+        var written = model.pages[0]
+        written.append(contentsOf: PKDrawing(strokes: marks.map(box)))
+        model.canvasChanged(written, page: 0)
+        let stored = model.pages[0].contentsRenderFrame
+
+        for width in widths {
+            for index in pages {
+                let rendered = await model.render(index, width: width)
+                let found = try XCTUnwrap(changed(from: blank[width]![index], to: XCTUnwrap(rendered)),
+                                          "page \(index + 1) has its ink at \(width)")
+                let slot = model.pageRect(index)
+                let expected = marks[index].applying(NotebookEditorModel.pixelTransform(region: slot, width: width))
+                // The pen's width, either side of the line.
+                let slack = 8 * width / NotebookColumn.width + 2
+                XCTAssertEqual(found.minX, expected.minX, accuracy: slack, "page \(index + 1) at \(width)")
+                XCTAssertEqual(found.minY, expected.minY, accuracy: slack, "page \(index + 1) at \(width)")
+                XCTAssertEqual(found.maxX, expected.maxX, accuracy: slack, "page \(index + 1) at \(width)")
+                XCTAssertEqual(found.maxY, expected.maxY, accuracy: slack, "page \(index + 1) at \(width)")
+            }
+        }
+        XCTAssertEqual(model.pages[0].contentsRenderFrame, stored, "drawing a picture doesn't move the ink")
+        await model.checkpoint()
+        XCTAssertEqual(model.marked, Set(pages), "every page counts as written on")
+    }
+
+    private func box(_ rect: CGRect) -> PKStroke {
+        let corners = [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
+                       CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY)]
+        let points = corners.enumerated().map { index, corner in
+            PKStrokePoint(location: corner, timeOffset: Double(index) * 0.1, size: CGSize(width: 6, height: 6),
+                          opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+        }
+        return PKStroke(ink: PKInk(.pen, color: .black), path: PKStrokePath(controlPoints: points, creationDate: Date()))
+    }
+
+    /// The pixels that differ between two pictures of the same size, or nil.
+    private func changed(from before: CGImage, to after: CGImage) -> CGRect? {
+        let a = CFDataGetBytePtr(before.dataProvider!.data!)!, b = CFDataGetBytePtr(after.dataProvider!.data!)!
+        var minX = Int.max, minY = Int.max, maxX = -1, maxY = -1
+        for y in 0..<after.height {
+            for x in 0..<after.width {
+                let o = y * after.bytesPerRow + x * 4
+                let difference = abs(Int(a[o]) - Int(b[o])) + abs(Int(a[o + 1]) - Int(b[o + 1])) + abs(Int(a[o + 2]) - Int(b[o + 2]))
+                if difference > 30 { minX = min(minX, x); minY = min(minY, y); maxX = max(maxX, x); maxY = max(maxY, y) }
+            }
+        }
+        guard maxX >= 0 else { return nil }
+        return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+    }
+
     private func isDark(_ image: CGImage, at point: CGPoint) -> Bool {
         let bytes = CFDataGetBytePtr(image.dataProvider!.data!)!
         let offset = Int(point.y) * image.bytesPerRow + Int(point.x) * 4

@@ -84,16 +84,49 @@ def _run_nightly() -> None:
     run_briefing()
 
 
+# How long the phone sync log keeps superseded versions. A device that hasn't
+# synced for longer must bootstrap again, which for downloaded library text is
+# a Wi-Fi re-download, so this is generous.
+SYNC_HISTORY_DAYS = 90
+
+
+def compact_sync_history() -> None:
+    """Trim the phone sync log after the morning's model work.
+
+    No model call, so it needs no slot; it runs here only because this is the
+    one thread that already wakes at the start of the day, and after the
+    briefing so it never delays it. A failure costs nothing but disk.
+    """
+    from backend.mobile_sync.maintenance import compact
+    try:
+        removed = compact(keep_days=SYNC_HISTORY_DAYS)
+        if removed:
+            print(f'Sync log compacted: {removed} superseded versions removed')
+    except Exception as e:
+        print(f'Sync log compaction failed: {e}')
+
+
+def _tick(now: datetime, last_run_date):
+    """One poll: the briefing (when enabled), then compaction, once a day in
+    the briefing window. Returns the date it last ran for."""
+    enabled, hour = _briefing_settings()
+    in_window = hour <= now.hour < hour + WINDOW_SPAN_HOURS
+    if not in_window or last_run_date == now.date():
+        return last_run_date
+    try:
+        if enabled:
+            run_nightly()
+    except Exception as e:
+        print(f'Overnight briefing failed: {e}')
+    compact_sync_history()
+    return now.date()
+
+
 def _scheduler_loop() -> None:
     last_run_date = None
     while True:
         try:
-            enabled, hour = _briefing_settings()
-            now = datetime.now()
-            in_window = hour <= now.hour < hour + WINDOW_SPAN_HOURS
-            if enabled and in_window and last_run_date != now.date():
-                last_run_date = now.date()
-                run_nightly()
+            last_run_date = _tick(datetime.now(), last_run_date)
         except Exception as e:
             print(f'Overnight briefing failed: {e}')
         time.sleep(_POLL_SECONDS)

@@ -116,8 +116,8 @@ what each device can currently do and which work remains device-only.
   (`backend/weather/entry.py`, woken by each save) looks the weather up for the
   entry's own place and capture hour, so an entry saved offline still gets the
   weather from when it was written. The Journal list shows it on server entries
-  (from the replica) and on this device's captures (read back after upload; meals
-  through `GET /api/food/<id>`).
+  (from the replica) and on meals (asked through `GET /api/food/<id>` for a day
+  after saving, at most every ten minutes).
 - Offline typed journal entries. On the phone, **Transcribe** and **Record**
   add clips to the Capture tab's draft; stopping keeps the clip there, and
   only **Save entry** turns the draft into one entry. Clips upload through the
@@ -138,6 +138,18 @@ what each device can currently do and which work remains device-only.
   button is disabled while a non-media file is attached. Clips go through the
   food recordings route, which transcribes each one into the meal's note.
   Passed in simulator offline; uploading to a real server is untested.
+- **Editing a server entry or a meal** (Journal → open it → Edit) offers the
+  Capture tab's own buttons: Transcribe, Record, Take photo, Choose photo and
+  Attach file, plus YouTube links for a journal entry. What they make waits in
+  a draft of that entry's own (`draft-<entryID>.json`, beside the composer's,
+  which is never touched) and survives a relaunch; Save turns it into an
+  *addition*, a capture with `entryID` set that uploads under the existing
+  entry through the same replay-safe routes, while changed words go through
+  the replica's revision-checked outbox. Cancel discards what was staged. Meals
+  are replicated (`food_entries`, `food_media`) and their dish, place and notes
+  are editable; Attach file is limited to pictures, videos and audio there.
+  Passed in simulator offline (library photo onto an entry); uploading an
+  addition to a real server is untested.
 - Chat works like the desktop's: today's one conversation, the streamed reply
   with its steps and reasoning, sources, Markdown, New chat / Clean slate, the
   delegate's editable confirm cards (calendar, calories, food, recipe, recipe
@@ -216,8 +228,15 @@ what each device can currently do and which work remains device-only.
   holds Library, Learning and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
   Library/Folders switch. Library mode has provider pills and sorts by the site's latest
   chapter date (`latest_activity`), not the download time. Folders mode lists folders and Unsorted,
-  and each pushes its books with a Back button. Both have title/tag search, tag and
-  Favorite/Continue-reading filters, and recent/title sorting. Other saved material is grouped
+  and each pushes its books with a Back button. Both have title/tag search,
+  Favorite/Continue-reading filters, and recent/title sorting; there is no tag filter, since
+  fics carry hundreds of user tags. The toolbar's refresh calls `POST /api/fanfic/refresh-alerts`,
+  and long-pressing a site's fic calls `POST /api/fanfic/<id>/check-updates` (shallow or deep);
+  both only queue work for the server, and new chapters arrive by sync. Importing goes through
+  `POST /api/fanfic/import` from two places: the share extension (`Share/`, a link shared from
+  any app) and Settings → Library downloads → Import a fic. A link sent while the server is
+  unreachable waits in `FicImportOutbox`, in the App Group container the two share, and the
+  app's sync pass sends it. Other saved material is grouped
   under Study. Download controls remain in More → Settings → Library downloads.
   Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:
   continue bookmark, then this device's last read, then the server's, then chapter 1),
@@ -257,8 +276,11 @@ what each device can currently do and which work remains device-only.
   audio lives beside them. A separate SQLite replica stores server records,
   full-text search, sync cursors, and revision-checked journal edits.
 - Stable client ULIDs, original capture timestamps, sequential retry-safe
-  uploads, server acknowledgement validation, and read-back of titles and
-  transcripts for the 30 most recent synced captures on this device.
+  uploads and server acknowledgement validation. A synced capture's title and
+  transcripts come from the replica's copy of its entry, not a request per
+  capture; once that entry has been in the replica for a week the capture file
+  is removed (meals and unconfirmed Watch recordings are kept). An entry deleted
+  on another device marks its capture instead, which is never sent again.
 - Persistent recording upload bodies with destination/identity checks and
   SHA-256 verification. Retries reuse the same multipart file and boundary;
   missing or damaged staging is rebuilt from retained audio before sending.
@@ -273,8 +295,14 @@ what each device can currently do and which work remains device-only.
   local session token and retains captures and that binding.
 - Cellular text/audio sync enabled by default with a per-device switch. Turning
   it off cancels an in-flight sync; subsequent requests prohibit cellular and
-  expensive-network access. The app checks for work every 30 seconds while
-  active. Capture upload failures use persisted exponential backoff from 30
+  expensive-network access. Coming to the foreground (and Sync, and a
+  background task) runs a full pass. While active, a local change syncs a
+  second after the last tap, and every 30 seconds one `POST
+  /api/mobile/sync/status` asks whether any replica scope has news; only the
+  scopes it names are pulled, and outboxes with nothing waiting make no
+  request. Screens fetched rather than replicated (To-do, Daily, Workout
+  history, sleep) refresh when shown or after their own changes upload. One
+  long-lived connection per network setting is reused across passes. Capture upload failures use persisted exponential backoff from 30
   seconds to 30 minutes; Sync retries waiting uploads immediately. Authentication
   failures pause uploads until login, and a capture-specific 4xx rejection
   requires Retry upload. Interrupted foreground attempts recover at the next

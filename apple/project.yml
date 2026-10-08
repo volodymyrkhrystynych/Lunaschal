@@ -17,10 +17,12 @@ targets:
   Lunaschal:
     type: application
     platform: iOS
-    sources: [App]
+    sources: [App, Shared]
     dependencies:
       - package: LunaschalCore
       - target: LunaschalWatch
+        embed: true
+      - target: LunaschalShare
         embed: true
       - sdk: HealthKit.framework
     entitlements:
@@ -28,6 +30,9 @@ targets:
       properties:
         com.apple.developer.healthkit: true
         com.apple.developer.healthkit.access: []
+        # Shared with the share extension: the session it imports with
+        # (SharedSignIn) and the links waiting for the server.
+        com.apple.security.application-groups: [group.com.lunaschal.mobile]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile
@@ -74,13 +79,25 @@ targets:
     platform: watchOS
     sources:
       - Watch
+      - WatchShared
       - App/Recorder.swift
     dependencies:
       - package: LunaschalCore
+      - target: LunaschalWatchWidgets
+        embed: true
+    # The App Group carries the timer's state to the complications, which run
+    # in their own process. Release profiles for both bundles must include it.
+    entitlements:
+      path: Generated/Watch.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.lunaschal.mobile.watch]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile.watchkitapp
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # WatchShared/WatchIntents.swift is compiled into both Watch targets;
+        # only the app has a recorder for the recording intent to drive.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) WATCH_APP
         CURRENT_PROJECT_VERSION: 4
         MARKETING_VERSION: '1'
         TARGETED_DEVICE_FAMILY: '4'
@@ -104,6 +121,74 @@ targets:
         WKRunsIndependentlyOfCompanionApp: false
         NSMicrophoneUsageDescription: Record thoughts for your journal, even while your phone is unavailable.
         UIBackgroundModes: [audio]
+  LunaschalWatchWidgets:
+    type: app-extension
+    platform: watchOS
+    sources: [WatchWidgets, WatchShared]
+    dependencies:
+      - package: LunaschalCore
+    entitlements:
+      path: Generated/WatchWidgets.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.lunaschal.mobile.watch]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile.watchkitapp.widgets
+        CURRENT_PROJECT_VERSION: 4
+        MARKETING_VERSION: '1'
+        TARGETED_DEVICE_FAMILY: '4'
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          DEVELOPMENT_TEAM: $(APPLE_TEAM_ID)
+          CODE_SIGN_IDENTITY: $(APPLE_SIGNING_IDENTITY)
+          PROVISIONING_PROFILE_SPECIFIER: $(LUNASCHAL_COMPLICATIONS_PROFILE_UUID)
+    info:
+      path: Generated/WatchWidgets-Info.plist
+      properties:
+        CFBundleDisplayName: Lunaschal
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  LunaschalShare:
+    type: app-extension
+    platform: iOS
+    sources: [Share, Shared]
+    dependencies:
+      - package: LunaschalCore
+    entitlements:
+      path: Generated/Share.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.lunaschal.mobile]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile.share
+        CURRENT_PROJECT_VERSION: 4
+        MARKETING_VERSION: '1'
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          DEVELOPMENT_TEAM: $(APPLE_TEAM_ID)
+          CODE_SIGN_IDENTITY: $(APPLE_SIGNING_IDENTITY)
+          PROVISIONING_PROFILE_SPECIFIER: $(LUNASCHAL_SHARE_PROFILE_UUID)
+    info:
+      path: Generated/Share-Info.plist
+      properties:
+        CFBundleDisplayName: Lunaschal
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            # A web page's link, or text with one in it: whether it is a fic
+            # is decided inside, against the server's list of sites.
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsWebPageWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
   LunaschalAppTests:
     type: bundle.unit-test
     platform: iOS

@@ -118,7 +118,7 @@ final class FoodCaptureTests: XCTestCase {
         let server = JournalOnlyServer()
         try await CaptureSync(store: store).run(using: server)
         XCTAssertEqual(Set(server.sent), [meal.id, entry.id])
-        XCTAssertEqual(server.fetched, [entry.id])
+        XCTAssertEqual(server.fetched, [], "neither is read back: the entry comes through the replica")
         XCTAssertEqual(try store.load(meal.id).state, .synced)
         XCTAssertNil(try store.load(meal.id).lastError)
     }

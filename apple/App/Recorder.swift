@@ -22,10 +22,11 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
-    /// Records a clip into the Capture tab's draft. Stopping keeps it there;
-    /// only Save entry sends it, as part of that entry.
-    func startClip(transcribe: Bool) async {
-        await begin(intoDraft: true, mode: transcribe ? .transcribe : .record)
+    /// Records a clip into the Capture tab's draft, or with `entryID` into the
+    /// draft of the server entry being edited. Stopping keeps it there; only
+    /// Save sends it, as part of that entry.
+    func startClip(transcribe: Bool, into entryID: String? = nil) async {
+        await begin(intoDraft: true, mode: transcribe ? .transcribe : .record, entryID: entryID)
     }
 
     /// Records a standalone entry: stopping saves it and queues it for sync.
@@ -36,7 +37,7 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     }
 
     private func begin(intoDraft draft: Bool, mode: CaptureMode,
-                       ficID: String? = nil, chapterID: String? = nil) async {
+                       ficID: String? = nil, chapterID: String? = nil, entryID: String? = nil) async {
         guard activeID == nil, !isStarting else { return }
         isStarting = true
         defer { isStarting = false }
@@ -62,7 +63,7 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
             // there is still a manifest (or draft row) explaining whose recording this is.
             let url: URL, id: String
             if draft {
-                let item = try store.beginClip(transcribe: mode == .transcribe)
+                let item = try store.beginClip(transcribe: mode == .transcribe, into: entryID)
                 clip = item
                 url = try store.clipURL(item); id = item.attachmentID
             } else {

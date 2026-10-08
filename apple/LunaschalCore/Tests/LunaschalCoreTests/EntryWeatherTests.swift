@@ -89,16 +89,29 @@ final class EntryWeatherTests: XCTestCase {
     func testAMealsWeatherIsReadBackUntilTheServerHasIt() async throws {
         let meal = try store.commitDraft(text: "Ramen", youtubeURLs: [], kind: .food)
         let server = MealServer()
-        let sync = CaptureSync(store: store)
+        var clock = meal.createdAt
+        let sync = CaptureSync(store: store, now: { clock })
         try await sync.run(using: server)
         XCTAssertNil(try store.load(meal.id).weather)
         server.weather = #"{"hourTs": 1790000000, "weatherCode": 2, "temperatureC": 14}"#
+        try await sync.run(using: server)
+        XCTAssertEqual(server.asked, 1, "asked at most every ten minutes")
+        clock += 11 * 60
         try await sync.run(using: server)
         XCTAssertEqual(try store.load(meal.id).entryWeather?.temperatureC, 14)
         // Once it has weather it is not asked again.
         let asked = server.asked
         try await sync.run(using: server)
         XCTAssertEqual(server.asked, asked)
+    }
+
+    @MainActor
+    func testAMealWithoutWeatherAfterADayIsNoLongerAskedAbout() async throws {
+        let meal = try store.commitDraft(text: "Toast", youtubeURLs: [], kind: .food)
+        let server = MealServer()
+        let sync = CaptureSync(store: store, now: { meal.createdAt + 86_400 + 1 })
+        try await sync.run(using: server)
+        XCTAssertEqual(server.asked, 0)
     }
 }
 

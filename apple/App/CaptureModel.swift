@@ -9,11 +9,15 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var captures: [Capture] = []
     /// What the Capture tab has staged (clips, photos, files) and not yet saved.
     @Published private(set) var draft = CaptureDraft()
+    /// What is staged on server entries being edited, by entry id.
+    @Published private(set) var entryDrafts: [String: CaptureDraft] = [:]
     @Published private(set) var server: URL?
     @Published private(set) var signedIn = false
     @Published private(set) var syncing = false
     @Published private(set) var signingIn = false
     @Published var message: String?
+    @Published var refreshingFics = false
+    @Published var importingFic = false
     @Published private(set) var syncMessage: String?
     @Published var backgroundStatus = "Background sync is idle."
     var onBackgroundSyncNeeded: (() -> Void)?
@@ -22,6 +26,9 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var journalCount = 0
     /// Each loaded journal entry's attachments, in the server's order.
     @Published private(set) var journalAttachments: [String: [JournalAttachmentItem]] = [:]
+    /// The food log's meals in the feed, and each one's media.
+    @Published private(set) var foodRecords: [SyncChange] = []
+    @Published private(set) var foodMedia: [String: [JournalAttachmentItem]] = [:]
     /// Calendar occurrences that can border a run of the journal feed, as on the web.
     @Published private(set) var journalOccurrences: [CalendarOccurrence] = []
     /// Series templates and their exceptions; the calendar expands them per view.
@@ -69,6 +76,7 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var todoQueue: [TodoOp] = []
     @Published var todoRefusals: [String] = []
     let todoOutbox: TodoOutbox
+    let ficImports: FicImportOutbox
     private let todoSyncer: TodoSync
     /// Jobs feed decisions the server hasn't had yet, and what it last turned down.
     @Published private(set) var jobQueue: [JobDecisionOp] = []
@@ -80,12 +88,17 @@ final class CaptureModel: ObservableObject {
     /// The fic reader's reading spans and last-read chapters, until uploaded.
     let ficActivity: FicActivityStore
     private let ficActivitySyncer: FicActivitySync
-    /// Bumped after each sync pass, so Chat can look for what it uploaded.
-    @Published private(set) var syncPasses = 0
+    /// What the last sync pass (or local change) touched: screens reload when
+    /// it touches what they show, and keep their place.
+    @Published private(set) var syncChanges = SyncChanges()
     /// A fix the server hasn't been told about yet.
     private var unsentFix: (latitude: Double, longitude: Double)?
     let store: CaptureStore
+    /// The UI's connection: small writes a tap makes, and lookups too quick to
+    /// be worth a hop. Lists and anything decoded in bulk go through `reader`.
     let replica: ReplicaStore
+    /// Reads the replica off the main thread, on its own connection.
+    let reader: ReplicaReader
     let drawings: DrawingStore
     let drawingPublications: DrawingPublicationStore
     /// The iPad's paginated notes canvases, blank or over a newspaper issue.
@@ -104,13 +117,25 @@ final class CaptureModel: ObservableObject {
     private lazy var healthSource: HealthKitSource? = HealthKitSource.isAvailable ? HealthKitSource() : nil
     private let replicaSyncer: ReplicaSync
     private let libraryWorker: LibraryDownload
-    private var activeAPI: JournalAPI?
-    private var libraryAPI: JournalAPI?
     private var token: String?
-    private var syncingTask: Task<Void, Never>?
+    private var syncingTask: Task<Bool, Never>?
+    /// A local change waits a moment before syncing, so a burst of them is one pass.
+    private var pendingRequest: Task<Void, Never>?
+    /// A pass asked for while one was running: run once it's done.
+    private var queuedMode: SyncMode?
     private var libraryTask: Task<Void, Never>?
     private var ficTask: Task<Void, Never>?
-    private var ficAPI: JournalAPI?
+    /// One client per network setting, kept for as long as the server and the
+    /// sign-in stay the same. Each pass used to build its own, and with it a
+    /// new connection and TLS handshake every 30 seconds.
+    private var apis: [Bool: JournalAPI] = [:]
+    private var apisFor: (server: URL, token: String)?
+    /// The server's sync capabilities, asked once rather than every pass.
+    private var capabilities: SyncCapabilities?
+    private var journalLoads = 0
+    /// When the library may next be re-downloaded after its cursor expired.
+    private var libraryRetryAt: Date?
+    private static let libraryStaleKey = "libraryNeedsBootstrap"
     /// The bulk download yielded to an opened fic and picks up once the queue empties.
     private var resumeLibraryAfterFics = false
     private var ficEstimate = TransferEstimate(started: Date())
@@ -126,6 +151,7 @@ final class CaptureModel: ObservableObject {
         try NewspaperFixture.seedIfAsked(notebooks)
         #endif
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
+        reader = ReplicaReader(url: store.root.appendingPathComponent("replica.sqlite"))
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
         daily = try DailyStore(root: store.root.appendingPathComponent("daily", isDirectory: true))
         dailySyncer = DailySync(store: daily)
@@ -145,6 +171,9 @@ final class CaptureModel: ObservableObject {
         calendarSyncer = CalendarSyncer(outbox: calendarOutbox)
         ficActivity = try FicActivityStore(root: store.root.appendingPathComponent("fic-activity", isDirectory: true))
         ficActivitySyncer = FicActivitySync(store: ficActivity)
+        // Shared with the share extension when the App Group is there.
+        ficImports = try FicImportOutbox(root: SharedSignIn.importOutboxRoot()
+            ?? store.root.appendingPathComponent("fic-imports", isDirectory: true))
         try chatRecordings.recoverInterrupted()
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store, pomodoros: pomodoros)
@@ -156,8 +185,11 @@ final class CaptureModel: ObservableObject {
         server = try store.server
         if let server { token = try SessionToken.read(server: server) }
         signedIn = token != nil
+        // Signed in before the share extension existed: give it the session now.
+        if let server, let token { SharedSignIn.save(server: server, token: token) } else { SharedSignIn.remove() }
         captures = try store.list()
         draft = try store.draft()
+        entryDrafts = try store.entryDrafts()
         dailyLogs = try daily.list()
         healthStatus = healthState.status()
         workoutLogs = try workouts.list()
@@ -167,16 +199,15 @@ final class CaptureModel: ObservableObject {
         recentExercises = (try? JSONDecoder().decode([RecentExercise].self, from: Data(contentsOf: workoutCache("recent")))) ?? []
         recentWorkouts = (try? JSONDecoder().decode([WorkoutSession].self, from: Data(contentsOf: workoutCache("sessions")))) ?? []
         weather = try? JSONDecoder().decode(WeatherDay.self, from: Data(contentsOf: weatherCache))
-        pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
-        try loadJournal()
-        try loadCalendar()
+        pendingEdits = try replica.edits().filter { Self.feedCollections.contains($0.operation.collection) }
+        Task { await reloadJournal(); await reloadCalendar() }
         refreshLibraryBytes()
         recorder.onChange = { [weak self] in
-            self?.reload()
+            self?.reloadCaptures()
             self?.requestSync()
         }
         recorder.onError = { [weak self] in self?.message = $0.localizedDescription }
-        watchReceiver.onChange = { [weak self] in self?.reload(); self?.requestSync() }
+        watchReceiver.onChange = { [weak self] in self?.reloadCaptures(); self?.reloadQueues(); self?.requestSync() }
         watchReceiver.onError = { [weak self] in self?.message = $0.localizedDescription }
         watchReceiver.activate()
         // A screenshot from the Shortcuts action lands here even with no editor open.
@@ -235,8 +266,9 @@ final class CaptureModel: ObservableObject {
     /// A Health problem on this device (HealthKit refusing a query) is shown
     /// in Settings and doesn't fail the rest of the pass; the server being
     /// unreachable or the pass being cancelled still does.
-    private func syncHealth(using api: JournalAPI) async throws {
-        guard healthSyncEnabled, let healthSource else { return }
+    private func syncHealth(using api: JournalAPI, force: Bool) async throws {
+        guard healthSyncEnabled, let healthSource,
+              force || HealthSync.isDue(healthState.status(), now: Date()) else { return }
         defer { healthStatus = healthState.status() }
         do {
             try await healthSyncer.run(source: healthSource, transport: api)
@@ -245,27 +277,67 @@ final class CaptureModel: ObservableObject {
         }
     }
 
+    /// Everything, for the few places that changed more than they can name.
     func reload() {
+        reloadCaptures()
+        reloadQueues()
+        Task { await reloadJournal(); await reloadCalendar() }
+    }
+
+    /// This device's captures and the composer's draft. Cheap: unchanged
+    /// capture files aren't decoded again.
+    func reloadCaptures() {
         do {
             captures = try store.list()
             draft = try store.draft()
+            entryDrafts = try store.entryDrafts()
+        } catch { message = error.localizedDescription }
+    }
+
+    /// The small outboxes: what is waiting to go up.
+    func reloadQueues() {
+        do {
             dailyLogs = try daily.list()
             workoutLogs = try workouts.list()
             chatRecordingQueue = try chatRecordings.list()
             todoQueue = try todoOutbox.list()
             jobQueue = try jobStore.pending()
-            try loadJournal()
-            pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
-            try loadCalendar()
         } catch { message = error.localizedDescription }
     }
 
-    private func loadJournal() throws {
-        journalRecords = try replica.newestRecords(collection: "journal_entries", query: journalQuery, limit: journalLimit)
-        journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
-        journalAttachments = JournalAttachmentItem.grouped(
-            try replica.relatedRecords(collection: "journal_attachments", field: "entryId", values: journalRecords.map(\.id)))
+    /// The journal feed's entries and meals, their attachments and media, and
+    /// the edits waiting on them, read and decoded off the main thread. A newer
+    /// load supersedes an older one still running (typing a search).
+    func reloadJournal() async {
+        journalLoads += 1
+        let load = journalLoads, query = journalQuery, limit = journalLimit, collections = Self.feedCollections
+        do {
+            let feed = try await reader.read { store in
+                let records = try store.newestRecords(collection: "journal_entries", query: query, limit: limit)
+                let meals = try store.newestRecords(collection: "food_entries", query: query, limit: limit)
+                return JournalFeedRead(
+                    records: records, count: try store.count(collection: "journal_entries", query: query),
+                    attachments: try store.relatedRecords(collection: "journal_attachments", field: "entryId", values: records.map(\.id)),
+                    meals: meals,
+                    mealMedia: try store.relatedRecords(collection: "food_media", field: "entryId", values: meals.map(\.id)),
+                    edits: try store.edits().filter { collections.contains($0.operation.collection) })
+            }
+            guard load == journalLoads else { return }
+            journalRecords = feed.records
+            journalCount = feed.count
+            journalAttachments = JournalAttachmentItem.grouped(feed.attachments)
+            foodRecords = feed.meals
+            foodMedia = JournalAttachmentItem.groupedFood(feed.mealMedia)
+            pendingEdits = feed.edits
+            placeJournalOccurrences()
+        } catch { message = error.localizedDescription }
     }
+
+    /// The collections whose saved edits the Journal feed lists.
+    static let feedCollections: Set<String> = ["journal_entries", "food_entries"]
+
+    /// What a sync pass has to touch for the Journal feed to read again.
+    static let feedScope = Set(["journal_entries", "journal_attachments"] + FoodSync.collections)
 
     /// The categorised calendar occurrences around the days the feed covers,
     /// for its borders. A search shows matches, not a day, so it has none, as
@@ -283,18 +355,22 @@ final class CaptureModel: ObservableObject {
             .filter { !$0.event.categoryTags.isEmpty }
     }
 
-    private func loadCalendar() throws {
-        // Every row, not a page: a series anchored years ago still occurs today.
-        let overlay = CalendarOverlay(
-            events: try replica.records(collection: "calendar_events", limit: 100_000).compactMap(CalendarEvent.init(record:)),
-            exceptions: try replica.records(collection: "calendar_event_exceptions", limit: 100_000)
-                .compactMap(CalendarException.init(record:)),
-            pending: try calendarOutbox.list())
-        calendarEvents = overlay.events
-        calendarExceptions = overlay.exceptions
-        pendingCalendarIDs = overlay.pendingIDs
-        sleepDays = CalendarSleep.overlay(sleepCache, pending: try calendarOutbox.list())
-        placeJournalOccurrences()
+    /// Every series and exception, not a page: a series anchored years ago
+    /// still occurs today. Decoded off the main thread.
+    func reloadCalendar() async {
+        do {
+            let (events, exceptions) = try await reader.read { store in
+                (try store.records(collection: "calendar_events", limit: 100_000).compactMap(CalendarEvent.init(record:)),
+                 try store.records(collection: "calendar_event_exceptions", limit: 100_000).compactMap(CalendarException.init(record:)))
+            }
+            let pending = try calendarOutbox.list()
+            let overlay = CalendarOverlay(events: events, exceptions: exceptions, pending: pending)
+            calendarEvents = overlay.events
+            calendarExceptions = overlay.exceptions
+            pendingCalendarIDs = overlay.pendingIDs
+            sleepDays = CalendarSleep.overlay(sleepCache, pending: pending)
+            placeJournalOccurrences()
+        } catch { message = error.localizedDescription }
     }
 
     /// The server derives wake and sleep from the day's activity, so they are
@@ -312,7 +388,7 @@ final class CaptureModel: ObservableObject {
         // A couple of months of days is plenty to page back through offline.
         for stale in cache.keys.sorted().dropLast(60) { cache[stale] = nil }
         try? JSONEncoder().encode(cache).write(to: sleepCacheURL, options: .atomic)
-        try? loadCalendar()
+        await reloadCalendar()
     }
 
     private func refreshLibraryBytes() {
@@ -328,7 +404,7 @@ final class CaptureModel: ObservableObject {
     func saveText(_ text: String) -> Bool {
         do {
             try store.save(Capture(text: text.trimmingCharacters(in: .whitespacesAndNewlines)))
-            reload()
+            reloadCaptures()
             requestSync()
             return true
         } catch { message = error.localizedDescription; return false }
@@ -341,7 +417,7 @@ final class CaptureModel: ObservableObject {
         guard !trimmed.isEmpty else { return false }
         do {
             try store.save(Capture(text: trimmed, ficID: ficID, chapterID: chapterID))
-            reload()
+            reloadCaptures()
             requestSync()
             return true
         } catch { message = error.localizedDescription; return false }
@@ -360,15 +436,28 @@ final class CaptureModel: ObservableObject {
         if sync { requestSync() }
     }
 
+    #if DEBUG
+    /// The journal fixture's new entry, landing as a sync would land it.
+    func fixtureArrival() {
+        guard let page = try? JournalFixture.arrivalPage() else { return }
+        let changed = (try? replica.apply(page, startingBootstrap: false)) ?? []
+        syncChanges = SyncChanges(collections: changed, full: false, token: syncChanges.token + 1)
+        Task { await reloadJournal() }
+    }
+    #endif
+
+    /// Only an actual change of search reloads: the feed calls this each time
+    /// it appears, and sync keeps the list current otherwise.
     func searchJournal(_ query: String) {
-        if journalQuery != query { journalLimit = 200 }
+        guard journalQuery != query else { return }
+        journalLimit = 200
         journalQuery = query
-        reload()
+        Task { await reloadJournal() }
     }
 
     func loadMoreJournal() {
         journalLimit += 200
-        reload()
+        Task { await reloadJournal() }
     }
 
     /// Save entry: the typed text, its links and everything staged become one
@@ -377,8 +466,8 @@ final class CaptureModel: ObservableObject {
         if recorder.activeID != nil { recorder.stop() }
         do {
             try store.commitDraft(text: text, youtubeURLs: youtubeURLs, kind: kind, location: location.recent)
-            reload(); requestSync(); return true
-        } catch { message = error.localizedDescription; reload(); return false }
+            reloadCaptures(); requestSync(); return true
+        } catch { message = error.localizedDescription; reloadCaptures(); return false }
     }
 
     // MARK: Notebooks
@@ -390,9 +479,9 @@ final class CaptureModel: ObservableObject {
             let capture = try store.commitImages(text: text, youtubeURLs: notebook.youtubeURL.map { [$0] } ?? [],
                                                  images: pages, location: location.recent)
             let saved = try notebooks.markSaved(notebook.id, captureID: capture.id)
-            reload(); requestSync()
+            reloadCaptures(); requestSync()
             return saved
-        } catch { message = error.localizedDescription; reload(); return nil }
+        } catch { message = error.localizedDescription; reloadCaptures(); return nil }
     }
 
     /// The issues the server has archived: asked fresh when signed in, and
@@ -434,20 +523,19 @@ final class CaptureModel: ObservableObject {
     func logWorkout(_ text: String, selected: String?) -> WorkoutEntry? {
         do {
             let (_, entry) = try workouts.log(text, selected: selected)
-            reload(); requestSync(); return entry
+            reloadQueues(); requestSync(); return entry
         } catch { message = error.localizedDescription; return nil }
     }
 
     func discard(_ item: WorkoutLog) {
         do { try workouts.remove(item) } catch { message = error.localizedDescription }
-        reload()
+        reloadQueues()
     }
 
     /// "Rate / location" needs the server; it is not queued.
     func updateWorkout(_ id: String, location: String?, intensity: Int?) async -> Bool {
-        guard signedIn, let server, let token else { message = "Connect to your server to rate a workout."; return false }
+        guard let api = chatAPI() else { message = "Connect to your server to rate a workout."; return false }
         do {
-            let api = try JournalAPI(server: server, token: token, allowCellular: allowCellular)
             try await api.updateWorkout(id, location: location, intensity: intensity)
             await refreshWorkouts(using: api)
             return true
@@ -456,10 +544,23 @@ final class CaptureModel: ObservableObject {
 
     // MARK: Chat
 
-    /// A client for the Chat tab's calls, which all need the server.
-    func chatAPI() -> JournalAPI? {
+    /// The shared client for every screen's calls, which all need the server.
+    func chatAPI() -> JournalAPI? { sharedAPI(cellular: allowCellular) }
+
+    /// The long-lived client for this network setting: the cellular preference
+    /// for ordinary calls, Wi-Fi only for the library, always for an opened fic.
+    /// Rebuilt only when the server or the sign-in changes.
+    private func sharedAPI(cellular: Bool) -> JournalAPI? {
         guard signedIn, let server, let token else { return nil }
-        return try? JournalAPI(server: server, token: token, allowCellular: allowCellular)
+        if apisFor?.server != server || apisFor?.token != token {
+            apis = [:]
+            apisFor = (server, token)
+            capabilities = nil
+        }
+        if let api = apis[cellular] { return api }
+        guard let api = try? JournalAPI(server: server, token: token, allowCellular: cellular, uploads: uploads) else { return nil }
+        apis[cellular] = api
+        return api
     }
 
     // MARK: Journal media
@@ -478,9 +579,10 @@ final class CaptureModel: ObservableObject {
     func journalMediaFile(_ item: JournalAttachmentItem, thumbnail: Bool = false) async -> URL? {
         // A WebM clip downloaded with the library is the original, which the
         // phone cannot play; the server's AAC copy is fetched instead.
-        let playable = !thumbnail && item.media == .audio && !item.phonePlayable
+        // A meal's media has no converted copy to ask for.
+        let playable = !thumbnail && item.media == .audio && !item.phonePlayable && item.collection != "food_media"
         if !thumbnail, !playable,
-           let saved = try? media.downloaded(collection: "journal_attachments", id: item.id) { return saved }
+           let saved = try? media.downloaded(collection: item.collection, id: item.id) { return saved }
         let name = item.id + (thumbnail ? ".poster" : playable ? ".m4a" : "")
         let file = journalMediaRoot.appendingPathComponent(name)
         if FileManager.default.fileExists(atPath: file.path) { return file }
@@ -488,7 +590,7 @@ final class CaptureModel: ObservableObject {
         guard let api = chatAPI() else { return nil }
         let fetch = Task<URL?, Never> {
             do {
-                try await api.downloadJournalAttachment(item.id, thumbnail: thumbnail, playable: playable, to: file)
+                try await api.downloadAttachment(item, thumbnail: thumbnail, playable: playable, to: file)
                 return file
             } catch { return nil }
         }
@@ -511,11 +613,11 @@ final class CaptureModel: ObservableObject {
             guard let file = await journalMediaFile(item) else { return nil }
             return player(file, mime: item.playerMIME)
         }
-        if item.media == .video, let saved = try? media.downloaded(collection: "journal_attachments", id: item.id) {
+        if item.media == .video, let saved = try? media.downloaded(collection: item.collection, id: item.id) {
             return player(saved, mime: item.mime)
         }
         guard signedIn, let server, let token, let api = chatAPI(),
-              let url = try? api.journalAttachmentURL(item.id),
+              let url = try? api.attachmentURL(item),
               let cookie = HTTPCookie(properties: [.name: "lunaschal_token", .value: token,
                                                    .domain: server.host ?? "", .path: "/"]) else { return nil }
         return player(url, mime: item.playerMIME,
@@ -533,8 +635,9 @@ final class CaptureModel: ObservableObject {
 
     /// A to-do change the server can't take right now waits for the next
     /// pass without holding up the uploads after it.
-    private func sendTodoChanges(using api: JournalAPI) async throws {
-        guard !todoQueue.isEmpty || !((try? todoOutbox.list()) ?? []).isEmpty else { return }
+    @discardableResult
+    private func sendTodoChanges(using api: JournalAPI) async throws -> Bool {
+        guard !todoQueue.isEmpty || !((try? todoOutbox.list()) ?? []).isEmpty else { return false }
         do {
             todoRefusals += try await todoSyncer.run(using: api)
         } catch {
@@ -542,6 +645,51 @@ final class CaptureModel: ObservableObject {
             if (error as? URLError) != nil { throw error }
         }
         todoQueue = (try? todoOutbox.list()) ?? todoQueue
+        return true
+    }
+
+    /// Links shared or typed while the server was out of reach. One the server
+    /// refuses is reported once and dropped; a server error waits for the next
+    /// pass without holding up the uploads after it.
+    private func sendFicImports(using api: JournalAPI) async throws {
+        guard !((try? ficImports.list()) ?? []).isEmpty else { return }
+        do {
+            let outcome = try await FicImportSync(outbox: ficImports).run(using: api)
+            if !outcome.refused.isEmpty {
+                message = "The server couldn’t import:\n" + outcome.refused.joined(separator: "\n")
+            }
+        } catch {
+            if Task.isCancelled || error is CancellationError || error is URLError { throw error }
+            // The session ended: the same as any other route saying so.
+            if let failure = error as? FicServerFailure, [401, 403].contains(failure.status) {
+                signedIn = false
+                throw failure
+            }
+        }
+    }
+
+    /// Imports the fic `text` links to, from Settings. The server does the
+    /// work; out of reach, the link waits and goes with the next sync.
+    @discardableResult
+    func importFic(_ text: String) async -> Bool {
+        guard let link = FicImportLink.find(in: text) else {
+            message = "That isn’t a link to a fic. Supported: \(FicImportLink.siteNames.joined(separator: ", "))."
+            return false
+        }
+        guard let api = chatAPI() else { message = "Sign in to import fics."; return false }
+        importingFic = true
+        defer { importingFic = false }
+        do {
+            message = try await api.importFic(link.url).summary(site: link.site)
+            requestSync()
+            return true
+        } catch let error as URLError where error.isUnreachable {
+            do {
+                try ficImports.append(link)
+                message = "The server can’t be reached, so the \(link.site) link is saved. It’s imported with the next sync."
+                return true
+            } catch { message = error.localizedDescription; return false }
+        } catch { message = error.localizedDescription; return false }
     }
 
     /// Queues a Queue or Dismiss from the jobs feed and starts sending it.
@@ -571,14 +719,15 @@ final class CaptureModel: ObservableObject {
     func queueCalendar(_ change: CalendarChange) -> Bool {
         do {
             try calendarOutbox.append(change)
-            try loadCalendar()
+            Task { await reloadCalendar() }
             requestSync()
             return true
         } catch { message = error.localizedDescription; return false }
     }
 
-    private func sendCalendarEvents(using api: JournalAPI) async throws {
-        guard !((try? calendarOutbox.list()) ?? []).isEmpty else { return }
+    @discardableResult
+    private func sendCalendarEvents(using api: JournalAPI) async throws -> Bool {
+        guard !((try? calendarOutbox.list()) ?? []).isEmpty else { return false }
         do {
             let refused = try await calendarSyncer.run(using: api)
             if !refused.isEmpty { message = refused.joined(separator: "\n") }
@@ -586,14 +735,27 @@ final class CaptureModel: ObservableObject {
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
             if (error as? URLError) != nil { throw error }
         }
+        return true
     }
 
     func discard(_ item: ChatRecording) {
         do { try chatRecordings.remove(item) } catch { message = error.localizedDescription }
-        reload()
+        reloadQueues()
     }
 
     private func workoutCache(_ name: String) -> URL { workouts.root.appendingPathComponent("\(name).cache") }
+
+    /// For the Workout page as it opens.
+    func refreshServerWorkouts() async {
+        guard let api = chatAPI() else { return }
+        await refreshWorkouts(using: api)
+    }
+
+    /// For the Daily page as it opens.
+    func refreshDailyStatus() async {
+        guard let api = chatAPI() else { return }
+        await refreshDaily(using: api)
+    }
 
     private func refreshWorkouts(using api: JournalAPI) async {
         if let recent = try? await api.recentExercises() {
@@ -624,11 +786,11 @@ final class CaptureModel: ObservableObject {
     /// Drops a log the server refused; nothing else can make it succeed.
     func discard(_ log: DailyLog) {
         do { try daily.remove(log) } catch { message = error.localizedDescription }
-        reload()
+        reloadQueues()
     }
 
     private func logDaily(_ make: (DailyStore) throws -> DailyLog) -> Bool {
-        do { _ = try make(daily); reload(); requestSync(); return true }
+        do { _ = try make(daily); reloadQueues(); requestSync(); return true }
         catch { message = error.localizedDescription; return false }
     }
 
@@ -670,18 +832,18 @@ final class CaptureModel: ObservableObject {
     /// Copies something just picked into the draft.
     func stage(_ make: (CaptureStore) throws -> CaptureFile) {
         do { _ = try make(store) } catch { message = error.localizedDescription }
-        reload()
+        reloadCaptures()
     }
 
     func discard(_ file: CaptureFile) {
         do { try store.discardStaged(file) } catch { message = error.localizedDescription }
-        reload()
+        reloadCaptures()
     }
 
     func discard(_ clip: CaptureClip) {
         if recorder.activeID == clip.attachmentID { recorder.stop() }
         do { try store.discard(clip) } catch { message = error.localizedDescription }
-        reload()
+        reloadCaptures()
     }
 
     func login(address: String, password: String, code: String) async -> Bool {
@@ -696,11 +858,13 @@ final class CaptureModel: ObservableObject {
             try store.bind(to: url)
             server = url
             try SessionToken.save(value, server: url)
+            SharedSignIn.save(server: url, token: value)
             try transfers.resumeAuthentication(now: Date())
             token = value
             signedIn = true
             message = nil
-            requestSync()
+            capabilities = nil
+            requestSync(manual: true)
             return true
         } catch { message = error.localizedDescription; return false }
     }
@@ -712,22 +876,59 @@ final class CaptureModel: ObservableObject {
         ficQueue.removeAll()
         do {
             if let server { try SessionToken.remove(server: server) }
+            SharedSignIn.remove()
             token = nil
             signedIn = false
+            apis = [:]
+            apisFor = nil
+            capabilities = nil
             onBackgroundSyncNeeded?()
         } catch { message = error.localizedDescription }
     }
 
+    /// A local change: sync once things settle for a second, so a burst of
+    /// taps is one pass. Manual ("Sync now", pull to refresh) is a full pass now.
     func requestSync(manual: Bool = false) {
         onBackgroundSyncNeeded?()
-        guard UIApplication.shared.applicationState == .active,
-              !syncing, !backgroundSyncing, signedIn, let server, let token else { return }
         if manual {
             do { try transfers.retryWaiting(now: Date()) }
             catch { message = error.localizedDescription; return }
+            startSync(.full)
+            return
+        }
+        pendingRequest?.cancel()
+        pendingRequest = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.startSync(.changes)
+        }
+    }
+
+    /// Back in the foreground: everything, including what is fetched rather than replicated.
+    func syncOnForeground() { startSync(.full) }
+
+    /// The foreground's periodic check: one request asks whether the server
+    /// has anything new, and only what it names is pulled. Outboxes with
+    /// nothing in them make no request at all.
+    func checkIn() { startSync(.changes) }
+
+    private func startSync(_ mode: SyncMode) {
+        guard UIApplication.shared.applicationState == .active, signedIn, let server, let token else { return }
+        guard !syncing, !backgroundSyncing else {
+            // Asked for mid-pass: run it after, so nothing waits for the next check-in.
+            queuedMode = queuedMode == .full || mode == .full ? .full : .changes
+            return
         }
         syncing = true
-        syncingTask = Task { _ = await performSync(server: server, token: token) }
+        syncingTask = Task { [weak self] in
+            guard let self else { return false }
+            let ok = await performSync(server: server, token: token, mode: mode)
+            if let next = queuedMode, !Task.isCancelled {
+                queuedMode = nil
+                startSync(next)
+            }
+            return ok
+        }
     }
 
     func nextBackgroundSync() throws -> Date? {
@@ -749,7 +950,10 @@ final class CaptureModel: ObservableObject {
               backgroundSyncEnabled else { return false }
         syncing = true; backgroundSyncing = true
         defer { backgroundSyncing = false }
-        return await performSync(server: server, token: token)
+        // Its own task, so the background lease's expiry can cancel it through `cancelSync`.
+        let task = Task { await performSync(server: server, token: token, mode: .full) }
+        syncingTask = task
+        return await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
     }
 
     func leaveForeground() {
@@ -764,13 +968,39 @@ final class CaptureModel: ObservableObject {
         onBackgroundSyncNeeded?()
     }
 
-    private func performSync(server: URL, token: String) async -> Bool {
+    /// The journal & library scope the UI's sync keeps current.
+    private static let journalScope = [
+        "journal_entries", "journal_attachments", "fics", "study_sources",
+        "papers", "conversations", "knowledge_archives", "fic_folders", "fic_bookmarks",
+    ]
+
+    /// One pass: send what is waiting, then pull what changed. A `.changes`
+    /// pass asks the server once which scopes have anything new and pulls only
+    /// those; a `.full` pass (foreground, manual, background) pulls every
+    /// scope and refreshes what is fetched rather than replicated.
+    private func performSync(server: URL, token: String, mode: SyncMode) async -> Bool {
         timings = SyncTimings()
         let stalls = StallWatch()
+        let full = mode == .full
+        var changed: Set<String> = []
+        // What this device had waiting before the pass, so only those screens reload.
+        let hadCaptures = captures.contains { $0.state == .pending || ($0.kind == .food && $0.weather == nil) }
+        let hadDaily = dailyLogs.contains { $0.state == .pending }
+        let hadWorkouts = !workoutLogs.isEmpty
+        let hadQueues = hadDaily || hadWorkouts || !chatRecordingQueue.isEmpty || !todoQueue.isEmpty || !jobQueue.isEmpty
         defer {
-            syncing = false; activeAPI = nil
-            timed("refresh screens") { reload() }
-            syncPasses += 1
+            syncing = false
+            timed("refresh screens") {
+                if full || hadCaptures { reloadCaptures() }
+                if full || hadQueues { reloadQueues() }
+                if full || !changed.isDisjoint(with: Self.feedScope) {
+                    Task { await reloadJournal() }
+                }
+                if full || !changed.isDisjoint(with: CalendarSync.collections) { Task { await reloadCalendar() } }
+            }
+            if full || !changed.isEmpty {
+                syncChanges = SyncChanges(collections: changed, full: full, token: syncChanges.token + 1)
+            }
             watchReceiver.sendServerReceipts()
             onBackgroundSyncNeeded?()
             timings.longestStall = stalls.stop()
@@ -778,53 +1008,90 @@ final class CaptureModel: ObservableObject {
         }
         do {
             try Task.checkCancellation()
-            let api = try JournalAPI(server: server, token: token, allowCellular: allowCellular, uploads: uploads)
-            activeAPI = api
+            guard let api = sharedAPI(cellular: allowCellular) else { return false }
+            // Push. Each step makes no request when its outbox is empty.
             // First: a voice message is a question someone is waiting on.
-            try await timed("chat voice") { try await chatRecordingSyncer.run(using: api) }
-            try await timed("to-dos") { try await sendTodoChanges(using: api) }
+            if !chatRecordingQueue.isEmpty {
+                try await timed("chat voice") { try await chatRecordingSyncer.run(using: api) }
+                changed.insert(SyncChanges.chat)
+            }
+            if try await timed("to-dos", { try await sendTodoChanges(using: api) }) { changed.insert(SyncChanges.todos) }
             try await timed("job decisions") { try await sendJobDecisions(using: api) }
-            try await timed("calendar changes") { try await sendCalendarEvents(using: api) }
+            try await timed("fic imports") { try await sendFicImports(using: api) }
+            if try await timed("calendar changes", { try await sendCalendarEvents(using: api) }) {
+                changed.formUnion(CalendarSync.collections)
+            }
             try await timed("uploads") { try await syncer.run(using: api) }
             try await timed("daily") { try await dailySyncer.run(using: api) }
             try await timed("workouts") { try await workoutSyncer.run(using: api) }
             try await timed("pomodoro") { try await pomodoroSyncer.run(using: api) }
             try await timed("reading activity") { try await ficActivitySyncer.run(using: api) }
-            await timed("workout history") { await refreshWorkouts(using: api) }
-            await timed("daily status") { await refreshDaily(using: api) }
+            // What the server works out rather than replicates: after this
+            // device sent something it changes, or on a full pass.
+            if full || hadWorkouts { await timed("workout history") { await refreshWorkouts(using: api) } }
+            if full || hadDaily { await timed("daily status") { await refreshDaily(using: api) } }
             await timed("weather") { await refreshWeather(using: api) }
-            try await timed("journal & library") {
-                try await replicaSyncer.run(using: api, collections: [
-                    "journal_entries", "journal_attachments", "fics", "study_sources",
-                    "papers", "conversations", "knowledge_archives", "fic_folders", "fic_bookmarks",
-                ])
+
+            // Pull.
+            let caps = try await timed("capabilities") { try await serverCapabilities(api) }
+            let calendar = CalendarSync.supported(by: caps.collections)
+            let food = FoodSync.supported(by: caps.collections)
+            let libraryScope = LibraryDownload.collections(knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge"))
+            let scopes = [Self.journalScope, CalendarSync.collections, libraryScope, FoodSync.collections]
+            var pull = scopes.map { _ in true }
+            if !full, caps.syncStatus {
+                pull = try await timed("check for changes") { try await replicaSyncer.scopesToPull(using: api, scopes: scopes) }
+            }
+            let editsWaiting = !pendingEdits.isEmpty || ((try? replica.edits().contains { $0.state == "pending" }) ?? false)
+            if pull[0] || editsWaiting {
+                changed.formUnion(try await timed("journal & library") {
+                    try await replicaSyncer.run(using: api, collections: Self.journalScope)
+                })
             }
             // Its own scope, so a server without it never fails the journal's sync.
-            try await timed("calendar") {
-                if CalendarSync.supported(by: try await api.syncCollections()) {
-                    try await replicaSyncer.run(using: api, collections: CalendarSync.collections, sendEdits: false)
-                    await refreshSleep(DayKey.of(Date()))
-                }
+            if food, pull[3] {
+                changed.formUnion(try await timed("food log") {
+                    try await replicaSyncer.run(using: api, collections: FoodSync.collections)
+                })
             }
+            if calendar, pull[1] {
+                changed.formUnion(try await timed("calendar") {
+                    try await replicaSyncer.run(using: api, collections: CalendarSync.collections, sendEdits: false)
+                })
+            }
+            if calendar, full { await timed("sleep") { await refreshSleep(DayKey.of(Date())) } }
             try await timed("drawings") {
                 for publication in try drawingPublications.all() where publication.state == "pending" {
                     try Task.checkCancellation()
                     let reply = try await api.publishDrawing(publication, store: drawingPublications)
                     try drawingPublications.receive(reply, for: publication)
+                    changed.insert(SyncChanges.drawings)
                 }
             }
-            if !downloadingLibrary {
+            if !downloadingLibrary, pull[2] {
                 try await timed("library text") {
-                    try await libraryWorker.updateText(using: api, collections: LibraryDownload.collections(
-                        knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge")))
+                    try await libraryWorker.updateText(using: api, collections: libraryScope)
                 }
+                changed.formUnion(await libraryWorker.takeTextChanges())
+                // The server stopped accepting the library's cursor (its history
+                // was compacted while this device was away): only a Wi-Fi
+                // download can bring the text up to date again. Remembered
+                // across launches, and tried at most every ten minutes, since
+                // off Wi-Fi it can only fail.
+                if await libraryWorker.needsBootstrap { UserDefaults.standard.set(true, forKey: Self.libraryStaleKey) }
             }
-            try await timed("health") { try await syncHealth(using: api) }
+            if UserDefaults.standard.bool(forKey: Self.libraryStaleKey), !downloadingLibrary,
+               libraryRetryAt.map({ Date() >= $0 }) ?? true {
+                libraryRetryAt = Date().addingTimeInterval(600)
+                startLibraryDownload()
+            }
+            try await timed("health") { try await syncHealth(using: api, force: full) }
             // Once per device, after everything else has synced: never at launch,
-            // where building them on a large library outlasted the watchdog.
-            try await timed("lookup indexes") { try await replicaSyncer.buildIndexes() }
+            // where building the indexes on a large library outlasted the watchdog.
+            try await timed("replica upkeep") { try await replicaSyncer.maintain() }
             // Anything ticked off while this pass was busy uploading.
-            try await timed("to-dos") { try await sendTodoChanges(using: api) }
+            if try await timed("to-dos", { try await sendTodoChanges(using: api) }) { changed.insert(SyncChanges.todos) }
+            if full || changed.contains("journal_entries") { tidyCaptures() }
             let retry = try transfers.all().compactMap(\.retryAt).min()
             syncMessage = retry.map { "Uploads will retry after \($0.formatted(date: .omitted, time: .shortened))." }
             return true
@@ -832,11 +1099,31 @@ final class CaptureModel: ObservableObject {
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return false }
             // Being offline is normal; don't show an alert every retry.
             syncMessage = error.localizedDescription
-            if let failure = error as? HTTPFailure, [401, 403].contains(failure.status) {
-                signedIn = false
+            if let failure = error as? HTTPFailure {
+                if [401, 403].contains(failure.status) { signedIn = false }
+                // Perhaps a different server now: ask again next pass.
+                if (400..<500).contains(failure.status) { capabilities = nil }
             }
             return false
         }
+    }
+
+    private func serverCapabilities(_ api: JournalAPI) async throws -> SyncCapabilities {
+        if let capabilities { return capabilities }
+        let fetched = try await api.serverCapabilities()
+        capabilities = fetched
+        return fetched
+    }
+
+    /// Settles synced journal captures against the replica's entries: marks
+    /// one deleted elsewhere, drops one the entry now stands in for.
+    private func tidyCaptures() {
+        do {
+            if try store.tidySynced(entry: { [replica] id in
+                guard let record = try replica.record(collection: "journal_entries", id: id) else { return .unknown }
+                return record.deleted ? .removed : .present
+            }) > 0 { reloadCaptures() }
+        } catch { /* Tidying only: the next pass tries again. */ }
     }
 
     /// The last pass's step times, for Settings → Transfers.
@@ -855,13 +1142,16 @@ final class CaptureModel: ObservableObject {
         return try work()
     }
 
+    /// Cancelling the pass's task cancels its requests; the shared session
+    /// itself stays usable for the next one.
     func cancelSync() {
+        pendingRequest?.cancel()
+        queuedMode = nil
         syncingTask?.cancel()
-        activeAPI?.cancel()
     }
 
     func startLibraryDownload() {
-        guard !downloadingLibrary, signedIn, let server, let token else { return }
+        guard !downloadingLibrary, let api = sharedAPI(cellular: false) else { return }
         downloadingLibrary = true
         libraryMessage = "Downloading reading content over Wi-Fi…"
         let collections = LibraryDownload.collections(
@@ -873,17 +1163,17 @@ final class CaptureModel: ObservableObject {
         let gigabytes = max(1, configured == 0 ? 20 : configured)
         libraryTask = Task {
             defer {
-                downloadingLibrary = false; libraryAPI = nil; libraryTask = nil
-                reload(); refreshLibraryBytes()
+                downloadingLibrary = false; libraryTask = nil
+                refreshLibraryBytes()
+                syncChanges = SyncChanges(collections: Set(collections + ["fics"]), full: false, token: syncChanges.token + 1)
             }
             do {
                 try Task.checkCancellation()
-                let api = try JournalAPI(server: server, token: token, allowCellular: false)
-                libraryAPI = api
                 let supported = try await libraryWorker.download(using: api, collections: collections,
                     mediaCollections: selected, budget: Int64(gigabytes) * 1024 * 1024 * 1024) { [weak self] status in
                         await self?.showLibraryProgress(status)
                     }
+                UserDefaults.standard.set(false, forKey: Self.libraryStaleKey)
                 libraryMessage = !supported.contains("fics") && selected.contains("fics")
                     ? "Downloads complete. Update the server to include PDF books."
                     : "Reading text and available active media downloaded. Archive videos are excluded."
@@ -899,7 +1189,6 @@ final class CaptureModel: ObservableObject {
 
     func pauseLibrary() {
         libraryTask?.cancel()
-        libraryAPI?.cancel()
     }
 
     // MARK: Fic downloads
@@ -919,7 +1208,11 @@ final class CaptureModel: ObservableObject {
     /// badge: chapters counted for the page in one query, not one per row.
     func ficsOnDevice(_ books: [SyncChange]) -> Set<String> {
         let text = books.filter { $0.data?["sourceType"]?.string != "pdf" }
-        let counts = (try? replica.chapterCounts(bookIDs: text.map(\.id))) ?? [:]
+        return ficsOnDevice(books, chapterCounts: (try? replica.chapterCounts(bookIDs: text.map(\.id))) ?? [:])
+    }
+
+    /// The same, with the chapters already counted (off the main thread).
+    func ficsOnDevice(_ books: [SyncChange], chapterCounts counts: [String: Int]) -> Set<String> {
         var out = Set<String>()
         for book in books {
             if book.data?["sourceType"]?.string == "pdf" {
@@ -930,6 +1223,23 @@ final class CaptureModel: ObservableObject {
             }
         }
         return out
+    }
+
+    /// Asks the server to read the forums' alerts and queue whatever they
+    /// mention. The chapters it fetches arrive through the next sync.
+    func refreshFicsOnServer() async {
+        guard let api = chatAPI() else { message = "Sign in to refresh the library on the server."; return }
+        refreshingFics = true
+        defer { refreshingFics = false }
+        do { message = try await api.refreshFicAlerts().summary } catch { message = error.localizedDescription }
+    }
+
+    /// Queues one fic for an update on the server, or takes it back out if it
+    /// was already waiting. `deep` also re-reads chapters the author edited.
+    func checkFicForUpdates(_ book: SyncChange, deep: Bool) async {
+        guard let api = chatAPI() else { message = "Sign in to update fics on the server."; return }
+        do { message = try await api.checkFicForUpdates(book.id, deep: deep).summary(title: book.title) }
+        catch { message = error.localizedDescription }
     }
 
     /// Opening a fic that isn't on the device puts it at the front of the
@@ -967,17 +1277,12 @@ final class CaptureModel: ObservableObject {
         #if DEBUG
         if LibraryFixture.isActive { return { LibraryFixture.Transport() } }
         #endif
-        guard signedIn, let server, let token else { return nil }
-        return { [weak self] in
-            let api = try JournalAPI(server: server, token: token, allowCellular: true)
-            self?.ficAPI = api
-            return api
-        }
+        guard let api = sharedAPI(cellular: true) else { return nil }
+        return { api }
     }
 
     func pauseFicDownloads() {
         ficTask?.cancel()
-        ficAPI?.cancel()
         ficTask = nil
         ficDownload = nil
     }
@@ -985,7 +1290,6 @@ final class CaptureModel: ObservableObject {
     private func restartFicDownloads() {
         let previous = ficTask, library = libraryTask
         previous?.cancel()
-        ficAPI?.cancel()
         ficTask = Task {
             // Only one writer at a time: let whatever was running let go first.
             await previous?.value
@@ -1014,7 +1318,6 @@ final class CaptureModel: ObservableObject {
             ficDownloadRevision += 1
         }
         ficDownload = nil
-        ficAPI = nil
         ficTask = nil
         refreshLibraryBytes()
         if resumeLibraryAfterFics, ficQueue.isEmpty {
@@ -1037,7 +1340,7 @@ final class CaptureModel: ObservableObject {
         do {
             try media.removeDownloadedCopies()
             libraryMessage = "Downloaded media removed. Captures and server originals are retained."
-            reload(); refreshLibraryBytes()
+            refreshLibraryBytes()
         } catch { message = error.localizedDescription }
     }
 
@@ -1046,7 +1349,7 @@ final class CaptureModel: ObservableObject {
         do {
             let freed = try media.removeDownloadedCopy(collection: collection, id: id)
             libraryMessage = "Device copy removed. \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) freed. Shared files may remain for other items."
-            reload(); refreshLibraryBytes()
+            refreshLibraryBytes()
             return true
         } catch { message = error.localizedDescription; return false }
     }
@@ -1054,19 +1357,54 @@ final class CaptureModel: ObservableObject {
     func edit(_ record: SyncChange, content: String, title: String) -> Bool {
         do {
             _ = try replica.queue(record: record, data: ["content": .string(content), "title": .string(title)])
-            reload(); requestSync(); return true
+            Task { await reloadJournal() }; requestSync(); return true
         } catch { message = error.localizedDescription; return false }
+    }
+
+    /// Save on an edited server entry (a journal entry or a meal): the changed
+    /// words go to the replica's outbox, revision-checked, and whatever was
+    /// recorded, photographed or attached goes up under the entry. `changes`
+    /// holds only the fields that differ from the record. A recording still
+    /// running is stopped into the entry's draft first.
+    func saveEdit(_ record: SyncChange, changes: [String: JSONValue], youtubeURLs: [String] = []) -> Bool {
+        if recorder.activeID != nil { recorder.stop() }
+        let kind: CaptureKind = record.collection == "food_entries" ? .food : .journal
+        do {
+            // Checked before anything is written, so a refused addition never
+            // leaves the words queued without it, or the reverse.
+            if !changes.isEmpty, try replica.edits().contains(where: {
+                $0.operation.collection == record.collection && $0.operation.recordId == record.id
+            }) { throw ReplicaError.editAlreadyPending }
+            if kind == .food, try !store.draft(for: record.id).files.allSatisfy(\.isFoodMedia) {
+                throw CaptureError.notFoodMedia
+            }
+            try store.commitAdditions(to: record.id, kind: kind, youtubeURLs: youtubeURLs)
+            if !changes.isEmpty { _ = try replica.queue(record: record, data: changes) }
+            reload(); requestSync(); return true
+        } catch { message = error.localizedDescription; reload(); return false }
+    }
+
+    /// Cancel on an edited entry: drops what was staged for it.
+    func discardEdit(_ entryID: String) {
+        if recorder.activeID != nil { recorder.stop() }
+        do { try store.discardDraft(for: entryID) } catch { message = error.localizedDescription }
+        reload()
+    }
+
+    /// What this device has queued to add to `entryID` and not yet uploaded.
+    func pendingAdditions(to entryID: String) -> [Capture] {
+        captures.filter { $0.entryID == entryID && $0.state != .synced }
     }
 
     func delete(_ record: SyncChange) {
         do {
             _ = try replica.queue(record: record, data: [:], delete: true)
-            reload(); requestSync()
+            Task { await reloadJournal() }; requestSync()
         } catch { message = error.localizedDescription }
     }
 
     func resolve(_ edit: PendingEdit, keepLocal: Bool) {
-        do { try replica.resolve(edit, keepLocal: keepLocal); reload(); requestSync() }
+        do { try replica.resolve(edit, keepLocal: keepLocal); Task { await reloadJournal() }; requestSync() }
         catch { message = error.localizedDescription }
     }
 
@@ -1085,7 +1423,7 @@ final class CaptureModel: ObservableObject {
                 item.lastError = nil
                 try store.save(item)
             }
-            reload()
+            reloadCaptures()
             requestSync()
         } catch { message = error.localizedDescription }
     }
@@ -1106,4 +1444,35 @@ struct FicDownloadStatus: Equatable {
             : "Starting…"
         return "\(Int((fraction * 100).rounded()))% · \(size) · \(TransferEstimate.describe(secondsLeft))"
     }
+}
+
+/// How much a sync pass does.
+enum SyncMode { case changes, full }
+
+/// What one sync pass (or library download) touched, so each screen reloads
+/// for its own data only and keeps its place. `token` changes every time, so
+/// two passes touching the same collections still both notify.
+struct SyncChanges: Equatable {
+    var collections: Set<String> = []
+    /// A foreground, manual or background pass: everything fetched rather
+    /// than replicated was refreshed too, so every screen may refresh.
+    var full = false
+    var token = 0
+
+    func touches(_ names: Set<String>) -> Bool { full || !collections.isDisjoint(with: names) }
+
+    /// Local outboxes, beside the replica's collection names.
+    static let todos = "local:todos"
+    static let chat = "local:chat"
+    static let drawings = "local:drawings"
+}
+
+/// One read of the Journal feed, taken off the main thread.
+private struct JournalFeedRead {
+    let records: [SyncChange]
+    let count: Int
+    let attachments: [SyncChange]
+    let meals: [SyncChange]
+    let mealMedia: [SyncChange]
+    let edits: [PendingEdit]
 }
