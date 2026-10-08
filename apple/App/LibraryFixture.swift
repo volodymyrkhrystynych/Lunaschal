@@ -131,10 +131,21 @@ enum LibraryFixture {
     }
 
     static func chapter(_ book: Book, _ index: Int, now: Date = Date()) -> [String: Any] {
-        let text = paragraphs(book: book, chapter: index).joined(separator: "\n\n")
+        let lines = paragraphs(book: book, chapter: index)
+        // Shaped like a XenForo post: lines ending in <br>, an empty line
+        // between paragraphs, italics, a quoted message and a scene break.
+        var html: [String] = []
+        for (number, line) in lines.enumerated() {
+            if number == lines.count / 2 { html.append("<div style=\"text-align: center\">* * *</div>") }
+            let words = line.split(separator: " ", maxSplits: 2).map(String.init)
+            let styled = words.count == 3 ? "\(words[0]) <i>\(words[1])</i> \(words[2])" : line
+            html.append(number == 1 ? "<blockquote>\(styled)</blockquote>" : styled + "<br>\n<br>")
+        }
+        // What the server's `get_text(' ')` makes of it: single line breaks.
+        let text = lines.joined(separator: "\n")
         return change("fic_chapters", chapterID(book, index), [
             "ficId": book.id, "position": index, "title": "Chapter \(index + 1)",
-            "contentText": text, "contentHtml": "<p>" + text.replacingOccurrences(of: "\n\n", with: "</p><p>") + "</p>",
+            "contentText": text, "contentHtml": "<div>" + html.joined(separator: "\n") + "</div>",
             "wordCount": text.split(separator: " ").count,
             "postedAt": Int(now.addingTimeInterval(-Double(book.chapters - index) * 86_400).timeIntervalSince1970),
         ])

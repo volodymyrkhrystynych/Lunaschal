@@ -100,7 +100,13 @@ struct LibraryCategoryView: View {
                     prompt: "Search \(category.rawValue.lowercased())")
         .task(id: model.downloadingLibrary) { refresh() }
         .onChange(of: model.syncing) { _, syncing in if !syncing { refresh() } }
-        .onChange(of: query) { _, _ in limit = 50; refresh() }
+        .onChange(of: query) { _, _ in limit = 50 }
+        .task(id: query) {
+            guard !query.isEmpty else { return refresh() }
+            try? await Task.sleep(nanoseconds: BookListView.typingPause)
+            guard !Task.isCancelled else { return }
+            refresh()
+        }
     }
 
     @ViewBuilder

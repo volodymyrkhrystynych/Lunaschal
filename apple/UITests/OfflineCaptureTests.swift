@@ -701,6 +701,62 @@ final class OfflineCaptureTests: XCTestCase {
         }
     }
 
+    /// A chapter reads as formatted text, its size is kept on the device,
+    /// and the end of the chapter clears the floating menu and the tab bar.
+    func testChapterIsFormattedSizedAndClearsTheBottomControls() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let size = app.buttons["reader-text-size"]
+        XCTAssertTrue(size.waitForExistence(timeout: 10))
+        attach(app, "chapter")
+        XCTAssertFalse(app.staticTexts["Reading position stays on this device."].exists, "no status bar")
+
+        size.tap()
+        let larger = app.buttons["reader-text-larger"]
+        XCTAssertTrue(larger.waitForExistence(timeout: 5))
+        larger.tap(); larger.tap()
+        app.tap() // close the menu
+        XCTAssertEqual(size.value as? String, "23 points")
+        attach(app, "larger text")
+
+        app.terminate()
+        app.launch()
+        openMore(app, "Library")
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        XCTAssertTrue(size.waitForExistence(timeout: 10))
+        XCTAssertEqual(size.value as? String, "23 points", "the size is kept on the device")
+
+        // The scene break in the middle of the chapter is a line of its own.
+        let sceneBreak = app.staticTexts["* * *"]
+        for _ in 0..<12 where !sceneBreak.exists { app.swipeUp() }
+        XCTAssertTrue(sceneBreak.exists)
+
+        let next = app.buttons["Next chapter"]
+        for _ in 0..<40 where !(next.exists && next.isHittable) { app.swipeUp() }
+        app.swipeUp(); app.swipeUp()
+        XCTAssertTrue(next.isHittable)
+        let menu = app.buttons["reader-menu"]
+        XCTAssertFalse(next.frame.intersects(menu.frame), "Next clears the menu button")
+        let previous = app.buttons["Previous"]
+        if previous.exists { XCTAssertFalse(previous.frame.intersects(menu.frame), "Previous clears the menu button") }
+        if app.tabBars.firstMatch.exists {
+            XCTAssertLessThanOrEqual(next.frame.maxY, app.tabBars.firstMatch.frame.minY, "Next clears the tab bar")
+        }
+        attach(app, "end of chapter")
+
+        size.tap()
+        XCTAssertTrue(app.buttons["Default size"].waitForExistence(timeout: 5))
+        app.buttons["Default size"].tap()
+        app.tap()
+        XCTAssertEqual(size.value as? String, "19 points")
+    }
+
     func testDrawingWorkspaceReopensWithoutAServer() {
         let app = XCUIApplication()
         app.launch()

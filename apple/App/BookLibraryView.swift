@@ -118,14 +118,23 @@ struct BookListView: View {
         .task(id: model.downloadingLibrary) { refresh() }
         .onAppear { refresh() }
         .onChange(of: model.syncing) { _, syncing in if !syncing { refresh() } }
-        .onChange(of: filter) { _, _ in limit = 50; refresh() }
+        .onChange(of: filter) { _, _ in limit = 50 }
+        // Typing searches once it pauses, not on every keystroke: each search
+        // reads the whole book list on the UI thread.
+        .task(id: filter) {
+            try? await Task.sleep(nanoseconds: Self.typingPause)
+            guard !Task.isCancelled else { return }
+            refresh(tags: false)
+        }
         // When the fic downloading changes, the one before it has finished.
         .onChange(of: model.ficDownload?.id) { _, _ in onDevice = model.ficsOnDevice(books) }
     }
 
     private func fresh() -> BookFilter { BookFilter() }
 
-    private func refresh() {
+    static let typingPause: UInt64 = 300_000_000
+
+    private func refresh(tags refreshTags: Bool = true) {
         do {
             // The folder is where this list is, not a filter to clear.
             var query = filter
@@ -133,6 +142,8 @@ struct BookListView: View {
             let result = try model.replica.books(filter: query, limit: limit)
             books = result.records; count = result.count
             onDevice = model.ficsOnDevice(books)
+            // The tag menu lists every tag in the library, whatever is typed.
+            guard refreshTags else { return }
             tags = try model.replica.bookTags()
         } catch { model.message = error.localizedDescription }
     }
