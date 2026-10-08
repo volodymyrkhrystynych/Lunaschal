@@ -1008,13 +1008,17 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(later.waitForExistence(timeout: 10))
         later.tap()
         XCTAssertTrue(app.navigationBars["Fixture later"].waitForExistence(timeout: 5))
-        app.buttons["Edit"].tap()
-        let names = ["Transcribe", "Record", "Take photo", "Choose photo", "Attach file"]
+        // Top right, as everywhere else.
+        app.navigationBars["Fixture later"].buttons["Edit"].tap()
+        let names = ["Attach file", "Choose photo", "Take photo", "Record", "Transcribe"]
         let first = app.buttons[names[0]]
         XCTAssertTrue(first.waitForExistence(timeout: 5))
         for name in names {
             XCTAssertTrue(app.buttons[name].exists, name)
             XCTAssertEqual(app.buttons[name].frame.midY, first.frame.midY, accuracy: 4, "\(name) sits in the same line")
+        }
+        for (left, right) in zip(names, names.dropFirst()) {
+            XCTAssertLessThan(app.buttons[left].frame.midX, app.buttons[right].frame.midX, "\(left) sits left of \(right)")
         }
         XCTAssertTrue(app.textFields["YouTube video URL"].exists)
         let save = app.buttons["Save edit on this device"]
@@ -1045,17 +1049,87 @@ final class OfflineCaptureTests: XCTestCase {
         meal.tap()
         XCTAssertTrue(app.navigationBars["Fixture ramen"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Rich broth."].exists)
-        app.buttons["Edit"].tap()
+        app.navigationBars["Fixture ramen"].buttons["Edit"].tap()
         XCTAssertTrue(app.textFields["Dish"].waitForExistence(timeout: 5))
         for name in names { XCTAssertTrue(app.buttons[name].exists, "meal: \(name)") }
         XCTAssertFalse(app.textFields["YouTube video URL"].exists, "a meal takes no links")
         app.buttons["Cancel"].tap()
-        XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Fixture ramen"].buttons["Edit"].waitForExistence(timeout: 5))
 
         // The composer's own draft was never touched.
         selectTab(app, "Capture")
         XCTAssertTrue(app.buttons["Transcribe"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Attachments"].exists)
+    }
+
+    /// Delete is part of editing, not reading, and asks before it does anything.
+    func testDeletingAnEntryIsInEditAndAsksFirst() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-journalFeedFixture")
+        app.launch()
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        pages.buttons["Journal"].tap()
+        let later = app.staticTexts["Fixture later"]
+        XCTAssertTrue(later.waitForExistence(timeout: 10))
+        later.tap()
+        let bar = app.navigationBars["Fixture later"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Delete entry"].exists, "not while reading")
+
+        bar.buttons["Edit"].tap()
+        let delete = app.buttons["Delete entry"]
+        for _ in 0..<4 where !delete.isHittable { app.swipeUp() }
+        XCTAssertTrue(delete.isHittable)
+        delete.tap()
+        let alert = app.alerts["Delete this entry?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.buttons["Delete"].exists)
+        // Not confirmed: a queued delete would outlive this test and list the
+        // fixture entry twice (as a pending edit) for the tests after it.
+        alert.buttons["Cancel"].tap()
+        XCTAssertFalse(alert.exists)
+        XCTAssertTrue(bar.exists, "Cancel keeps the entry open")
+    }
+
+    /// An entry still waiting to sync opens with Edit at the top right, and
+    /// the new words are what it will be sent with. UI tests have no server,
+    /// so nothing has been sent and it stays editable.
+    func testAWaitingEntryCanBeEdited() {
+        let app = XCUIApplication()
+        app.launch()
+        let first = "Waiting \(UUID().uuidString.prefix(8))"
+        let editor = app.textViews["Journal text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.tap()
+        editor.typeText(first)
+        app.buttons["Save entry"].tap()
+        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
+
+        selectTab(app, "Journal")
+        let card = app.staticTexts[first]
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        card.tap()
+        let bar = app.navigationBars["Capture"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        bar.buttons["Edit"].tap()
+
+        let text = app.textViews["Entry text"]
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        let save = app.buttons["Save edit on this device"]
+        XCTAssertFalse(save.isEnabled, "nothing changed yet")
+        text.tap()
+        text.typeText(" and then some")
+        save.tap()
+
+        let edited = first + " and then some"
+        XCTAssertTrue(app.staticTexts[edited].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.textViews["Entry text"].exists, "back to reading")
+        XCTAssertTrue(bar.buttons["Edit"].exists, "still waiting, so still editable")
+        bar.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts[edited].waitForExistence(timeout: 5), "the feed shows the new words")
+        XCTAssertFalse(app.staticTexts[first].exists)
     }
 
     func testYouTubeLinksAttachToTheEntryAndSaveStaysPinned() {
@@ -1094,6 +1168,46 @@ final class OfflineCaptureTests: XCTestCase {
                       || app.buttons["https://www.youtube.com/watch?v=dQw4w9WgXcQ"].exists)
     }
 
+    /// The composer's draft outlives the app, and only Discard (after asking)
+    /// throws it away: text, links and staged photos together.
+    func testTheDraftIsKeptUntilDiscarded() {
+        let app = XCUIApplication()
+        app.launch()
+        let words = "Draft \(UUID().uuidString.prefix(8))"
+        let editor = app.textViews["Journal text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.tap()
+        editor.typeText(words)
+        let field = app.textFields["YouTube video URL"]
+        field.tap()
+        field.typeText("https://youtu.be/aircAruvnKk")
+        app.buttons["Add link"].tap()
+        let link = "https://www.youtube.com/watch?v=aircAruvnKk"
+        XCTAssertTrue(app.staticTexts[link].waitForExistence(timeout: 5))
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertEqual(editor.value as? String, words, "kept across a relaunch")
+        XCTAssertTrue(app.staticTexts[link].exists)
+
+        let discard = app.buttons["Discard draft"]
+        XCTAssertTrue(discard.isEnabled)
+        discard.tap()
+        let alert = app.alerts["Discard this draft?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["Cancel"].tap()
+        XCTAssertEqual(editor.value as? String, words, "Cancel keeps it")
+
+        discard.tap()
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["Discard"].tap()
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
+                                                                      object: app.staticTexts[link])], timeout: 5) == .completed)
+        XCTAssertNotEqual(editor.value as? String, words)
+        XCTAssertFalse(discard.isEnabled, "nothing left to discard")
+    }
+
     func testSaveFoodEntrySitsLeftOfSaveEntryAndLeavesTheLinks() {
         let app = XCUIApplication()
         app.launch()
@@ -1101,9 +1215,15 @@ final class OfflineCaptureTests: XCTestCase {
         let save = app.buttons["Save entry"]
         XCTAssertTrue(food.waitForExistence(timeout: 10))
         let window = app.windows.firstMatch.frame
-        XCTAssertLessThan(food.frame.midX, window.midX, "Save food entry sits on the left")
+        let discard = app.buttons["Discard draft"]
+        XCTAssertTrue(discard.exists)
+        // Discard · Save food entry · Save entry, left to right.
+        XCTAssertLessThan(discard.frame.maxX, food.frame.minX, "Discard sits left of Save food entry")
+        XCTAssertLessThan(food.frame.maxX, save.frame.minX, "Save food entry sits left of Save entry")
+        XCTAssertLessThan(discard.frame.midX, window.midX, "Discard sits on the left")
         XCTAssertGreaterThan(save.frame.midX, window.midX, "Save entry sits on the right")
         XCTAssertEqual(food.frame.midY, save.frame.midY, accuracy: 4)
+        XCTAssertEqual(discard.frame.midY, save.frame.midY, accuracy: 4)
         XCTAssertGreaterThan(food.frame.midY, window.midY, "Both sit at the bottom")
         XCTAssertFalse(food.isEnabled)
 
@@ -1142,13 +1262,17 @@ final class OfflineCaptureTests: XCTestCase {
     func testCaptureActionsShareOneLineAndAPhotoAttachesToTheEntry() {
         let app = XCUIApplication()
         app.launch()
-        let names = ["Transcribe", "Record", "Take photo", "Choose photo", "Attach file"]
+        let names = ["Attach file", "Choose photo", "Take photo", "Record", "Transcribe"]
         let first = app.buttons[names[0]]
         XCTAssertTrue(first.waitForExistence(timeout: 10))
         for name in names {
             let button = app.buttons[name]
             XCTAssertTrue(button.exists, name)
             XCTAssertEqual(button.frame.midY, first.frame.midY, accuracy: 4, "\(name) sits in the same line")
+        }
+        // Most-used rightmost, under the thumb.
+        for (left, right) in zip(names, names.dropFirst()) {
+            XCTAssertLessThan(app.buttons[left].frame.midX, app.buttons[right].frame.midX, "\(left) sits left of \(right)")
         }
         XCTAssertFalse(app.staticTexts["Speak"].exists)
         XCTAssertFalse(app.staticTexts["Capture works offline. Sign in under Settings to sync."].exists)

@@ -102,7 +102,9 @@ public struct Capture: Codable, Identifiable, Equatable {
     public let createdAt: Date
     public let mode: CaptureMode
     public let kind: CaptureKind
-    public let text: String
+    /// Changeable only through `CaptureStore.editText`, and only while the
+    /// server cannot have the entry yet.
+    public internal(set) var text: String
     public let links: [CaptureLink]
     public let files: [CaptureFile]
     public let clips: [CaptureClip]
@@ -125,6 +127,13 @@ public struct Capture: Codable, Identifiable, Equatable {
     /// entry, and no entry of its own is created. The capture keeps its own
     /// id, so several additions to one entry are separate uploads.
     public let entryID: String?
+    /// Whether a send of this entry may have reached the server. Creating an
+    /// entry is replay-safe there (`INSERT OR IGNORE` on the id), so once one
+    /// may have landed a re-send carrying new words is silently dropped, and
+    /// the words can no longer be edited here. Set before every send; put back
+    /// only by a send that failed before connecting. Nil on captures saved
+    /// before this was recorded, which a transfer record then decides.
+    public internal(set) var mayBeOnServer: Bool?
 
     /// The entry everything here is filed under.
     public var targetID: String { entryID ?? id }
@@ -135,6 +144,15 @@ public struct Capture: Codable, Identifiable, Equatable {
     public var recordingTranscript: JournalSnapshot.Attachment? {
         guard let attachmentID else { return nil }
         return snapshot?.attachments?.first { $0.id == attachmentID }
+    }
+
+    /// Whether this capture's words can still be changed on the device: a
+    /// typed journal entry, waiting, not being sent, and certainly not on the
+    /// server yet. `attempt` is its transfer record, if it has one.
+    public func canEditText(attempt: TransferAttempt?) -> Bool {
+        guard kind == .journal, mode == .text, entryID == nil, state == .pending,
+              attempt?.state != .sending else { return false }
+        return mayBeOnServer.map { !$0 } ?? (attempt == nil)
     }
 
     public func matchesSearch(_ query: String) -> Bool {
@@ -165,11 +183,12 @@ public struct Capture: Codable, Identifiable, Equatable {
         self.files = files
         self.clips = clips
         state = mode == .text ? .pending : .recording
+        mayBeOnServer = false
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, attachmentID, createdAt, mode, kind, text, links, files, clips, state, lastError, snapshot
-        case latitude, longitude, weather, ficID, chapterID, entryID
+        case latitude, longitude, weather, ficID, chapterID, entryID, mayBeOnServer
     }
 
     // Manifests written before an entry could hold several links stored one
@@ -194,6 +213,7 @@ public struct Capture: Codable, Identifiable, Equatable {
         ficID = try c.decodeIfPresent(String.self, forKey: .ficID)
         chapterID = try c.decodeIfPresent(String.self, forKey: .chapterID)
         entryID = try c.decodeIfPresent(String.self, forKey: .entryID)
+        mayBeOnServer = try c.decodeIfPresent(Bool.self, forKey: .mayBeOnServer)
         files = try c.decodeIfPresent([CaptureFile].self, forKey: .files) ?? []
         clips = try c.decodeIfPresent([CaptureClip].self, forKey: .clips) ?? []
         if let links = try c.decodeIfPresent([CaptureLink].self, forKey: .links) {
@@ -218,6 +238,14 @@ extension CaptureLink {
 }
 
 public enum YouTubeLink {
+    /// The first YouTube video linked in `text`, canonical: a shared URL, or a
+    /// page title with its link after it, as some apps share.
+    public static func find(in text: String) -> String? {
+        let tokens = text.split(whereSeparator: { $0.isWhitespace || $0 == "<" || $0 == ">" || $0 == "\"" })
+        return tokens.lazy.filter { $0.lowercased().hasPrefix("http") }
+            .compactMap { try? canonical(String($0)) }.first
+    }
+
     public static func canonical(_ value: String) throws -> String {
         guard let parts = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
               ["http", "https"].contains(parts.scheme?.lowercased() ?? ""),
@@ -266,6 +294,7 @@ public enum ULID {
 
 public enum CaptureError: LocalizedError {
     case invalidID, emptyText, nothingToAdd, missingAudio, missingFile, notFoodMedia, stillRecording, invalidServer, differentServer, invalidResponse
+    case alreadySent
 
     public var errorDescription: String? {
         switch self {
@@ -279,6 +308,7 @@ public enum CaptureError: LocalizedError {
         case .invalidServer: return "Enter an HTTPS server address without a path, credentials, or query."
         case .differentServer: return "This device's captures are bound to a different server."
         case .invalidResponse: return "The server did not confirm this capture. It is still saved on this device."
+        case .alreadySent: return "This entry may already be on the server, so it can no longer be edited here. Edit it once it has synced."
         }
     }
 }

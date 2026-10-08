@@ -53,4 +53,11 @@ enum SharedSignIn {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)?
             .appendingPathComponent("fic-imports", isDirectory: true)
     }
+
+    /// YouTube links shared for the Capture composer's draft. Nil without the
+    /// App Group entitlement.
+    static func sharedLinksRoot() -> URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)?
+            .appendingPathComponent("shared-links", isDirectory: true)
+    }
 }

@@ -446,7 +446,6 @@ struct FoodRecordView: View {
                     if let raw = meal?.rawContent, raw != meal?.notes {
                         DisclosureGroup("What was written and said") { Text(raw).textSelection(.enabled) }
                     }
-                    Button("Edit") { startEditing() }
                     PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
                 }
                 let media = model.foodMedia[record.id] ?? []
@@ -456,6 +455,9 @@ struct FoodRecordView: View {
             }
         }
         .navigationTitle(meal?.heading ?? "Meal").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !editing { ToolbarItem(placement: .primaryAction) { Button("Edit") { startEditing() } } }
+        }
         .onAppear { if !editing && !staged.isEmpty { startEditing() } }
     }
 

@@ -5,6 +5,8 @@ import LunaschalCore
 /// "Lunaschal" in the share sheet: a link to a fic on one of the sites the
 /// server imports from is sent to `POST /api/fanfic/import`. Out of reach,
 /// it waits in the App Group's outbox and the app sends it on its next sync.
+/// A YouTube link goes into the Capture composer's draft instead, through the
+/// App Group's shared-links inbox, and needs no server at all.
 final class ShareViewController: UIViewController {
     private let model = ShareModel()
 
@@ -35,7 +37,8 @@ final class ShareModel: ObservableObject {
     func run(_ items: [NSExtensionItem]) async {
         let text = await Self.sharedText(items)
         guard let link = FicImportLink.find(in: text) else {
-            return finish("That isn’t a link to a fic. Lunaschal imports from \(FicImportLink.siteNames.joined(separator: ", ")).",
+            if let video = YouTubeLink.find(in: text) { return addToDraft(video) }
+            return finish("That isn’t a link to a fic or a YouTube video. Lunaschal imports fics from \(FicImportLink.siteNames.joined(separator: ", ")).",
                           imported: false)
         }
         guard let session = SharedSignIn.read() else {
@@ -52,6 +55,20 @@ final class ShareModel: ObservableObject {
             }
             finish("The server can’t be reached, so the \(link.site) link is saved. Lunaschal imports it on its next sync.",
                    imported: true)
+        } catch {
+            finish(error.localizedDescription, imported: false)
+        }
+    }
+
+    /// The link waits in the App Group until Lunaschal next opens, then joins
+    /// the draft's YouTube links; whatever the draft already holds is kept.
+    private func addToDraft(_ video: String) {
+        guard let root = SharedSignIn.sharedLinksRoot() else {
+            return finish("Lunaschal can’t receive shared links in this build.", imported: false)
+        }
+        do {
+            try SharedLinkInbox(root: root).append(video)
+            finish("Added to your journal draft. It’s in Capture next time you open Lunaschal.", imported: true)
         } catch {
             finish(error.localizedDescription, imported: false)
         }
@@ -97,7 +114,7 @@ struct ShareView: View {
             VStack(spacing: 16) {
                 switch model.state {
                 case .working:
-                    ProgressView("Sending to your server…")
+                    ProgressView("Working…")
                 case let .finished(text, imported):
                     Image(systemName: imported ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .font(.system(size: 44))
@@ -107,7 +124,7 @@ struct ShareView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationTitle("Import to Lunaschal")
+            .navigationTitle("Share to Lunaschal")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { model.close() } }

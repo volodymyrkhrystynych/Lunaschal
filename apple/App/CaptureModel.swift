@@ -470,6 +470,33 @@ final class CaptureModel: ObservableObject {
         } catch { message = error.localizedDescription; reloadCaptures(); return false }
     }
 
+    /// Discard on the composer: its staged clips, photos and files, bytes
+    /// included. The composer clears its own text and links.
+    func discardComposerDraft() -> Bool {
+        do { try store.discardDraft(for: nil); reloadCaptures(); return true }
+        catch { message = error.localizedDescription; reloadCaptures(); return false }
+    }
+
+    /// Where the composer keeps its YouTube links, one per line.
+    static let draftLinksKey = "youtubeDraftLinks"
+
+    /// YouTube links shared from other apps wait in the App Group (the share
+    /// extension cannot reach this app's storage); on the way in they join the
+    /// composer's draft, after anything already there.
+    func takeSharedLinks() {
+        guard let root = SharedSignIn.sharedLinksRoot() else { return }
+        do {
+            let inbox = try SharedLinkInbox(root: root)
+            let shared = try inbox.list()
+            guard !shared.isEmpty else { return }
+            let defaults = UserDefaults.standard
+            // Into the draft before out of the inbox, so a crash between repeats rather than loses.
+            defaults.set(DraftLinks.merge(defaults.string(forKey: Self.draftLinksKey) ?? "", shared.map(\.url)),
+                         forKey: Self.draftLinksKey)
+            try inbox.remove(shared)
+        } catch { message = error.localizedDescription }
+    }
+
     // MARK: Notebooks
 
     /// Files a notebook's rendered pages, plus its one video, as a journal
@@ -1381,6 +1408,21 @@ final class CaptureModel: ObservableObject {
             try store.commitAdditions(to: record.id, kind: kind, youtubeURLs: youtubeURLs)
             if !changes.isEmpty { _ = try replica.queue(record: record, data: changes) }
             reload(); requestSync(); return true
+        } catch { message = error.localizedDescription; reload(); return false }
+    }
+
+    /// Whether a capture's words can still change on this device: never once
+    /// a send of it may have reached the server (see `Capture.mayBeOnServer`).
+    func canEditText(_ capture: Capture) -> Bool {
+        // An unreadable transfer record is not "never sent".
+        do { return capture.canEditText(attempt: try transfers.load(capture.id)) } catch { return false }
+    }
+
+    /// Replaces a waiting entry's words before it is sent.
+    func editText(_ capture: Capture, to text: String) -> Bool {
+        do {
+            try store.editText(capture.id, to: text, attempt: transfers.load(capture.id))
+            reload(); return true
         } catch { message = error.localizedDescription; reload(); return false }
     }
 

@@ -184,7 +184,8 @@ targets:
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
           NSExtensionAttributes:
             # A web page's link, or text with one in it: whether it is a fic
-            # is decided inside, against the server's list of sites.
+            # is decided inside, against the server's list of sites; a YouTube
+            # video instead joins the Capture composer's draft.
             NSExtensionActivationRule:
               NSExtensionActivationSupportsWebURLWithMaxCount: 1
               NSExtensionActivationSupportsWebPageWithMaxCount: 1

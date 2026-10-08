@@ -31,10 +31,21 @@ public final class CaptureSync {
         if try transfers?.all().contains(where: { $0.state == .authentication }) == true {
             throw HTTPFailure(status: 401)
         }
-        for var capture in try store.list().reversed() where capture.state == .pending {
+        for listed in try store.list().reversed() where listed.state == .pending {
             try Task.checkCancellation()
-            let attempt = try transfers?.begin(capture.id, now: now())
+            let attempt = try transfers?.begin(listed.id, now: now())
             if transfers != nil && attempt == nil { continue }
+            // Read again: the list was taken before the sends ahead of this one
+            // awaited, and the entry's words may have been edited since.
+            var capture = try store.load(listed.id)
+            guard capture.state == .pending else {
+                if let attempt { try transfers?.finish(attempt, outcome: .cancelled, now: now()) }
+                continue
+            }
+            // Recorded before sending, so a crash mid-send leaves it locked.
+            let mayBeOnServer = capture.mayBeOnServer
+            capture.mayBeOnServer = true
+            try store.save(capture)
             do {
                 try await transport.send(capture, audioURL: capture.attachmentID == nil ? nil : store.audioURL(capture),
                                          files: capture.files.map(store.fileURL),
@@ -50,6 +61,8 @@ public final class CaptureSync {
                     throw error
                 }
                 capture.lastError = error.localizedDescription
+                // Failed before the entry could reach the server: as editable as before.
+                if JournalAPI.failedBeforeSending(error) { capture.mayBeOnServer = mayBeOnServer }
                 var outcome = TransferStore.Outcome.retryable
                 if let http = error as? HTTPFailure {
                     if http.status == 401 || http.status == 403 { outcome = .authentication }

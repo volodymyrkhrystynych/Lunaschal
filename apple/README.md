@@ -124,14 +124,16 @@ what each device can currently do and which work remains device-only.
   recordings route under that entry's id, in recorded order, so the server
   appends Transcribe clips' words after the typed text. Both modes retain the
   original mono AAC file. The draft (text, links, clips, photos, files)
-  survives relaunch; a clip cut off by a kill is kept and marked interrupted.
+  survives relaunch and is kept until saved or discarded: **Discard draft**
+  (the trash icon, bottom left) asks first, then removes all of it, bytes
+  included. A clip cut off by a kill is kept and marked interrupted.
   The Watch still saves each recording as its own entry. Clip uploads use the
   foreground session, not the background recording uploader.
 - Photos (camera or library) and arbitrary files attached to an entry,
   staged into the same draft and uploaded after the entry is
   created, each under its own client-minted attachment ID. Passed in
   simulator for the library picker; the camera needs a device.
-- **Save food entry** (bottom left, beside **Save entry** on the right) files
+- **Save food entry** (bottom middle, between Discard and **Save entry**) files
   the same draft in the food log instead: text, photos/videos and clips, under
   client-minted meal and media IDs, with the capture time the server now keeps.
   YouTube links stay in the composer for the next journal entry, and the
@@ -150,6 +152,17 @@ what each device can currently do and which work remains device-only.
   are editable; Attach file is limited to pictures, videos and audio there.
   Passed in simulator offline (library photo onto an entry); uploading an
   addition to a real server is untested.
+- **Editing an entry still waiting to sync** (Journal → open it → Edit, top
+  right, where Edit sits for server entries and meals too) changes its words
+  on the device before they are sent. Only while the server certainly has none
+  of it: creating an entry is replay-safe there, so a re-send after a create
+  that landed is ignored and later words would be lost. Each send marks the
+  capture `mayBeOnServer` first; only a create that failed before connecting
+  (no network, host not found or refused, as `JournalAPI` marks it) puts it
+  back. A timeout locks it, since the request may have arrived; that entry is
+  edited like any other once it has synced. Typed journal entries only, not
+  meals or recordings, and not their attachments. Passed in simulator offline;
+  the offline-retry path is covered by `CaptureEditTests` only.
 - Chat works like the desktop's: today's one conversation, the streamed reply
   with its steps and reasoning, sources, Markdown, New chat / Clean slate, the
   delegate's editable confirm cards (calendar, calories, food, recipe, recipe
@@ -236,7 +249,12 @@ what each device can currently do and which work remains device-only.
   `POST /api/fanfic/import` from two places: the share extension (`Share/`, a link shared from
   any app) and Settings → Library downloads → Import a fic. A link sent while the server is
   unreachable waits in `FicImportOutbox`, in the App Group container the two share, and the
-  app's sync pass sends it. Other saved material is grouped
+  app's sync pass sends it. A **YouTube** link shared the same way goes into the
+  Capture composer's draft instead, with no server involved: the extension
+  appends it to `SharedLinkInbox` in the same App Group, and the app moves it
+  into the draft's links whenever it comes to the foreground. Passed in core
+  tests only; the hand-off needs a signed build (an unsigned one has no App
+  Group, and the extension says so). Other saved material is grouped
   under Study. Download controls remain in More → Settings → Library downloads.
   Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:
   continue bookmark, then this device's last read, then the server's, then chapter 1),
