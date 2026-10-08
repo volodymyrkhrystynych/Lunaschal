@@ -41,14 +41,7 @@ public final class ReplicaStore {
                                     [searchBody(record.data ?? [:]), record.collection, record.id])
                     }
                 }
-                // A record's children (a fic's chapters, an entry's attachments) are
-                // found by a field inside the JSON payload. Unindexed, every lookup
-                // parsed every record's JSON, a whole library's chapters to open
-                // one book, on the UI thread. These match `relatedFilter` exactly.
-                // No version bump: an older build reads a database with them fine.
-                for field in Self.relatedFields {
-                    try execute("CREATE INDEX IF NOT EXISTS replica_by_\(field) ON replica_records(collection,\(Self.extract(field)))")
-                }
+                // The lookup indexes are not built here: see `buildIndexes`.
                 try execute("PRAGMA user_version=3")
             }
         } catch { sqlite3_close(db); db = nil; throw error }
@@ -190,6 +183,29 @@ public final class ReplicaStore {
     private func relatedFilter(_ field: String) throws -> String {
         guard Self.relatedFields.contains(field) else { throw ReplicaError.invalidPage }
         return Self.extract(field)
+    }
+
+    /// The lookup indexes not yet built, by name.
+    public func missingIndexes() throws -> [String] {
+        let present = Set(try rows("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='replica_records'").map { $0[0] })
+        return Self.relatedFields.map { "replica_by_\($0)" }.filter { !present.contains($0) }
+    }
+
+    /// A record's children (a fic's chapters, an entry's attachments) are
+    /// found by a field inside the JSON payload, and these indexes, matching
+    /// `relatedFilter` exactly, find them without parsing every record. Building
+    /// one reads every record, a whole library's chapter text, so it never runs
+    /// when the database opens: build 6 did, at launch, and on an iPad with a
+    /// large library the launch watchdog killed the app before it finished,
+    /// rolling the index back to be started again on the next launch. Queries
+    /// work without them, only slower. One index per statement, so each one
+    /// built is kept even if the app is stopped partway through the rest.
+    /// No version bump: an older build reads a database with them fine.
+    public func buildIndexes(while shouldContinue: () -> Bool = { true }) throws {
+        for field in Self.relatedFields where try missingIndexes().contains("replica_by_\(field)") {
+            guard shouldContinue() else { return }
+            try execute("CREATE INDEX IF NOT EXISTS replica_by_\(field) ON replica_records(collection,\(Self.extract(field)))")
+        }
     }
 
     /// How SQLite would run `relatedRecords`, for the test that keeps it indexed.
