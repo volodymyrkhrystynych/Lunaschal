@@ -1,4 +1,4 @@
-"""Revision-checked journal edits with transactional replay acknowledgements."""
+"""Revision-checked journal and food edits with transactional replay acknowledgements."""
 import hashlib
 import json
 import time
@@ -21,10 +21,12 @@ def apply(body):
     if body['collection'] == 'fic_bookmarks':
         bookmarks.validate(body)
         return transact(body, bookmarks.mutate)
-    if body['collection'] != 'journal_entries' or body['action'] not in ('update', 'delete'):
-        raise ValueError('This operation supports journal update/delete only')
     if not isinstance(body['epoch'], str) or type(body['baseRevision']) is not int or body['baseRevision'] < 1:
         raise ValueError('An epoch and positive baseRevision are required')
+    if body['collection'] == 'food_entries':
+        return apply_food(body)
+    if body['collection'] != 'journal_entries' or body['action'] not in ('update', 'delete'):
+        raise ValueError('This operation supports journal update/delete only')
     data = body['data']
     if not isinstance(data, dict) or set(data) - {'content', 'title', 'tags'}:
         raise ValueError('Only content, title and tags may be edited')
@@ -40,13 +42,55 @@ def apply(body):
     return transact(body, journal_mutation)
 
 
+FOOD_FIELDS = ('dish', 'place', 'notes')
+
+
+def apply_food(body):
+    # A meal's words, as the food log's own edit form changes them. Media is
+    # added through the food routes, which replay by media id on their own.
+    if body['action'] != 'update':
+        raise ValueError('Food entries support update only')
+    data = body['data']
+    if not isinstance(data, dict) or not data or set(data) - set(FOOD_FIELDS):
+        raise ValueError('Only dish, place and notes may be edited')
+    if not all(isinstance(value, str) for value in data.values()):
+        raise ValueError('Food fields must be text')
+    return transact(body, food_mutation)
+
+
+def food_mutation(db, body):
+    current = _latest(db, body)
+    if _stale(current, body):
+        return _conflict(current)
+    updates = {name: value.strip() or None for name, value in body['data'].items()}
+    if 'notes' in updates:
+        # As PATCH /api/food/<id>: a hand edit wins over the structuring pass.
+        updates['generated_notes'] = None
+    updates['updated_at'] = int(time.time())
+    setters = ','.join(f'"{name}"=?' for name in updates)
+    db.execute(f'UPDATE food_entries SET {setters} WHERE id=?', [*updates.values(), body['recordId']])
+    return {'operationId': body['id'], 'change': change_dict(_latest(db, body))}, 200
+
+
+def _latest(db, body):
+    return db.execute('SELECT * FROM mobile_sync_changes WHERE collection=? AND record_id=? ORDER BY sequence DESC LIMIT 1',
+                      (body['collection'], body['recordId'])).fetchone()
+
+
+def _stale(current, body):
+    return current is None or current['payload'] is None or current['sequence'] != body['baseRevision']
+
+
+def _conflict(current):
+    return {'error': 'Record changed; keep your edit and resolve the conflict',
+            'conflict': True, 'current': change_dict(current) if current else None}, 409
+
+
 def journal_mutation(db, body):
     data = body['data']
-    current = db.execute('SELECT * FROM mobile_sync_changes WHERE collection=? AND record_id=? ORDER BY sequence DESC LIMIT 1',
-                         (body['collection'], body['recordId'])).fetchone()
-    if current is None or current['payload'] is None or current['sequence'] != body['baseRevision']:
-        result, status = {'error': 'Record changed; keep your edit and resolve the conflict',
-                          'conflict': True, 'current': change_dict(current) if current else None}, 409
+    current = _latest(db, body)
+    if _stale(current, body):
+        result, status = _conflict(current)
     else:
         if body['action'] == 'delete':
             delete_journal_entry(db, body['recordId'])
@@ -58,9 +102,7 @@ def journal_mutation(db, body):
             db.execute(f'UPDATE journal_entries SET {setters} WHERE id=?',
                        [*updates.values(), body['recordId']])
             _close_screenshot_session(db, body['recordId'])
-        revision = db.execute('SELECT * FROM mobile_sync_changes WHERE collection=? AND record_id=? ORDER BY sequence DESC LIMIT 1',
-                              (body['collection'], body['recordId'])).fetchone()
-        result, status = {'operationId': body['id'], 'change': change_dict(revision)}, 200
+        result, status = {'operationId': body['id'], 'change': change_dict(_latest(db, body))}, 200
     return result, status
 
 

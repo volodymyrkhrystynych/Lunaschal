@@ -138,6 +138,18 @@ what each device can currently do and which work remains device-only.
   button is disabled while a non-media file is attached. Clips go through the
   food recordings route, which transcribes each one into the meal's note.
   Passed in simulator offline; uploading to a real server is untested.
+- **Editing a server entry or a meal** (Journal → open it → Edit) offers the
+  Capture tab's own buttons: Transcribe, Record, Take photo, Choose photo and
+  Attach file, plus YouTube links for a journal entry. What they make waits in
+  a draft of that entry's own (`draft-<entryID>.json`, beside the composer's,
+  which is never touched) and survives a relaunch; Save turns it into an
+  *addition*, a capture with `entryID` set that uploads under the existing
+  entry through the same replay-safe routes, while changed words go through
+  the replica's revision-checked outbox. Cancel discards what was staged. Meals
+  are replicated (`food_entries`, `food_media`) and their dish, place and notes
+  are editable; Attach file is limited to pictures, videos and audio there.
+  Passed in simulator offline (library photo onto an entry); uploading an
+  addition to a real server is untested.
 - Chat works like the desktop's: today's one conversation, the streamed reply
   with its steps and reasoning, sources, Markdown, New chat / Clean slate, the
   delegate's editable confirm cards (calendar, calories, food, recipe, recipe

@@ -414,6 +414,14 @@ claim that the current foreground uploader follows redirects.
       during search. The capture/relaunch UI test verifies matching and
       non-matching searches at `ef78e21`; original-dictation index migration is
       covered by portable database tests, not a seeded historical-entry UI test.
+- [x] Add clips, photos, files and YouTube links to an existing journal entry or
+      meal from its editor, offline, with the Capture tab's buttons. Additions
+      are captures carrying `entryID`, staged in a per-entry draft; meals sync
+      as their own scope (`food_entries`, `food_media`) and their dish/place/
+      notes edits are revision-checked operations. `POST /api/food/<id>/media`
+      now replays by client media id. Adding the food projection rotates the
+      sync epoch, so devices bootstrap again. Passed in simulator offline;
+      real-server upload of an addition is untested.
 - [ ] Define safe server-address changes, server restore detection, and account/device reset.
 - [x] Extend server schema/seeding/tests together for any new tables.
 
