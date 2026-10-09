@@ -262,7 +262,7 @@ private struct CaptureComposer: View {
                 // bar, and an unblurred button prints the rows through itself.
                 Button { saveFood() } label: { Label("Save food entry", systemImage: "fork.knife") }
                     .buttonStyle(.glass)
-                    .disabled(!canSaveFood || saving)
+                    .disabled(!canSaveFood)
                     .accessibilityHint(model.draft.files.allSatisfy(\.isFoodMedia) ? ""
                         : "Food entries hold photos, videos and recordings only.")
                 Spacer()
@@ -290,23 +290,31 @@ private struct CaptureComposer: View {
     private func save() {
         // A URL typed but not yet added still belongs to this entry.
         guard YouTubeLinksSection.add(typed: $youtubeURL, to: linkList, model: model) else { return }
+        // Read now, as tapped: the words must not wait behind rendering the notes.
+        let words = text, chosen = links
+        guard let notes else {
+            if model.saveEntry(words, youtubeURLs: chosen) { cleared() }
+            return
+        }
         saving = true
         Task {
             defer { saving = false }
-            if await model.saveEntry(text, youtubeURLs: links) {
-                text = ""; draftLinks = ""; saved = true; typing = false
-            }
+            guard await model.saveEntryWithNotes(words, youtubeURLs: chosen, notebook: notes) else { return }
+            // Anything typed while the pages rendered is the next entry's.
+            let more = text == words ? "" : text
+            cleared()
+            text = more
         }
+    }
+
+    private func cleared() {
+        text = ""; draftLinks = ""; saved = true; typing = false
     }
 
     private func saveFood() {
         // Links, a half-typed URL and the notes are left where they are, for the next entry.
-        saving = true
-        Task {
-            defer { saving = false }
-            if await model.saveEntry(text, youtubeURLs: [], kind: .food) {
-                text = ""; saved = true; typing = false
-            }
+        if model.saveEntry(text, youtubeURLs: [], kind: .food) {
+            text = ""; saved = true; typing = false
         }
     }
 }

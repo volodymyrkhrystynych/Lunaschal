@@ -31,11 +31,17 @@ what each device can currently do and which work remains device-only.
   pictures that can be moved and resized, text boxes and shapes from the tool
   picker's **+**.
   **Notes** are A4 pages, one at a time, each fitted whole to the window so
-  nothing scrolls. A finger drags a page sideways and a deliberate swipe (a
-  third of the page's width) turns it; short of that it springs back. Swiping on
-  past the last page shows a **+ New page** marker and adding the page is what
-  finishing the swipe does; backwards from the first page nothing moves, and
-  zoomed in a sideways drag is panning. The top bar's arrows still work.
+  nothing scrolls. **Only a finger that lands at a side of the screen** (within
+  44 pt) turns a page: in from the right edge for the next page, in from the
+  left for the previous one, and a deliberate swipe (a third of the page's
+  width) turns it; short of that it springs back. Anywhere else one finger moves
+  nothing — PaperKit's scroll views need two fingers on a notes page — so a palm
+  that palm rejection misses can't slide the page from under the Pencil. Two
+  fingers still pinch, and pan when zoomed in. The system's swipe-back is off
+  while notes are open (the Back button stays), so the left edge turns pages.
+  Swiping on past the last page shows a **+ New page** marker and adding the
+  page is what finishing the swipe does; backwards from the first page nothing
+  moves. The top bar's arrows still work.
   **Newspaper** opens today's archived issue (by the 4am day; the newest is offered if
   today's isn't in) as **one continuous scroll**: a single canvas with every PDF
   page stacked down it at its own shape, so ink can cross from one page to the

@@ -408,6 +408,39 @@ final class NotebookEditorTests: XCTestCase {
         return markup
     }
 
+    private func scrollViews(_ root: UIView) -> [UIScrollView] {
+        ([root as? UIScrollView].compactMap { $0 }) + root.subviews.flatMap(scrollViews)
+    }
+
+    /// In a window, laid out, as the editor shows it.
+    private func shown(_ model: NotebookEditorModel) -> NotebookCanvasController {
+        let controller = canvas(model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 1366))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        controller.view.layoutIfNeeded()
+        addTeardownBlock { window.isHidden = true }
+        return controller
+    }
+
+    func testOneFingerDoesNotScrollANotesPage() throws {
+        let store = try store()
+        let controller = shown(NotebookEditorModel(store: store, notebook: try store.create()))
+        let scrolls = scrollViews(controller.paper.view)
+        XCTAssertFalse(scrolls.isEmpty, "PaperKit scrolls with a UIScrollView")
+        // A palm slipping past palm rejection used to slide the page; two fingers still pinch and pan.
+        XCTAssertTrue(scrolls.allSatisfy { $0.panGestureRecognizer.minimumNumberOfTouches == 2 })
+    }
+
+    func testTheNewspaperColumnStillScrollsWithOneFinger() throws {
+        let store = try store()
+        let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try issuePDF(pages: 2), pageCount: 2)
+        let controller = shown(NotebookEditorModel(store: store, notebook: notebook))
+        let scrolls = scrollViews(controller.paper.view)
+        XCTAssertFalse(scrolls.isEmpty)
+        XCTAssertTrue(scrolls.contains { $0.panGestureRecognizer.minimumNumberOfTouches == 1 })
+    }
+
     func testAddingAPageKeepsInkTheCanvasHadNotReported() async throws {
         let store = try store()
         let notebook = try store.create()

@@ -81,6 +81,29 @@ public enum PageSwipe {
     /// Of the page's on-screen width, and never less than `minimum` points.
     public static let fraction: CGFloat = 0.35
     public static let minimum: CGFloat = 120
+    /// How close to a side of the screen a finger has to land for its drag to
+    /// turn the page. Anywhere else a finger is as likely to be a palm the
+    /// Pencil's palm rejection missed, and a page that slides under it is a
+    /// page being written on going somewhere else.
+    public static let edgeWidth: CGFloat = 44
+
+    public enum Edge: Equatable { case leading, trailing }
+
+    /// The side a drag starting at `x` pulls from, in a view `width` wide; nil
+    /// away from both.
+    public static func edge(startX x: CGFloat, width: CGFloat) -> Edge? {
+        guard width > 2 * edgeWidth else { return nil }
+        if x <= edgeWidth { return .leading }
+        if x >= width - edgeWidth { return .trailing }
+        return nil
+    }
+
+    /// The part of a drag that counts: in from the side it started at. From
+    /// the trailing edge it pulls the next page in, from the leading edge the
+    /// previous one; outwards it does nothing.
+    public static func pull(dx: CGFloat, from edge: Edge) -> CGFloat {
+        edge == .trailing ? min(dx, 0) : max(dx, 0)
+    }
 
     public static func threshold(pageWidth: CGFloat) -> CGFloat {
         max(minimum, pageWidth * fraction)

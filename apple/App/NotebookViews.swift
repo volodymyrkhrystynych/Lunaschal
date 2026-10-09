@@ -737,6 +737,21 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     private let visibleProbe = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
     #endif
     private let marker = NewPageMarker()
+    private var disabledBackSwipes: [UIGestureRecognizer] = []
+
+    /// SwiftUI's navigation stack. A representable's controller is not always
+    /// parented under it, so `navigationController` can be nil; the responder
+    /// chain from the view always reaches it.
+    private var hostNavigation: UINavigationController? {
+        var responder: UIResponder? = view
+        while let current = responder {
+            if let stack = current as? UINavigationController { return stack }
+            responder = current.next
+        }
+        return navigationController
+    }
+    /// PaperKit's scroll views, once found and told one finger doesn't scroll.
+    private let heldScrolls = NSHashTable<UIScrollView>.weakObjects()
     private var swipeThreshold: CGFloat = PageSwipe.minimum
 
     init(model: NotebookEditorModel) {
@@ -770,6 +785,10 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         if !model.isColumn {
             swipe.delegate = self
             swipe.shouldTrack = { [weak self] in !(self?.isZoomedIn ?? true) }
+            swipe.edgeAt = { [weak self] point in
+                guard let self else { return nil }
+                return PageSwipe.edge(startX: point.x, width: self.view.bounds.width)
+            }
             swipe.onBegin = { [weak self] in self?.beginSwipe() }
             swipe.onMove = { [weak self] dx in self?.moveSwipe(dx) }
             swipe.onEnd = { [weak self] dx, cancelled in self?.endSwipe(dx, cancelled: cancelled) }
@@ -802,6 +821,18 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        holdPageStill()
+        // A notes page turns from either side; the system's swipe back from
+        // the left edge would take the whole notebook away instead. The Back
+        // button stays.
+        if !model.isColumn, let stack = hostNavigation {
+            var backSwipes = [stack.interactivePopGestureRecognizer]
+            if #available(iOS 26.0, *) { backSwipes.append(stack.interactiveContentPopGestureRecognizer) }
+            for case let recognizer? in backSwipes where recognizer.isEnabled {
+                recognizer.isEnabled = false
+                disabledBackSwipes.append(recognizer)
+            }
+        }
         picker.setVisible(true, forFirstResponder: paper)
         paper.becomeFirstResponder()
         // Again once the bars and the tool picker are in place: PaperKit moves
@@ -812,11 +843,14 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        for recognizer in disabledBackSwipes { recognizer.isEnabled = true }
+        disabledBackSwipes = []
         picker.setVisible(false, forFirstResponder: paper)
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        holdPageStill()
         // A rotation or a Split View resize refits the page being read.
         if view.bounds.size != fittedSize { fit() }
     }
@@ -992,6 +1026,26 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         return view
     }
 
+    /// A notes page fits whole, so a finger has nothing to scroll to — and a
+    /// palm the Pencil's palm rejection missed slid the page out from under
+    /// the nib. One finger leaves the page where it is; two still pinch and,
+    /// zoomed in, pan. PaperKit has no setting for this, so it is set on its
+    /// scroll views, found in its view tree. The newspaper column is read by
+    /// scrolling, and keeps one-finger scrolling.
+    private func holdPageStill() {
+        guard !model.isColumn, isViewLoaded, heldScrolls.count == 0 else { return }
+        var pending: [UIView] = [paper.view]
+        while let next = pending.popLast() {
+            if let scroll = next as? UIScrollView {
+                scroll.panGestureRecognizer.minimumNumberOfTouches = 2
+                scroll.alwaysBounceVertical = false
+                scroll.alwaysBounceHorizontal = false
+                heldScrolls.add(scroll)
+            }
+            pending.append(contentsOf: next.subviews)
+        }
+    }
+
     /// Zoomed in past the whole-page fit, a sideways drag is looking around
     /// the page, not asking to turn it.
     private var isZoomedIn: Bool {
@@ -1083,10 +1137,14 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
 final class FingerDragObserver: UIGestureRecognizer {
     /// Asked once the drag has a direction; false leaves the drag alone.
     var shouldTrack: () -> Bool = { true }
+    /// The side of the view a drag starting here pulls from; nil (anywhere
+    /// but near a side) leaves the drag alone.
+    var edgeAt: (CGPoint) -> PageSwipe.Edge? = { _ in nil }
     var onBegin: () -> Void = {}
     var onMove: (CGFloat) -> Void = { _ in }
     var onEnd: (CGFloat, Bool) -> Void = { _, _ in }
     private var start: CGPoint?
+    private var edge: PageSwipe.Edge?
     /// Nil until the finger has moved far enough to say which way it is going.
     private var sideways: Bool?
     private static let decideAfter: CGFloat = 12
@@ -1105,6 +1163,7 @@ final class FingerDragObserver: UIGestureRecognizer {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard start == nil, numberOfTouches == 1, let touch = touches.first else { abandon(); return }
         start = touch.location(in: view?.window)
+        edge = edgeAt(touch.location(in: view))
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -1112,10 +1171,10 @@ final class FingerDragObserver: UIGestureRecognizer {
         let point = touch.location(in: view?.window)
         let dx = point.x - start.x, dy = point.y - start.y
         if sideways == nil, hypot(dx, dy) >= Self.decideAfter {
-            sideways = abs(dx) > abs(dy) && shouldTrack()
+            sideways = edge != nil && abs(dx) > abs(dy) && shouldTrack()
             if sideways == true { onBegin() }
         }
-        if sideways == true { onMove(dx) }
+        if sideways == true, let edge { onMove(PageSwipe.pull(dx: dx, from: edge)) }
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -1127,8 +1186,8 @@ final class FingerDragObserver: UIGestureRecognizer {
     }
 
     private func finish(_ touches: Set<UITouch>, cancelled: Bool) {
-        if sideways == true, let start, let touch = touches.first {
-            onEnd(touch.location(in: view?.window).x - start.x, cancelled)
+        if sideways == true, let start, let edge, let touch = touches.first {
+            onEnd(PageSwipe.pull(dx: touch.location(in: view?.window).x - start.x, from: edge), cancelled)
         }
         state = .failed
     }
@@ -1142,6 +1201,7 @@ final class FingerDragObserver: UIGestureRecognizer {
 
     override func reset() {
         start = nil
+        edge = nil
         sideways = nil
     }
 }

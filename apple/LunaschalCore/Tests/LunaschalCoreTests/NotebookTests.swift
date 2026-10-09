@@ -334,6 +334,24 @@ final class NotebookFitTests: XCTestCase {
 }
 
 final class PageSwipeTests: XCTestCase {
+    func testOnlyADragFromASideTurnsThePage() {
+        XCTAssertEqual(PageSwipe.edge(startX: 10, width: 1000), .leading)
+        XCTAssertEqual(PageSwipe.edge(startX: 44, width: 1000), .leading)
+        XCTAssertEqual(PageSwipe.edge(startX: 990, width: 1000), .trailing)
+        // Mid-page is where a palm rests: never a page turn.
+        XCTAssertNil(PageSwipe.edge(startX: 45, width: 1000))
+        XCTAssertNil(PageSwipe.edge(startX: 500, width: 1000))
+        XCTAssertNil(PageSwipe.edge(startX: 955, width: 1000))
+        XCTAssertNil(PageSwipe.edge(startX: 10, width: 60), "no room for two edges")
+    }
+
+    func testADragOnlyCountsInwardsFromItsSide() {
+        XCTAssertEqual(PageSwipe.pull(dx: -300, from: .trailing), -300)
+        XCTAssertEqual(PageSwipe.pull(dx: 300, from: .trailing), 0)
+        XCTAssertEqual(PageSwipe.pull(dx: 300, from: .leading), 300)
+        XCTAssertEqual(PageSwipe.pull(dx: -300, from: .leading), 0)
+    }
+
     func testAPageTurnIsADeliberateDrag() {
         XCTAssertEqual(PageSwipe.threshold(pageWidth: 1000), 350)
         XCTAssertEqual(PageSwipe.threshold(pageWidth: 200), 120)

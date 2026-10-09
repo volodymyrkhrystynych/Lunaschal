@@ -460,22 +460,28 @@ final class CaptureModel: ObservableObject {
         Task { await reloadJournal() }
     }
 
-    /// Save entry: the typed text, its links, everything staged and the
-    /// draft's notebook become one capture. A recording still running is
-    /// stopped into the draft first. A meal leaves the notebook in the draft.
-    func saveEntry(_ text: String, youtubeURLs: [String], kind: CaptureKind = .journal) async -> Bool {
+    /// Save entry: the typed text, its links and everything staged become one
+    /// capture. A recording still running is stopped into the draft first.
+    /// Synchronous on purpose: the composer's words are read the moment Save
+    /// is tapped, so an async hop would let a last keystroke land after them.
+    /// With notes in the draft a journal entry goes through `saveEntryWithNotes`.
+    func saveEntry(_ text: String, youtubeURLs: [String], kind: CaptureKind = .journal) -> Bool {
         if recorder.activeID != nil { recorder.stop() }
-        guard kind == .journal, let notebook = draftNotebook else {
-            return commitComposer(text, youtubeURLs: youtubeURLs, kind: kind, notebook: nil, pages: [])
-        }
-        // Rendered from what is saved on the device: the notebook is closed
-        // here, and Back checkpoints it on the way out.
+        // A meal leaves the notes in the draft.
+        return commitComposer(text, youtubeURLs: youtubeURLs, kind: kind, notebook: nil, pages: [])
+    }
+
+    /// Save entry with the draft's notes: their pages are rendered from what
+    /// is saved on the device (Back checkpoints them on the way out) and filed
+    /// with everything else as one entry.
+    func saveEntryWithNotes(_ text: String, youtubeURLs: [String], notebook: Notebook) async -> Bool {
+        if recorder.activeID != nil { recorder.stop() }
         let pages = NotebookEditorModel(store: notebooks, notebook: notebook)
         guard pages.loaded else {
             message = pages.error ?? "Couldn't open the notes for this entry."
             return false
         }
-        return commitComposer(text, youtubeURLs: youtubeURLs, kind: kind, notebook: notebook,
+        return commitComposer(text, youtubeURLs: youtubeURLs, kind: .journal, notebook: notebook,
                               pages: await pages.renderForSave())
     }
 

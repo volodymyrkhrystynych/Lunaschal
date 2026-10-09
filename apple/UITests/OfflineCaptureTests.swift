@@ -842,6 +842,7 @@ final class OfflineCaptureTests: XCTestCase {
         }
         XCTAssertTrue(notes.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["capture-newspaper"].exists)
+        detachDraftNotes(app)
         notes.tap()
         XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
         // Full window: no tab is left to tap.
@@ -881,6 +882,7 @@ final class OfflineCaptureTests: XCTestCase {
         let notes = app.buttons["capture-notes"]
         guard UIDevice.current.userInterfaceIdiom == .pad else { return }
         XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        detachDraftNotes(app)
         notes.tap()
         XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
         app.buttons["notebook-add-page"].tap()
@@ -1542,6 +1544,7 @@ final class OfflineCaptureTests: XCTestCase {
         app.launch()
         let notes = app.buttons["capture-notes"]
         XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        detachDraftNotes(app)
         notes.tap()
         let counter = app.buttons["notebook-page"]
         XCTAssertTrue(counter.waitForExistence(timeout: 10))
@@ -1552,20 +1555,33 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertEqual(counter.label, "\(total) / \(total)")
 
         let window = app.windows.firstMatch
+        let shown = app.otherElements["notebook-visible-frame"]
+        // Turning happens only from a side of the screen: a finger anywhere
+        // else may be a palm, and moves nothing at all.
+        let rightEdge = window.coordinate(withNormalizedOffset: CGVector(dx: 0.985, dy: 0.5))
+        let leftEdge = window.coordinate(withNormalizedOffset: CGVector(dx: 0.015, dy: 0.5))
         let right = window.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
         let left = window.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5))
-        // A short drag springs back.
-        right.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
+        let before = shown.value as? String
+        right.press(forDuration: 0.05, thenDragTo: left)
+        XCTAssertEqual(counter.label, "\(total) / \(total)", "a drag mid-page is not a page turn")
+        let middle = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        middle.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)))
+        middle.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.8)))
+        sleep(1)
+        XCTAssertEqual(shown.value as? String, before, "one finger never scrolls a notes page")
+        // A short drag from the side springs back.
+        rightEdge.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
         XCTAssertEqual(counter.label, "\(total) / \(total)")
         // A deliberate one off the last page adds a page.
-        right.press(forDuration: 0.05, thenDragTo: left)
+        rightEdge.press(forDuration: 0.05, thenDragTo: left)
         XCTAssertTrue(waitForLabel(counter, equalTo: "\(total + 1) / \(total + 1)"))
         attach(app, "notes new page")
-        // And back.
-        left.press(forDuration: 0.05, thenDragTo: right)
+        // And back, from the other side.
+        leftEdge.press(forDuration: 0.05, thenDragTo: right)
         XCTAssertTrue(waitForLabel(counter, equalTo: "\(total) / \(total + 1)"))
+        XCTAssertTrue(app.buttons["notebook-save"].exists, "the left edge turns the page, not Back")
         // A page fits whole either way up: no vertical scrolling sideways on.
-        let shown = app.otherElements["notebook-visible-frame"]
         XCUIDevice.shared.orientation = .landscapeLeft
         addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
         XCTAssertTrue(waitForValue(shown) { frame in
@@ -1578,8 +1594,28 @@ final class OfflineCaptureTests: XCTestCase {
         // Backwards from the first page: nothing.
         for _ in 1..<max(total, 1) { app.buttons["Previous page"].tap() }
         XCTAssertEqual(counter.label, "1 / \(total + 1)")
-        left.press(forDuration: 0.05, thenDragTo: right)
+        leftEdge.press(forDuration: 0.05, thenDragTo: right)
         XCTAssertEqual(counter.label, "1 / \(total + 1)")
+        // Leave no notes in the entry draft for the next test.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        detachDraftNotes(app)
+    }
+
+    /// Notes reopen the entry draft's notebook until the entry is saved, so a
+    /// test that wants a fresh one first takes any left over by an earlier
+    /// test (or an earlier try of this one) out of the draft. They stay in Draw.
+    private func detachDraftNotes(_ app: XCUIApplication) {
+        let row = app.buttons["capture-draft-notes"]
+        guard row.waitForExistence(timeout: 3) else { return }
+        row.swipeLeft()
+        let remove = app.buttons["Remove"]
+        if remove.waitForExistence(timeout: 3) { remove.tap() }
+        XCTAssertTrue(waitForAbsence(row), "the old notes left the draft")
+    }
+
+    private func waitForAbsence(_ element: XCUIElement) -> Bool {
+        let predicate = NSPredicate(format: "exists == false")
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 5) == .completed
     }
 
     /// Waits for the canvas's visible frame (x, y, width, height, in canvas
