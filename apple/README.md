@@ -145,7 +145,7 @@ what each device can currently do and which work remains device-only.
   Attach file, plus YouTube links for a journal entry. What they make waits in
   a draft of that entry's own (`draft-<entryID>.json`, beside the composer's,
   which is never touched) and survives a relaunch; Save turns it into an
-  *addition*, a capture with `entryID` set that uploads under the existing
+  _addition_, a capture with `entryID` set that uploads under the existing
   entry through the same replay-safe routes, while changed words go through
   the replica's revision-checked outbox. Cancel discards what was staged. Meals
   are replicated (`food_entries`, `food_media`) and their dish, place and notes
@@ -222,8 +222,10 @@ what each device can currently do and which work remains device-only.
   in-memory stand-in with sample folders, tags, due and queued cards and a
   word-match grader, so the screen can be seen without one; a UI test runs a
   whole review against it.
-- Offline YouTube links attached to a typed entry (any number per entry), with
-  preserved drafts and stable entry and per-link attachment IDs. Entry creation
+- Offline YouTube links attached to an entry (any number per entry), with
+  optional commentary kept separate from the attachments. A link-only entry has
+  an empty text body, just like the web composer. Drafts and stable entry and
+  per-link attachment IDs are preserved. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
 - Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
@@ -316,7 +318,7 @@ what each device can currently do and which work remains device-only.
   expensive-network access. Coming to the foreground (and Sync, and a
   background task) runs a full pass. While active, a local change syncs a
   second after the last tap, and every 30 seconds one `POST
-  /api/mobile/sync/status` asks whether any replica scope has news; only the
+/api/mobile/sync/status` asks whether any replica scope has news; only the
   scopes it names are pulled, and outboxes with nothing waiting make no
   request. Screens fetched rather than replicated (To-do, Daily, Workout
   history, sleep) refresh when shown or after their own changes upload. One

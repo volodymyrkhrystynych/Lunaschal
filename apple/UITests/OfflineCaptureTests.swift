@@ -1168,6 +1168,30 @@ final class OfflineCaptureTests: XCTestCase {
                       || app.buttons["https://www.youtube.com/watch?v=dQw4w9WgXcQ"].exists)
     }
 
+    func testYouTubeOnlyEntryHasAttachmentsWithoutOriginalText() {
+        let app = XCUIApplication()
+        app.launch()
+        let save = app.buttons["Save entry"]
+        XCTAssertTrue(save.waitForExistence(timeout: settle))
+        let field = app.textFields["YouTube video URL"]
+        field.tap()
+        field.typeText("https://youtu.be/aircAruvnKk")
+        // Saving also attaches a URL still in its field, without commentary.
+        save.tap()
+        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: settle))
+
+        selectTab(app, "Journal")
+        let video = app.staticTexts["1 YouTube video"].firstMatch
+        XCTAssertTrue(video.waitForExistence(timeout: settle))
+        video.tap()
+        XCTAssertTrue(app.staticTexts["Saved YouTube link"].waitForExistence(timeout: settle))
+        XCTAssertFalse(app.staticTexts["Original text"].exists)
+        app.buttons["Edit"].tap()
+        let editor = app.textViews["Entry text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: settle))
+        XCTAssertEqual(editor.value as? String, "")
+    }
+
     /// The composer's draft outlives the app, and only Discard (after asking)
     /// throws it away: text, links and staged photos together.
     func testTheDraftIsKeptUntilDiscarded() {

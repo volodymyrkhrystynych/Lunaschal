@@ -48,6 +48,31 @@ final class CaptureTests: XCTestCase {
         XCTAssertThrowsError(try store.save(capture))
     }
 
+    func testLinkOnlyEntryKeepsItsBodyEmptyAcrossRestart() throws {
+        let capture = try store.commitDraft(text: " \n ", youtubeURLs: [
+            "https://youtu.be/aircAruvnKk", "https://youtube.com/shorts/dQw4w9WgXcQ"
+        ])
+        XCTAssertEqual(capture.text, "")
+        let reopened = try CaptureStore(root: root)
+        let restored = try reopened.load(capture.id)
+        XCTAssertEqual(restored, capture)
+        XCTAssertEqual(restored.links.map(\.url), [
+            "https://www.youtube.com/watch?v=aircAruvnKk", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        ])
+        XCTAssertTrue(restored.matchesSearch("aircAruvnKk"), "Attachments remain searchable without body text")
+        // Sync updates and re-saves the capture before and after uploading it.
+        XCTAssertNoThrow(try reopened.save(restored))
+    }
+
+    func testAttachedLinksNeverReplaceOrAppendToCommentary() throws {
+        let url = "https://www.youtube.com/watch?v=aircAruvnKk"
+        for text in ["My thoughts", "I wrote this URL myself: \(url)"] {
+            let capture = try store.commitDraft(text: text, youtubeURLs: [url])
+            XCTAssertEqual(capture.text, text)
+            XCTAssertEqual(capture.links.map(\.url), [url])
+        }
+    }
+
     func testYouTubeURLValidationAndOldManifestCompatibility() throws {
         for url in ["https://youtube.com/shorts/aircAruvnKk", "https://m.youtube.com/watch?v=aircAruvnKk", "https://youtube.com/live/aircAruvnKk"] {
             XCTAssertEqual(try YouTubeLink.canonical(url), "https://www.youtube.com/watch?v=aircAruvnKk")
