@@ -14,10 +14,10 @@ public enum DayKey {
 }
 
 /// One thing logged from the Daily tab: the day's selfie, its weigh-in, or a
-/// calorie entry. The server keeps one selfie and one weight per day and
-/// replaces on re-upload; calorie entries are additive, keyed by `id`.
+/// calorie entry or purchase. The server keeps one selfie and one weight per
+/// day and replaces on re-upload; calories and spending are additive, keyed by `id`.
 public struct DailyLog: Codable, Equatable, Identifiable {
-    public enum Kind: String, Codable { case selfie, weight, calories }
+    public enum Kind: String, Codable { case selfie, weight, calories, spending }
     public enum State: String, Codable { case pending, failed, synced }
 
     public let id: String
@@ -27,20 +27,25 @@ public struct DailyLog: Codable, Equatable, Identifiable {
     public var weight: Double?
     public var calories: Int?
     public var description: String?
+    public var amountCents: Int?
+    public var category: String?
+    // Optional so manifests from before deletion support still decode.
+    public var deleted: Bool?
+    public var isDeletion: Bool { deleted == true }
     public var state: State
     public var lastError: String?
 
-    init(kind: Kind, now: Date, calendar: Calendar) {
-        id = ULID.make(now: now)
+    init(id: String? = nil, kind: Kind, day: String? = nil, now: Date, calendar: Calendar) {
+        self.id = id ?? ULID.make(now: now)
         self.kind = kind
-        day = DayKey.of(now, calendar: calendar)
+        self.day = day ?? DayKey.of(now, calendar: calendar)
         createdAt = now
         state = .pending
     }
 }
 
 public enum DailyError: LocalizedError, Equatable {
-    case invalidWeight, invalidCalories, missingDescription, missingImage
+    case invalidWeight, invalidCalories, missingDescription, missingImage, invalidAmount, invalidCategory, cannotDelete
 
     public var errorDescription: String? {
         switch self {
@@ -48,7 +53,25 @@ public enum DailyError: LocalizedError, Equatable {
         case .invalidCalories: return "Enter calories between 0 and 20000."
         case .missingDescription: return "Say what you ate."
         case .missingImage: return "The selfie could not be saved."
+        case .invalidAmount: return "Enter an amount from $0.01 to $1,000,000.00, with at most two decimal places."
+        case .invalidCategory: return "Enter a category of up to 200 characters."
+        case .cannotDelete: return "Only calorie and spending entries can be deleted here."
         }
+    }
+}
+
+/// Money crosses storage and the API as whole CAD cents. Reject extra decimal
+/// places instead of rounding a purchase into a different amount.
+public enum SpendingAmount {
+    public static func cents(_ text: String) -> Int? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")
+        guard value.range(of: #"^[0-9]+(?:\.[0-9]{1,2})?$"#, options: .regularExpression) != nil else { return nil }
+        let parts = value.split(separator: ".")
+        guard let whole = Int(parts[0]), whole <= 1_000_000 else { return nil }
+        let fraction = parts.count == 2 ? Int(parts[1].padding(toLength: 2, withPad: "0", startingAt: 0))! : 0
+        let cents = whole * 100 + fraction
+        return (1...100_000_000).contains(cents) ? cents : nil
     }
 }
 
@@ -136,6 +159,32 @@ public final class DailyStore {
         return log
     }
 
+    @discardableResult
+    public func logSpending(_ amountCents: Int, category: String, now: Date = Date()) throws -> DailyLog {
+        guard (1...100_000_000).contains(amountCents) else { throw DailyError.invalidAmount }
+        let category = category.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !category.isEmpty, category.unicodeScalars.count <= 200 else { throw DailyError.invalidCategory }
+        var log = DailyLog(kind: .spending, now: now, calendar: calendar)
+        log.amountCents = amountCents
+        log.category = category
+        try save(log)
+        return log
+    }
+
+    /// Keep the deletion on disk, even for an unsynced entry: a previous
+    /// upload may have reached the server before its response was lost.
+    @discardableResult
+    public func delete(id: String, kind: DailyLog.Kind, day: String, now: Date = Date()) throws -> DailyLog {
+        guard kind == .calories || kind == .spending else { throw DailyError.cannotDelete }
+        var log = try list().first { $0.id == id } ?? DailyLog(id: id, kind: kind, day: day, now: now, calendar: calendar)
+        guard log.kind == kind, log.day == day else { throw DailyError.cannotDelete }
+        log.deleted = true
+        log.state = .pending
+        log.lastError = nil
+        try save(log)
+        return log
+    }
+
     public func save(_ log: DailyLog) throws {
         guard ULID.isValid(log.id) else { throw CaptureError.invalidID }
         try JSONEncoder().encode(log).write(to: manifest(log.id), options: .atomic)
@@ -178,13 +227,24 @@ public struct DailyStatus: Equatable {
         }
     }
 
+    public struct Spending: Codable, Equatable, Identifiable {
+        public let id: String
+        public let category: String
+        public let amountCents: Int
+        public init(id: String, category: String, amountCents: Int) {
+            self.id = id; self.category = category; self.amountCents = amountCents
+        }
+    }
+
     public let day: String
     public var weight: Double?
     public var selfie: Selfie?
     public var entries: [Entry]
+    public var spending: [Spending]
 
-    public init(day: String, weight: Double? = nil, selfie: Selfie? = nil, entries: [Entry] = []) {
+    public init(day: String, weight: Double? = nil, selfie: Selfie? = nil, entries: [Entry] = [], spending: [Spending] = []) {
         self.day = day; self.weight = weight; self.selfie = selfie; self.entries = entries
+        self.spending = spending
     }
 }
 
@@ -198,6 +258,13 @@ public struct DailySummary: Equatable {
         public let waiting: Bool
     }
 
+    public struct Spending: Equatable, Identifiable {
+        public let id: String
+        public let category: String
+        public let amountCents: Int
+        public let waiting: Bool
+    }
+
     public let day: String
     public var weight: Double?
     public var weightWaiting = false
@@ -206,6 +273,8 @@ public struct DailySummary: Equatable {
     public var serverSelfie: DailyStatus.Selfie?
     public var entries: [Entry] = []
     public var total: Int { entries.reduce(0) { $0 + $1.calories } }
+    public var spending: [Spending] = []
+    public var totalCents: Int { spending.reduce(0) { $0 + $1.amountCents } }
     public var hasSelfie: Bool { localSelfie != nil || serverSelfie != nil }
 
     public init(day: String, server: DailyStatus?, local: [DailyLog]) {
@@ -216,7 +285,18 @@ public struct DailySummary: Equatable {
         serverSelfie = status?.selfie
         let known = Set(status?.entries.map(\.id) ?? [])
         entries = (status?.entries ?? []).map { Entry(id: $0.id, description: $0.description, calories: $0.calories, waiting: false) }
+        let knownSpending = Set(status?.spending.map(\.id) ?? [])
+        spending = (status?.spending ?? []).map { Spending(id: $0.id, category: $0.category, amountCents: $0.amountCents, waiting: false) }
         for log in mine {
+            // Keep hiding a confirmed delete until the server refresh catches
+            // up. A refusal restores its row and is also shown in the error list.
+            if log.isDeletion {
+                if log.state != .failed {
+                    entries.removeAll { $0.id == log.id }
+                    spending.removeAll { $0.id == log.id }
+                }
+                continue
+            }
             // With the server's record in hand, a synced log is already in it.
             let waiting = log.state != .synced
             if status != nil && !waiting { continue }
@@ -229,6 +309,10 @@ public struct DailySummary: Equatable {
             case .calories where !known.contains(log.id):
                 entries.append(Entry(id: log.id, description: log.description ?? "", calories: log.calories ?? 0, waiting: waiting))
             case .calories:
+                break
+            case .spending where !knownSpending.contains(log.id):
+                spending.append(Spending(id: log.id, category: log.category ?? "", amountCents: log.amountCents ?? 0, waiting: waiting))
+            case .spending:
                 break
             }
         }
@@ -253,15 +337,27 @@ public final class DailySync {
     }
 
     public func run(using transport: DailyTransport) async throws {
-        for var log in try store.list() where log.state == .pending {
+        for queued in try store.list() where queued.state == .pending {
+            // An earlier upload yields to the UI; the next item might have
+            // been deleted or discarded since the snapshot was taken.
+            guard var log = try store.list().first(where: { $0.id == queued.id }), log.state == .pending else { continue }
             try Task.checkCancellation()
             do {
                 try await transport.sendDaily(log, image: log.kind == .selfie ? store.imageURL(log) : nil)
+                guard try store.list().first(where: { $0.id == log.id }) == log else { continue }
                 log.state = .synced
                 log.lastError = nil
                 try store.save(log)
             } catch {
                 if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+                // Never overwrite a deletion made while this request was in flight.
+                guard try store.list().first(where: { $0.id == log.id }) == log else { throw error }
+                if log.isDeletion, (error as? HTTPFailure)?.status == 404 {
+                    log.state = .synced
+                    log.lastError = nil
+                    try store.save(log)
+                    continue
+                }
                 log.lastError = error.localizedDescription
                 if let http = error as? HTTPFailure, ![401, 403].contains(http.status), !http.retryAutomatically {
                     log.state = .failed

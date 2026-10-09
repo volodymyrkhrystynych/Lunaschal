@@ -930,6 +930,65 @@ def delete_calories(entry_id):
     return jsonify({'success': True})
 
 
+# --- Voluntary spending (CAD cents) -------------------------------------------
+
+@bp.get('/spending')
+def list_spending():
+    day, err = _parse_date(request.args.get('date'), _today())
+    if err:
+        return jsonify({'error': err}), 400
+    rows = get_db().execute(
+        'SELECT * FROM spending_logs WHERE date=? ORDER BY created_at, id', (day,),
+    ).fetchall()
+    entries = [row_to_dict(row) for row in rows]
+    return jsonify({'date': day, 'entries': entries,
+                    'totalCents': sum(entry['amountCents'] for entry in entries)})
+
+
+@bp.post('/spending')
+def log_spending():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Expected an object'}), 400
+    category = body.get('category')
+    if not isinstance(category, str) or not category.strip() or len(category.strip()) > 200:
+        return jsonify({'error': 'category must be between 1 and 200 characters'}), 400
+    cents = body.get('amountCents')
+    if type(cents) is not int or not 1 <= cents <= 100000000:
+        return jsonify({'error': 'amountCents must be a whole number between 1 and 100000000'}), 400
+    day, err = _parse_date(body.get('date'), _today())
+    if err:
+        return jsonify({'error': err}), 400
+    entry_id = body.get('id')
+    if entry_id is None:
+        entry_id = str(ULID())
+    try:
+        if not isinstance(entry_id, str) or str(ULID.from_str(entry_id)) != entry_id:
+            raise ValueError('Invalid ID')
+        captured_at = optional_capture_time(body)
+    except (TypeError, ValueError) as exc:
+        return jsonify({'error': str(exc)}), 400
+    clock = int(time.time())
+    created_at = min(captured_at, clock) if captured_at is not None else clock
+    db = get_db()
+    db.execute(
+        'INSERT OR IGNORE INTO spending_logs (id, date, category, amount_cents, created_at)'
+        ' VALUES (?,?,?,?,?)', (entry_id, day, category.strip(), cents, created_at),
+    )
+    db.commit()
+    return jsonify(row_to_dict(db.execute('SELECT * FROM spending_logs WHERE id=?', (entry_id,)).fetchone())), 201
+
+
+@bp.delete('/spending/<entry_id>')
+def delete_spending(entry_id):
+    db = get_db()
+    cur = db.execute('DELETE FROM spending_logs WHERE id=?', (entry_id,))
+    db.commit()
+    if not cur.rowcount:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'success': True})
+
+
 # --- Pomodoro ----------------------------------------------------------------
 
 _POMODORO_COLS = 'id, kind, date, started_at, ended_at, planned_seconds, completed, created_at'

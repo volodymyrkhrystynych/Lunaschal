@@ -803,6 +803,14 @@ final class CaptureModel: ObservableObject {
         logDaily { try $0.logCalories(calories, description: description) }
     }
 
+    func logSpending(_ amountCents: Int, category: String) -> Bool {
+        logDaily { try $0.logSpending(amountCents, category: category) }
+    }
+
+    func deleteDailyEntry(id: String, kind: DailyLog.Kind, day: String) {
+        _ = logDaily { try $0.delete(id: id, kind: kind, day: day) }
+    }
+
     func logSelfie(_ image: UIImage) -> Bool {
         logDaily { store in
             guard let jpeg = image.jpegData(compressionQuality: 0.85) else { throw DailyError.missingImage }

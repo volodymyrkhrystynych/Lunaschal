@@ -290,8 +290,53 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Saved on this device · Waiting to sync"].exists)
         for _ in 0..<5 where !app.staticTexts[meal].exists { app.swipeUp() }
         XCTAssertTrue(app.staticTexts[meal].exists)
+        app.staticTexts[meal].swipeLeft()
+        if app.buttons["Delete"].exists { app.buttons["Delete"].tap() }
+        XCTAssertTrue(app.staticTexts[meal].waitForNonExistence(timeout: settle))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: settle))
+        app.segmentedControls.buttons["Daily"].tap()
+        let calories = app.textFields["Calories"]
+        for _ in 0..<5 where !calories.exists { app.swipeUp() }
+        XCTAssertTrue(calories.exists)
+        XCTAssertFalse(app.staticTexts[meal].exists, "A deleted calorie entry stays gone after relaunch")
         app.segmentedControls.buttons["Entry"].tap()
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
+    }
+
+    func testDailySpendingSavesOfflineAndSwipesToDelete() {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: settle))
+        app.segmentedControls.buttons["Daily"].tap()
+        let category = "Groceries " + UUID().uuidString.prefix(8)
+        let categoryField = app.textFields["Spending category"]
+        for _ in 0..<10 where !categoryField.exists || !categoryField.isHittable { app.swipeUp() }
+        XCTAssertTrue(categoryField.exists)
+        categoryField.tap()
+        if let old = categoryField.value as? String, old != categoryField.placeholderValue {
+            categoryField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
+        }
+        categoryField.typeText(category)
+        let amount = app.textFields["Spending amount"]
+        amount.tap()
+        if let old = amount.value as? String, old != amount.placeholderValue {
+            amount.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
+        }
+        amount.typeText("30.25")
+        app.buttons["Add spending"].tap()
+        XCTAssertTrue(app.staticTexts[category].waitForExistence(timeout: settle))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: settle))
+        app.segmentedControls.buttons["Daily"].tap()
+        let entry = app.staticTexts[category]
+        for _ in 0..<10 where !entry.exists || !entry.isHittable { app.swipeUp() }
+        XCTAssertTrue(entry.exists, "The purchase survives a restart without a server")
+        entry.swipeLeft()
+        if app.buttons["Delete"].exists { app.buttons["Delete"].tap() }
+        XCTAssertTrue(entry.waitForNonExistence(timeout: settle))
     }
 
     func testThePageSwitchStaysPutWithTheWeatherOnEveryPage() {

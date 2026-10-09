@@ -494,6 +494,13 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
 extension JournalAPI: DailyTransport {
     public func sendDaily(_ log: DailyLog, image: URL?) async throws {
         guard ULID.isValid(log.id) else { throw CaptureError.invalidID }
+        if log.isDeletion {
+            guard log.kind == .calories || log.kind == .spending else { throw DailyError.cannotDelete }
+            let resource = log.kind == .calories ? "calories" : "spending"
+            let (data, response) = try await session.data(for: request("api/lifestyle/\(resource)/\(log.id)", method: "DELETE"))
+            try check(data, response)
+            return
+        }
         let data: Data
         switch log.kind {
         case .weight:
@@ -508,6 +515,12 @@ extension JournalAPI: DailyTransport {
             struct Body: Encodable { let id: String; let description: String; let calories: Int; let date: String; let capturedAt: String }
             data = try await postJSON("api/lifestyle/calories",
                                       Body(id: log.id, description: text, calories: calories, date: log.day,
+                                           capturedAt: ISO8601DateFormatter().string(from: log.createdAt)))
+        case .spending:
+            guard let cents = log.amountCents, let category = log.category else { throw DailyError.invalidAmount }
+            struct Body: Encodable { let id: String; let category: String; let amountCents: Int; let date: String; let capturedAt: String }
+            data = try await postJSON("api/lifestyle/spending",
+                                      Body(id: log.id, category: category, amountCents: cents, date: log.day,
                                            capturedAt: ISO8601DateFormatter().string(from: log.createdAt)))
         case .selfie:
             guard let image else { throw DailyError.missingImage }
@@ -527,7 +540,7 @@ extension JournalAPI: DailyTransport {
     public static func validateDailyAcknowledgement(_ data: Data, for log: DailyLog) throws {
         struct Ack: Decodable { let id: String; let date: String }
         let ack = try JSONDecoder().decode(Ack.self, from: data)
-        let matches = log.kind == .calories ? ack.id == log.id && ack.date == log.day : ack.date == log.day
+        let matches = (log.kind == .calories || log.kind == .spending) ? ack.id == log.id && ack.date == log.day : ack.date == log.day
         guard matches else { throw CaptureError.invalidResponse }
     }
 
@@ -543,11 +556,21 @@ extension JournalAPI: DailyTransport {
         let selfies = try JSONDecoder().decode([Selfie].self, from: await get("api/lifestyle/selfies", ["limit": "1"]))
         let calories = try JSONDecoder().decode(Calories.self, from: await get("api/lifestyle/calories", ["date": day]))
         guard calories.date == day else { throw CaptureError.invalidResponse }
+        struct Spending: Decodable { let date: String; let entries: [DailyStatus.Spending] }
+        // A phone can be updated before its server. Keep the other Daily
+        // sections readable until the new spending endpoint is deployed.
+        var spending: [DailyStatus.Spending] = []
+        do {
+            let reply = try JSONDecoder().decode(Spending.self, from: await get("api/lifestyle/spending", ["date": day]))
+            guard reply.date == day else { throw CaptureError.invalidResponse }
+            spending = reply.entries
+        } catch let error as HTTPFailure where error.status == 404 {}
         return DailyStatus(
             day: day,
             weight: weights.last { $0.date == day }?.weight,
             selfie: selfies.first { $0.date == day }.map { DailyStatus.Selfie(id: $0.id) },
-            entries: calories.entries.map { DailyStatus.Entry(id: $0.id, description: $0.description, calories: $0.calories) })
+            entries: calories.entries.map { DailyStatus.Entry(id: $0.id, description: $0.description, calories: $0.calories) },
+            spending: spending)
     }
 
     /// Today's weather where the server last knew the user to be.

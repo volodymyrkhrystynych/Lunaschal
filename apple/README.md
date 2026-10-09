@@ -74,13 +74,21 @@ what each device can currently do and which work remains device-only.
 
 - The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
   default) is the composer below; **Daily** logs the day's selfie (front camera),
-  body weight and calorie entries. Each is saved on the device first, keyed by the
+  body weight, calorie entries and voluntary spending. Each is saved on the device
+  first, keyed by the
   4am day it was logged on, and uploads to the Lifestyle routes on the next sync.
   A newer selfie or weight replaces an unsent one for the same day; calorie entries
   carry a device-minted id so a replay is not counted twice. Once reachable, the
   page shows the server's record of today with unsent logs marked waiting.
   Calories take one line, split as the desktop card does it (`CalorieLine`, a port
   of `parseCalorieEntry`): "chicken and rice, ~600" becomes the food and its count.
+  Swipe a calorie row left to delete it, including entries already on the server.
+  **Voluntary spending** takes only an amount in CAD and a free-text category
+  (for example, `15` and `McDonald's` or `30` and `Groceries`), shows today's total,
+  and supports the same swipe deletion. Purchases and deletes queue offline and
+  survive relaunch. Amounts are stored as integer cents in `spending_logs`.
+  The backend and portable Swift tests cover replay and deletion during an upload;
+  the new simulator tests have not been run locally.
 - **Workout** (the third Capture page) is the desktop's workout log: one set or
   activity per line ("bicep curls 20, 10" in lb, "squats 10" bodyweight, bare
   "20, 10" for the selected pill, "walking 30" minutes), recent-exercise pills,
