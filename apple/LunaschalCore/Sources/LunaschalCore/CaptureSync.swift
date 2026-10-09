@@ -27,12 +27,15 @@ public final class CaptureSync {
         for capture in try store.list() where capture.state == .synced {
             try uploads?.discardAfterSync(capture)
             try transfers?.discardAfterSync(capture)
+            try store.retireReplaced(by: capture)
         }
         if try transfers?.all().contains(where: { $0.state == .authentication }) == true {
             throw HTTPFailure(status: 401)
         }
         for listed in try store.list().reversed() where listed.state == .pending {
             try Task.checkCancellation()
+            // A replacement goes up only after what it replaces, which it deletes.
+            if try store.waitsForReplaced(listed) { continue }
             let attempt = try transfers?.begin(listed.id, now: now())
             if transfers != nil && attempt == nil { continue }
             // Read again: the list was taken before the sends ahead of this one
@@ -75,6 +78,7 @@ public final class CaptureSync {
             }
             try uploads?.discardAfterSync(try store.load(capture.id))
             try transfers?.discardAfterSync(try store.load(capture.id))
+            try store.retireReplaced(by: try store.load(capture.id))
         }
         // A meal's weather arrives a moment after it is saved; ask until it has
         // some, but only for a day, and no more than every ten minutes each: a
