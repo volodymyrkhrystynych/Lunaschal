@@ -225,6 +225,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 
     func go(to index: Int) {
         guard (0..<pageCount).contains(index), index != current else { return }
+        syncFromCanvas()
         current = index
         refreshPictureState()
         if isColumn { canvas?.scroll(toSlot: index) }
@@ -238,6 +239,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 
     func addPage() {
         guard loaded else { return }
+        syncFromCanvas()
         if isColumn {
             // A blank frame at the foot of the column.
             slotCount += 1
@@ -261,6 +263,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 
     func deleteCurrentPage() {
         guard loaded, canDeleteCurrent else { return }
+        syncFromCanvas()
         let index = current
         pages.remove(at: index)
         encoded.remove(at: index)
@@ -271,6 +274,13 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         revision += 1
         scheduleCheckpoint()
     }
+
+    /// What the canvas holds, taken into the model before anything replaces
+    /// the canvas's markup. The canvas reports ink only through its delegate,
+    /// and every page turn, added page, lock or pasted picture reassigns the
+    /// canvas from `pages` — so ink it had not reported yet was overwritten,
+    /// and missing from the checkpoint and the Save as well.
+    private func syncFromCanvas() { canvas?.flushInk() }
 
     /// From the canvas. Assigning a page's markup to the canvas can echo back
     /// unchanged, which must not mark a newspaper page as written on.
@@ -288,6 +298,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 
     func lockPictures() async {
         guard loaded, pages.indices.contains(markupIndex) else { return }
+        syncFromCanvas()
         let index = markupIndex, source = pages[index]
         guard !NotebookPage.isBlank(NotebookPage.pictures(of: source)) else { return }
         do {
@@ -311,6 +322,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 
     func unlockPictures() async {
         guard loaded, pages.indices.contains(markupIndex), let layer = lockedLayer(markupIndex) else { return }
+        syncFromCanvas()
         let index = markupIndex, source = pages[index]
         do {
             // Into a fresh page, ink first: the page the pictures were taken
@@ -343,6 +355,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     /// there; PaperKit lets it be moved and resized afterwards.
     func insertScreenshot(_ image: CGImage) {
         guard loaded, pages.indices.contains(markupIndex) else { return }
+        syncFromCanvas()
         let index = markupIndex
         let page = pageRect(current)
         let margin: CGFloat = 40
@@ -472,6 +485,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 
     /// Saves now. Checkpoints run one after another, never interleaved.
     func checkpoint() async {
+        syncFromCanvas()
         debounce?.cancel()
         let previous = lastCheckpoint
         let task = Task { [weak self] in
@@ -663,6 +677,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     /// The pages a Save files, as JPEGs. A blank notebook drops empty pages;
     /// a newspaper files its cover and whatever was marked.
     func renderForSave() async -> [(data: Data, name: String)] {
+        syncFromCanvas()
         var snapshot = notebook
         snapshot.pageCount = pageCount
         if isColumn, let ink = pages.first { marked = await inkedSlots(ink, slots: slotCount) }
@@ -804,6 +819,14 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         super.viewDidLayoutSubviews()
         // A rotation or a Split View resize refits the page being read.
         if view.bounds.size != fittedSize { fit() }
+    }
+
+    /// Hands the model whatever ink is on the canvas now. PaperKit reports
+    /// changes through the delegate in its own time; the model asks for this
+    /// before it swaps the canvas's markup out, so nothing drawn is lost.
+    func flushInk() {
+        guard isViewLoaded, shownRevision != -1, let markup = paper.markup else { return }
+        model.canvasChanged(markup, page: model.isColumn ? 0 : shownPage)
     }
 
     func show(page: Int, revision: Int) {
@@ -1010,6 +1033,8 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         case .previous: turn = (1, { [model] in model.go(to: model.current - 1) })
         case .newPage: turn = (-1, { [model] in model.addPage() })
         }
+        // Before the page slides away: the ink on it is the model's from here.
+        if turn != nil { flushInk() }
         guard let (direction, change) = turn else {
             UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut) { self.paper.view.transform = .identity }
             return
@@ -1255,9 +1280,10 @@ struct NotebookEditor: View {
                     Button("How to add screenshots…", systemImage: "questionmark.circle") { showHelp = true }
                 } label: { Label("Screenshot", systemImage: "camera.viewfinder") }
                 Button {
-                    if model.notebook.savedCaptureIDs.isEmpty { save() } else { confirmResave = true }
+                    // A newspaper filed again replaces its entry; nothing to confirm.
+                    if model.notebook.savedCaptureIDs.isEmpty || model.isNewspaper { save() } else { confirmResave = true }
                 } label: {
-                    if saving { ProgressView() } else { Text("Save") }
+                    if saving { ProgressView() } else { Text(saveTitle) }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(saving || !model.loaded)
@@ -1315,12 +1341,34 @@ struct NotebookEditor: View {
             .accessibilityIdentifier("notebook-add-page")
     }
 
+    /// The entry draft's notes file with the composer's words, as one entry.
+    private var isDraftNotes: Bool {
+        owner.isDraftNotebook(model.notebook) && model.notebook.savedCaptureIDs.isEmpty
+    }
+
+    private var saveTitle: String {
+        if isDraftNotes { return "Save entry" }
+        if model.isNewspaper && !model.notebook.savedCaptureIDs.isEmpty { return "Update entry" }
+        return "Save"
+    }
+
     private func save() {
         saving = true
         Task {
             await model.checkpoint()
             let files = await model.renderForSave()
             defer { saving = false }
+            if isDraftNotes {
+                guard !files.isEmpty || owner.composerHasContent || model.notebook.youtubeURL != nil else {
+                    model.error = "Nothing to save yet. Write or paste something first."
+                    return
+                }
+                if let saved = owner.saveComposerDraft(notebook: model.notebook, pages: files) {
+                    model.adopt(saved)
+                    dismiss()
+                }
+                return
+            }
             guard !files.isEmpty || model.notebook.youtubeURL != nil else {
                 model.error = "Nothing to save yet. Write or paste something first."
                 return
@@ -1418,6 +1466,7 @@ struct NotebookSection: View {
     }
 
     private func status(_ notebook: Notebook) -> String {
+        if model.isDraftNotebook(notebook) && notebook.savedCaptureIDs.isEmpty { return "In the journal draft" }
         guard let savedAt = notebook.savedAt else { return "Not in the journal yet" }
         return "Saved to journal · \(savedAt.formatted(.dateTime.month().day()))"
     }

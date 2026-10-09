@@ -46,12 +46,25 @@ what each device can currently do and which work remains device-only.
   page) is converted on open, each page's ink moved down to its place in the
   column; the paged original stays as the previous checkpoint. It downloads the PDF once
   from `GET /api/newspapers/issues/<date>/pdf`, since mobile sync doesn't carry
-  issue PDFs, and reopens the same unsaved notebook instead of making a second one.
+  issue PDFs, and reopens that issue's notebook — filed or not — instead of making
+  a second one, so a paper is written on through the day in one place.
   The web reader's own markup is untouched. Back autosaves (current + previous
   checkpoint, like drawings) and the notebook is listed under Draw → Notebooks to
-  continue. **Save** files one journal entry: each page as a JPEG (a newspaper
-  files its cover plus the pages written on, found from the ink itself), plus the notebook's one YouTube link.
-  The text composer's draft is never touched.
+  continue. Ink the canvas hasn't reported yet is taken into the notebook before
+  any page turn, added page, lock or paste replaces the canvas, and before every
+  checkpoint and Save.
+  **Notes belong to the entry draft**: Notes reopens the draft's notebook until the
+  entry is saved, and the composer lists it under Attachments (tap to reopen,
+  swipe to take it out of the entry; it stays in Draw). **Save entry** — in the
+  composer, or **Save entry** inside the notes — files the typed text, links,
+  clips, files and the notes' pages (as JPEGs, blank pages dropped) as one journal
+  entry. Save food entry leaves the notes in the draft.
+  A **newspaper's Save** files its cover plus the pages written on (found from the
+  ink itself) and the notebook's one YouTube link. Saving the same issue again
+  (**Update entry**) files every page written on so far and **replaces** the
+  earlier entry: the capture carries `replaces`, sync holds it until the entry it
+  replaces has gone up, and `POST /api/journal` deletes that entry once the new one
+  is in, so the day ends with one entry for the paper.
   **Lock pictures on this page** (camera menu) pins a page's pictures under the
   ink so they can be written over but not selected or dragged; a lock badge
   shows beside the page number, and Unlock makes them movable again. PaperKit

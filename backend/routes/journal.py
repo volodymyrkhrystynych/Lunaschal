@@ -312,6 +312,11 @@ def create_entry():
     content = body.get('content', '').strip()
 
     try:
+        replaces = _replaced_ids(body.get('replaces'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    try:
         pending = int(body.get('pendingAttachments') or 0)
     except (TypeError, ValueError):
         pending = 0
@@ -358,8 +363,30 @@ def create_entry():
         # storing a row that looks located and isn't.
         coords=coord_pair(body.get('latitude'), body.get('longitude')),
     )
+    if replaces:
+        # An iPad newspaper filed again later in the day stands in for the
+        # entry it was filed as before, so the day keeps one. After the insert,
+        # so a create that fails leaves the old entry where it was; a replay
+        # finds them already gone.
+        db = get_db()
+        for old in replaces:
+            if old != id:
+                delete_journal_entry(db, old)
+        db.commit()
     _queue_todays_newspaper()
     return jsonify({'id': id}), 201
+
+
+def _replaced_ids(value) -> list[str]:
+    """`replaces` as the iPad sends it: comma-separated entry ULIDs."""
+    if value in (None, ''):
+        return []
+    if not isinstance(value, str):
+        raise ValueError('replaces must be comma-separated ids')
+    ids = [_client_id(part) for part in value.split(',')]
+    if any(i is None for i in ids):
+        raise ValueError('replaces must be comma-separated ids')
+    return ids
 
 
 def _entry_coords(entry_id: str) -> tuple[float | None, float | None]:

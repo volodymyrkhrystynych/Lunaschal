@@ -46,6 +46,11 @@ A notes notebook turns pages with a finger swipe (with a **+ New page** marker p
 newspaper notebook is one continuous scroll fitted to the width; both passed in simulator
 (`testNotesPagesTurnWithASwipe`, `testNewspaperScrollsAsOneColumn`, portrait and landscape), and neither
 has been verified on device — in particular how a finger and a Pencil share the page.
+Ink not yet reported by PaperKit survives an added page, a page turn and Save (AppTests
+`…KeepsInkTheCanvasHadNotReported`); Notes reopening from the entry draft and saving with
+it passed in simulator (`testNotesComeBackFromTheEntryDraftAndSaveWithIt`). A newspaper
+re-save replacing its earlier entry is covered by core and server tests only; real Pencil
+timing and the replacement against a live server are unverified on device.
 Library is books-only and switches between two views. Library picks a provider
 (site or file type) and sorts by the site's latest chapter date. Folders lists
 the desktop's folders plus Unsorted, and each opens with a Back button. Both have

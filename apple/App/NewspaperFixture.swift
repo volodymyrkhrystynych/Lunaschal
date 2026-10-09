@@ -16,7 +16,7 @@ enum NewspaperFixture {
     static func seedIfAsked(_ notebooks: NotebookStore) throws {
         guard ProcessInfo.processInfo.arguments.contains(argument) else { return }
         let date = DayKey.of(Date())
-        if try notebooks.unsavedNewspaper(date: date) != nil { return }
+        if try notebooks.newspaper(date: date) != nil { return }
         let pdf = FileManager.default.temporaryDirectory.appendingPathComponent("fixture-\(UUID().uuidString).pdf")
         try makeIssue(at: pdf)
         try notebooks.createNewspaper(date: date, pdf: pdf, pageCount: shapes.count)

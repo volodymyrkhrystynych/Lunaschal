@@ -381,6 +381,91 @@ final class NotebookEditorTests: XCTestCase {
         XCTAssertEqual(try session.deliver(png), "Added to page 1.")
         XCTAssertThrowsError(try session.deliver(Data("not an image".utf8)))
     }
+
+    // MARK: Ink the canvas hasn't reported yet
+
+    /// A canvas over `model`, loaded, with its delegate as the editor wires it.
+    private func canvas(_ model: NotebookEditorModel) -> NotebookCanvasController {
+        let controller = NotebookCanvasController(model: model)
+        model.canvas = controller
+        controller.loadViewIfNeeded()
+        return controller
+    }
+
+    /// Puts `markup` on the canvas the way a stroke does before PaperKit has
+    /// told its delegate: the model has not seen it.
+    private func drawUnreported(_ markup: PaperMarkup, on controller: NotebookCanvasController) {
+        let delegate = controller.paper.delegate
+        controller.paper.delegate = nil
+        controller.paper.markup = markup
+        controller.paper.delegate = delegate
+    }
+
+    private func inked(_ page: PaperMarkup) throws -> PaperMarkup {
+        var markup = page
+        markup.insertNewImage(try XCTUnwrap(solid(.red, CGSize(width: 300, height: 200))),
+                              frame: CGRect(x: 60, y: 60, width: 300, height: 200))
+        return markup
+    }
+
+    func testAddingAPageKeepsInkTheCanvasHadNotReported() async throws {
+        let store = try store()
+        let notebook = try store.create()
+        let model = NotebookEditorModel(store: store, notebook: notebook)
+        let controller = canvas(model)
+        drawUnreported(try inked(model.pages[0]), on: controller)
+        XCTAssertTrue(NotebookPage.isBlank(model.pages[0]), "the model has not been told")
+
+        model.addPage()
+        XCTAssertFalse(NotebookPage.isBlank(model.pages[0]), "the first page keeps what was drawn")
+        XCTAssertTrue(NotebookPage.isBlank(model.pages[1]))
+        XCTAssertEqual(model.current, 1)
+        // SwiftUI then shows the new page; the canvas is blank, and the ink is what Save files.
+        controller.show(page: model.current, revision: model.revision)
+        XCTAssertTrue(NotebookPage.isBlank(try XCTUnwrap(controller.paper.markup)))
+        let files = await model.renderForSave()
+        XCTAssertEqual(files.map(\.name), ["Notes p1.jpg"])
+        await model.checkpoint()
+        let reopened = NotebookEditorModel(store: store, notebook: try store.notebook(notebook.id))
+        XCTAssertFalse(NotebookPage.isBlank(reopened.pages[0]))
+    }
+
+    func testTurningThePageKeepsInkTheCanvasHadNotReported() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        model.addPage()
+        let controller = canvas(model)
+        drawUnreported(try inked(model.pages[1]), on: controller)
+        model.go(to: 0)
+        XCTAssertFalse(NotebookPage.isBlank(model.pages[1]))
+        XCTAssertTrue(NotebookPage.isBlank(model.pages[0]))
+        XCTAssertEqual(model.marked, [1])
+    }
+
+    func testSavingKeepsInkTheCanvasHadNotReported() async throws {
+        let store = try store()
+        let notebook = try store.create()
+        let model = NotebookEditorModel(store: store, notebook: notebook)
+        drawUnreported(try inked(model.pages[0]), on: canvas(model))
+        let files = await model.renderForSave()
+        XCTAssertEqual(files.map(\.name), ["Notes p1.jpg"])
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(notebook.id).markedPages, [0])
+    }
+
+    func testAPageAddedToAColumnKeepsInkTheCanvasHadNotReported() throws {
+        let store = try store()
+        let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try issuePDF(pages: 2), pageCount: 2)
+        let model = NotebookEditorModel(store: store, notebook: notebook)
+        let controller = canvas(model)
+        drawUnreported(try inked(model.pages[0]), on: controller)
+        model.addPage()
+        controller.show(page: model.current, revision: model.revision)
+        XCTAssertEqual(model.pageCount, 3)
+        XCTAssertFalse(NotebookPage.isBlank(model.pages[0]), "the column keeps what was drawn on it")
+        XCTAssertFalse(NotebookPage.isBlank(try XCTUnwrap(controller.paper.markup)), "and still shows it")
+    }
+
 }
 
 @MainActor

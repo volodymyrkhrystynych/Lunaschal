@@ -146,13 +146,18 @@ final class NotebookTests: XCTestCase {
         XCTAssertEqual(saved.markedPages, [2, 3])
     }
 
-    func testUnsavedNewspaperIsReusedUntilFiled() throws {
+    func testAnIssueReopensTheSameNotebookAfterItIsFiled() throws {
         let root = try directory(), store = try NotebookStore(root: root)
         let first = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3)
-        XCTAssertEqual(try store.unsavedNewspaper(date: "2026-10-06")?.id, first.id)
-        XCTAssertNil(try store.unsavedNewspaper(date: "2026-10-05"))
+        XCTAssertEqual(try store.newspaper(date: "2026-10-06")?.id, first.id)
+        XCTAssertNil(try store.newspaper(date: "2026-10-05"))
+        // Filed at lunch, written on again in the evening: the same notebook.
         try store.markSaved(first.id, captureID: ULID.make())
-        XCTAssertNil(try store.unsavedNewspaper(date: "2026-10-06"))
+        XCTAssertEqual(try store.newspaper(date: "2026-10-06")?.id, first.id)
+        // Of two over one issue (made before this), the newest is the one to continue.
+        let second = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3,
+                                               now: Date().addingTimeInterval(60))
+        XCTAssertEqual(try store.newspaper(date: "2026-10-06")?.id, second.id)
     }
 
     func testPagesToFile() {

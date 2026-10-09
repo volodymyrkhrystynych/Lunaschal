@@ -857,12 +857,12 @@ final class OfflineCaptureTests: XCTestCase {
         app.alerts.buttons["Add"].tap()
         XCTAssertTrue(app.buttons["YouTube video added"].waitForExistence(timeout: 5))
 
-        // Back saves it; Draw lists it to continue.
+        // Back saves it; Draw lists it to continue, as the entry draft's notes.
         app.navigationBars.buttons.element(boundBy: 0).tap()
         tab(app, "Draw").tap()
         let row = app.staticTexts.containing(NSPredicate(format: "label CONTAINS '2 pages'")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["Not in the journal yet"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["In the journal draft"].firstMatch.exists)
         row.tap()
         XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["notebook-page"].label, "1 / 2")
@@ -873,6 +873,46 @@ final class OfflineCaptureTests: XCTestCase {
 
         tab(app, "Journal").tap()
         XCTAssertTrue(app.staticTexts["https://www.youtube.com/watch?v=M7lc1UVf-VE"].firstMatch.waitForExistence(timeout: 10))
+    }
+
+    func testNotesComeBackFromTheEntryDraftAndSaveWithIt() {
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        notes.tap()
+        XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
+        app.buttons["notebook-add-page"].tap()
+        XCTAssertEqual(app.buttons["notebook-page"].label, "2 / 2")
+
+        // Back, then Notes again: the same two pages, not a fresh notebook.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let row = app.buttons["capture-draft-notes"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        notes.tap()
+        XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["notebook-page"].label.hasSuffix("/ 2"), true)
+        XCTAssertEqual(app.buttons["notebook-save"].label, "Save entry")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        // The row opens them too.
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+        XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["notebook-page"].label.hasSuffix("/ 2"), true)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        // Saving the entry takes the notes with it; the next Notes is a new notebook.
+        let editor = app.textViews["Journal text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.tap()
+        editor.typeText("Evening notes")
+        app.buttons["Save entry"].tap()
+        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 10))
+        XCTAssertFalse(row.exists)
+        notes.tap()
+        XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["notebook-page"].label, "1 / 1")
     }
 
     func testCaptureSurvivesTerminationWithoutAServer() {
