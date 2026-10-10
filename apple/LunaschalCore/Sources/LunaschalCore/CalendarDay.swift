@@ -1,5 +1,27 @@
 import Foundation
 
+/// Drag editing is an explicit choice for this calendar visit, not a saved
+/// preference. Off produces no preview or schedule change.
+public enum CalendarDragMode: String {
+    case off = "Off", move = "Move", resize = "Resize"
+
+    public var next: CalendarDragMode {
+        switch self {
+        case .off: return .move
+        case .move: return .resize
+        case .resize: return .off
+        }
+    }
+
+    public func adjusted(start: Int, end: Int, by delta: Int) -> (start: Int, end: Int)? {
+        switch self {
+        case .off: return nil
+        case .move: return CalendarTimeline.moved(start: start, end: end, by: delta)
+        case .resize: return CalendarTimeline.resized(start: start, end: end, by: delta)
+        }
+    }
+}
+
 /// The day view's timeline, as `src/lib/calendarDayLayout.ts` draws it on the
 /// web: the app's 4am-to-4am day, so it spans two calendar dates — `day` from
 /// 04:00, then the date after it up to 04:00.

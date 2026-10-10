@@ -1,7 +1,7 @@
 import SwiftUI
 import LunaschalCore
 
-/// The Capture tab's second page: the three things logged once a day or so.
+/// The Capture tab's second page: daily health and voluntary spending logs.
 /// Everything is saved on the device first and uploads with the next sync.
 struct DailyView: View {
     @ObservedObject var model: CaptureModel
@@ -9,6 +9,9 @@ struct DailyView: View {
     // Kept across launches, like the desktop card's draft.
     @AppStorage("dailyCaloriesDraft") private var calorieLine = ""
     @State private var calorieError: String?
+    @AppStorage("dailySpendingAmountDraft") private var spendingAmount = ""
+    @AppStorage("dailySpendingCategoryDraft") private var spendingCategory = ""
+    @State private var spendingError: String?
     @State private var showCamera = false
     @FocusState private var typing: Bool
 
@@ -56,6 +59,11 @@ struct DailyView: View {
                         }
                         Text("\(entry.calories) kcal").monospacedDigit().foregroundStyle(.secondary)
                     }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button("Delete", role: .destructive) {
+                            model.deleteDailyEntry(id: entry.id, kind: .calories, day: today.day)
+                        }
+                    }
                 }
                 HStack {
                     TextField("chicken breast and rice, ~600", text: $calorieLine)
@@ -81,6 +89,41 @@ struct DailyView: View {
                     Text("\(today.total) kcal today").monospacedDigit()
                 }
             }
+            Section {
+                ForEach(today.spending) { entry in
+                    HStack {
+                        Text(entry.category)
+                        Spacer()
+                        if entry.waiting {
+                            Image(systemName: "clock").foregroundStyle(.secondary).accessibilityLabel("Waiting to sync")
+                        }
+                        Text(money(entry.amountCents)).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button("Delete", role: .destructive) {
+                            model.deleteDailyEntry(id: entry.id, kind: .spending, day: today.day)
+                        }
+                    }
+                }
+                TextField("Category, e.g. Groceries or McDonald's", text: $spendingCategory)
+                    .focused($typing).accessibilityLabel("Spending category")
+                HStack {
+                    TextField("Amount (CAD)", text: $spendingAmount)
+                        .keyboardType(.decimalPad).focused($typing).accessibilityLabel("Spending amount")
+                    Button("Add", action: addSpending)
+                        .disabled(spendingCategory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || spendingAmount.isEmpty)
+                        .accessibilityLabel("Add spending")
+                }
+                if let error = spendingError { Text(error).font(.footnote).foregroundStyle(.red) }
+            } header: {
+                HStack {
+                    Text("Voluntary spending")
+                    Spacer()
+                    Text("\(money(today.totalCents)) today").monospacedDigit()
+                }
+            }
+            .onChange(of: spendingAmount) { _, _ in spendingError = nil }
+            .onChange(of: spendingCategory) { _, _ in spendingError = nil }
             if !refused.isEmpty {
                 Section("Not accepted by the server") {
                     ForEach(refused) { log in
@@ -118,6 +161,20 @@ struct DailyView: View {
         }
     }
 
+    private func addSpending() {
+        guard let cents = SpendingAmount.cents(spendingAmount) else {
+            spendingError = DailyError.invalidAmount.localizedDescription
+            return
+        }
+        if model.logSpending(cents, category: spendingCategory) {
+            spendingAmount = ""; spendingCategory = ""; spendingError = nil; typing = false
+        }
+    }
+
+    private func money(_ cents: Int) -> String {
+        (Decimal(cents) / 100).formatted(.currency(code: "CAD"))
+    }
+
     @ViewBuilder private func selfie(_ today: DailySummary) -> some View {
         if let local = today.localSelfie, let image = UIImage(contentsOfFile: model.daily.imageURL(local).path) {
             photo(image)
@@ -144,10 +201,12 @@ struct DailyView: View {
     }
 
     private func label(_ log: DailyLog) -> String {
+        if log.isDeletion { return "Delete \(log.kind == .calories ? "calorie" : "spending") entry for \(log.day)" }
         switch log.kind {
         case .selfie: return "Selfie for \(log.day)"
         case .weight: return "Weight \(log.weight.map { String($0) } ?? "") for \(log.day)"
         case .calories: return "\(log.description ?? "") · \(log.calories ?? 0) kcal"
+        case .spending: return "\(log.category ?? "") · \(money(log.amountCents ?? 0))"
         }
     }
 }

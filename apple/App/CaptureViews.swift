@@ -646,7 +646,7 @@ struct CaptureDetail: View {
                         }
                         .disabled(text == capture.text
                             || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                && capture.files.isEmpty && capture.clips.isEmpty))
+                                && capture.files.isEmpty && capture.clips.isEmpty && capture.links.isEmpty))
                         Button("Cancel", role: .cancel) { editing = false }
                     }
                 } else {

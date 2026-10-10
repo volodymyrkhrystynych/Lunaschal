@@ -49,6 +49,19 @@ final class CaptureEditTests: XCTestCase {
         XCTAssertEqual(server.texts[capture.id], "Second draft")
     }
 
+    func testCommentaryCanBeClearedWhileKeepingTheYouTubeAttachment() async throws {
+        let capture = try store.commitDraft(text: "My thoughts", youtubeURLs: ["https://youtu.be/aircAruvnKk"])
+        try store.editText(capture.id, to: " \n ", attempt: nil)
+        XCTAssertEqual(try store.load(capture.id).text, "")
+        XCTAssertEqual(try store.load(capture.id).links, capture.links)
+
+        let server = Server()
+        try await CaptureSync(store: store).run(using: server)
+        XCTAssertEqual(server.texts[capture.id], "")
+        XCTAssertEqual(try store.load(capture.id).state, .synced)
+        XCTAssertEqual(try store.load(capture.id).links, capture.links)
+    }
+
     func testAnEntryThatFailedBeforeConnectingStaysEditable() async throws {
         let transfers = try TransferStore(root: root.appendingPathComponent("transfers"))
         let capture = Capture(text: "Offline words")

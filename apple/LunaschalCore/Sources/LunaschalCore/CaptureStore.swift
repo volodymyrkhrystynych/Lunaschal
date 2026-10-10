@@ -114,9 +114,9 @@ public final class CaptureStore {
                 throw CaptureError.nothingToAdd
             }
         }
-        // A photo or a clip with nothing written about it is still an entry; the
+        // A photo, clip or link with nothing written about it is still an entry; the
         // server accepts an empty body when it is told attachments are on the way.
-        else if capture.mode == .text && capture.files.isEmpty && capture.clips.isEmpty
+        else if capture.mode == .text && capture.files.isEmpty && capture.clips.isEmpty && capture.links.isEmpty
             && capture.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw CaptureError.emptyText
         }
@@ -413,8 +413,8 @@ public final class CaptureStore {
                         location: (latitude: Double, longitude: Double)?, now: Date) throws -> Capture {
         let links = kind == .food ? [] : try youtubeURLs.map(YouTubeLink.canonical)
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // With nothing written, links are the entry's words; a file or clip needs none.
-        var capture = Capture(text: body.isEmpty ? links.joined(separator: "\n") : body, kind: kind, now: now,
+        // Links are attachments, just like files and clips, never substitute words.
+        var capture = Capture(text: body, kind: kind, now: now,
                               youtubeURLs: links, files: files, clips: clips)
         capture.latitude = location?.latitude
         capture.longitude = location?.longitude

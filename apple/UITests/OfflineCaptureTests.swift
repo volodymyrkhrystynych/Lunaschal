@@ -290,8 +290,53 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Saved on this device · Waiting to sync"].exists)
         for _ in 0..<5 where !app.staticTexts[meal].exists { app.swipeUp() }
         XCTAssertTrue(app.staticTexts[meal].exists)
+        app.staticTexts[meal].swipeLeft()
+        if app.buttons["Delete"].exists { app.buttons["Delete"].tap() }
+        XCTAssertTrue(app.staticTexts[meal].waitForNonExistence(timeout: settle))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: settle))
+        app.segmentedControls.buttons["Daily"].tap()
+        let calories = app.textFields["Calories"]
+        for _ in 0..<5 where !calories.exists { app.swipeUp() }
+        XCTAssertTrue(calories.exists)
+        XCTAssertFalse(app.staticTexts[meal].exists, "A deleted calorie entry stays gone after relaunch")
         app.segmentedControls.buttons["Entry"].tap()
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
+    }
+
+    func testDailySpendingSavesOfflineAndSwipesToDelete() {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: settle))
+        app.segmentedControls.buttons["Daily"].tap()
+        let category = "Groceries " + UUID().uuidString.prefix(8)
+        let categoryField = app.textFields["Spending category"]
+        for _ in 0..<10 where !categoryField.exists || !categoryField.isHittable { app.swipeUp() }
+        XCTAssertTrue(categoryField.exists)
+        categoryField.tap()
+        if let old = categoryField.value as? String, old != categoryField.placeholderValue {
+            categoryField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
+        }
+        categoryField.typeText(category)
+        let amount = app.textFields["Spending amount"]
+        amount.tap()
+        if let old = amount.value as? String, old != amount.placeholderValue {
+            amount.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
+        }
+        amount.typeText("30.25")
+        app.buttons["Add spending"].tap()
+        XCTAssertTrue(app.staticTexts[category].waitForExistence(timeout: settle))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: settle))
+        app.segmentedControls.buttons["Daily"].tap()
+        let entry = app.staticTexts[category]
+        for _ in 0..<10 where !entry.exists || !entry.isHittable { app.swipeUp() }
+        XCTAssertTrue(entry.exists, "The purchase survives a restart without a server")
+        entry.swipeLeft()
+        if app.buttons["Delete"].exists { app.buttons["Delete"].tap() }
+        XCTAssertTrue(entry.waitForNonExistence(timeout: settle))
     }
 
     func testThePageSwitchStaysPutWithTheWeatherOnEveryPage() {
@@ -468,9 +513,19 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(outside.isSelected)
         app.navigationBars[long].buttons.firstMatch.tap()
 
-        // The toggle at the bottom left makes a drag change the length.
+        // Drag editing starts off; touching and scrolling across an event
+        // must not change its time or open it as if the swipe were a tap.
         let mode = app.buttons["calendar-drag-mode"]
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertEqual(mode.value as? String, "off")
+        let original = event(long).label
+        line(event(long)).press(forDuration: 0.3, thenDragTo: line(event(long)).withOffset(CGVector(dx: 0, dy: 120)))
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertEqual(event(long).label, original, "Off leaves the event's start and end unchanged")
+
+        // One tap enables Move; the next enables Resize.
+        mode.tap()
+        XCTAssertEqual(mode.value as? String, "moves it")
         mode.tap()
         XCTAssertEqual(mode.value as? String, "changes its length")
         let target = event(long)
@@ -481,15 +536,21 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertGreaterThan(longer.frame.maxY, before.maxY + 100, "a length drag moves the end")
         XCTAssertTrue(longer.label.contains("08:00 – 09:"), longer.label)
 
-        // Back to moving: the short one goes an hour later, keeping its length.
+        // Resize cycles back to Off, then another tap enables Move.
+        mode.tap()
+        XCTAssertEqual(mode.value as? String, "off")
+        let shortBefore = event(short).label
+        line(event(short)).press(forDuration: 0.3, thenDragTo: line(event(short)).withOffset(CGVector(dx: 0, dy: 60)))
+        XCTAssertEqual(event(short).label, shortBefore)
         mode.tap()
         XCTAssertEqual(mode.value as? String, "moves it")
         let moving = event(short)
+        let beforeMoving = moving.frame
         line(moving).press(forDuration: 0.3, thenDragTo: line(moving).withOffset(CGVector(dx: 0, dy: 120)))
         let moved = app.buttons.matching(identifier: "calendar-event")
             .matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", short, "09:")).firstMatch
         XCTAssertTrue(moved.waitForExistence(timeout: 5), event(short).label)
-        XCTAssertGreaterThan(moved.frame.maxY, before.maxY + 100)
+        XCTAssertGreaterThan(moved.frame.maxY, beforeMoving.maxY + 100)
 
         // Wake time set by hand, offline: the morning is shaded at once.
         app.buttons["calendar-sleep"].tap()
@@ -500,13 +561,30 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["sleep-band-morning"].waitForExistence(timeout: 5))
 
         // Leave the day as it was found: the simulator keeps what runs queue.
+        // Off-mode swipes scroll the timeline. Restore its 8am position before
+        // using coordinates: an offscreen event's frame can lie over the tabs.
+        app.buttons["Previous day"].tap()
+        app.buttons["Next day"].tap()
         for name in [long, short] {
             line(event(name)).tap()
+            XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: settle))
             deleteFromEdit(app, title: name)
         }
         app.buttons["calendar-sleep"].tap()
         if (wake.value as? String) == "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
         saveForm(app, "Sleep")
+
+        // Enabling a mode is temporary, never a preference restored on launch.
+        XCTAssertEqual(mode.value as? String, "off")
+        mode.tap()
+        XCTAssertEqual(mode.value as? String, "moves it")
+        app.terminate()
+        app.launch()
+        selectTab(app, "Journal")
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        if !app.buttons["calendar-new-event"].exists { pages.buttons["Calendar"].tap() }
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertEqual(mode.value as? String, "off")
     }
 
     func testWorkoutLogsSetsLikeTheDesktopWithoutAServer() {
@@ -873,7 +951,10 @@ final class OfflineCaptureTests: XCTestCase {
                       || app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Saved to journal'")).firstMatch.waitForExistence(timeout: 5))
 
         tab(app, "Journal").tap()
-        XCTAssertTrue(app.staticTexts["https://www.youtube.com/watch?v=M7lc1UVf-VE"].firstMatch.waitForExistence(timeout: 10))
+        let video = app.staticTexts["1 YouTube video"].firstMatch
+        XCTAssertTrue(video.waitForExistence(timeout: settle))
+        video.tap()
+        XCTAssertTrue(app.staticTexts["Saved YouTube link"].firstMatch.waitForExistence(timeout: settle))
     }
 
     func testNotesComeBackFromTheEntryDraftAndSaveWithIt() {
@@ -1210,6 +1291,30 @@ final class OfflineCaptureTests: XCTestCase {
                       || app.buttons["https://www.youtube.com/watch?v=dQw4w9WgXcQ"].exists)
     }
 
+    func testYouTubeOnlyEntryHasAttachmentsWithoutOriginalText() {
+        let app = XCUIApplication()
+        app.launch()
+        let save = app.buttons["Save entry"]
+        XCTAssertTrue(save.waitForExistence(timeout: settle))
+        let field = app.textFields["YouTube video URL"]
+        field.tap()
+        field.typeText("https://youtu.be/aircAruvnKk")
+        // Saving also attaches a URL still in its field, without commentary.
+        save.tap()
+        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: settle))
+
+        selectTab(app, "Journal")
+        let video = app.staticTexts["1 YouTube video"].firstMatch
+        XCTAssertTrue(video.waitForExistence(timeout: settle))
+        video.tap()
+        XCTAssertTrue(app.staticTexts["Saved YouTube link"].waitForExistence(timeout: settle))
+        XCTAssertFalse(app.staticTexts["Original text"].exists)
+        app.buttons["Edit"].tap()
+        let editor = app.textViews["Entry text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: settle))
+        XCTAssertEqual(editor.value as? String, "")
+    }
+
     /// The composer's draft outlives the app, and only Discard (after asking)
     /// throws it away: text, links and staged photos together.
     func testTheDraftIsKeptUntilDiscarded() {
@@ -1419,9 +1524,10 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         focus(title)
         title.typeText(name)
-        // A tap on the switch's middle lands on its label; flip the toggle itself.
-        app.switches["Due date"].coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-        XCTAssertTrue(app.datePickers.firstMatch.waitForExistence(timeout: 3), "Due today")
+        // SwiftUI exposes both a labelled row and the actual nested switch.
+        let due = app.switches["Due date"]
+        due.switches.firstMatch.exists ? due.switches.firstMatch.tap() : due.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["todo-due-date"].waitForExistence(timeout: settle), "Due today")
         app.buttons["todo-editor-save"].tap()
         let row = app.buttons.matching(NSPredicate(format: "identifier == 'todo-row' AND label BEGINSWITH %@", name)).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5))

@@ -190,9 +190,12 @@ transcription into its text. “Record” means create the entry with its record
 without requesting speech transcription. Neither action should require a live
 server connection. Server enrichment remains separate from saving a capture.
 
-Saving a YouTube link offline means preserving the URL and the user's thoughts
-for later processing. It does not promise that a video which was never
-downloaded will play offline.
+Saving a YouTube link offline means preserving the URL as an attachment and the
+user's optional thoughts as the entry body, separately, for later processing.
+A link-only entry keeps its body empty; URLs are never substituted for missing
+commentary. The local feed labels its video attachments, and clearing commentary
+from a waiting entry keeps those attachments. It does not promise that a video
+which was never downloaded will play offline.
 
 ## Architecture and invariants
 
@@ -645,9 +648,25 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
 - [x] Add historical Journal browsing, editing, attachment readers, and conflict resolution.
       New photo/document attachment capture and share-extension imports remain open.
 - [x] Save YouTube URLs and commentary offline; queue server metadata/import work.
+- [x] Capture → Daily: swipe to delete calorie entries; voluntary spending with an
+      amount in CAD and a free-text category, a daily total and swipe deletion.
+      Purchases use `spending_logs` with whole cents, client ULIDs and the original
+      4am day/capture timestamp. Creates and deletions persist in the Daily outbox;
+      deleting during an upload cannot be overwritten by its response, and a
+      replayed deletion treats 404 as success. Synced deletion markers keep stale
+      server snapshots from bringing rows back. Backend and portable Swift tests
+      passed; simulator coverage added but not run locally.
 - [ ] Show archive playback availability without preventing URL/commentary capture.
-- [ ] Add a share extension for links, audio, photos, and supported documents.
-- [ ] Use a shared app container/outbox with safe handoff from the share extension.
+- [ ] Complete share-extension support: fic/YouTube links and journal screenshots
+      are implemented; audio and documents remain outstanding. Image shares (up to 20) preserve original bytes in `ScreenshotOutbox`, upload through
+      `POST /api/journal/screenshots`, and retry during app sync. The existing server
+      session groups consecutive arrivals until other journal activity, matching
+      desktop behavior; timestamps use share time with its original local offset.
+- [x] Use a shared app container/outbox with safe handoff from the share extension.
+      Screenshot items publish atomically and a process lock serializes drains.
+      Validated receipts precede removal; interrupted requests reuse attachment IDs.
+      Core/backend coverage is automated; the new image-provider AppTest and signed
+      iPhone/iPad share-sheet flow still require Apple CI/device verification.
 - [ ] Reuse web readers/screens where appropriate with local content access and one
       shared data source; avoid embedding a server-dependent page as “offline.”
 - [ ] Preserve useful keyboard access, accessibility labels, Dynamic Type, and rotation.
@@ -667,7 +686,12 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
       and holds Delete instead. A split now carries the categories into the new series. Overlapping events share their hours in lanes, with labels
       placed clear of every line in the group. Dragging an event queues a `reschedule`
       (one occurrence of a series becomes a move exception, as the web's drag does); a
-      toggle at the bottom left switches the drag between moving and changing the length.
+      button at the bottom left cycles Off → Move → Resize → Off. Each calendar
+      visit starts Off, regardless of the old saved Length setting. Off attaches
+      only a tap gesture to events, so swipes scroll without changing event times;
+      taps still open details. Mode cycling and adjustment gating have portable
+      tests; simulator coverage includes disabled drags and relaunch defaults,
+      but the new simulator checks have not been run locally.
       Wake/sleep bands come from `GET /api/calendar/sleep/<date>` (derived on the server,
       so fetched and cached per day rather than replicated); hand-set times queue as a
       `PUT`. The server's rule is the desktop's: the first activity after 4am is the
@@ -841,13 +865,13 @@ These are staged decisions, not reasons to pause unrelated implementation.
 
 ### Verification log
 
-| Date       | Scope                                                   | Evidence                                                                                                                                                                         | Limits                                                                                            |
-| ---------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| 2026-09-27 | Capture foundation, `e018be9`                           | 145 backend tests; 13 Swift core tests; Swift syntax parsing; YAML/format checks                                                                                                 | No hosted Mac run, native UI test execution, signing, or device validation                        |
-| 2026-09-28 | Replica, conflicts, historical journal and library text | 173 backend regression tests; 21 Swift core tests; native Swift syntax parsing                                                                                                   | Apple SDK type checking and simulator/device execution still pending                              |
-| 2026-09-28 | Sync-log compaction and restore epochs                  | 41 sync/seeder tests passed                                                                                                                                                      | Maintenance commands tested on isolated databases only                                            |
-| 2026-09-29 | Native drawing recovery and Apple builds, `e71830d`     | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36503732880): 35 Linux / 36 Mac core tests, Watch build, two iPhone relaunch tests                    | Unsigned simulator validation; Pencil and paired Watch hardware unverified                        |
-| 2026-09-29 | Drawing import, `1e8b624`                               | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616): 37 Linux / 38 Mac core tests, four native import tests, two relaunch tests, Watch build | Source bytes preserved; blank imports rejected; Files-provider and Pencil hardware checks pending |
+| Date       | Scope                                                   | Evidence                                                                                                                                                                                                                                                  | Limits                                                                                                                                                           |
+| ---------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-09-27 | Capture foundation, `e018be9`                           | 145 backend tests; 13 Swift core tests; Swift syntax parsing; YAML/format checks                                                                                                                                                                          | No hosted Mac run, native UI test execution, signing, or device validation                                                                                       |
+| 2026-09-28 | Replica, conflicts, historical journal and library text | 173 backend regression tests; 21 Swift core tests; native Swift syntax parsing                                                                                                                                                                            | Apple SDK type checking and simulator/device execution still pending                                                                                             |
+| 2026-09-28 | Sync-log compaction and restore epochs                  | 41 sync/seeder tests passed                                                                                                                                                                                                                               | Maintenance commands tested on isolated databases only                                                                                                           |
+| 2026-09-29 | Native drawing recovery and Apple builds, `e71830d`     | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36503732880): 35 Linux / 36 Mac core tests, Watch build, two iPhone relaunch tests                                                                                             | Unsigned simulator validation; Pencil and paired Watch hardware unverified                                                                                       |
+| 2026-09-29 | Drawing import, `1e8b624`                               | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616): 37 Linux / 38 Mac core tests, four native import tests, two relaunch tests, Watch build                                                                          | Source bytes preserved; blank imports rejected; Files-provider and Pencil hardware checks pending                                                                |
 | 2026-10-07 | Replica lock fix and incremental sync                   | 381 core tests on macOS, on both FTS5 paths (contentless, and the pre-3.43 fallback); 4,494 backend tests (sync, status check, nightly compaction included); 38 app unit and 30 UI tests in the iPhone 17 Pro simulator from a clean install; Watch build | Passed in simulator; not verified on device. Linux core run is CI's. Five backend tests fail and three WeasyPrint files crash on this Mac, identically on `main` |
 
 ### Implementation entry points

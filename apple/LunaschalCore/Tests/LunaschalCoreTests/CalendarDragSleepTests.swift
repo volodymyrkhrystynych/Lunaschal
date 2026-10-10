@@ -90,6 +90,29 @@ final class CalendarDragSleepTests: XCTestCase {
 
     // MARK: dragging
 
+    func testDragEditingCyclesOffMoveResizeOff() {
+        var mode = CalendarDragMode.off
+        mode = mode.next
+        XCTAssertEqual(mode, .move)
+        mode = mode.next
+        XCTAssertEqual(mode, .resize)
+        mode = mode.next
+        XCTAssertEqual(mode, .off)
+        XCTAssertEqual(mode.next, .move)
+    }
+
+    func testOffNeverAdjustsAnEventAndEnabledModesKeepTheirMeaning() throws {
+        for delta in [-500, 0, 30, 500] {
+            XCTAssertNil(CalendarDragMode.off.adjusted(start: 60, end: 120, by: delta))
+        }
+        let moved = try XCTUnwrap(CalendarDragMode.move.adjusted(start: 60, end: 120, by: 30))
+        XCTAssertEqual(moved.start, 90)
+        XCTAssertEqual(moved.end, 150)
+        let resized = try XCTUnwrap(CalendarDragMode.resize.adjusted(start: 60, end: 120, by: 30))
+        XCTAssertEqual(resized.start, 60)
+        XCTAssertEqual(resized.end, 150)
+    }
+
     func testMoveKeepsTheLengthAndStaysInsideTheDay() {
         XCTAssertTrue(CalendarTimeline.moved(start: 60, end: 120, by: 30) == (90, 150))
         XCTAssertTrue(CalendarTimeline.moved(start: 60, end: 120, by: -500) == (0, 60))

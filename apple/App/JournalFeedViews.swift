@@ -231,7 +231,8 @@ private struct LocalCaptureCard: View {
 
     var body: some View {
         FeedCard {
-            Text(capture.snapshot?.title ?? (capture.text.isEmpty ? (capture.files.first?.name ?? "Recording") : capture.text))
+            Text(capture.snapshot?.title ?? (capture.text.isEmpty
+                ? (capture.files.first?.name ?? (capture.links.isEmpty ? "Recording" : "Journal entry")) : capture.text))
                 .lineLimit(2)
             if capture.kind == .food { Label("Food log", systemImage: "fork.knife").font(.caption) }
             let photos = capture.files.filter(\.isImage).compactMap { try? model.store.fileURL($0) }
@@ -246,6 +247,11 @@ private struct LocalCaptureCard: View {
             }
             if !capture.clips.isEmpty || capture.attachmentID != nil {
                 Label(capture.clips.count > 1 ? "\(capture.clips.count) recordings" : "Recording", systemImage: "waveform")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !capture.links.isEmpty {
+                Label(capture.links.count == 1 ? "1 YouTube video" : "\(capture.links.count) YouTube videos",
+                      systemImage: "play.rectangle")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Text(capture.createdAt, format: .dateTime.month().day().hour().minute())

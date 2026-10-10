@@ -77,6 +77,7 @@ final class CaptureModel: ObservableObject {
     @Published var todoRefusals: [String] = []
     let todoOutbox: TodoOutbox
     let ficImports: FicImportOutbox
+    let screenshots: ScreenshotOutbox
     private let todoSyncer: TodoSync
     /// Jobs feed decisions the server hasn't had yet, and what it last turned down.
     @Published private(set) var jobQueue: [JobDecisionOp] = []
@@ -174,6 +175,8 @@ final class CaptureModel: ObservableObject {
         // Shared with the share extension when the App Group is there.
         ficImports = try FicImportOutbox(root: SharedSignIn.importOutboxRoot()
             ?? store.root.appendingPathComponent("fic-imports", isDirectory: true))
+        screenshots = try ScreenshotOutbox(root: SharedSignIn.screenshotsRoot()
+            ?? store.root.appendingPathComponent("journal-screenshots", isDirectory: true))
         try chatRecordings.recoverInterrupted()
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store, pomodoros: pomodoros)
@@ -899,6 +902,14 @@ final class CaptureModel: ObservableObject {
         logDaily { try $0.logCalories(calories, description: description) }
     }
 
+    func logSpending(_ amountCents: Int, category: String) -> Bool {
+        logDaily { try $0.logSpending(amountCents, category: category) }
+    }
+
+    func deleteDailyEntry(id: String, kind: DailyLog.Kind, day: String) {
+        _ = logDaily { try $0.delete(id: id, kind: kind, day: day) }
+    }
+
     func logSelfie(_ image: UIImage) -> Bool {
         logDaily { store in
             guard let jpeg = image.jpegData(compressionQuality: 0.85) else { throw DailyError.missingImage }
@@ -1064,6 +1075,7 @@ final class CaptureModel: ObservableObject {
                 || !ficActivity.list().isEmpty
                 || !todoOutbox.list().isEmpty
                 || !jobStore.pending().isEmpty
+                || !screenshots.list().isEmpty
                 || (healthSyncEnabled && HealthSync.isDue(healthState.status(), now: Date())), signedIn: signedIn,
             enabled: backgroundSyncEnabled, now: Date())
     }
@@ -1145,6 +1157,7 @@ final class CaptureModel: ObservableObject {
                 changed.formUnion(CalendarSync.collections)
             }
             try await timed("uploads") { try await syncer.run(using: api) }
+            try await timed("screenshots") { try await screenshots.run(using: api) }
             try await timed("daily") { try await dailySyncer.run(using: api) }
             try await timed("workouts") { try await workoutSyncer.run(using: api) }
             try await timed("pomodoro") { try await pomodoroSyncer.run(using: api) }

@@ -558,6 +558,11 @@ def seed_food(db, recipe_id):
             'INSERT INTO calorie_logs (id, date, description, calories, created_at) VALUES (?, ?, ?, ?, ?)',
             (new_id(), today, description, calories, ts(0)),
         )
+    for category, cents in [("McDonald's", 1500), ('Groceries', 3000)]:
+        db.execute(
+            'INSERT INTO spending_logs (id, date, category, amount_cents, created_at) VALUES (?, ?, ?, ?, ?)',
+            (new_id(), today, category, cents, ts(0)),
+        )
 
 
 def seed_fanfic(db, journal_ids):

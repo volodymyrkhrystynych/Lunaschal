@@ -12,8 +12,8 @@ struct CalendarPage: View {
     @State private var creating: CalendarDraft?
     @State private var opened: CalendarOccurrence?
     @State private var editingSleep = false
-    /// What dragging an event does: move it, or (toggled at the bottom left) change its length.
-    @AppStorage("calendarDragChangesLength") private var dragChangesLength = false
+    /// Each visit starts with drag editing off, even if an older build saved Length.
+    @State private var dragMode = CalendarDragMode.off
     /// The event being dragged and where it would land, in offset minutes.
     @State private var dragging: (id: String, start: Int, end: Int)?
 
@@ -34,17 +34,18 @@ struct CalendarPage: View {
             timeline
         }
         .overlay(alignment: .bottomLeading) {
-            Button { dragChangesLength.toggle() } label: {
-                Label(dragChangesLength ? "Length" : "Move",
-                      systemImage: dragChangesLength ? "arrow.up.and.down.square" : "hand.draw")
+            Button { dragging = nil; dragMode = dragMode.next } label: {
+                Label(dragMode.rawValue,
+                      systemImage: dragMode == .off ? "hand.raised" : dragMode == .resize ? "arrow.up.and.down.square" : "hand.draw")
                     .font(.subheadline.weight(.semibold))
                     .padding(.horizontal, 14).frame(height: 44)
-                    .background(Capsule().fill(dragChangesLength ? AnyShapeStyle(.tint) : AnyShapeStyle(.regularMaterial)))
-                    .foregroundStyle(dragChangesLength ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                    .background(Capsule().fill(dragMode != .off ? AnyShapeStyle(.tint) : AnyShapeStyle(.regularMaterial)))
+                    .foregroundStyle(dragMode != .off ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                     .shadow(radius: 2)
             }
             .accessibilityLabel("Dragging an event")
-            .accessibilityValue(dragChangesLength ? "changes its length" : "moves it")
+            .accessibilityValue(dragMode == .off ? "off" : dragMode == .resize ? "changes its length" : "moves it")
+            .accessibilityHint("Switch to \(dragMode.next.rawValue)")
             .accessibilityIdentifier("calendar-drag-mode")
             .padding(16)
         }
@@ -78,6 +79,7 @@ struct CalendarPage: View {
             .presentationDetents([.medium, .large])
         }
         .task(id: day) { await model.refreshSleep(day) }
+        .onDisappear { dragMode = .off; dragging = nil }
     }
 
     private var bands: [SleepBand] { model.sleepDays[day].map { CalendarSleep.bands($0) } ?? [] }
@@ -137,11 +139,7 @@ struct CalendarPage: View {
                     .allowsHitTesting(dragging == nil)
                     if day == today { NowLine(scale: scale) }
                     ForEach(plan.timed) { item in
-                        let live = dragging.flatMap { $0.id == item.id ? ($0.start, $0.end) : nil }
-                        EventLine(item: item, start: live?.0 ?? item.startMinutes, end: live?.1 ?? item.endMinutes,
-                                  scale: scale, pending: model.pendingCalendarIDs.contains(item.occurrence.event.id),
-                                  changesLength: dragChangesLength, dragged: live != nil)
-                            .gesture(drag(item))
+                        eventLine(item)
                             .accessibilityAction { opened = item.occurrence }
                     }
                 }
@@ -160,6 +158,20 @@ struct CalendarPage: View {
         })
     }
 
+    @ViewBuilder private func eventLine(_ item: TimedOccurrence) -> some View {
+        let live = dragging.flatMap { $0.id == item.id ? ($0.start, $0.end) : nil }
+        let line = EventLine(item: item, start: live?.0 ?? item.startMinutes, end: live?.1 ?? item.endMinutes,
+                             scale: scale, pending: model.pendingCalendarIDs.contains(item.occurrence.event.id),
+                             changesLength: dragMode == .resize, dragged: live != nil)
+        if dragMode == .off {
+            // No zero-distance drag recognizer: a swipe over the event must
+            // reach the ScrollView, while a deliberate tap still opens it.
+            line.onTapGesture { opened = item.occurrence }
+        } else {
+            line.gesture(drag(item))
+        }
+    }
+
     /// One gesture for tap and drag, as on the web: a touch that hardly moves
     /// opens the event; one that moves drags it, on the 5-minute grid, and
     /// is saved on release (queued, so it works offline).
@@ -168,12 +180,11 @@ struct CalendarPage: View {
             .onChanged { value in
                 guard abs(value.translation.height) > 6 || dragging?.id == item.id else { return }
                 let delta = CalendarTimeline.snapped(Double(value.translation.height / scale))
-                let range = dragChangesLength
-                    ? CalendarTimeline.resized(start: item.startMinutes, end: item.endMinutes, by: delta)
-                    : CalendarTimeline.moved(start: item.startMinutes, end: item.endMinutes, by: delta)
+                guard let range = dragMode.adjusted(start: item.startMinutes, end: item.endMinutes, by: delta) else { return }
                 dragging = (item.id, range.start, range.end)
             }
             .onEnded { _ in
+                guard dragMode != .off else { dragging = nil; return }
                 guard let landed = dragging, landed.id == item.id else {
                     opened = item.occurrence
                     return

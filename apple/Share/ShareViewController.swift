@@ -7,6 +7,7 @@ import LunaschalCore
 /// it waits in the App Group's outbox and the app sends it on its next sync.
 /// A YouTube link goes into the Capture composer's draft instead, through the
 /// App Group's shared-links inbox, and needs no server at all.
+/// Shared images use the desktop screenshot endpoint after durable local saving.
 final class ShareViewController: UIViewController {
     private let model = ShareModel()
 
@@ -35,6 +36,10 @@ final class ShareModel: ObservableObject {
     var close: () -> Void = {}
 
     func run(_ items: [NSExtensionItem]) async {
+        let images = items.flatMap { $0.attachments ?? [] }.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+        }
+        if !images.isEmpty { return await shareScreenshots(images) }
         let text = await Self.sharedText(items)
         guard let link = FicImportLink.find(in: text) else {
             if let video = YouTubeLink.find(in: text) { return addToDraft(video) }
@@ -57,6 +62,35 @@ final class ShareModel: ObservableObject {
                    imported: true)
         } catch {
             finish(error.localizedDescription, imported: false)
+        }
+    }
+
+    private func shareScreenshots(_ providers: [NSItemProvider]) async {
+        guard let root = SharedSignIn.screenshotsRoot() else {
+            return finish("Lunaschal can’t receive screenshots in this build.", imported: false)
+        }
+        var saved = 0
+        do {
+            let outbox = try ScreenshotOutbox(root: root)
+            // Sequential copies keep multi-image shares within extension memory.
+            for provider in providers {
+                try await SharedScreenshotLoader.save(provider, to: outbox)
+                saved += 1
+            }
+            if let session = SharedSignIn.read() {
+                let api = try JournalAPI(server: session.server, token: session.token, allowCellular: true)
+                try await outbox.run(using: api)
+                if try outbox.list().isEmpty {
+                    return finish("Screenshots added to your journal.", imported: true)
+                }
+            }
+            finish("Screenshots saved. Open Lunaschal to sign in and sync them to your journal.", imported: true)
+        } catch {
+            if saved == providers.count {
+                finish("Screenshots saved on this device. Lunaschal will retry on its next sync. \(error.localizedDescription)", imported: false)
+            } else {
+                finish("Saved \(saved) of \(providers.count) screenshots for sync. The remaining images could not be copied. \(error.localizedDescription)", imported: false)
+            }
         }
     }
 

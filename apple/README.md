@@ -93,13 +93,21 @@ what each device can currently do and which work remains device-only.
 
 - The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
   default) is the composer below; **Daily** logs the day's selfie (front camera),
-  body weight and calorie entries. Each is saved on the device first, keyed by the
+  body weight, calorie entries and voluntary spending. Each is saved on the device
+  first, keyed by the
   4am day it was logged on, and uploads to the Lifestyle routes on the next sync.
   A newer selfie or weight replaces an unsent one for the same day; calorie entries
   carry a device-minted id so a replay is not counted twice. Once reachable, the
   page shows the server's record of today with unsent logs marked waiting.
   Calories take one line, split as the desktop card does it (`CalorieLine`, a port
   of `parseCalorieEntry`): "chicken and rice, ~600" becomes the food and its count.
+  Swipe a calorie row left to delete it, including entries already on the server.
+  **Voluntary spending** takes only an amount in CAD and a free-text category
+  (for example, `15` and `McDonald's` or `30` and `Groceries`), shows today's total,
+  and supports the same swipe deletion. Purchases and deletes queue offline and
+  survive relaunch. Amounts are stored as integer cents in `spending_logs`.
+  The backend and portable Swift tests cover replay and deletion during an upload;
+  the new simulator tests have not been run locally.
 - **Workout** (the third Capture page) is the desktop's workout log: one set or
   activity per line ("bicep curls 20, 10" in lb, "squats 10" bodyweight, bare
   "20, 10" for the selected pill, "walking 30" minutes), recent-exercise pills,
@@ -164,7 +172,7 @@ what each device can currently do and which work remains device-only.
   Attach file, plus YouTube links for a journal entry. What they make waits in
   a draft of that entry's own (`draft-<entryID>.json`, beside the composer's,
   which is never touched) and survives a relaunch; Save turns it into an
-  *addition*, a capture with `entryID` set that uploads under the existing
+  _addition_, a capture with `entryID` set that uploads under the existing
   entry through the same replay-safe routes, while changed words go through
   the replica's revision-checked outbox. Cancel discards what was staged. Meals
   are replicated (`food_entries`, `food_media`) and their dish, place and notes
@@ -241,8 +249,10 @@ what each device can currently do and which work remains device-only.
   in-memory stand-in with sample folders, tags, due and queued cards and a
   word-match grader, so the screen can be seen without one; a UI test runs a
   whole review against it.
-- Offline YouTube links attached to a typed entry (any number per entry), with
-  preserved drafts and stable entry and per-link attachment IDs. Entry creation
+- Offline YouTube links attached to an entry (any number per entry), with
+  optional commentary kept separate from the attachments. A link-only entry has
+  an empty text body, just like the web composer. Drafts and stable entry and
+  per-link attachment IDs are preserved. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
 - Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
@@ -255,7 +265,8 @@ what each device can currently do and which work remains device-only.
   with the web's create, edit and delete (including "This and future" / "All events" on a
   repeating event; Delete is inside Edit), the six category checkboxes on the event's page and
   their colours, overlapping events side by side,
-  drag to move (or, with the bottom-left toggle on Length, to change the end), and shaded
+  optional drag editing (the bottom-left button cycles **Off → Move → Resize → Off**,
+  starting Off each visit; taps still open events), and shaded
   wake/sleep bands with an editor; changes are saved on the device and replayed in order on the next sync. More
   holds Library, Learning and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
   Library/Folders switch. Library mode has provider pills and sorts by the site's latest
@@ -273,7 +284,15 @@ what each device can currently do and which work remains device-only.
   appends it to `SharedLinkInbox` in the same App Group, and the app moves it
   into the draft's links whenever it comes to the foreground. Passed in core
   tests only; the hand-off needs a signed build (an unsigned one has no App
-  Group, and the extension says so). Other saved material is grouped
+  Group, and the extension says so). Sharing up to 20 images on iPhone or iPad
+  sends them as journal screenshots. Original files first enter a durable App Group
+  outbox, then upload immediately or retry on the app's next sync. The existing
+  desktop screenshot endpoint groups consecutive uploads into one entry until
+  other journal activity intervenes; screenshots do not become entry text.
+  Grouping follows server arrival order, including offline retries. Timestamps
+  record when each image was shared. Core and backend tests cover persistence,
+  retries and grouping; native share-sheet verification remains pending.
+  Other saved material is grouped
   under Study. Download controls remain in More → Settings → Library downloads.
   Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:
   continue bookmark, then this device's last read, then the server's, then chapter 1),
@@ -335,7 +354,7 @@ what each device can currently do and which work remains device-only.
   expensive-network access. Coming to the foreground (and Sync, and a
   background task) runs a full pass. While active, a local change syncs a
   second after the last tap, and every 30 seconds one `POST
-  /api/mobile/sync/status` asks whether any replica scope has news; only the
+/api/mobile/sync/status` asks whether any replica scope has news; only the
   scopes it names are pulled, and outboxes with nothing waiting make no
   request. Screens fetched rather than replicated (To-do, Daily, Workout
   history, sleep) refresh when shown or after their own changes upload. One

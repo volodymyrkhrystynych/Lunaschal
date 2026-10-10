@@ -153,6 +153,117 @@ final class DailyTests: XCTestCase {
         XCTAssertNoThrow(try JournalAPI.validateDailyAcknowledgement(mine, for: calories))
     }
 
+    func testSpendingAmountsUseExactCents() {
+        for (text, cents) in [("15", 1500), ("30.01", 3001), (" 0,10 ", 10), ("1.5", 150), ("1000000", 100000000)] {
+            XCTAssertEqual(SpendingAmount.cents(text), cents)
+        }
+        for text in ["", "0", "-15", "1.001", "NaN", "1e3", "1,000.00", "1000000.01", "9999999999999999999999999"] {
+            XCTAssertNil(SpendingAmount.cents(text), text)
+        }
+    }
+
+    func testSpendingSurvivesRestartAndMergesWithServerWithoutDoubleCounting() throws {
+        let first = try store.logSpending(1500, category: " McDonald's ", now: at(5, 1))
+        let second = try store.logSpending(3001, category: "Groceries", now: at(5, 2))
+        let reopened = try DailyStore(root: root, calendar: calendar)
+        XCTAssertEqual(try reopened.list().map(\.day), ["2026-10-04", "2026-10-04"])
+        let server = DailyStatus(day: first.day, spending: [.init(id: first.id, category: "McDonald's", amountCents: 1500)])
+        let summary = DailySummary(day: first.day, server: server, local: try reopened.list())
+        XCTAssertEqual(summary.totalCents, 4501)
+        XCTAssertEqual(summary.spending.map(\.id), [first.id, second.id])
+        XCTAssertEqual(summary.spending.map(\.waiting), [false, true])
+        XCTAssertEqual(DailySummary(day: first.day, server: nil, local: try reopened.list()).totalCents, 4501)
+        XCTAssertThrowsError(try store.logSpending(0, category: "Groceries"))
+        XCTAssertThrowsError(try store.logSpending(1, category: " "))
+        XCTAssertThrowsError(try store.logSpending(1, category: String(repeating: "x", count: 201)))
+        let ack = Data(#"{"id":"\#(first.id)","date":"\#(first.day)"}"#.utf8)
+        XCTAssertNoThrow(try JournalAPI.validateDailyAcknowledgement(ack, for: first))
+        XCTAssertThrowsError(try JournalAPI.validateDailyAcknowledgement(ack, for: second))
+    }
+
+    @MainActor
+    func testDeletingAnUnsentCalorieEntrySurvivesRestartAndNeverCreatesIt() async throws {
+        let log = try store.logCalories(300, description: "Oats", now: at(4, 9))
+        try store.delete(id: log.id, kind: .calories, day: log.day)
+        let reopened = try DailyStore(root: root, calendar: calendar)
+        XCTAssertEqual(DailySummary(day: log.day, server: nil, local: try reopened.list()).total, 0)
+        let transport = FakeDaily(refuse: [log.id: 404])
+        try await DailySync(store: reopened, now: { self.at(4, 12) }).run(using: transport)
+        XCTAssertEqual(transport.logs.map(\.isDeletion), [true])
+        XCTAssertEqual(try reopened.list().first?.state, .synced)
+    }
+
+    @MainActor
+    func testServerOnlyDeletionHidesStaleRowsAndReplaysAfterLostResponse() async throws {
+        let id = ULID.make(), day = "2026-10-04"
+        let server = DailyStatus(day: day, entries: [.init(id: id, description: "Lunch", calories: 400)])
+        try store.delete(id: id, kind: .calories, day: day)
+        let transport = FakeDaily(refuse: [id: 503])
+        do { try await DailySync(store: store).run(using: transport); XCTFail("offline") } catch {}
+        XCTAssertEqual(try store.list().first?.state, .pending)
+        XCTAssertEqual(DailySummary(day: day, server: server, local: try store.list()).total, 0)
+        let reopened = try DailyStore(root: root, calendar: calendar)
+        try await DailySync(store: reopened, now: { self.at(4, 12) }).run(using: FakeDaily(refuse: [id: 404]))
+        XCTAssertEqual(DailySummary(day: day, server: server, local: try reopened.list()).total, 0)
+    }
+
+    @MainActor
+    func testDeletionDuringUploadIsNotOverwrittenByTheReply() async throws {
+        for status in [nil, 503] as [Int?] {
+            let log = try store.logSpending(1500, category: "Lunch", now: at(4, 9))
+            let transport = FakeDaily(refuse: status.map { [log.id: $0] } ?? [:])
+            transport.during = { item in
+                if item.id == log.id { try self.store.delete(id: item.id, kind: item.kind, day: item.day) }
+            }
+            do { try await DailySync(store: store, now: { self.at(4, 12) }).run(using: transport) }
+            catch { XCTAssertNotNil(status) }
+            let pending = try XCTUnwrap(store.list().first { $0.id == log.id })
+            XCTAssertTrue(pending.isDeletion)
+            XCTAssertEqual(pending.state, .pending)
+            let retry = FakeDaily()
+            try await DailySync(store: store, now: { self.at(4, 12) }).run(using: retry)
+            XCTAssertEqual(retry.logs.map(\.isDeletion), [true])
+            let server = DailyStatus(day: log.day, spending: [.init(id: log.id, category: "Lunch", amountCents: 1500)])
+            XCTAssertEqual(DailySummary(day: log.day, server: server, local: try store.list()).totalCents, 0)
+        }
+    }
+
+    @MainActor
+    func testDeletionQueuedBehindAnUploadIsReadFreshBeforeSending() async throws {
+        _ = try store.logWeight(80, now: at(4, 8))
+        let later = try store.logCalories(300, description: "Oats", now: at(4, 9))
+        let transport = FakeDaily()
+        transport.during = { log in
+            if log.kind == .weight { try self.store.delete(id: later.id, kind: .calories, day: later.day) }
+        }
+        try await DailySync(store: store, now: { self.at(4, 12) }).run(using: transport)
+        XCTAssertEqual(transport.logs.map(\.isDeletion), [false, true])
+    }
+
+    @MainActor
+    func testRefusedDeletionShowsTheServerRowAgainAndAuthenticationKeepsItPending() async throws {
+        let id = ULID.make(), day = "2026-10-04"
+        let server = DailyStatus(day: day, spending: [.init(id: id, category: "Lunch", amountCents: 1500)])
+        try store.delete(id: id, kind: .spending, day: day)
+        do { try await DailySync(store: store).run(using: FakeDaily(refuse: [id: 401])); XCTFail("signed out") } catch {}
+        XCTAssertEqual(try store.list().first?.state, .pending)
+        try await DailySync(store: store).run(using: FakeDaily(refuse: [id: 400]))
+        XCTAssertEqual(try store.list().first?.state, .failed)
+        XCTAssertEqual(DailySummary(day: day, server: server, local: try store.list()).totalCents, 1500)
+        XCTAssertThrowsError(try store.delete(id: ULID.make(), kind: .weight, day: day))
+    }
+
+    func testOldDailyManifestsWithoutSpendingOrDeletionStillDecode() throws {
+        let log = try store.logCalories(300, description: "Oats", now: at(4, 9))
+        let data = try JSONEncoder().encode(log)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(json["deleted"])
+        let restored = try JSONDecoder().decode(DailyLog.self, from: data)
+        XCTAssertFalse(restored.isDeletion)
+        XCTAssertNil(restored.amountCents)
+        XCTAssertEqual(restored, log)
+    }
+
     func testTheSelfieUploadCarriesItsDay() throws {
         let selfie = try store.logSelfie(jpeg: Data("jpeg-bytes".utf8), now: at(5, 2))
         let body = try SelfieMultipart(log: selfie, image: store.imageURL(selfie))
@@ -166,11 +277,15 @@ final class DailyTests: XCTestCase {
 
 private final class FakeDaily: DailyTransport {
     var sent: [(String, URL?)] = []
+    var logs: [DailyLog] = []
+    var during: ((DailyLog) throws -> Void)?
     let refuse: [String: Int]
     init(refuse: [String: Int] = [:]) { self.refuse = refuse }
 
     func sendDaily(_ log: DailyLog, image: URL?) async throws {
         sent.append((log.id, image))
+        logs.append(log)
+        try during?(log)
         if let status = refuse[log.id] { throw HTTPFailure(status: status) }
     }
 

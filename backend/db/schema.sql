@@ -1287,6 +1287,18 @@ CREATE TABLE IF NOT EXISTS calorie_logs (
 
 CREATE INDEX IF NOT EXISTS idx_calorie_logs_date ON calorie_logs(date);
 
+-- Voluntary purchases logged in Capture > Daily. Amounts are CAD cents,
+-- never floating point; the client ID makes offline uploads replay-safe.
+CREATE TABLE IF NOT EXISTS spending_logs (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
+    category TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL CHECK(amount_cents > 0 AND amount_cents <= 100000000),
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_spending_logs_date ON spending_logs(date);
+
 -- Pomodoro runs from the Watch: a 25-minute work block, the 5-minute break
 -- after one, or a 10-minute timeout. One row per run, under the id the Watch
 -- minted, so a replayed upload is a no-op. date is the 4am day of started_at.

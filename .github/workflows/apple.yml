@@ -15,7 +15,7 @@ env:
   DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
 # The simulator work used to be one job of ~40 minutes. It is now split across
 # parallel macOS jobs, each building for itself (~5 min) and then running its
-# share: the device archive and Watch build, three shards of the iPhone UI
+# share: the device archive and Watch build, five shards of the iPhone UI
 # tests (app unit tests in the first), and the iPad-only tests. Simulator UI
 # tests flake on slow runners, so each failing test gets one retry, and a test
 # stuck for 5 minutes (one once hung 12 on a tap) is stopped and retried.
@@ -64,7 +64,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
       - name: Generate Xcode project
@@ -72,12 +72,19 @@ jobs:
           brew install xcodegen
           swift apple/tools/make_icons.swift
           xcodegen generate --spec apple/project.yml
-      - name: Test on iPhone simulator (shard ${{ matrix.shard }} of 3)
+      - name: Test on iPhone simulator (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
         shell: bash
         run: |
           simulator_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for runtime,devices in data["devices"].items() if "iOS" in runtime for d in devices if "iPhone" in d["name"]))')
           selection=()
-          while IFS= read -r test; do selection+=("$test"); done < <(python3 apple/tools/ui_shards.py apple/UITests ${{ matrix.shard }} 3)
+          # Finish first-boot setup before XCTest starts its launch deadline.
+          xcrun simctl boot "$simulator_id"
+          xcrun simctl bootstatus "$simulator_id" -b
+          # The photo-picker test must not depend on stock simulator photos.
+          xcrun simctl addmedia "$simulator_id" apple/App/Assets.xcassets/AppIcon.appiconset/Icon.png
+          # A selector error must stop the job, not accidentally run the full suite.
+          python3 apple/tools/ui_shards.py apple/UITests ${{ matrix.shard }} ${{ strategy.job-total }} > "$RUNNER_TEMP/ui-selection.txt"
+          while IFS= read -r test; do selection+=("$test"); done < "$RUNNER_TEMP/ui-selection.txt"
           if [ "${{ matrix.shard }}" = 1 ]; then selection+=("-only-testing:LunaschalAppTests"); fi
           xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
             -destination "platform=iOS Simulator,id=$simulator_id" \
@@ -107,6 +114,8 @@ jobs:
         shell: bash
         run: |
           simulator_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for runtime,devices in data["devices"].items() if "iOS" in runtime for d in devices if "iPad" in d["name"]))')
+          xcrun simctl boot "$simulator_id"
+          xcrun simctl bootstatus "$simulator_id" -b
           xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
             -destination "platform=iOS Simulator,id=$simulator_id" \
             -parallel-testing-enabled NO -destination-timeout 120 \

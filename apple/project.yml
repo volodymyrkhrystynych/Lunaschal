@@ -90,7 +90,8 @@ targets:
     entitlements:
       path: Generated/Watch.entitlements
       properties:
-        com.apple.security.application-groups: [group.com.lunaschal.mobile.watch]
+        com.apple.security.application-groups:
+          [group.com.lunaschal.mobile.watch]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile.watchkitapp
@@ -130,7 +131,8 @@ targets:
     entitlements:
       path: Generated/WatchWidgets.entitlements
       properties:
-        com.apple.security.application-groups: [group.com.lunaschal.mobile.watch]
+        com.apple.security.application-groups:
+          [group.com.lunaschal.mobile.watch]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile.watchkitapp.widgets
@@ -190,6 +192,7 @@ targets:
               NSExtensionActivationSupportsWebURLWithMaxCount: 1
               NSExtensionActivationSupportsWebPageWithMaxCount: 1
               NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsImageWithMaxCount: 20
   LunaschalAppTests:
     type: bundle.unit-test
     platform: iOS

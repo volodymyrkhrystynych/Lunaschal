@@ -60,4 +60,9 @@ enum SharedSignIn {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)?
             .appendingPathComponent("shared-links", isDirectory: true)
     }
+
+    static func screenshotsRoot() -> URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)?
+            .appendingPathComponent("journal-screenshots", isDirectory: true)
+    }
 }
