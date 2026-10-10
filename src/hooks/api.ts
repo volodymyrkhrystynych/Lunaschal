@@ -3796,6 +3796,10 @@ export const api = {
   },
 
   calendar: {
+    reading: (date: string) =>
+      get<import('../lib/calendarReading').CalendarReadingSpan[]>(
+        `/api/calendar/reading/${date}`
+      ),
     listByRange: (start: string, end: string) =>
       get<CalendarEvent[]>(`/api/calendar?start=${start}&end=${end}`),
     listByDate: (date: string) =>

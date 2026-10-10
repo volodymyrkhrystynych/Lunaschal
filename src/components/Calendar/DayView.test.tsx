@@ -10,6 +10,7 @@ vi.mock('../../hooks/api', () => ({
   api: {
     calendar: {
       listByDate: vi.fn(),
+      reading: vi.fn().mockResolvedValue([]),
       sleep: { get: vi.fn() },
       update: vi.fn(),
       moveOccurrence: vi.fn(),
@@ -73,6 +74,31 @@ function renderDay(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.calendar.reading).mockResolvedValue([]);
+});
+
+it('loads reading automatically alongside events and reveals chapter details on the rail', async () => {
+  vi.mocked(api.calendar.reading).mockResolvedValue([
+    {
+      id: 'span1',
+      title: 'Lighthouse',
+      chapterNumber: 4,
+      startedAt: at(DATE, '09:00'),
+      endedAt: at(DATE, '09:30'),
+    },
+  ]);
+  const { onOpenEvent } = renderDay(
+    sleepDay({ wakeAt: at(DATE, '08:00'), sleepAt: at(DATE, '23:00') })
+  );
+  await screen.findByTestId('reading-fill');
+  expect(api.calendar.reading).toHaveBeenCalledWith(DATE);
+  expect(screen.queryByText(/Lighthouse/)).toBeNull();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Leisure reading timeline' })
+  );
+  expect(screen.getByText('Lighthouse · Ch. 4')).toBeTruthy();
+  expect(onOpenEvent).not.toHaveBeenCalled();
+  expect(api.calendar.create).not.toHaveBeenCalled();
 });
 
 describe('sleep bands', () => {
