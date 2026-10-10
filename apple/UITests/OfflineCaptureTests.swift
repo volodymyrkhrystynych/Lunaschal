@@ -513,9 +513,19 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(outside.isSelected)
         app.navigationBars[long].buttons.firstMatch.tap()
 
-        // The toggle at the bottom left makes a drag change the length.
+        // Drag editing starts off; touching and scrolling across an event
+        // must not change its time or open it as if the swipe were a tap.
         let mode = app.buttons["calendar-drag-mode"]
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertEqual(mode.value as? String, "off")
+        let original = event(long).label
+        line(event(long)).press(forDuration: 0.3, thenDragTo: line(event(long)).withOffset(CGVector(dx: 0, dy: 120)))
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertEqual(event(long).label, original, "Off leaves the event's start and end unchanged")
+
+        // One tap enables Move; the next enables Resize.
+        mode.tap()
+        XCTAssertEqual(mode.value as? String, "moves it")
         mode.tap()
         XCTAssertEqual(mode.value as? String, "changes its length")
         let target = event(long)
@@ -526,15 +536,21 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertGreaterThan(longer.frame.maxY, before.maxY + 100, "a length drag moves the end")
         XCTAssertTrue(longer.label.contains("08:00 – 09:"), longer.label)
 
-        // Back to moving: the short one goes an hour later, keeping its length.
+        // Resize cycles back to Off, then another tap enables Move.
+        mode.tap()
+        XCTAssertEqual(mode.value as? String, "off")
+        let shortBefore = event(short).label
+        line(event(short)).press(forDuration: 0.3, thenDragTo: line(event(short)).withOffset(CGVector(dx: 0, dy: 60)))
+        XCTAssertEqual(event(short).label, shortBefore)
         mode.tap()
         XCTAssertEqual(mode.value as? String, "moves it")
         let moving = event(short)
+        let beforeMoving = moving.frame
         line(moving).press(forDuration: 0.3, thenDragTo: line(moving).withOffset(CGVector(dx: 0, dy: 120)))
         let moved = app.buttons.matching(identifier: "calendar-event")
             .matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", short, "09:")).firstMatch
         XCTAssertTrue(moved.waitForExistence(timeout: 5), event(short).label)
-        XCTAssertGreaterThan(moved.frame.maxY, before.maxY + 100)
+        XCTAssertGreaterThan(moved.frame.maxY, beforeMoving.maxY + 100)
 
         // Wake time set by hand, offline: the morning is shaded at once.
         app.buttons["calendar-sleep"].tap()
@@ -552,6 +568,18 @@ final class OfflineCaptureTests: XCTestCase {
         app.buttons["calendar-sleep"].tap()
         if (wake.value as? String) == "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
         saveForm(app, "Sleep")
+
+        // Enabling a mode is temporary, never a preference restored on launch.
+        XCTAssertEqual(mode.value as? String, "off")
+        mode.tap()
+        XCTAssertEqual(mode.value as? String, "moves it")
+        app.terminate()
+        app.launch()
+        selectTab(app, "Journal")
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        if !app.buttons["calendar-new-event"].exists { pages.buttons["Calendar"].tap() }
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertEqual(mode.value as? String, "off")
     }
 
     func testWorkoutLogsSetsLikeTheDesktopWithoutAServer() {

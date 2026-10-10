@@ -246,7 +246,8 @@ what each device can currently do and which work remains device-only.
   with the web's create, edit and delete (including "This and future" / "All events" on a
   repeating event; Delete is inside Edit), the six category checkboxes on the event's page and
   their colours, overlapping events side by side,
-  drag to move (or, with the bottom-left toggle on Length, to change the end), and shaded
+  optional drag editing (the bottom-left button cycles **Off → Move → Resize → Off**,
+  starting Off each visit; taps still open events), and shaded
   wake/sleep bands with an editor; changes are saved on the device and replayed in order on the next sync. More
   holds Library, Learning and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
   Library/Folders switch. Library mode has provider pills and sorts by the site's latest

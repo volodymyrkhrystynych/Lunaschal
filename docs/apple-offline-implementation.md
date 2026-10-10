@@ -678,7 +678,12 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
       and holds Delete instead. A split now carries the categories into the new series. Overlapping events share their hours in lanes, with labels
       placed clear of every line in the group. Dragging an event queues a `reschedule`
       (one occurrence of a series becomes a move exception, as the web's drag does); a
-      toggle at the bottom left switches the drag between moving and changing the length.
+      button at the bottom left cycles Off → Move → Resize → Off. Each calendar
+      visit starts Off, regardless of the old saved Length setting. Off attaches
+      only a tap gesture to events, so swipes scroll without changing event times;
+      taps still open details. Mode cycling and adjustment gating have portable
+      tests; simulator coverage includes disabled drags and relaunch defaults,
+      but the new simulator checks have not been run locally.
       Wake/sleep bands come from `GET /api/calendar/sleep/<date>` (derived on the server,
       so fetched and cached per day rather than replicated); hand-set times queue as a
       `PUT`. The server's rule is the desktop's: the first activity after 4am is the
