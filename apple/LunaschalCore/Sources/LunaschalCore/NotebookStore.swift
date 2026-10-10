@@ -128,9 +128,11 @@ public final class NotebookStore {
         return notebook
     }
 
-    /// The notebook to reopen for an issue: the newest one not yet filed.
-    public func unsavedNewspaper(date: String) throws -> Notebook? {
-        try notebooks().first { $0.newspaperDate == date && $0.savedCaptureIDs.isEmpty }
+    /// The notebook to reopen for an issue: the newest one over it, filed or
+    /// not. An issue is written on through the day, and filing it again
+    /// replaces the entry it was filed as, so a Save must not start it over.
+    public func newspaper(date: String) throws -> Notebook? {
+        try notebooks().first { $0.newspaperDate == date }
     }
 
     public func pdfURL(_ notebook: Notebook) throws -> URL? {

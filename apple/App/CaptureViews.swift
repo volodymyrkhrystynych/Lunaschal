@@ -81,7 +81,9 @@ private struct CaptureTab: View {
         // All three stay built and only the chosen one shows: building a page
         // at the moment of the tap stalled the switch's slide into a snap.
         ZStack {
-            KeptPage(shown: page == .entry) { CaptureComposer(model: model, recorder: model.recorder) }
+            KeptPage(shown: page == .entry) {
+                CaptureComposer(model: model, recorder: model.recorder) { openNotes() }
+            }
             KeptPage(shown: page == .daily) { DailyView(model: model) }
             KeptPage(shown: page == .workout) { WorkoutView(model: model) }
         }
@@ -116,6 +118,8 @@ private struct CaptureTab: View {
             }
         }
         .navigationDestination(item: $notebook) { NotebookEditor(owner: model, notebook: $0) }
+        // Back from a notebook: the composer's notes row shows what was drawn.
+        .onChange(of: notebook) { _, shown in if shown == nil { model.reloadCaptures() } }
         .confirmationDialog("Today's paper isn't archived yet.", isPresented: Binding(get: { olderIssue != nil }, set: { if !$0 { olderIssue = nil } }),
                             titleVisibility: .visible, presenting: olderIssue) { issue in
             Button("Open \(issue.date)") { Task { await open(issue) } }
@@ -123,9 +127,9 @@ private struct CaptureTab: View {
         }
     }
 
+    /// The entry draft's own notes, so Back and Notes again find them as left.
     private func openNotes() {
-        do { notebook = try model.notebooks.create() }
-        catch { model.message = error.localizedDescription }
+        notebook = model.openDraftNotes()
     }
 
     /// Today's paper by the 4am day; the newest one is offered if today's isn't in.
@@ -193,12 +197,15 @@ private struct KeptPage<Content: View>: UIViewControllerRepresentable {
 private struct CaptureComposer: View {
     @ObservedObject var model: CaptureModel
     @ObservedObject var recorder: Recorder
+    /// Opens the draft's notes (the iPad's Notes button does the same).
+    var openNotes: () -> Void = {}
     // Preserve an unfinished draft across app termination: text and links
-    // here, recordings, photos and files in the capture store's draft.
-    @AppStorage("journalDraft") private var text = ""
+    // here, recordings, photos, files and the notes in the capture store's draft.
+    @AppStorage(CaptureModel.draftTextKey) private var text = ""
     @AppStorage(CaptureModel.draftLinksKey) private var draftLinks = ""
-    @AppStorage("youtubeDraftURL") private var youtubeURL = ""
+    @AppStorage(CaptureModel.draftURLKey) private var youtubeURL = ""
     @State private var saved = false
+    @State private var saving = false
     @State private var confirmingDiscard = false
     @FocusState private var typing: Bool
 
@@ -207,9 +214,12 @@ private struct CaptureComposer: View {
         Binding(get: { links }, set: { draftLinks = $0.joined(separator: "\n") })
     }
     private var typedURL: String { youtubeURL.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// The notes going with this entry, if any were opened for it.
+    private var notes: Notebook? { model.draftNotebook }
     private var canSave: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !links.isEmpty || !model.draft.isEmpty || !typedURL.isEmpty
+            || !(notes?.markedPages.isEmpty ?? true) || notes?.youtubeURL != nil
     }
     /// Anything at all to lose: the draft is kept until saved or discarded.
     private var hasDraft: Bool { !text.isEmpty || canSave }
@@ -228,8 +238,11 @@ private struct CaptureComposer: View {
                 AttachmentButtons(model: model, recorder: recorder) { saved = false; typing = false }
                 if saved { Text("Saved on this device").foregroundStyle(.secondary) }
             }
-            if !model.draft.isEmpty {
-                Section("Attachments") { StagedAttachmentRows(model: model, recorder: recorder, draft: model.draft) }
+            if !model.draft.isEmpty || notes != nil {
+                Section("Attachments") {
+                    if let notes { DraftNotesRow(model: model, notebook: notes, open: openNotes) }
+                    StagedAttachmentRows(model: model, recorder: recorder, draft: model.draft)
+                }
             }
             YouTubeLinksSection(model: model, links: linkList, typed: $youtubeURL, typing: $typing) { saved = false }
         }
@@ -255,7 +268,7 @@ private struct CaptureComposer: View {
                 Spacer()
                 Button { save() } label: { Label("Save entry", systemImage: "checkmark") }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!canSave)
+                    .disabled(!canSave || saving)
             }
             .controlSize(.large)
             .padding()
@@ -265,7 +278,7 @@ private struct CaptureComposer: View {
             Button("Discard", role: .destructive) { discard() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Its text, links, recordings, photos and files are removed from this device. This cannot be undone.")
+            Text("Its text, links, recordings, photos and files are removed from this device. This cannot be undone. Its notes stay in Draw.")
         }
     }
 
@@ -277,13 +290,29 @@ private struct CaptureComposer: View {
     private func save() {
         // A URL typed but not yet added still belongs to this entry.
         guard YouTubeLinksSection.add(typed: $youtubeURL, to: linkList, model: model) else { return }
-        if model.saveEntry(text, youtubeURLs: links) {
-            text = ""; draftLinks = ""; saved = true; typing = false
+        // Read now, as tapped: the words must not wait behind rendering the notes.
+        let words = text, chosen = links
+        guard let notes else {
+            if model.saveEntry(words, youtubeURLs: chosen) { cleared() }
+            return
+        }
+        saving = true
+        Task {
+            defer { saving = false }
+            guard await model.saveEntryWithNotes(words, youtubeURLs: chosen, notebook: notes) else { return }
+            // Anything typed while the pages rendered is the next entry's.
+            let more = text == words ? "" : text
+            cleared()
+            text = more
         }
     }
 
+    private func cleared() {
+        text = ""; draftLinks = ""; saved = true; typing = false
+    }
+
     private func saveFood() {
-        // Links and a half-typed URL are left where they are, for the next entry.
+        // Links, a half-typed URL and the notes are left where they are, for the next entry.
         if model.saveEntry(text, youtubeURLs: [], kind: .food) {
             text = ""; saved = true; typing = false
         }
@@ -386,6 +415,38 @@ struct AttachmentButtons: View {
 }
 
 /// A draft's clips and files, each removable with a swipe.
+/// The notes drawn for the composer's entry: a tap goes back to them, and
+/// removing the row takes them out of this entry (they stay in Draw).
+private struct DraftNotesRow: View {
+    @ObservedObject var model: CaptureModel
+    let notebook: Notebook
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 12) {
+                if let url = try? model.notebooks.previewURL(notebook), let image = UIImage(contentsOfFile: url.path) {
+                    Image(uiImage: image).resizable().scaledToFit().frame(width: 44, height: 60)
+                        .background(.white).clipShape(RoundedRectangle(cornerRadius: 4))
+                        .overlay { RoundedRectangle(cornerRadius: 4).stroke(.separator) }
+                } else {
+                    Image(systemName: "pencil.and.scribble").frame(width: 44, height: 60)
+                }
+                VStack(alignment: .leading) {
+                    Text("Notes")
+                    Text("\(notebook.pageCount) page\(notebook.pageCount == 1 ? "" : "s")")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .foregroundStyle(.primary)
+        .accessibilityIdentifier("capture-draft-notes")
+        .swipeActions {
+            Button("Remove", role: .destructive) { model.detachDraftNotebook() }
+        }
+    }
+}
+
 struct StagedAttachmentRows: View {
     @ObservedObject var model: CaptureModel
     @ObservedObject var recorder: Recorder

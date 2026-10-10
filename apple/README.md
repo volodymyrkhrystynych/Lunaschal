@@ -31,11 +31,17 @@ what each device can currently do and which work remains device-only.
   pictures that can be moved and resized, text boxes and shapes from the tool
   picker's **+**.
   **Notes** are A4 pages, one at a time, each fitted whole to the window so
-  nothing scrolls. A finger drags a page sideways and a deliberate swipe (a
-  third of the page's width) turns it; short of that it springs back. Swiping on
-  past the last page shows a **+ New page** marker and adding the page is what
-  finishing the swipe does; backwards from the first page nothing moves, and
-  zoomed in a sideways drag is panning. The top bar's arrows still work.
+  nothing scrolls. **Only a finger that lands at a side of the screen** (within
+  44 pt) turns a page: in from the right edge for the next page, in from the
+  left for the previous one, and a deliberate swipe (a third of the page's
+  width) turns it; short of that it springs back. Anywhere else one finger moves
+  nothing — PaperKit's scroll views need two fingers on a notes page — so a palm
+  that palm rejection misses can't slide the page from under the Pencil. Two
+  fingers still pinch, and pan when zoomed in. The system's swipe-back is off
+  while notes are open (the Back button stays), so the left edge turns pages.
+  Swiping on past the last page shows a **+ New page** marker and adding the
+  page is what finishing the swipe does; backwards from the first page nothing
+  moves. The top bar's arrows still work.
   **Newspaper** opens today's archived issue (by the 4am day; the newest is offered if
   today's isn't in) as **one continuous scroll**: a single canvas with every PDF
   page stacked down it at its own shape, so ink can cross from one page to the
@@ -46,12 +52,25 @@ what each device can currently do and which work remains device-only.
   page) is converted on open, each page's ink moved down to its place in the
   column; the paged original stays as the previous checkpoint. It downloads the PDF once
   from `GET /api/newspapers/issues/<date>/pdf`, since mobile sync doesn't carry
-  issue PDFs, and reopens the same unsaved notebook instead of making a second one.
+  issue PDFs, and reopens that issue's notebook — filed or not — instead of making
+  a second one, so a paper is written on through the day in one place.
   The web reader's own markup is untouched. Back autosaves (current + previous
   checkpoint, like drawings) and the notebook is listed under Draw → Notebooks to
-  continue. **Save** files one journal entry: each page as a JPEG (a newspaper
-  files its cover plus the pages written on, found from the ink itself), plus the notebook's one YouTube link.
-  The text composer's draft is never touched.
+  continue. Ink the canvas hasn't reported yet is taken into the notebook before
+  any page turn, added page, lock or paste replaces the canvas, and before every
+  checkpoint and Save.
+  **Notes belong to the entry draft**: Notes reopens the draft's notebook until the
+  entry is saved, and the composer lists it under Attachments (tap to reopen,
+  swipe to take it out of the entry; it stays in Draw). **Save entry** — in the
+  composer, or **Save entry** inside the notes — files the typed text, links,
+  clips, files and the notes' pages (as JPEGs, blank pages dropped) as one journal
+  entry. Save food entry leaves the notes in the draft.
+  A **newspaper's Save** files its cover plus the pages written on (found from the
+  ink itself) and the notebook's one YouTube link. Saving the same issue again
+  (**Update entry**) files every page written on so far and **replaces** the
+  earlier entry: the capture carries `replaces`, sync holds it until the entry it
+  replaces has gone up, and `POST /api/journal` deletes that entry once the new one
+  is in, so the day ends with one entry for the paper.
   **Lock pictures on this page** (camera menu) pins a page's pictures under the
   ink so they can be written over but not selected or dragged; a lock badge
   shows beside the page number, and Unlock makes them movable again. PaperKit

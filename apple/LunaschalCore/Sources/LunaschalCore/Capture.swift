@@ -88,6 +88,10 @@ public struct CaptureClip: Codable, Equatable, Identifiable {
 public struct CaptureDraft: Codable, Equatable {
     public var files: [CaptureFile] = []
     public var clips: [CaptureClip] = []
+    /// The iPad notebook drawn for this entry: Notes reopens it, and Save
+    /// entry files its pages with everything else. Whether it holds anything
+    /// is the notebook's to say, so it is not part of `isEmpty`.
+    public var notebookID: String?
 
     public init() {}
     public var isEmpty: Bool { files.isEmpty && clips.isEmpty }
@@ -134,6 +138,11 @@ public struct Capture: Codable, Identifiable, Equatable {
     /// only by a send that failed before connecting. Nil on captures saved
     /// before this was recorded, which a transfer record then decides.
     public internal(set) var mayBeOnServer: Bool?
+    /// Entries this one stands in for: a newspaper filed again later in the
+    /// day replaces the entry it was filed as before. The server deletes them
+    /// once this one lands, and sync holds this one back until they have
+    /// landed themselves, so the old one cannot arrive after its replacement.
+    public internal(set) var replaces: [String] = []
 
     /// The entry everything here is filed under.
     public var targetID: String { entryID ?? id }
@@ -188,7 +197,7 @@ public struct Capture: Codable, Identifiable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, attachmentID, createdAt, mode, kind, text, links, files, clips, state, lastError, snapshot
-        case latitude, longitude, weather, ficID, chapterID, entryID, mayBeOnServer
+        case latitude, longitude, weather, ficID, chapterID, entryID, mayBeOnServer, replaces
     }
 
     // Manifests written before an entry could hold several links stored one
@@ -214,6 +223,7 @@ public struct Capture: Codable, Identifiable, Equatable {
         chapterID = try c.decodeIfPresent(String.self, forKey: .chapterID)
         entryID = try c.decodeIfPresent(String.self, forKey: .entryID)
         mayBeOnServer = try c.decodeIfPresent(Bool.self, forKey: .mayBeOnServer)
+        replaces = try c.decodeIfPresent([String].self, forKey: .replaces) ?? []
         files = try c.decodeIfPresent([CaptureFile].self, forKey: .files) ?? []
         clips = try c.decodeIfPresent([CaptureClip].self, forKey: .clips) ?? []
         if let links = try c.decodeIfPresent([CaptureLink].self, forKey: .links) {

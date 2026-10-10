@@ -146,13 +146,18 @@ final class NotebookTests: XCTestCase {
         XCTAssertEqual(saved.markedPages, [2, 3])
     }
 
-    func testUnsavedNewspaperIsReusedUntilFiled() throws {
+    func testAnIssueReopensTheSameNotebookAfterItIsFiled() throws {
         let root = try directory(), store = try NotebookStore(root: root)
         let first = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3)
-        XCTAssertEqual(try store.unsavedNewspaper(date: "2026-10-06")?.id, first.id)
-        XCTAssertNil(try store.unsavedNewspaper(date: "2026-10-05"))
+        XCTAssertEqual(try store.newspaper(date: "2026-10-06")?.id, first.id)
+        XCTAssertNil(try store.newspaper(date: "2026-10-05"))
+        // Filed at lunch, written on again in the evening: the same notebook.
         try store.markSaved(first.id, captureID: ULID.make())
-        XCTAssertNil(try store.unsavedNewspaper(date: "2026-10-06"))
+        XCTAssertEqual(try store.newspaper(date: "2026-10-06")?.id, first.id)
+        // Of two over one issue (made before this), the newest is the one to continue.
+        let second = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3,
+                                               now: Date().addingTimeInterval(60))
+        XCTAssertEqual(try store.newspaper(date: "2026-10-06")?.id, second.id)
     }
 
     func testPagesToFile() {
@@ -329,6 +334,24 @@ final class NotebookFitTests: XCTestCase {
 }
 
 final class PageSwipeTests: XCTestCase {
+    func testOnlyADragFromASideTurnsThePage() {
+        XCTAssertEqual(PageSwipe.edge(startX: 10, width: 1000), .leading)
+        XCTAssertEqual(PageSwipe.edge(startX: 44, width: 1000), .leading)
+        XCTAssertEqual(PageSwipe.edge(startX: 990, width: 1000), .trailing)
+        // Mid-page is where a palm rests: never a page turn.
+        XCTAssertNil(PageSwipe.edge(startX: 45, width: 1000))
+        XCTAssertNil(PageSwipe.edge(startX: 500, width: 1000))
+        XCTAssertNil(PageSwipe.edge(startX: 955, width: 1000))
+        XCTAssertNil(PageSwipe.edge(startX: 10, width: 60), "no room for two edges")
+    }
+
+    func testADragOnlyCountsInwardsFromItsSide() {
+        XCTAssertEqual(PageSwipe.pull(dx: -300, from: .trailing), -300)
+        XCTAssertEqual(PageSwipe.pull(dx: 300, from: .trailing), 0)
+        XCTAssertEqual(PageSwipe.pull(dx: 300, from: .leading), 300)
+        XCTAssertEqual(PageSwipe.pull(dx: -300, from: .leading), 0)
+    }
+
     func testAPageTurnIsADeliberateDrag() {
         XCTAssertEqual(PageSwipe.threshold(pageWidth: 1000), 350)
         XCTAssertEqual(PageSwipe.threshold(pageWidth: 200), 120)

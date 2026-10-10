@@ -103,6 +103,8 @@ public final class CaptureStore {
             let size = try clipURL(clip).resourceValues(forKeys: [.fileSizeKey]).fileSize
             guard (size ?? 0) > 0 else { throw CaptureError.missingAudio }
         }
+        guard capture.replaces.allSatisfy({ ULID.isValid($0) && $0 != capture.id }),
+              capture.replaces.isEmpty || capture.entryID == nil else { throw CaptureError.invalidID }
         if let entryID = capture.entryID {
             // An addition carries attachments only: the entry's words are
             // edited through the replica, where a conflict can be seen.
@@ -287,14 +289,32 @@ public final class CaptureStore {
     @discardableResult
     /// `location` is the device's fix at Save, if it had a recent one; the
     /// server uses it for the entry's place and the weather it looks up.
+    /// `images` are the draft notebook's rendered pages, filed after what was
+    /// staged; the notebook itself is let go with the rest of the draft.
     public func commitDraft(text: String, youtubeURLs: [String], kind: CaptureKind = .journal,
+                            images: [(data: Data, name: String)] = [],
                             location: (latitude: Double, longitude: Double)? = nil,
                             now: Date = Date()) throws -> Capture {
         let staged = try draft()
-        let capture = try commit(text: text, youtubeURLs: youtubeURLs, kind: kind, files: staged.files,
+        // A meal takes no notebook: its pages, and the notebook, wait for the next entry.
+        let pages = try writeImages(kind == .food ? [] : images, now: now)
+        let capture: Capture
+        do {
+            capture = try commit(text: text, youtubeURLs: youtubeURLs, kind: kind, files: staged.files + pages,
                                  clips: staged.clips, location: location, now: now)
-        try updateDraft { $0 = CaptureDraft() }
+        } catch {
+            for file in pages { try? fm.removeItem(at: fileURL(file)) }
+            throw error
+        }
+        try updateDraft { $0 = CaptureDraft(); if kind == .food { $0.notebookID = staged.notebookID } }
         return capture
+    }
+
+    /// Ties a notebook to the composer's draft, so Notes reopens it and Save
+    /// entry files its pages; nil lets it go (it stays in Draw).
+    public func setDraftNotebook(_ id: String?) throws {
+        if let id { guard ULID.isValid(id) else { throw CaptureError.invalidID } }
+        try updateDraft { $0.notebookID = id }
     }
 
     /// Save on an edited server entry: what is staged for it, plus `youtubeURLs`
@@ -329,11 +349,25 @@ public final class CaptureStore {
 
     /// A journal entry made of pictures that were never staged: the iPad
     /// notebook's rendered pages. The composer's draft is neither read nor
-    /// cleared, so a half-written text entry waits where it was.
+    /// cleared, so a half-written text entry waits where it was. `replaces`
+    /// names entries this one supersedes (see `Capture.replaces`).
     @discardableResult
     public func commitImages(text: String, youtubeURLs: [String], images: [(data: Data, name: String)],
+                             replaces: [String] = [],
                              location: (latitude: Double, longitude: Double)? = nil,
                              now: Date = Date()) throws -> Capture {
+        let files = try writeImages(images, now: now)
+        do {
+            return try commit(text: text, youtubeURLs: youtubeURLs, kind: .journal, files: files, clips: [],
+                              replaces: replaces, location: location, now: now)
+        } catch {
+            for file in files { try? fm.removeItem(at: fileURL(file)) }
+            throw error
+        }
+    }
+
+    /// Writes rendered JPEGs where staged files live; all or nothing.
+    private func writeImages(_ images: [(data: Data, name: String)], now: Date) throws -> [CaptureFile] {
         var files: [CaptureFile] = []
         do {
             for image in images {
@@ -344,17 +378,39 @@ public final class CaptureStore {
                 try image.data.write(to: destination, options: .atomic)
                 files.append(file)
             }
-            return try commit(text: text, youtubeURLs: youtubeURLs, kind: .journal, files: files, clips: [],
-                              location: location, now: now)
+            return files
         } catch {
             for file in files { try? fm.removeItem(at: fileURL(file)) }
             throw error
         }
     }
 
+    /// Whether `capture` must wait: an entry it replaces is still on its way
+    /// up, and sending this first would leave the old one to land after it.
+    public func waitsForReplaced(_ capture: Capture) throws -> Bool {
+        try capture.replaces.contains { id in
+            guard fm.fileExists(atPath: manifest(id).path) else { return false }
+            let old = try load(id)
+            return old.state == .pending || old.state == .recording || old.state == .interrupted
+        }
+    }
+
+    /// Once a replacement has landed, the server has deleted what it
+    /// replaced; the device's copies of those go too, bytes included.
+    public func retireReplaced(by capture: Capture) throws {
+        guard capture.state == .synced else { return }
+        for id in capture.replaces where fm.fileExists(atPath: manifest(id).path) {
+            let old = try load(id)
+            if old.attachmentID != nil { try? fm.removeItem(at: audioURL(old)) }
+            for file in old.files { try? fm.removeItem(at: fileURL(file)) }
+            for clip in old.clips { try? fm.removeItem(at: clipURL(clip)) }
+            try fm.removeItem(at: manifest(id))
+        }
+    }
+
     private func commit(text: String, youtubeURLs: [String], kind: CaptureKind, files: [CaptureFile],
-                        clips: [CaptureClip], location: (latitude: Double, longitude: Double)?,
-                        now: Date) throws -> Capture {
+                        clips: [CaptureClip], replaces: [String] = [],
+                        location: (latitude: Double, longitude: Double)?, now: Date) throws -> Capture {
         let links = kind == .food ? [] : try youtubeURLs.map(YouTubeLink.canonical)
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Links are attachments, just like files and clips, never substitute words.
@@ -362,6 +418,7 @@ public final class CaptureStore {
                               youtubeURLs: links, files: files, clips: clips)
         capture.latitude = location?.latitude
         capture.longitude = location?.longitude
+        capture.replaces = replaces
         try save(capture)
         return capture
     }

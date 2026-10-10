@@ -139,6 +139,8 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
                 body["latitude"] = String(latitude)
                 body["longitude"] = String(longitude)
             }
+            // The entries this one supersedes; the server deletes them once it is in.
+            if !capture.replaces.isEmpty { body["replaces"] = capture.replaces.joined(separator: ",") }
             req.httpBody = try JSONEncoder().encode(body)
             (data, response) = try await session.data(for: req)
         } else {

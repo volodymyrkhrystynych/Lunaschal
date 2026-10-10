@@ -465,12 +465,101 @@ final class CaptureModel: ObservableObject {
 
     /// Save entry: the typed text, its links and everything staged become one
     /// capture. A recording still running is stopped into the draft first.
+    /// Synchronous on purpose: the composer's words are read the moment Save
+    /// is tapped, so an async hop would let a last keystroke land after them.
+    /// With notes in the draft a journal entry goes through `saveEntryWithNotes`.
     func saveEntry(_ text: String, youtubeURLs: [String], kind: CaptureKind = .journal) -> Bool {
         if recorder.activeID != nil { recorder.stop() }
+        // A meal leaves the notes in the draft.
+        return commitComposer(text, youtubeURLs: youtubeURLs, kind: kind, notebook: nil, pages: [])
+    }
+
+    /// Save entry with the draft's notes: their pages are rendered from what
+    /// is saved on the device (Back checkpoints them on the way out) and filed
+    /// with everything else as one entry.
+    func saveEntryWithNotes(_ text: String, youtubeURLs: [String], notebook: Notebook) async -> Bool {
+        if recorder.activeID != nil { recorder.stop() }
+        let pages = NotebookEditorModel(store: notebooks, notebook: notebook)
+        guard pages.loaded else {
+            message = pages.error ?? "Couldn't open the notes for this entry."
+            return false
+        }
+        return commitComposer(text, youtubeURLs: youtubeURLs, kind: .journal, notebook: notebook,
+                              pages: await pages.renderForSave())
+    }
+
+    /// Save from inside the draft's notebook: the composer's words and links,
+    /// read from where the composer keeps them, filed with these pages, and
+    /// cleared from the composer as its own Save entry clears them.
+    func saveComposerDraft(notebook: Notebook, pages: [(data: Data, name: String)]) -> Notebook? {
+        if recorder.activeID != nil { recorder.stop() }
+        let defaults = UserDefaults.standard
+        let text = defaults.string(forKey: Self.draftTextKey) ?? ""
+        var links = (defaults.string(forKey: Self.draftLinksKey) ?? "").split(separator: "\n").map(String.init)
+        let typed = (defaults.string(forKey: Self.draftURLKey) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !typed.isEmpty {
+            do {
+                let link = try YouTubeLink.canonical(typed)
+                if !links.contains(link) { links.append(link) }
+            } catch { message = error.localizedDescription; return nil }
+        }
+        guard commitComposer(text, youtubeURLs: links, kind: .journal, notebook: notebook, pages: pages) else { return nil }
+        for key in [Self.draftTextKey, Self.draftLinksKey, Self.draftURLKey] { defaults.removeObject(forKey: key) }
+        return try? notebooks.notebook(notebook.id)
+    }
+
+    private func commitComposer(_ text: String, youtubeURLs: [String], kind: CaptureKind, notebook: Notebook?,
+                                pages: [(data: Data, name: String)]) -> Bool {
+        var links = youtubeURLs
+        // The notes' own video goes with them.
+        if let video = notebook?.youtubeURL, !links.contains(video) { links.append(video) }
         do {
-            try store.commitDraft(text: text, youtubeURLs: youtubeURLs, kind: kind, location: location.recent)
+            let capture = try store.commitDraft(text: text, youtubeURLs: links, kind: kind, images: pages,
+                                                location: location.recent)
+            if let notebook {
+                do { try notebooks.markSaved(notebook.id, captureID: capture.id) }
+                catch { message = "Saved. The notes stay in Draw: \(error.localizedDescription)" }
+            }
             reloadCaptures(); requestSync(); return true
         } catch { message = error.localizedDescription; reloadCaptures(); return false }
+    }
+
+    // MARK: Draft notebook
+
+    /// The notebook drawn for the composer's entry, while it is still
+    /// waiting to be filed.
+    var draftNotebook: Notebook? {
+        guard let id = draft.notebookID, let notebook = try? notebooks.notebook(id),
+              notebook.savedCaptureIDs.isEmpty else { return nil }
+        return notebook
+    }
+
+    func isDraftNotebook(_ notebook: Notebook) -> Bool { draft.notebookID == notebook.id }
+
+    /// Whether the composer holds anything besides its notes.
+    var composerHasContent: Bool {
+        let defaults = UserDefaults.standard
+        return [Self.draftTextKey, Self.draftLinksKey, Self.draftURLKey].contains {
+            !(defaults.string(forKey: $0) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        } || !draft.isEmpty
+    }
+
+    /// Notes: the draft's notebook, so leaving it and coming back finds every
+    /// page still there; a new one only when the draft has none.
+    func openDraftNotes() -> Notebook? {
+        if let existing = draftNotebook { return existing }
+        do {
+            let notebook = try notebooks.create()
+            try store.setDraftNotebook(notebook.id)
+            reloadCaptures()
+            return notebook
+        } catch { message = error.localizedDescription; reloadCaptures(); return nil }
+    }
+
+    /// Takes the notes out of this entry. The notebook stays in Draw.
+    func detachDraftNotebook() {
+        do { try store.setDraftNotebook(nil) } catch { message = error.localizedDescription }
+        reloadCaptures()
     }
 
     /// Discard on the composer: its staged clips, photos and files, bytes
@@ -482,6 +571,9 @@ final class CaptureModel: ObservableObject {
 
     /// Where the composer keeps its YouTube links, one per line.
     static let draftLinksKey = "youtubeDraftLinks"
+    /// Where the composer keeps its words, and a link typed but not yet added.
+    static let draftTextKey = "journalDraft"
+    static let draftURLKey = "youtubeDraftURL"
 
     /// YouTube links shared from other apps wait in the App Group (the share
     /// extension cannot reach this app's storage); on the way in they join the
@@ -503,11 +595,15 @@ final class CaptureModel: ObservableObject {
     // MARK: Notebooks
 
     /// Files a notebook's rendered pages, plus its one video, as a journal
-    /// entry. The composer's draft is left alone.
+    /// entry. The composer's draft is left alone. A newspaper filed before
+    /// replaces its earlier entry, so the day ends with one holding every
+    /// page written on.
     func saveNotebook(_ notebook: Notebook, text: String, pages: [(data: Data, name: String)]) -> Notebook? {
         do {
             let capture = try store.commitImages(text: text, youtubeURLs: notebook.youtubeURL.map { [$0] } ?? [],
-                                                 images: pages, location: location.recent)
+                                                 images: pages,
+                                                 replaces: notebook.newspaperDate == nil ? [] : notebook.savedCaptureIDs,
+                                                 location: location.recent)
             let saved = try notebooks.markSaved(notebook.id, captureID: capture.id)
             reloadCaptures(); requestSync()
             return saved
@@ -523,11 +619,11 @@ final class CaptureModel: ObservableObject {
             .compactMap { NewspaperIssue(record: $0.data) }
     }
 
-    /// Opens a notebook over `issue`: the unsaved one already made for it, or a
-    /// new one once its PDF has downloaded. Nil (with a message) offline.
+    /// Opens a notebook over `issue`: the one already made for it, filed or
+    /// not, or a new one once its PDF has downloaded. Nil (with a message) offline.
     func openNewspaper(_ issue: NewspaperIssue) async -> Notebook? {
         do {
-            if let existing = try notebooks.unsavedNewspaper(date: issue.date) { markOpened(issue); return existing }
+            if let existing = try notebooks.newspaper(date: issue.date) { markOpened(issue); return existing }
             guard let api = chatAPI() else {
                 message = "Connect to your server to download this newspaper. Once downloaded it stays on this iPad."
                 return nil
