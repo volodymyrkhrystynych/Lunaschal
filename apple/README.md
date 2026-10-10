@@ -265,7 +265,15 @@ what each device can currently do and which work remains device-only.
   appends it to `SharedLinkInbox` in the same App Group, and the app moves it
   into the draft's links whenever it comes to the foreground. Passed in core
   tests only; the hand-off needs a signed build (an unsigned one has no App
-  Group, and the extension says so). Other saved material is grouped
+  Group, and the extension says so). Sharing up to 20 images on iPhone or iPad
+  sends them as journal screenshots. Original files first enter a durable App Group
+  outbox, then upload immediately or retry on the app's next sync. The existing
+  desktop screenshot endpoint groups consecutive uploads into one entry until
+  other journal activity intervenes; screenshots do not become entry text.
+  Grouping follows server arrival order, including offline retries. Timestamps
+  record when each image was shared. Core and backend tests cover persistence,
+  retries and grouping; native share-sheet verification remains pending.
+  Other saved material is grouped
   under Study. Download controls remain in More → Settings → Library downloads.
   Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:
   continue bookmark, then this device's last read, then the server's, then chapter 1),

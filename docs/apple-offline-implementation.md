@@ -657,8 +657,16 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
       server snapshots from bringing rows back. Backend and portable Swift tests
       passed; simulator coverage added but not run locally.
 - [ ] Show archive playback availability without preventing URL/commentary capture.
-- [ ] Add a share extension for links, audio, photos, and supported documents.
-- [ ] Use a shared app container/outbox with safe handoff from the share extension.
+- [ ] Complete share-extension support: fic/YouTube links and journal screenshots
+      are implemented; audio and documents remain outstanding. Image shares (up to 20) preserve original bytes in `ScreenshotOutbox`, upload through
+      `POST /api/journal/screenshots`, and retry during app sync. The existing server
+      session groups consecutive arrivals until other journal activity, matching
+      desktop behavior; timestamps use share time with its original local offset.
+- [x] Use a shared app container/outbox with safe handoff from the share extension.
+      Screenshot items publish atomically and a process lock serializes drains.
+      Validated receipts precede removal; interrupted requests reuse attachment IDs.
+      Core/backend coverage is automated; the new image-provider AppTest and signed
+      iPhone/iPad share-sheet flow still require Apple CI/device verification.
 - [ ] Reuse web readers/screens where appropriate with local content access and one
       shared data source; avoid embedding a server-dependent page as “offline.”
 - [ ] Preserve useful keyboard access, accessibility labels, Dynamic Type, and rotation.
