@@ -283,6 +283,7 @@ private struct TodoEditor: View {
                                                      set: { draft.due = $0 ? (draft.due ?? Date()) : nil }))
                     if let due = draft.due {
                         DatePicker("Due", selection: Binding(get: { due }, set: { draft.due = $0 }), displayedComponents: .date)
+                            .accessibilityIdentifier("todo-due-date")
                     }
                     Toggle("Repeat", isOn: Binding(get: { draft.repeatInterval != nil },
                                                    set: { draft.repeatInterval = $0 ? (draft.repeatInterval ?? 1) : nil }))

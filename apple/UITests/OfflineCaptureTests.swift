@@ -561,8 +561,13 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["sleep-band-morning"].waitForExistence(timeout: 5))
 
         // Leave the day as it was found: the simulator keeps what runs queue.
+        // Off-mode swipes scroll the timeline. Restore its 8am position before
+        // using coordinates: an offscreen event's frame can lie over the tabs.
+        app.buttons["Previous day"].tap()
+        app.buttons["Next day"].tap()
         for name in [long, short] {
             line(event(name)).tap()
+            XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: settle))
             deleteFromEdit(app, title: name)
         }
         app.buttons["calendar-sleep"].tap()
@@ -946,7 +951,10 @@ final class OfflineCaptureTests: XCTestCase {
                       || app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Saved to journal'")).firstMatch.waitForExistence(timeout: 5))
 
         tab(app, "Journal").tap()
-        XCTAssertTrue(app.staticTexts["https://www.youtube.com/watch?v=M7lc1UVf-VE"].firstMatch.waitForExistence(timeout: 10))
+        let video = app.staticTexts["1 YouTube video"].firstMatch
+        XCTAssertTrue(video.waitForExistence(timeout: settle))
+        video.tap()
+        XCTAssertTrue(app.staticTexts["Saved YouTube link"].firstMatch.waitForExistence(timeout: settle))
     }
 
     func testNotesComeBackFromTheEntryDraftAndSaveWithIt() {
@@ -1516,9 +1524,10 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         focus(title)
         title.typeText(name)
-        // A tap on the switch's middle lands on its label; flip the toggle itself.
-        app.switches["Due date"].coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-        XCTAssertTrue(app.datePickers.firstMatch.waitForExistence(timeout: 3), "Due today")
+        // SwiftUI exposes both a labelled row and the actual nested switch.
+        let due = app.switches["Due date"]
+        due.switches.firstMatch.exists ? due.switches.firstMatch.tap() : due.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["todo-due-date"].waitForExistence(timeout: settle), "Due today")
         app.buttons["todo-editor-save"].tap()
         let row = app.buttons.matching(NSPredicate(format: "identifier == 'todo-row' AND label BEGINSWITH %@", name)).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5))
