@@ -111,6 +111,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it('keeps the empty-chat composer near the top instead of filling the transcript height', async () => {
+  renderChat();
+  const welcome = await screen.findByText('Welcome to Lunaschal');
+  const transcript = welcome.parentElement!.parentElement!;
+  expect(transcript.classList.contains('flex-1')).toBe(false);
+  expect(transcript.classList.contains('shrink-0')).toBe(true);
+  expect(screen.getByPlaceholderText('Type a message...')).toBeTruthy();
+});
+
 describe('delegate proposals are durable confirm cards', () => {
   // Cards render purely from the assistant message's persisted metadata now
   // (backend/delegate/runs.py writes it when the run finishes) — no live

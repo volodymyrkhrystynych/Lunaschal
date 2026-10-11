@@ -99,6 +99,30 @@ def test_an_ordinary_message_runs_no_tools_at_all(monkeypatch, answered):
                              'truncated': False, 'timedOut': False}
 
 
+def test_followup_sees_saved_todo_receipts_without_mutating_history(monkeypatch, answered):
+    messages = [
+        {'role': 'user', 'content': 'Add buy milk'},
+        {'role': 'assistant', 'content': 'Done.', 'metadata': json.dumps({
+            'steps': [{'tool': 'add_todos', 'ok': True, 'arg': 'Buy milk'},
+                      {'tool': 'add_todos', 'ok': False, 'arg': 'Refused item'}],
+        })},
+        {'role': 'user', 'content': 'Also call the dentist'},
+    ]
+    seen = _main_script(monkeypatch, [SimpleNamespace(content='', tool_calls=None)])
+    _drain(messages)
+    receipt = next(m['content'] for m in seen[0] if m['role'] == 'assistant')
+    assert 'Previously saved to-dos; do not add again: Buy milk' in receipt
+    assert 'Refused item' not in receipt
+    assert 'Act on the latest user message only' in seen[0][-1]['content']
+    assert messages[1]['content'] == 'Done.'
+
+
+@pytest.mark.parametrize('metadata', ['invalid json', '[]', {'steps': None}, None])
+def test_saved_todo_receipts_tolerate_legacy_metadata(metadata):
+    message = {'role': 'assistant', 'content': 'Hello', 'metadata': metadata}
+    assert delegate_chat._with_saved_todos([message]) == [message]
+
+
 def test_a_proposal_tool_runs_on_this_turn_and_stages_a_card(monkeypatch, answered):
     """It used to take a delegate round-trip to get here, and the detail the
     user gave had to survive being paraphrased into a task string on the way."""
