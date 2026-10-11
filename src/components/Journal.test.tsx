@@ -71,6 +71,7 @@ vi.mock('../hooks/api', () => ({
     },
     curatedTags: { list: vi.fn().mockResolvedValue([]) },
     newspapers: { journalIssues: vi.fn().mockResolvedValue([]) },
+    location: { journal: vi.fn().mockResolvedValue([]) },
     study: { journal: vi.fn().mockResolvedValue([]) },
     transcriptions: { list: vi.fn().mockResolvedValue([]), delete: vi.fn() },
     shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
@@ -1350,6 +1351,43 @@ describe('archived newspapers in the feed', () => {
       target: { value: 'first' },
     });
     await waitFor(() => expect(screen.queryByText(/not marked up/)).toBeNull());
+  });
+});
+
+describe("a day's location map in the feed", () => {
+  const day = {
+    date: '2026-07-02',
+    archivedAt: '2026-07-03T07:59:59Z',
+    pointCount: 120,
+    placeCount: 2,
+    entryCount: 1,
+    imageUrl: '/api/location/days/2026-07-02/map.png?v=abc',
+  };
+
+  it('shows the map with what is on it, and blows it up on click', async () => {
+    vi.mocked(api.location.journal).mockResolvedValue([day]);
+    renderJournal();
+    expect(await screen.findByText('2 places · 1 entry pinned')).toBeTruthy();
+    const map = screen.getByAltText(/Map of where you went/);
+    expect(map.getAttribute('src')).toBe(day.imageUrl);
+    fireEvent.click(map);
+    await waitFor(() =>
+      expect(
+        document.querySelectorAll(`img[src="${day.imageUrl}"]`)
+      ).toHaveLength(2)
+    );
+  });
+
+  it('keeps the card out of a search', async () => {
+    vi.mocked(api.location.journal).mockResolvedValue([day]);
+    renderJournal();
+    await screen.findByText('2 places · 1 entry pinned');
+    fireEvent.change(screen.getByPlaceholderText(/Search/i), {
+      target: { value: 'first' },
+    });
+    await waitFor(() =>
+      expect(screen.queryByText('2 places · 1 entry pinned')).toBeNull()
+    );
   });
 });
 

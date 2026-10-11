@@ -322,6 +322,28 @@ CREATE TABLE IF NOT EXISTS health_daily (
     PRIMARY KEY (date, type)
 );
 
+-- The iPhone's background location trail (backend/location/), uploaded in
+-- batches like Health. Keyed by an id the phone minted, so a batch replayed
+-- after a lost reply changes nothing -- and a visit, which iOS reports once on
+-- arrival and again on departure, is the same row both times. Times are REAL
+-- unix seconds read raw (`*_ts`), as in health_samples. `day_key` is the 4am
+-- day of the fix, stored because grouping millions of fixes by a computed day
+-- is the Journal card's whole query.
+CREATE TABLE IF NOT EXISTS location_points (
+    id TEXT PRIMARY KEY,
+    fix_ts REAL NOT NULL,
+    day_key TEXT NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    accuracy_m REAL,
+    altitude_m REAL,
+    speed_mps REAL,
+    kind TEXT NOT NULL,                   -- 'fine' | 'coarse' | 'visit'
+    departed_ts REAL,                     -- a visit's departure; NULL while still there
+    received_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_location_points_day ON location_points(day_key, fix_ts);
+
 CREATE TABLE IF NOT EXISTS mcp_servers (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,

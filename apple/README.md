@@ -131,6 +131,19 @@ what each device can currently do and which work remains device-only.
   on the simulator (`HealthKitSourceTests`); reading real data with permission,
   and the permission sheet itself, are not yet verified on device. Background
   delivery (being woken when the Watch syncs) is not implemented.
+- **Location trail** (Settings → Location → Record where I go, off until turned
+  on). Needs **Always**, which the app now declares
+  (`NSLocationAlwaysAndWhenInUseUsageDescription`, `location` background mode)
+  and asks for; the section says what is missing (While Using, denied, Precise
+  Location off) and links to iOS Settings. Adaptive: visits and
+  significant-change monitoring all day, live GPS only while Core Motion says
+  walking, running or cycling (`TrailPolicy`, `LocationTracker`). Points queue
+  in a JSON-lines outbox and post to `/api/location/points` in batches, on their
+  own when enough piles up and inside every sync pass; the server draws a map of
+  each day for the web Journal feed (`backend/location/`). Core logic tested in
+  `LocationTrailTests`; the Settings flow passed in simulator
+  (`testLocationTrailAsksForLocationAndExplainsTheAnswer`). Background wakes,
+  the Always upgrade prompt and battery cost are not yet verified on device.
 - Weather. The Entry page shows the conditions now at its top left; tapping them
   shows feels-like (Open-Meteo's apparent temperature: wind chill and humidity),
   wind and gusts ("windy" from 30 km/h sustained or 50 km/h gusts), and whether

@@ -9,6 +9,7 @@ import type {
   TaskEvent,
   JournalNewspaper,
   JournalStudySource,
+  JournalLocationDay,
 } from '../hooks/api';
 
 function entry(id: string, createdAt: string): JournalEntry {
@@ -118,7 +119,19 @@ function study(id: string, archivedAt: string): JournalStudySource {
   };
 }
 
+function locationDay(date: string, archivedAt: string): JournalLocationDay {
+  return {
+    date,
+    archivedAt,
+    pointCount: 120,
+    placeCount: 2,
+    entryCount: 1,
+    imageUrl: `/api/location/days/${date}/map.png?v=abc`,
+  };
+}
+
 function idOf(i: FeedItem): string {
+  if (i.kind === 'location') return `map-${i.location.date}`;
   if (i.kind === 'entry') return i.entry.id;
   if (i.kind === 'study') return i.study.id;
   if (i.kind === 'transcription') return i.transcription.id;
@@ -392,5 +405,25 @@ describe('buildFeed', () => {
       [study('s1', '2026-07-08T12:00:00')]
     );
     expect(feed.map(idOf)).toEqual(['e1', 's1']);
+  });
+
+  it("puts a day's map card above that day's last entry, non-selectable", () => {
+    const entries = [
+      entry('e1', '2026-07-08T21:00:00'),
+      entry('e2', '2026-07-07T09:00:00'),
+    ];
+    // archivedAt is the last second of each 4am day, as the server sends it.
+    const days = [
+      locationDay('2026-07-07', '2026-07-08T03:59:59'),
+      locationDay('2026-07-06', '2026-07-07T03:59:59'),
+    ];
+    const feed = buildFeed(entries, [], [], [], [], [], [], [], days);
+    expect(feed.map(idOf)).toEqual([
+      'e1',
+      'map-2026-07-07',
+      'e2',
+      'map-2026-07-06',
+    ]);
+    expect(feed[1]).toEqual({ kind: 'location', location: days[0] });
   });
 });

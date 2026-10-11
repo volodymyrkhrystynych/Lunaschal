@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import CoreLocation
 import PhotosUI
 import UniformTypeIdentifiers
 import LunaschalCore
@@ -833,11 +834,74 @@ private struct ConnectionSettings: View {
                 Text("Hear what you got wrong. For answers given while this is on, a short summary of what you missed is read aloud on the results, using your server's text-to-speech.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            LocationTrailSettings(model: model, trail: model.trail)
             if model.healthAvailable { HealthSettings(model: model) }
             IntelligenceAvailabilityView()
         }
         .navigationTitle("Settings")
         .onAppear { address = model.server?.absoluteString ?? address }
+    }
+}
+
+/// The background trail behind the Journal's daily map. Most of this section
+/// is about permission, because that is where it goes wrong: iOS asks for
+/// Always at most once, and every later change has to be made in the Settings
+/// app, so the section says plainly what's missing and links there.
+private struct LocationTrailSettings: View {
+    @ObservedObject var model: CaptureModel
+    @ObservedObject var trail: LocationTracker
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        Section("Location") {
+            Toggle("Record where I go", isOn: Binding(
+                get: { trail.enabled },
+                set: { $0 ? trail.enable() : trail.disable() }))
+                .accessibilityIdentifier("settings-location-trail")
+            if trail.enabled {
+                if let problem {
+                    Text(problem).font(.footnote).foregroundStyle(.orange)
+                    Button("Open iOS Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                    }
+                } else {
+                    Text(trail.mode == .fine ? "Recording your route now." : "Watching for walks and places, in low-power mode.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                let status = trail.status
+                if let last = status.lastSuccess {
+                    Text("Last uploaded \(last.formatted(date: .abbreviated, time: .shortened)) · \(trail.pending.formatted()) waiting")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else if trail.pending > 0 {
+                    Text("\(trail.pending.formatted()) points waiting to upload.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                if let error = status.lastError {
+                    Text(error).font(.footnote).foregroundStyle(.red)
+                }
+                if trail.pending > 0 {
+                    Button("Upload now") { model.requestSync(manual: true) }.disabled(model.syncing)
+                }
+            }
+            Text("Records the places you stop at, and your route while you walk, run or cycle, and draws a map of each day in your journal with a pin wherever you wrote an entry. Precise GPS runs only while you're moving on foot or by bike; the rest of the day uses iOS's low-power location. Everything goes only to your own Lunaschal server.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    /// What stops the trail from being recorded, if anything.
+    private var problem: String? {
+        switch trail.authorization {
+        case .denied, .restricted:
+            return "Location access is off for Lunaschal. Turn it on and choose Always: Settings → Lunaschal → Location."
+        case .authorizedWhenInUse:
+            return "Location is set to While Using, so nothing is recorded while Lunaschal is closed. Choose Always: Settings → Lunaschal → Location."
+        case .notDetermined:
+            return nil
+        default:
+            return trail.reducedAccuracy
+                ? "Precise Location is off, so every point is blurred by kilometres. Turn on Precise Location: Settings → Lunaschal → Location."
+                : nil
+        }
     }
 }
 
