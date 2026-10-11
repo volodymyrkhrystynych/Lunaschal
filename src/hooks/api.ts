@@ -1550,10 +1550,10 @@ export interface TodoPayload {
 
 // A day-scoped, ephemeral to-do shown in the Chat tab's bar above the input
 // box. Written instantly by the chat delegate's add_todos tool or the morning
-// briefing — there is no accept step. Resets at the next day boundary: the
-// list endpoint only ever returns today's rows, so an unfinished item from a
-// prior day just stops showing rather than needing to be purged.
+// briefing — there is no accept step. Yesterday's items remain available for
+// one day of review and promotion, using the same 4am day boundary.
 export interface ChatTodoItem {
+  previousDay?: boolean;
   id: string;
   dayKey: string;
   title: string;

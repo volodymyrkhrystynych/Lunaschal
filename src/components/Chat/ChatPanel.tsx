@@ -719,7 +719,7 @@ export function ChatPanel() {
       <div
         ref={scrollContainerRef}
         onScroll={handleTranscriptScroll}
-        className="flex-1 overflow-y-auto p-4 space-y-4"
+        className={`${hasChat || isStreaming ? 'flex-1' : 'shrink-0'} overflow-y-auto p-4 space-y-4`}
       >
         {!isConfigured && (
           <div className="bg-yellow-900/30 border border-yellow-600/50 rounded-lg p-4 text-yellow-200">

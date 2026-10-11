@@ -72,6 +72,13 @@ Use the propose_ tools to record something the user asked you to record, and \
 fill in every detail they actually gave: the deadline, the time, how important \
 it is. Do not drop a detail because it was not the main point of the sentence.
 
+Act on the latest user message only. Earlier messages are context, not new \
+requests to execute again. Use add_todos only for newly requested items. \
+Previously saved to-dos listed in assistant messages have already been \
+handled: do not recreate them, even with a different title, unless the user \
+explicitly asks to add them again. A follow-up may refer to earlier details; \
+use those details without repeating earlier actions.
+
 Where they clearly meant a detail but were too vague for you to act on it — \
 "soon", "before the trip", an event with no date you can work out — call \
 ask_user instead of guessing at it. Where they implied nothing, do not ask: \
@@ -154,6 +161,39 @@ def _system_prompt(messages: list[dict], system_prompt: str = '') -> str:
     if any(m.get('createdAt') for m in messages):
         system = f'{system}\n\n{TIME_PREFIX_NOTE}'
     return system
+
+
+def _with_saved_todos(messages: list[dict]) -> list[dict]:
+    """Keep durable action receipts in history, including compaction input.
+
+    The answer prose may not enumerate every item. The persisted tool trace
+    does, so later turns must see it to know which requests were handled.
+    """
+    result = []
+    for message in messages:
+        item = dict(message)
+        if item.get('role') == 'assistant':
+            meta = item.get('metadata') or {}
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except (ValueError, TypeError):
+                    meta = {}
+            steps = meta.get('steps', []) if isinstance(meta, dict) else []
+            saved = []
+            if isinstance(steps, list):
+                saved = [
+                    step['arg'] for step in steps
+                    if isinstance(step, dict) and step.get('tool') == 'add_todos'
+                    and step.get('ok') is True and isinstance(step.get('arg'), str)
+                ]
+            if saved:
+                item['content'] = (item.get('content') or '') + (
+                    '\n\n[Previously saved to-dos; do not add again: '
+                    + '; '.join(saved) + ']'
+                )
+        result.append(item)
+    return result
 
 
 def _main_dispatch(*, life: LifeTools, life_wiki, checkpoint, deadline):
@@ -274,7 +314,7 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     timed_out = False
     system = _system_prompt(messages, system_prompt)
     messages, rolling_context = compaction.compact_for_prompt(
-        messages, conversation_id,
+        _with_saved_todos(messages), conversation_id,
     )
     context_blocks = [
         compaction.handoff_context(conversation_id),
