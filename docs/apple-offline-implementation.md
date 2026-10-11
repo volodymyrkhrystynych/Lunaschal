@@ -4,6 +4,12 @@ Last updated: 2026-10-04. Working branch: `fix/apple-library-navigation`.
 
 Books-library follow-up:
 
+- iPad navigation now exposes Library, Jobs, Learning and Settings as separate
+  tabs, leaving narrow-window overflow to iPadOS. iPhone keeps its app More
+  menu. Three iPad navigation/jobs/library UI tests and two iPhone menu/jobs
+  regression tests passed in simulator. Actual Split View on device remains
+  unverified.
+
 - Library now opens directly to books. Title/tag search, source/folder/tag
   filtering, Unsorted, recent/latest/title ordering, and Favorite/Continue
   bookmark filters work over the offline replica with consistent pagination.

@@ -31,6 +31,15 @@ final class OfflineCaptureTests: XCTestCase {
 
     private func selectTab(_ app: XCUIApplication, _ name: String,
                            file: StaticString = #filePath, line: UInt = #line) {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            for _ in 0..<3 where !reachable(tab(app, name)) {
+                let next = app.buttons["Next Page"].firstMatch
+                let previous = app.buttons["Previous Page"].firstMatch
+                if reachable(next) { next.tap() }
+                else if reachable(previous) { previous.tap() }
+                else { tab(app, "More").tap() }
+            }
+        }
         let item = tab(app, name)
         let hittable = NSPredicate(format: "exists == true AND hittable == true")
         guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: item)],
@@ -42,7 +51,7 @@ final class OfflineCaptureTests: XCTestCase {
         // Retry once only when the requested screen has not appeared.
         for _ in 0..<2 {
             item.tap()
-            if app.navigationBars[name].waitForExistence(timeout: 5) { return }
+            if app.navigationBars[name == "Draw" ? "Drawings" : name].waitForExistence(timeout: 5) { return }
         }
         XCTFail("Tab \(name) did not open", file: file, line: line)
     }
@@ -75,10 +84,14 @@ final class OfflineCaptureTests: XCTestCase {
         XCTFail("\(field) did not take keyboard focus", file: file, line: line)
     }
 
-    // Library and Settings live behind the More tab. Re-selecting
-    // More keeps whatever was pushed, so step back to the menu before choosing.
+    // iPad destinations are native tabs; its tab bar can page or overflow.
+    // iPhone's app More tab keeps whatever was pushed, so pop back first.
     private func openMore(_ app: XCUIApplication, _ name: String,
                           file: StaticString = #filePath, line: UInt = #line) {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            selectTab(app, name, file: file, line: line)
+            return
+        }
         let more = tab(app, "More")
         let hittable = NSPredicate(format: "exists == true AND hittable == true")
         guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: more)],
@@ -112,6 +125,7 @@ final class OfflineCaptureTests: XCTestCase {
     }
 
     func testBottomBarIsCaptureJournalChatTodoMore() {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
         let app = XCUIApplication()
         app.launch()
         for name in ["Capture", "Journal", "Chat", "Todo", "More"] {
@@ -127,6 +141,19 @@ final class OfflineCaptureTests: XCTestCase {
         // The workout log is Capture's Workout page, not a More row.
         XCTAssertFalse(app.buttons["more-Workout log"].exists)
         openMore(app, "Settings")
+        XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
+    }
+
+    func testIPadDestinationsOpenWithoutAnAppMoreMenu() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad)
+        let app = XCUIApplication()
+        app.launch()
+        for name in ["Study", "Draw", "Library", "Jobs", "Learning", "Settings"] {
+            openMore(app, name)
+            XCTAssertFalse(app.buttons["more-Library"].exists)
+            XCTAssertFalse(app.buttons["more-Settings"].exists)
+            XCTAssertFalse(app.navigationBars["More"].exists)
+        }
         XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
     }
 
@@ -694,7 +721,10 @@ final class OfflineCaptureTests: XCTestCase {
         app.launch()
         openMore(app, "Jobs")
         XCTAssertTrue(app.segmentedControls["jobs-sort"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Sign in under More → Settings to load new postings."].waitForExistence(timeout: 5))
+        let signIn = UIDevice.current.userInterfaceIdiom == .pad
+            ? "Sign in under Settings to load new postings."
+            : "Sign in under More → Settings to load new postings."
+        XCTAssertTrue(app.staticTexts[signIn].waitForExistence(timeout: 5))
         app.segmentedControls["jobs-sort"].buttons["Nearest"].tap()
         XCTAssertTrue(app.staticTexts["Remote first, then nearest."].waitForExistence(timeout: 5))
     }
