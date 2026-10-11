@@ -122,6 +122,9 @@ targets:
         WKRunsIndependentlyOfCompanionApp: false
         NSMicrophoneUsageDescription: Record thoughts for your journal, even while your phone is unavailable.
         UIBackgroundModes: [audio]
+        # The Workout timer's end buzzes until stopped: a smart-alarm
+        # WKExtendedRuntimeSession, the only thing that can do that asleep.
+        WKBackgroundModes: [alarm]
   LunaschalWatchWidgets:
     type: app-extension
     platform: watchOS
