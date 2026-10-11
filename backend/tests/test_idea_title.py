@@ -184,7 +184,9 @@ def test_a_title_typed_while_the_pass_ran_wins(client, monkeypatch):
     assert body['title'] == 'Typed by hand'
 
 
-def test_title_stays_empty_when_ai_is_unavailable(client):
+def test_title_stays_empty_when_ai_is_unavailable(client, monkeypatch):
+    # Stubbed rather than assumed: a llama-server on :8080 would title it.
+    monkeypatch.setattr(idea_title, 'is_ai_configured', lambda: False)
     r = client.post('/api/ideas/voice', json={'rawContent': 'grid of habits'})
     idea_id = r.get_json()['id']
     # The clipped-first-line fallback covers it, on both sides.

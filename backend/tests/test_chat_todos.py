@@ -47,9 +47,7 @@ def test_add_skips_a_title_already_in_todays_bar(client):
     assert len(client.get('/api/tasks/chat-todos').get_json()) == 1
 
 
-def test_list_only_shows_todays_day_key(client):
-    """A row seeded under yesterday's day_key doesn't show up today — the bar
-    resets at the day boundary by construction, no purge needed."""
+def test_yesterdays_items_remain_available_for_promotion(client):
     yesterday = day_key_for(int(time.time()) - 86400)
     db = connection.get_db()
     db.execute(
@@ -59,7 +57,27 @@ def test_list_only_shows_todays_day_key(client):
     )
     db.commit()
 
+    listed = client.get('/api/tasks/chat-todos').get_json()
+    assert [(t['id'], t['previousDay']) for t in listed] == [('old', True)]
+    response = client.post('/api/tasks/chat-todos/old/promote', json={'title': 'Stale item'})
+    assert response.status_code == 201
     assert client.get('/api/tasks/chat-todos').get_json() == []
+
+
+def test_review_window_uses_day_keys_and_includes_completed_items(client, monkeypatch):
+    from backend.routes import tasks
+    monkeypatch.setattr(tasks, '_today', lambda: '2026-03-09')
+    db = connection.get_db()
+    for key, done in [('2026-03-07', 0), ('2026-03-08', 1), ('2026-03-09', 0), ('2026-03-10', 0)]:
+        db.execute(
+            'INSERT INTO chat_todos(id, day_key, title, done, created_at, updated_at) '
+            'VALUES (?, ?, ?, ?, 0, 0)', (key, key, key, done),
+        )
+    db.commit()
+    listed = client.get('/api/tasks/chat-todos').get_json()
+    assert [(t['dayKey'], t['previousDay'], t['done']) for t in listed] == [
+        ('2026-03-09', False, False), ('2026-03-08', True, True),
+    ]
 
 
 def test_update_title(client):

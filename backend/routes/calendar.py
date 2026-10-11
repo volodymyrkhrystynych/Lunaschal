@@ -203,6 +203,25 @@ def get_sleep(date):
     return jsonify(_sleep_payload(date))
 
 
+@bp.get('/reading/<date>')
+def get_reading(date):
+    """Recorded leisure, projected directly onto the 4am calendar day."""
+    if not _valid_date(date):
+        return jsonify({'error': 'invalid date'}), 400
+    start, end = day_bounds(date)
+    rows = get_db().execute(
+        'SELECT s.id, s.started_at, s.ended_at, f.title, c.position AS chapter_number'
+        ' FROM fic_reading_spans s JOIN fics f ON f.id=s.fic_id'
+        ' JOIN fic_chapters c ON c.id=s.chapter_id'
+        ' WHERE s.started_at<? AND s.ended_at>? AND s.active_seconds>=60'
+        ' ORDER BY s.started_at, s.id', (end, start))
+    return jsonify([{
+        'id': row['id'], 'title': row['title'], 'chapterNumber': row['chapter_number'],
+        'startedAt': max(start, row['started_at']),
+        'endedAt': min(end, row['ended_at']),
+    } for row in rows])
+
+
 @bp.put('/sleep/<date>')
 def set_sleep(date):
     """Set the day's manual wake/sleep. The body is the whole manual state for

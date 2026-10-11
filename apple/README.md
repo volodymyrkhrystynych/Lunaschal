@@ -29,7 +29,8 @@ what each device can currently do and which work remains device-only.
 - **iPad notebooks** (Capture → **Notes** or **Newspaper**, top right). A
   full-window PaperKit canvas with the tab bar hidden: Pencil ink,
   pictures that can be moved and resized, text boxes and shapes from the tool
-  picker's **+**.
+  picker's **+**. The initial drawing tool is applied on open, and the picker
+  uses light-page ink colours even when the rest of the app uses dark mode.
   **Notes** are A4 pages, one at a time, each fitted whole to the window so
   nothing scrolls. **Only a finger that lands at a side of the screen** (within
   44 pt) turns a page: in from the right edge for the next page, in from the
@@ -61,10 +62,10 @@ what each device can currently do and which work remains device-only.
   checkpoint and Save.
   **Notes belong to the entry draft**: Notes reopens the draft's notebook until the
   entry is saved, and the composer lists it under Attachments (tap to reopen,
-  swipe to take it out of the entry; it stays in Draw). **Save entry** — in the
-  composer, or **Save entry** inside the notes — files the typed text, links,
+  swipe to take it out of the entry; it stays in Draw). **Save** — in the
+  composer, or **Save** inside the notes — files the typed text, links,
   clips, files and the notes' pages (as JPEGs, blank pages dropped) as one journal
-  entry. Save food entry leaves the notes in the draft.
+  entry. Food leaves the notes in the draft.
   A **newspaper's Save** files its cover plus the pages written on (found from the
   ink itself) and the notebook's one YouTube link. Saving the same issue again
   (**Update entry**) files every page written on so far and **replaces** the
@@ -92,7 +93,8 @@ what each device can currently do and which work remains device-only.
   is iPhone-only); with no notebook open, its screenshot waits for the next one.
 
 - The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
-  default) is the composer below; **Daily** logs the day's selfie (front camera),
+  default) is the composer below; **Daily** logs the day's selfie (front camera,
+  flash initially off),
   body weight, calorie entries and voluntary spending. Each is saved on the device
   first, keyed by the
   4am day it was logged on, and uploads to the Lifestyle routes on the next sync.
@@ -102,12 +104,12 @@ what each device can currently do and which work remains device-only.
   Calories take one line, split as the desktop card does it (`CalorieLine`, a port
   of `parseCalorieEntry`): "chicken and rice, ~600" becomes the food and its count.
   Swipe a calorie row left to delete it, including entries already on the server.
-  **Voluntary spending** takes only an amount in CAD and a free-text category
-  (for example, `15` and `McDonald's` or `30` and `Groceries`), shows today's total,
+  **Voluntary spending** takes one line with a free-text category followed by
+  an amount in CAD (for example, `McDonald's 15` or `Groceries 30.25`), shows today's total,
   and supports the same swipe deletion. Purchases and deletes queue offline and
   survive relaunch. Amounts are stored as integer cents in `spending_logs`.
   The backend and portable Swift tests cover replay and deletion during an upload;
-  the new simulator tests have not been run locally.
+  single-line spending capture, relaunch and deletion passed in the iPhone simulator.
 - **Workout** (the third Capture page) is the desktop's workout log: one set or
   activity per line ("bicep curls 20, 10" in lb, "squats 10" bodyweight, bare
   "20, 10" for the selected pill, "walking 30" minutes), recent-exercise pills,
@@ -131,6 +133,19 @@ what each device can currently do and which work remains device-only.
   on the simulator (`HealthKitSourceTests`); reading real data with permission,
   and the permission sheet itself, are not yet verified on device. Background
   delivery (being woken when the Watch syncs) is not implemented.
+- **Location trail** (Settings → Location → Record where I go, off until turned
+  on). Needs **Always**, which the app now declares
+  (`NSLocationAlwaysAndWhenInUseUsageDescription`, `location` background mode)
+  and asks for; the section says what is missing (While Using, denied, Precise
+  Location off) and links to iOS Settings. Adaptive: visits and
+  significant-change monitoring all day, live GPS only while Core Motion says
+  walking, running or cycling (`TrailPolicy`, `LocationTracker`). Points queue
+  in a JSON-lines outbox and post to `/api/location/points` in batches, on their
+  own when enough piles up and inside every sync pass; the server draws a map of
+  each day for the web Journal feed (`backend/location/`). Core logic tested in
+  `LocationTrailTests`; the Settings flow passed in simulator
+  (`testLocationTrailAsksForLocationAndExplainsTheAnswer`). Background wakes,
+  the Always upgrade prompt and battery cost are not yet verified on device.
 - Weather. The Entry page shows the conditions now at its top left; tapping them
   shows feels-like (Open-Meteo's apparent temperature: wind chill and humidity),
   wind and gusts ("windy" from 30 km/h sustained or 50 km/h gusts), and whether
@@ -138,7 +153,7 @@ what each device can currently do and which work remains device-only.
   forecast is cached so it shows offline. With location permission, the Capture
   tab takes a fix when shown and sends it to `POST /api/lifestyle/weather/location`,
   so the forecast is for where the phone is.
-- Weather on entries. Save entry and Save food entry attach the fix if it is under
+- Weather on entries. Save and Food attach the fix if it is under
   15 minutes old; Save never waits for GPS. The server's entry-weather sweep
   (`backend/weather/entry.py`, woken by each save) looks the weather up for the
   entry's own place and capture hour, so an entry saved offline still gets the
@@ -147,7 +162,7 @@ what each device can currently do and which work remains device-only.
   after saving, at most every ten minutes).
 - Offline typed journal entries. On the phone, **Transcribe** and **Record**
   add clips to the Capture tab's draft; stopping keeps the clip there, and
-  only **Save entry** turns the draft into one entry. Clips upload through the
+  only **Save** turns the draft into one entry. Clips upload through the
   recordings route under that entry's id, in recorded order, so the server
   appends Transcribe clips' words after the typed text. Both modes retain the
   original mono AAC file. The draft (text, links, clips, photos, files)
@@ -160,13 +175,17 @@ what each device can currently do and which work remains device-only.
   staged into the same draft and uploaded after the entry is
   created, each under its own client-minted attachment ID. Passed in
   simulator for the library picker; the camera needs a device.
-- **Save food entry** (bottom middle, between Discard and **Save entry**) files
+- **Food** (bottom middle, between Discard and **Save**) files
   the same draft in the food log instead: text, photos/videos and clips, under
-  client-minted meal and media IDs, with the capture time the server now keeps.
+  client-minted meal and media IDs. A photo's original capture time dates the
+  meal locally and on upload; without photo metadata it uses the save time.
   YouTube links stay in the composer for the next journal entry, and the
   button is disabled while a non-media file is attached. Clips go through the
   food recordings route, which transcribes each one into the meal's note.
   Passed in simulator offline; uploading to a real server is untested.
+  The YouTube field's Paste button validates and adds the copied link in one tap.
+  Pasting images into the entry text box stages them as photo attachments;
+  existing words stay intact and the images survive closing the app.
 - **Editing a server entry or a meal** (Journal → open it → Edit) offers the
   Capture tab's own buttons: Transcribe, Record, Take photo, Choose photo and
   Attach file, plus YouTube links for a journal entry. What they make waits in
@@ -249,14 +268,26 @@ what each device can currently do and which work remains device-only.
   in-memory stand-in with sample folders, tags, due and queued cards and a
   word-match grader, so the screen can be seen without one; a UI test runs a
   whole review against it.
+- Review cards: on the iPad notebook, the menu beside the picture button holds
+  the notebook's YouTube video and a **For review** switch, kept per notebook.
+  Saving with it on files the entry as usual and sends `forReview`, and the
+  server makes a learning card in the built-in For review folder, first due at
+  the next 4am. It has no back side: in Review its pages are stacked down one
+  scroll with Again/Hard/Good/Easy after the last, rated straight from there
+  with no answer and no grade, in the same deck as every other card. Menu,
+  switch and reading/rating against `-learningFixture -learningReviewCard`
+  passed in simulator (iPad and iPhone); not yet run against a server or
+  verified on device.
 - Offline YouTube links attached to an entry (any number per entry), with
   optional commentary kept separate from the attachments. A link-only entry has
   an empty text body, just like the web composer. Drafts and stable entry and
   per-link attachment IDs are preserved. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
-- Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
-  Study and Draw. Journal's toolbar has Sync on the left and a Journal/Calendar
+- Native Capture / Journal / Chat / Todo / More tabs on iPhone. iPad has
+  Capture, Journal, Chat, Todo, Study, Draw, Library, Jobs, Learning and Settings
+  as individual tabs; iPadOS manages overflow in narrow windows without an app
+  More menu. Journal's toolbar has Sync on the left and a Journal/Calendar
   switch on the right. The Journal page is the desktop's feed: one newest-first timeline
   with inline photos, playable voice clips (desktop WebM clips arrive as an AAC copy),
   videos and YouTube posters, and calendar events' category-coloured borders around the
@@ -536,6 +567,28 @@ publicly to make CI work: simulator capture tests never contact it.
   checking the simulator without tapping. The countdown, end-of-timer choices and
   relaunch passed in the watchOS simulator; notification buttons and the
   Watch-to-phone transfer need paired devices.
+- The Watch opens on full-screen pages swiped horizontally: Focus, Timeout,
+  Workout, Record, Transcribe, then the recordings log. Each complication (and
+  each launcher button) opens its own page and acts at once; the app opens on
+  whichever timer is already going.
+- Workout is a 90-second rest timer (`RestTimer` in LunaschalCore), separate
+  from the pomodoro and never logged. When it ends the Watch buzzes every 1.5 s
+  until Stop or Restart, using a smart-alarm `WKExtendedRuntimeSession`
+  (`WKBackgroundModes: alarm`) scheduled for the end of each run, with a
+  notification as fallback. Debug builds take `-RestSeconds 5`. The pages, the
+  countdown, the ringing screen and the repeating haptic (in the system log)
+  passed in the watchOS simulator, **but only with an ad-hoc (`-`) signature**:
+  an unsigned `CODE_SIGNING_ALLOWED=NO` build gets "client is not entitled"
+  from the alarm service and shows "Couldn't set the alarm". The buzz with the
+  wrist down, and Stop/Restart ending it, need the device.
+- A running timer (Focus, Break, Timeout, Workout) shows on every timer
+  complication as the system Timer draws one: an emptying ring with the time
+  left inside it, the time with a gauge in a corner. A recording turns its Record
+  or Transcribe complication, launcher button and Control red, keeping the same
+  icon. Every change reloads all complications and Controls, and the app reloads
+  them again as the face comes back; before this, timer changes never reloaded
+  the launcher row. Builds in the watchOS simulator; how it looks on the face
+  needs the device.
 - Settings checks the actual Foundation Models text-model and locale availability,
   including disabled/ineligible/not-ready states. Generation and local speech
   recognition remain optional later layers. Server transcription is the only

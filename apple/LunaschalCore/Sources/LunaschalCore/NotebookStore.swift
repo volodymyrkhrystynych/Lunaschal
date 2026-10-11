@@ -38,6 +38,10 @@ public struct Notebook: Codable, Identifiable, Hashable {
     /// Absent from every notebook written before columns existed, which is
     /// exactly what makes those read as paged.
     public var layout: Layout?
+    /// The menu's For review switch: a Save files the entry as a learning
+    /// card too, whose front is these pages. Kept per notebook, so a notebook
+    /// saved again stays one. Absent (nil, off) on older notebooks.
+    public var forReview: Bool?
 
     init(title: String, source: Source, pageCount: Int, pdfPageCount: Int, now: Date) {
         id = ULID.make(now: now)
@@ -56,6 +60,7 @@ public struct Notebook: Codable, Identifiable, Hashable {
     }
 
     public var isColumn: Bool { layout == .column }
+    public var isForReview: Bool { forReview == true }
 
     /// How many markups a checkpoint holds: one for a column, one per page otherwise.
     public var markupCount: Int { isColumn ? 1 : pageCount }
@@ -236,6 +241,14 @@ public final class NotebookStore {
         var notebook = try notebook(id)
         let trimmed = url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         notebook.youtubeURL = trimmed.isEmpty ? nil : try YouTubeLink.canonical(trimmed)
+        notebook.updatedAt = Date()
+        try write(notebook)
+        return notebook
+    }
+
+    public func setForReview(_ id: String, _ on: Bool) throws -> Notebook {
+        var notebook = try notebook(id)
+        notebook.forReview = on ? true : nil
         notebook.updatedAt = Date()
         try write(notebook)
         return notebook

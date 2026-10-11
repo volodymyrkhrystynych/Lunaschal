@@ -49,6 +49,10 @@ export DOCPACKS_ROOT="$SCRATCH/docpacks"
 # the seeded video would resolve through settings.backup_path
 # (backend/journal/archive.py).
 export JOURNAL_ARCHIVE_ROOT="$SCRATCH/journal-archive"
+# Cached map tiles and drawn day maps for the Journal's location card.
+# Tiles still come from OpenStreetMap when online; offline the map draws on
+# a plain background (backend/location/tiles.py).
+export LOCATION_ROOT="$SCRATCH/location"
 export SHORTCUTS_PATH="$SCRATCH/shortcuts.json"
 
 # Same idiom backend/tests/conftest.py uses: keep every daemon scheduler off

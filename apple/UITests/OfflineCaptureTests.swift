@@ -31,6 +31,15 @@ final class OfflineCaptureTests: XCTestCase {
 
     private func selectTab(_ app: XCUIApplication, _ name: String,
                            file: StaticString = #filePath, line: UInt = #line) {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            for _ in 0..<3 where !reachable(tab(app, name)) {
+                let next = app.buttons["Next Page"].firstMatch
+                let previous = app.buttons["Previous Page"].firstMatch
+                if reachable(next) { next.tap() }
+                else if reachable(previous) { previous.tap() }
+                else { tab(app, "More").tap() }
+            }
+        }
         let item = tab(app, name)
         let hittable = NSPredicate(format: "exists == true AND hittable == true")
         guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: item)],
@@ -42,7 +51,7 @@ final class OfflineCaptureTests: XCTestCase {
         // Retry once only when the requested screen has not appeared.
         for _ in 0..<2 {
             item.tap()
-            if app.navigationBars[name].waitForExistence(timeout: 5) { return }
+            if app.navigationBars[name == "Draw" ? "Drawings" : name].waitForExistence(timeout: 5) { return }
         }
         XCTFail("Tab \(name) did not open", file: file, line: line)
     }
@@ -75,10 +84,14 @@ final class OfflineCaptureTests: XCTestCase {
         XCTFail("\(field) did not take keyboard focus", file: file, line: line)
     }
 
-    // Library and Settings live behind the More tab. Re-selecting
-    // More keeps whatever was pushed, so step back to the menu before choosing.
+    // iPad destinations are native tabs; its tab bar can page or overflow.
+    // iPhone's app More tab keeps whatever was pushed, so pop back first.
     private func openMore(_ app: XCUIApplication, _ name: String,
                           file: StaticString = #filePath, line: UInt = #line) {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            selectTab(app, name, file: file, line: line)
+            return
+        }
         let more = tab(app, "More")
         let hittable = NSPredicate(format: "exists == true AND hittable == true")
         guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: more)],
@@ -112,6 +125,7 @@ final class OfflineCaptureTests: XCTestCase {
     }
 
     func testBottomBarIsCaptureJournalChatTodoMore() {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
         let app = XCUIApplication()
         app.launch()
         for name in ["Capture", "Journal", "Chat", "Todo", "More"] {
@@ -127,6 +141,19 @@ final class OfflineCaptureTests: XCTestCase {
         // The workout log is Capture's Workout page, not a More row.
         XCTAssertFalse(app.buttons["more-Workout log"].exists)
         openMore(app, "Settings")
+        XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
+    }
+
+    func testIPadDestinationsOpenWithoutAnAppMoreMenu() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad)
+        let app = XCUIApplication()
+        app.launch()
+        for name in ["Study", "Draw", "Library", "Jobs", "Learning", "Settings"] {
+            openMore(app, name)
+            XCTAssertFalse(app.buttons["more-Library"].exists)
+            XCTAssertFalse(app.buttons["more-Settings"].exists)
+            XCTAssertFalse(app.navigationBars["More"].exists)
+        }
         XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
     }
 
@@ -199,6 +226,36 @@ final class OfflineCaptureTests: XCTestCase {
         snapshot(app, "5-browse")
     }
 
+    /// A notebook saved For review comes up as a card with no back side: its
+    /// pages one under another, then the ratings at the end of the scroll.
+    func testLearningReviewCardIsReadThenRated() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-learningFixture", "-learningReviewCard"]
+        app.launch()
+        openMore(app, "Learning")
+
+        let card = app.scrollViews["learning-review-card"]
+        XCTAssertTrue(card.waitForExistence(timeout: settle), "The review card didn't come first")
+        XCTAssertTrue(app.staticTexts["Card 1 of 7"].exists)
+        XCTAssertTrue(app.staticTexts["Fern life cycle"].exists)
+        XCTAssertFalse(app.textFields["learning-answer"].exists, "A review card has nothing to answer")
+        XCTAssertFalse(app.buttons["learning-flip"].exists)
+        XCTAssertTrue(app.images["learning-review-page-1"].waitForExistence(timeout: 10), "The first page didn't load")
+        snapshot(app, "review-card-top")
+
+        // The ratings are below the last page.
+        let good = app.buttons["learning-rate-Good"]
+        for _ in 0..<8 where !reachable(good) { card.swipeUp() }
+        XCTAssertTrue(app.images["learning-review-page-3"].exists, "Not every page is in the scroll")
+        XCTAssertTrue(reachable(good), "No ratings at the end of the pages")
+        snapshot(app, "review-card-ratings")
+        good.tap()
+
+        // Rated in place: on to an ordinary card, still answered as before.
+        XCTAssertTrue(app.textFields["learning-answer"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Card 2 of 7"].exists)
+    }
+
     /// Speech mode is switched in Settings, and an answer given with it on
     /// comes back with a summary to read aloud and a Replay button.
     func testLearningSpeechModeIsASettingAndOffersReplay() {
@@ -226,6 +283,40 @@ final class OfflineCaptureTests: XCTestCase {
         app.buttons["learning-rate-Good"].tap()
         XCTAssertTrue(app.staticTexts["Result 2 of 6"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["learning-replay"].exists)
+    }
+
+    /// The location trail is switched on in Settings, which asks iOS for
+    /// location, and the section then says what the answer means: recording,
+    /// or what is still missing for Always and how to get there.
+    func testLocationTrailAsksForLocationAndExplainsTheAnswer() {
+        let app = XCUIApplication()
+        app.resetAuthorizationStatus(for: .location)
+        app.launch()
+        openMore(app, "Settings")
+        let toggle = app.switches["settings-location-trail"]
+        for _ in 0..<6 where !reachable(toggle) { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "No location trail switch in Settings")
+        // Settings survive between runs on one simulator; start from off.
+        if (toggle.value as? String) == "1" { toggle.switches.firstMatch.tap() }
+        XCTAssertEqual(toggle.value as? String, "0")
+        toggle.switches.firstMatch.tap()
+
+        // The Capture tab asks for While Using at launch, and XCTest's own
+        // interruption handler may already have answered that; iOS then holds
+        // the Always upgrade back until the app uses location in the
+        // background. So a prompt here is possible, not certain.
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        if alert.waitForExistence(timeout: 5) {
+            let allow = alert.buttons["Allow While Using App"]
+            (allow.exists ? allow : alert.buttons.element(boundBy: 1)).tap()
+        }
+
+        XCTAssertEqual(toggle.value as? String, "1")
+        let outcome = NSPredicate(format:
+            "label CONTAINS 'choose Always' OR label CONTAINS 'Choose Always' OR label CONTAINS 'low-power mode'")
+        XCTAssertTrue(app.staticTexts.containing(outcome).firstMatch.waitForExistence(timeout: 10),
+                      "The section doesn't say what the permission means for the trail")
+        snapshot(app, "location-trail-settings")
     }
 
     func testDailyLogsWeightAndCaloriesWithoutAServer() {
@@ -311,20 +402,16 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: settle))
         app.segmentedControls.buttons["Daily"].tap()
         let category = "Groceries " + UUID().uuidString.prefix(8)
-        let categoryField = app.textFields["Spending category"]
+        let categoryField = app.textFields["Spending"]
         for _ in 0..<10 where !categoryField.exists || !categoryField.isHittable { app.swipeUp() }
         XCTAssertTrue(categoryField.exists)
         categoryField.tap()
         if let old = categoryField.value as? String, old != categoryField.placeholderValue {
             categoryField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
         }
-        categoryField.typeText(category)
-        let amount = app.textFields["Spending amount"]
-        amount.tap()
-        if let old = amount.value as? String, old != amount.placeholderValue {
-            amount.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
-        }
-        amount.typeText("30.25")
+        XCTAssertFalse(app.textFields["Spending category"].exists)
+        XCTAssertFalse(app.textFields["Spending amount"].exists)
+        categoryField.typeText(category + " 30.25")
         app.buttons["Add spending"].tap()
         XCTAssertTrue(app.staticTexts[category].waitForExistence(timeout: settle))
         app.terminate()
@@ -630,7 +717,10 @@ final class OfflineCaptureTests: XCTestCase {
         app.launch()
         openMore(app, "Jobs")
         XCTAssertTrue(app.segmentedControls["jobs-sort"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Sign in under More → Settings to load new postings."].waitForExistence(timeout: 5))
+        let signIn = UIDevice.current.userInterfaceIdiom == .pad
+            ? "Sign in under Settings to load new postings."
+            : "Sign in under More → Settings to load new postings."
+        XCTAssertTrue(app.staticTexts[signIn].waitForExistence(timeout: 5))
         app.segmentedControls["jobs-sort"].buttons["Nearest"].tap()
         XCTAssertTrue(app.staticTexts["Remote first, then nearest."].waitForExistence(timeout: 5))
     }
@@ -899,13 +989,16 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(newDrawing.waitForExistence(timeout: 10))
         newDrawing.tap()
         let page = app.staticTexts["Untitled drawing"].firstMatch
+        // Existing notebooks can push Drawings below the List's loaded rows.
+        for _ in 0..<12 where !page.exists { app.swipeUp() }
         XCTAssertTrue(page.waitForExistence(timeout: 5))
         page.tap()
         XCTAssertTrue(app.buttons["Save locally"].waitForExistence(timeout: 5))
         app.terminate()
         app.launch()
         tab(app, "Draw").tap()
-        XCTAssertTrue(app.staticTexts["Untitled drawing"].firstMatch.waitForExistence(timeout: 5))
+        for _ in 0..<12 where !page.exists { app.swipeUp() }
+        XCTAssertTrue(page.waitForExistence(timeout: 5))
     }
 
     func testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal() {
@@ -929,12 +1022,22 @@ final class OfflineCaptureTests: XCTestCase {
 
         app.buttons["notebook-add-page"].tap()
         XCTAssertEqual(app.buttons["notebook-page"].label, "2 / 2")
+        // The video and For review live in the menu beside the picture one.
+        let more = app.buttons["notebook-more"]
+        more.tap()
+        XCTAssertTrue(app.buttons["notebook-youtube"].waitForExistence(timeout: 5))
         app.buttons["notebook-youtube"].tap()
         let link = app.alerts.textFields["YouTube video URL"]
         XCTAssertTrue(link.waitForExistence(timeout: 5))
         link.typeText("https://youtu.be/M7lc1UVf-VE")
         app.alerts.buttons["Add"].tap()
+        more.tap()
         XCTAssertTrue(app.buttons["YouTube video added"].waitForExistence(timeout: 5))
+        let forReview = app.buttons["notebook-for-review"]
+        XCTAssertTrue(forReview.exists)
+        XCTAssertFalse(forReview.isSelected, "For review starts off")
+        snapshot(app, "notebook-menu")
+        forReview.tap()
 
         // Back saves it; Draw lists it to continue, as the entry draft's notes.
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -945,6 +1048,14 @@ final class OfflineCaptureTests: XCTestCase {
         row.tap()
         XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["notebook-page"].label, "1 / 2")
+        // The switch is kept with the notebook.
+        app.buttons["notebook-more"].tap()
+        XCTAssertTrue(app.buttons["notebook-for-review"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["notebook-for-review"].isSelected, "For review didn't stay on")
+        app.buttons["notebook-for-review"].tap()
+        app.buttons["notebook-more"].tap()
+        XCTAssertFalse(app.buttons["notebook-for-review"].isSelected)
+        app.buttons["notebook-for-review"].tap()
         app.buttons["notebook-save"].tap()
         // Saving goes back to Draw, where it now reads as filed.
         XCTAssertTrue(app.staticTexts["Saved to journal"].firstMatch.waitForExistence(timeout: 10)
@@ -976,7 +1087,7 @@ final class OfflineCaptureTests: XCTestCase {
         notes.tap()
         XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["notebook-page"].label.hasSuffix("/ 2"), true)
-        XCTAssertEqual(app.buttons["notebook-save"].label, "Save entry")
+        XCTAssertEqual(app.buttons["notebook-save"].label, "Save")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         // The row opens them too.
         XCTAssertTrue(row.waitForExistence(timeout: 10))
@@ -990,7 +1101,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
         editor.typeText("Evening notes")
-        app.buttons["Save entry"].tap()
+        app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 10))
         XCTAssertFalse(row.exists)
         notes.tap()
@@ -1006,7 +1117,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
         editor.typeText(text)
-        app.buttons["Save entry"].tap()
+        app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
         app.terminate()
         app.launch()
@@ -1227,7 +1338,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
         editor.typeText(first)
-        app.buttons["Save entry"].tap()
+        app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
 
         selectTab(app, "Journal")
@@ -1258,7 +1369,7 @@ final class OfflineCaptureTests: XCTestCase {
     func testYouTubeLinksAttachToTheEntryAndSaveStaysPinned() {
         let app = XCUIApplication()
         app.launch()
-        let save = app.buttons["Save entry"]
+        let save = app.buttons["Save"]
         XCTAssertTrue(save.waitForExistence(timeout: 10))
         let window = app.windows.firstMatch.frame
         XCTAssertGreaterThan(save.frame.midX, window.midX, "Save sits on the right")
@@ -1291,10 +1402,60 @@ final class OfflineCaptureTests: XCTestCase {
                       || app.buttons["https://www.youtube.com/watch?v=dQw4w9WgXcQ"].exists)
     }
 
+    func testEntryBoxPastesImagesIntoThePersistentDraft() {
+        let app = XCUIApplication()
+        app.launch()
+        let discard = app.buttons["Discard draft"]
+        XCTAssertTrue(discard.waitForExistence(timeout: 10))
+        if discard.isEnabled {
+            discard.tap()
+            app.alerts["Discard this draft?"].buttons["Discard"].tap()
+        }
+        let editor = app.textViews["Journal text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.tap()
+        editor.typeText("Pasted lunch photo")
+        UIPasteboard.general.image = UIGraphicsImageRenderer(size: CGSize(width: 20, height: 20)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 20, height: 20))
+        }
+        editor.press(forDuration: 1.2)
+        let menuPaste = app.menuItems["Paste"]
+        let paste = menuPaste.exists ? menuPaste : app.buttons["Paste"].firstMatch
+        XCTAssertTrue(paste.waitForExistence(timeout: 5))
+        paste.tap()
+        let allow = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Allow Paste'")).firstMatch
+        if allow.waitForExistence(timeout: 2) { allow.tap() }
+        let attachment = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Pasted image '")).firstMatch
+        XCTAssertTrue(attachment.waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, "Pasted lunch photo")
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(attachment.waitForExistence(timeout: 10), "the pasted image survives relaunch")
+        XCTAssertTrue(app.buttons["Save"].isEnabled)
+        XCTAssertTrue(app.buttons["Food"].isEnabled)
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
+    }
+
+    func testPasteYouTubeLinkAddsItWithoutAnotherTap() {
+        let app = XCUIApplication()
+        app.launch()
+        let paste = app.buttons["youtube-paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 10))
+        UIPasteboard.general.string = "https://youtu.be/aircAruvnKk"
+        paste.tap()
+        let allow = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Allow Paste'")).firstMatch
+        if allow.waitForExistence(timeout: 2) { allow.tap() }
+        XCTAssertTrue(app.staticTexts["https://www.youtube.com/watch?v=aircAruvnKk"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["YouTube video URL"].value as? String, "YouTube video URL")
+        XCTAssertTrue(app.buttons["Save"].isEnabled)
+    }
+
     func testYouTubeOnlyEntryHasAttachmentsWithoutOriginalText() {
         let app = XCUIApplication()
         app.launch()
-        let save = app.buttons["Save entry"]
+        let save = app.buttons["Save"]
         XCTAssertTrue(save.waitForExistence(timeout: settle))
         let field = app.textFields["YouTube video URL"]
         field.tap()
@@ -1358,17 +1519,17 @@ final class OfflineCaptureTests: XCTestCase {
     func testSaveFoodEntrySitsLeftOfSaveEntryAndLeavesTheLinks() {
         let app = XCUIApplication()
         app.launch()
-        let food = app.buttons["Save food entry"]
-        let save = app.buttons["Save entry"]
+        let food = app.buttons["Food"]
+        let save = app.buttons["Save"]
         XCTAssertTrue(food.waitForExistence(timeout: 10))
         let window = app.windows.firstMatch.frame
         let discard = app.buttons["Discard draft"]
         XCTAssertTrue(discard.exists)
-        // Discard · Save food entry · Save entry, left to right.
-        XCTAssertLessThan(discard.frame.maxX, food.frame.minX, "Discard sits left of Save food entry")
-        XCTAssertLessThan(food.frame.maxX, save.frame.minX, "Save food entry sits left of Save entry")
+        // Discard · Food · Save, left to right.
+        XCTAssertLessThan(discard.frame.maxX, food.frame.minX, "Discard sits left of Food")
+        XCTAssertLessThan(food.frame.maxX, save.frame.minX, "Food sits left of Save")
         XCTAssertLessThan(discard.frame.midX, window.midX, "Discard sits on the left")
-        XCTAssertGreaterThan(save.frame.midX, window.midX, "Save entry sits on the right")
+        XCTAssertGreaterThan(save.frame.midX, window.midX, "Save sits on the right")
         XCTAssertEqual(food.frame.midY, save.frame.midY, accuracy: 4)
         XCTAssertEqual(discard.frame.midY, save.frame.midY, accuracy: 4)
         XCTAssertGreaterThan(food.frame.midY, window.midY, "Both sit at the bottom")
@@ -1401,7 +1562,7 @@ final class OfflineCaptureTests: XCTestCase {
 
         // Leave the draft empty for the next test: the link goes in a journal entry.
         selectTab(app, "Capture")
-        app.buttons["Save entry"].tap()
+        app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts[link].exists)
     }
@@ -1437,7 +1598,7 @@ final class OfflineCaptureTests: XCTestCase {
         done.tap()
         // ...and to hand the picked photo over (CI has stalled ~40 s on Add).
         XCTAssertTrue(app.staticTexts["Attachments"].waitForExistence(timeout: 60))
-        app.buttons["Save entry"].tap()
+        app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Attachments"].exists)
         tab(app, "Journal").tap()
@@ -1472,13 +1633,13 @@ final class OfflineCaptureTests: XCTestCase {
         let clip = app.staticTexts["Transcription"]
         XCTAssertTrue(clip.waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Saved on this device"].exists)
-        XCTAssertTrue(app.buttons["Save entry"].isEnabled)
+        XCTAssertTrue(app.buttons["Save"].isEnabled)
 
         app.terminate()
         app.launch()
         XCTAssertTrue(app.staticTexts["Transcription"].waitForExistence(timeout: 10), "The draft survives a relaunch")
 
-        app.buttons["Save entry"].tap()
+        app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Transcription"].exists)
     }

@@ -162,6 +162,21 @@ final class DailyTests: XCTestCase {
         }
     }
 
+    func testSpendingLineUsesTheLastAmountAndKeepsTheCategory() {
+        for (text, category, cents) in [
+            ("Coffee 4.50", "Coffee", 450),
+            ("  McDonald's 15  ", "McDonald's", 1500),
+            ("Groceries 30,25", "Groceries", 3025),
+            ("7 Eleven snacks 1.5", "7 Eleven snacks", 150),
+            ("Coffee\t0.10", "Coffee", 10),
+        ] {
+            XCTAssertEqual(SpendingLine.parse(text), SpendingLine(category: category, amountCents: cents), text)
+        }
+        for text in ["", "Coffee", "4.50", " 4.50", "Coffee 0", "Coffee -4.50", "Coffee 1.001", "Coffee 1e3", "Coffee 1000000.01", "Coffee NaN"] {
+            XCTAssertNil(SpendingLine.parse(text), text)
+        }
+    }
+
     func testSpendingSurvivesRestartAndMergesWithServerWithoutDoubleCounting() throws {
         let first = try store.logSpending(1500, category: " McDonald's ", now: at(5, 1))
         let second = try store.logSpending(3001, category: "Groceries", now: at(5, 2))

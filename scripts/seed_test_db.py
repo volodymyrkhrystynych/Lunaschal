@@ -473,6 +473,39 @@ def seed_learning(db):
         (new_id(), card_ids[0], card_ids[0], 'manual_edit', 'el puento', 'el puente',
          '- el puento\n+ el puente', 0, None, 'Typo in the original answer.', ts(2)),
     )
+    seed_review_card(db)
+
+
+def seed_review_card(db):
+    """A notebook saved For review on the iPad: a journal entry whose pages are
+    two images, and the review card that shows them. Due now rather than at
+    the next 4am a real one starts at, so the demo deck has one to read."""
+    from backend.journal.storage import attachment_dir, attachment_path
+    from backend.learning.review_cards import SOURCE_TYPE, ensure_review_folder
+
+    entry_id = new_id()
+    db.execute(
+        'INSERT INTO journal_entries (id, content, raw_content, title, tags, created_at, updated_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (entry_id, '', None, 'Fern life cycle', tags_json(['study']), ts(3), ts(3)),
+    )
+    for position, label in enumerate(['Notes p1: spores, prothallus', 'Notes p2: sporophyte']):
+        attachment_id = new_id()
+        attachment_dir(attachment_id).mkdir(parents=True, exist_ok=True)
+        img_path = attachment_path(attachment_id, 'jpg')
+        placeholder_image(img_path, label, size=(768, 1024), color=(80, 100, 90))
+        db.execute(
+            'INSERT INTO journal_attachments (id, entry_id, kind, name, path, mime, size, position, created_at)'
+            " VALUES (?, ?, 'image', ?, ?, 'image/jpeg', ?, ?, ?)",
+            (attachment_id, entry_id, f'Notes p{position + 1}.jpg', str(img_path),
+             img_path.stat().st_size, position, ts(3)),
+        )
+    db.execute(
+        'INSERT INTO learning_cards (id, folder_id, question, answer, state, kind, source_type,'
+        ' source_id, due, created_at, updated_at)'
+        " VALUES (?, ?, 'For review', '', 'active', 'review', ?, ?, ?, ?, ?)",
+        (new_id(), ensure_review_folder(db), SOURCE_TYPE, entry_id, ts(1), ts(3), ts(3)),
+    )
 
 
 def seed_cookbook(db):
@@ -1470,6 +1503,41 @@ def seed_apple_health(db):
         )
 
 
+def seed_location(db):
+    """The phone's location trail (backend/location/), so the Journal shows a
+    map card for today and yesterday: a morning at home, a recorded walk
+    downtown, an afternoon there, and coarse fixes on the way back -- the same
+    mix of fine routes and sparse jumps the phone really uploads. The seeded
+    journal entries sit near 43.6532,-79.3832, so they land on the map too."""
+    import math
+
+    received = ts(0)
+    rows = []
+    for days_ago in (0, 1):
+        start, _ = day_bounds(today_key(days_ago))
+        home, downtown = (43.6677, -79.3948), (43.6532, -79.3832)
+        rows.append((f'visit-{start}-home', start + 3 * 3600, today_key(days_ago), *home, 25.0,
+                     None, None, 'visit', start + 5 * 3600, received))
+        walk_start = start + 5 * 3600 + 120
+        for i in range(40):
+            f = i / 39
+            lat = home[0] + (downtown[0] - home[0]) * f
+            lon = home[1] + (downtown[1] - home[1]) * f + 0.0012 * math.sin(f * math.pi * 3)
+            rows.append((f'fix-{start}-{i:03d}', walk_start + i * 45, today_key(days_ago), lat, lon,
+                         8.0, 90.0, 1.4, 'fine', None, received))
+        arrive = walk_start + 40 * 45 + 60
+        rows.append((f'visit-{start}-downtown', arrive, today_key(days_ago), *downtown, 30.0,
+                     None, None, 'visit', arrive + 3 * 3600, received))
+        for i, (lat, lon) in enumerate(((43.6600, -79.3790), (43.6650, -79.3900))):
+            rows.append((f'sig-{start}-{i}', arrive + 3 * 3600 + (i + 1) * 900, today_key(days_ago),
+                         lat, lon, 300.0, None, None, 'coarse', None, received))
+    db.executemany(
+        'INSERT INTO location_points (id, fix_ts, day_key, latitude, longitude, accuracy_m, altitude_m,'
+        ' speed_mps, kind, departed_ts, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        rows,
+    )
+
+
 def _seed_weather(db):
     """The Lifestyle weather strip: a day's sunrise/sunset, its resolved
     location, and the hourly series drawn across it."""
@@ -2213,6 +2281,7 @@ def main() -> None:
     seed_lifestyle(db)
     seed_pomodoro(db)
     seed_apple_health(db)
+    seed_location(db)
     seed_piano(db)
     seed_practice(db)
     seed_notes(db)

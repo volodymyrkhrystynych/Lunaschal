@@ -136,4 +136,24 @@ existing chapter bodies or changing their IDs and reading state.
 
 ## Reading spans (`fic_reading_spans`)
 
-A chapter open **and being scrolled** is recorded as reading time, so the briefing's day reconstruction (`backend/briefing_events.py`, `reading:` sources) can propose a leisure-reading block with no commentary written at all. One span is one continuous stretch of scrolling in one chapter: `src/lib/readingSpans.ts` holds the rules (five idle minutes end a span, each pause adds at most three minutes of active time — `GAP_CAP_SECONDS`, mirrored as `_SPAN_GAP_CAP` in the route), `src/components/Fanfic/useReadingSpans.ts` feeds it. Only scrolls within three seconds of a wheel/touch/key/pointer input count, because the reader scrolls itself (to the top on a chapter change, to a bookmark on restore) and that proves nothing; a hidden tab counts nothing either. Spans are client-minted ids sent through the offline queue to `PUT /api/fanfic/<fic>/reading-spans/<id>`, which only ever moves a span forward, so a replayed or out-of-order heartbeat is harmless. Spans under a minute of active time are left out of the briefing as accidental opens.
+A chapter open **and being scrolled** is recorded as reading time. Calendar's day
+view projects these spans directly through `GET /api/calendar/reading/<date>`
+onto a leisure line beside the hour labels, bounded by the existing wake/sleep
+times (unknown ends use the 4am day edges). Clicking or keyboard-activating the
+line reveals titles and chapter positions; labels start hidden. No event rows
+or approval steps are needed, and existing spans appear retrospectively. The
+briefing keeps `reading:` sources as chronology anchors but cannot stage events
+citing them, or proposals based solely on chapter commentary. Older pending
+reading-only reconstruction cards are hidden; resolved history is preserved.
+
+One span is one continuous stretch of scrolling in one chapter:
+`src/lib/readingSpans.ts` holds the rules (five idle minutes end a span, each pause
+adds at most three minutes of active time — `GAP_CAP_SECONDS`, mirrored as
+`_SPAN_GAP_CAP` in the route), `src/components/Fanfic/useReadingSpans.ts` feeds it.
+Only scrolls within three seconds of a wheel/touch/key/pointer input count,
+because restored scroll positions prove nothing; a hidden tab counts nothing
+either. Spans are client-minted ids sent through the offline queue to
+`PUT /api/fanfic/<fic>/reading-spans/<id>`, which only moves a span forward, so
+replayed or out-of-order heartbeats are harmless. Successful writes invalidate
+Calendar queries. Spans under a minute of active time are omitted as accidental
+opens. PDF reading has no chapter spans and is not tracked by this mechanism.

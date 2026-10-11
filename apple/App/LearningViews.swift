@@ -124,6 +124,9 @@ private struct LearningReviewPane: View {
             } else if let result = session.result {
                 LearningResultCard(learning: learning, session: session, result: result)
                     .id(result.id)
+            } else if let card = session.card, card.isReview {
+                LearningReadCard(learning: learning, session: session, card: card)
+                    .id(card.id)
             } else if let card = session.card {
                 LearningAnswerCard(learning: learning, session: session, card: card)
                     .id(card.id)
@@ -293,6 +296,81 @@ private struct LearningResultCard: View {
     private func suggestion(_ grade: LearningGrade?) -> LearningRating? {
         if case let .done(_, suggested, _) = grade { return suggested }
         return nil
+    }
+}
+
+/// A review card: the pages of the notebook it was saved from, stacked down
+/// one scroll, and the ratings at the bottom once they've been read. There is
+/// no back side and nothing to answer.
+private struct LearningReadCard: View {
+    @ObservedObject var learning: LearningModel
+    let session: LearningSession
+    let card: LearningCard
+
+    var body: some View {
+        let pages = card.review?.pages ?? []
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                LearningStatsLine(stats: learning.stats)
+                LearningProgress(label: "Card", position: session.position, total: session.total, tint: .accentColor)
+                Label(card.review?.title ?? "For review", systemImage: "book.pages")
+                    .font(.title3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if pages.isEmpty {
+                    ContentUnavailableView("Pages still uploading", systemImage: "icloud.and.arrow.up",
+                                           description: Text("This entry's pages haven't reached the server yet."))
+                }
+                ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
+                    LearningReviewPage(learning: learning, page: page)
+                        .accessibilityLabel("Page \(index + 1) of \(pages.count)")
+                        .accessibilityIdentifier("learning-review-page-\(index + 1)")
+                }
+                Text("How well do you remember this?")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                HStack(spacing: 8) {
+                    ForEach(LearningRating.allCases) { rating in
+                        LearningRatingButton(rating: rating, suggested: false) {
+                            Task { await learning.rateReview(rating) }
+                        }
+                        .disabled(learning.sending)
+                    }
+                }
+            }
+            .padding()
+        }
+        .accessibilityIdentifier("learning-review-card")
+    }
+}
+
+/// One page, fit to the width, fetched when it scrolls near.
+private struct LearningReviewPage: View {
+    @ObservedObject var learning: LearningModel
+    let page: LearningReviewPages.Page
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else if failed {
+                Label("Couldn't load this page", systemImage: "exclamationmark.triangle")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, minHeight: 240)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .task(id: page.id) {
+            image = await learning.reviewPage(page)
+            failed = image == nil
+        }
     }
 }
 
@@ -496,7 +574,8 @@ private struct LearningBrowsePane: View {
                     .listRowBackground(Color.clear)
             }
             ForEach(learning.cards) { card in
-                Button { editing = card } label: { LearningBrowseRow(card: card) }
+                // A review card has no wording to edit; it can still be deleted.
+                Button { if !card.isReview { editing = card } } label: { LearningBrowseRow(card: card) }
                     .buttonStyle(.plain)
                     .swipeActions {
                         Button("Delete", role: .destructive) { deleting = card }
@@ -531,8 +610,13 @@ private struct LearningBrowseRow: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Text(card.question).font(.body).lineLimit(3)
-            Text(card.answer).font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
+            if card.isReview {
+                Label(card.review?.title ?? "For review", systemImage: "book.pages").font(.body).lineLimit(2)
+                Text("\(card.review?.pages.count ?? 0) pages to read").font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                Text(card.question).font(.body).lineLimit(3)
+                Text(card.answer).font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
+            }
             if !card.tags.isEmpty {
                 Text(card.tags.map { "#\($0)" }.joined(separator: " ")).font(.caption).foregroundStyle(.secondary)
             }

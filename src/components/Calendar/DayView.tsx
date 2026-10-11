@@ -20,6 +20,7 @@ import { DEFAULT_DAY_ZOOM, type DayZoom } from '@/lib/calendarZoom';
 import { addDays, localDayKey } from '@/lib/dates';
 import { sleepBands } from '@/lib/sleep';
 import { DayEventLayer, type LaidOutEvent } from './DayEventLayer';
+import { ReadingTimeline } from './ReadingTimeline';
 
 /** Where the "+" button drops a new event on a day that isn't today, and where
  * such a day is scrolled to: 8am, a plausible start to a day. */
@@ -90,6 +91,12 @@ export function DayView({
   const { data: sleep } = useQuery({
     queryKey: ['calendar', 'sleep', date],
     queryFn: () => api.calendar.sleep.get(date),
+  });
+
+  const { data: reading = [] } = useQuery({
+    queryKey: ['calendar', 'reading', date],
+    queryFn: () => api.calendar.reading(date),
+    refetchInterval: 60_000,
   });
 
   const bands = useMemo(
@@ -330,7 +337,16 @@ export function DayView({
           {/* pointer-events-none so the sleep bands underneath stay tappable
               across the whole row; each EventBlock turns them back on for
               itself. */}
-          <div className="absolute left-12 right-2 top-0 bottom-0 pointer-events-none">
+          {sleep && (
+            <ReadingTimeline
+              key={date}
+              date={date}
+              sleep={sleep}
+              spans={reading}
+              zoom={zoom}
+            />
+          )}
+          <div className="absolute left-20 right-2 top-0 bottom-0 pointer-events-none">
             <DayEventLayer
               events={laidOut}
               pxPerMinute={zoom}

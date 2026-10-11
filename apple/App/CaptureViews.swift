@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import CoreLocation
 import PhotosUI
 import UniformTypeIdentifiers
 import LunaschalCore
@@ -35,9 +36,20 @@ struct CaptureRoot: View {
                     .tabItem { Label("Study", systemImage: "doc.text") }
                 NavigationStack { DrawingLibraryView(model: model) }
                     .tabItem { Label("Draw", systemImage: "pencil.tip") }
+                // Let iPadOS own overflow when Split View narrows the tab bar.
+                NavigationStack { LibraryView(model: model) }
+                    .tabItem { Label("Library", systemImage: "books.vertical") }
+                NavigationStack { JobsFeedView(capture: model) }
+                    .tabItem { Label("Jobs", systemImage: "briefcase") }
+                NavigationStack { LearningView(learning: learning) }
+                    .tabItem { Label("Learning", systemImage: "graduationcap") }
+                    .badge(learning.stats.due)
+                NavigationStack { ConnectionSettings(model: model) }
+                    .tabItem { Label("Settings", systemImage: "gear") }
+            } else {
+                NavigationStack { MoreMenu(model: model, learning: learning) }
+                    .tabItem { Label("More", systemImage: "line.3.horizontal") }
             }
-            NavigationStack { MoreMenu(model: model, learning: learning) }
-                .tabItem { Label("More", systemImage: "line.3.horizontal") }
         }
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
@@ -208,6 +220,7 @@ private struct CaptureComposer: View {
     @State private var saving = false
     @State private var confirmingDiscard = false
     @FocusState private var typing: Bool
+    @State private var typingText = false
 
     private var links: [String] { draftLinks.split(separator: "\n").map(String.init) }
     private var linkList: Binding<[String]> {
@@ -233,9 +246,13 @@ private struct CaptureComposer: View {
     var body: some View {
         Form {
             Section {
-                TextEditor(text: $text).frame(minHeight: 160).accessibilityLabel("Journal text")
-                    .focused($typing)
-                AttachmentButtons(model: model, recorder: recorder) { saved = false; typing = false }
+                CaptureEntryEditor(text: $text, focused: $typingText) { image in
+                    guard let data = image.pngData() else { return }
+                    model.stage { try $0.stageFile(data: data, name: "Pasted image \(ULID.make()).png", contentType: "image/png") }
+                    saved = false
+                }
+                .frame(minHeight: 160)
+                AttachmentButtons(model: model, recorder: recorder) { saved = false; typing = false; typingText = false }
                 if saved { Text("Saved on this device").foregroundStyle(.secondary) }
             }
             if !model.draft.isEmpty || notes != nil {
@@ -260,13 +277,13 @@ private struct CaptureComposer: View {
                 Spacer()
                 // Glass rather than a plain tint: the form scrolls under this
                 // bar, and an unblurred button prints the rows through itself.
-                Button { saveFood() } label: { Label("Save food entry", systemImage: "fork.knife") }
+                Button { saveFood() } label: { Label("Food", systemImage: "fork.knife") }
                     .buttonStyle(.glass)
                     .disabled(!canSaveFood)
                     .accessibilityHint(model.draft.files.allSatisfy(\.isFoodMedia) ? ""
                         : "Food entries hold photos, videos and recordings only.")
                 Spacer()
-                Button { save() } label: { Label("Save entry", systemImage: "checkmark") }
+                Button { save() } label: { Label("Save", systemImage: "checkmark") }
                     .buttonStyle(.borderedProminent)
                     .disabled(!canSave || saving)
             }
@@ -274,6 +291,8 @@ private struct CaptureComposer: View {
             .padding()
         }
         .onChange(of: text) { _, value in if !value.isEmpty { saved = false } }
+        .onChange(of: typing) { _, focused in if focused { typingText = false } }
+        .onChange(of: typingText) { _, focused in if focused { typing = false } }
         .alert("Discard this draft?", isPresented: $confirmingDiscard) {
             Button("Discard", role: .destructive) { discard() }
             Button("Cancel", role: .cancel) {}
@@ -284,7 +303,7 @@ private struct CaptureComposer: View {
 
     private func discard() {
         guard model.discardComposerDraft() else { return }
-        text = ""; draftLinks = ""; youtubeURL = ""; saved = false; typing = false
+        text = ""; draftLinks = ""; youtubeURL = ""; saved = false; typing = false; typingText = false
     }
 
     private func save() {
@@ -308,13 +327,13 @@ private struct CaptureComposer: View {
     }
 
     private func cleared() {
-        text = ""; draftLinks = ""; saved = true; typing = false
+        text = ""; draftLinks = ""; saved = true; typing = false; typingText = false
     }
 
     private func saveFood() {
         // Links, a half-typed URL and the notes are left where they are, for the next entry.
         if model.saveEntry(text, youtubeURLs: [], kind: .food) {
-            text = ""; saved = true; typing = false
+            text = ""; saved = true; typing = false; typingText = false
         }
     }
 }
@@ -377,7 +396,7 @@ struct AttachmentButtons: View {
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { image in
                 guard let data = image.jpegData(compressionQuality: 0.9) else { return }
-                model.stage { try $0.stageFile(data: data, name: photoName("jpg"), contentType: "image/jpeg", into: entryID) }
+                model.stage { try $0.stageFile(data: data, name: photoName("jpg"), contentType: "image/jpeg", into: entryID, capturedAt: Date()) }
                 onUse()
             }.ignoresSafeArea()
         }
@@ -463,6 +482,61 @@ struct StagedAttachmentRows: View {
     }
 }
 
+/// Keep ordinary text editing while routing clipboard pictures to the draft.
+struct CaptureEntryEditor: UIViewRepresentable {
+    @Binding var text: String
+    var focused: Binding<Bool>
+    var onPasteImage: (UIImage) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> CaptureEntryTextView {
+        let view = CaptureEntryTextView()
+        view.delegate = context.coordinator
+        view.backgroundColor = .clear
+        view.font = .preferredFont(forTextStyle: .body)
+        view.adjustsFontForContentSizeCategory = true
+        view.accessibilityLabel = "Journal text"
+        view.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        view.onPasteImage = onPasteImage
+        return view
+    }
+
+    func updateUIView(_ view: CaptureEntryTextView, context: Context) {
+        context.coordinator.parent = self
+        view.onPasteImage = onPasteImage
+        if view.text != text { view.text = text }
+        if focused.wrappedValue, !view.isFirstResponder { view.becomeFirstResponder() }
+        if !focused.wrappedValue, view.isFirstResponder { view.resignFirstResponder() }
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: CaptureEntryEditor
+        init(_ parent: CaptureEntryEditor) { self.parent = parent }
+        func textViewDidChange(_ textView: UITextView) { parent.text = textView.text }
+        func textViewDidBeginEditing(_ textView: UITextView) { parent.focused.wrappedValue = true }
+        func textViewDidEndEditing(_ textView: UITextView) { parent.focused.wrappedValue = false }
+    }
+}
+
+final class CaptureEntryTextView: UITextView {
+    var onPasteImage: ((UIImage) -> Void)?
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), UIPasteboard.general.hasImages { return true }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        let clipboard = UIPasteboard.general
+        if clipboard.hasImages, let images = clipboard.images, !images.isEmpty, let onPasteImage {
+            for image in images { onPasteImage(image) }
+            return
+        }
+        super.paste(sender)
+    }
+}
+
 /// The YouTube links going onto an entry, and the field a new one is typed in.
 struct YouTubeLinksSection: View {
     @ObservedObject var model: CaptureModel
@@ -482,6 +556,14 @@ struct YouTubeLinksSection: View {
                     .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                     .focused(typing)
                     .onSubmit { if Self.add(typed: $typed, to: $links, model: model) { onChange() } }
+                PasteButton(payloadType: String.self) { values in
+                    guard let value = values.first else { return }
+                    typed = value
+                    if Self.add(typed: $typed, to: $links, model: model) { onChange() }
+                }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Paste and add YouTube link")
+                .accessibilityIdentifier("youtube-paste")
                 Button("Add link") { if Self.add(typed: $typed, to: $links, model: model) { onChange() } }
                     .disabled(typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -557,6 +639,7 @@ struct CameraPicker: UIViewControllerRepresentable {
         let picker = UIImagePickerController()
         picker.sourceType = .camera
         if front && UIImagePickerController.isCameraDeviceAvailable(.front) { picker.cameraDevice = .front }
+        if front { picker.cameraFlashMode = .off }
         picker.delegate = context.coordinator
         return picker
     }
@@ -833,11 +916,74 @@ private struct ConnectionSettings: View {
                 Text("Hear what you got wrong. For answers given while this is on, a short summary of what you missed is read aloud on the results, using your server's text-to-speech.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            LocationTrailSettings(model: model, trail: model.trail)
             if model.healthAvailable { HealthSettings(model: model) }
             IntelligenceAvailabilityView()
         }
         .navigationTitle("Settings")
         .onAppear { address = model.server?.absoluteString ?? address }
+    }
+}
+
+/// The background trail behind the Journal's daily map. Most of this section
+/// is about permission, because that is where it goes wrong: iOS asks for
+/// Always at most once, and every later change has to be made in the Settings
+/// app, so the section says plainly what's missing and links there.
+private struct LocationTrailSettings: View {
+    @ObservedObject var model: CaptureModel
+    @ObservedObject var trail: LocationTracker
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        Section("Location") {
+            Toggle("Record where I go", isOn: Binding(
+                get: { trail.enabled },
+                set: { $0 ? trail.enable() : trail.disable() }))
+                .accessibilityIdentifier("settings-location-trail")
+            if trail.enabled {
+                if let problem {
+                    Text(problem).font(.footnote).foregroundStyle(.orange)
+                    Button("Open iOS Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                    }
+                } else {
+                    Text(trail.mode == .fine ? "Recording your route now." : "Watching for walks and places, in low-power mode.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                let status = trail.status
+                if let last = status.lastSuccess {
+                    Text("Last uploaded \(last.formatted(date: .abbreviated, time: .shortened)) · \(trail.pending.formatted()) waiting")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else if trail.pending > 0 {
+                    Text("\(trail.pending.formatted()) points waiting to upload.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                if let error = status.lastError {
+                    Text(error).font(.footnote).foregroundStyle(.red)
+                }
+                if trail.pending > 0 {
+                    Button("Upload now") { model.requestSync(manual: true) }.disabled(model.syncing)
+                }
+            }
+            Text("Records the places you stop at, and your route while you walk, run or cycle, and draws a map of each day in your journal with a pin wherever you wrote an entry. Precise GPS runs only while you're moving on foot or by bike; the rest of the day uses iOS's low-power location. Everything goes only to your own Lunaschal server.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    /// What stops the trail from being recorded, if anything.
+    private var problem: String? {
+        switch trail.authorization {
+        case .denied, .restricted:
+            return "Location access is off for Lunaschal. Turn it on and choose Always: Settings → Lunaschal → Location."
+        case .authorizedWhenInUse:
+            return "Location is set to While Using, so nothing is recorded while Lunaschal is closed. Choose Always: Settings → Lunaschal → Location."
+        case .notDetermined:
+            return nil
+        default:
+            return trail.reducedAccuracy
+                ? "Precise Location is off, so every point is blurred by kilometres. Turn on Precise Location: Settings → Lunaschal → Location."
+                : nil
+        }
     }
 }
 

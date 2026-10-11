@@ -80,6 +80,16 @@ final class NotebookTests: XCTestCase {
         XCTAssertNil(try store.setYouTube(notebook.id, url: "  ").youtubeURL)
     }
 
+    func testForReviewIsKeptPerNotebookAcrossRestart() throws {
+        let root = try directory(), store = try NotebookStore(root: root)
+        let notebook = try store.create()
+        XCTAssertFalse(notebook.isForReview)
+        XCTAssertTrue(try store.setForReview(notebook.id, true).isForReview)
+        XCTAssertTrue(try NotebookStore(root: root).notebook(notebook.id).isForReview)
+        XCTAssertFalse(try store.setForReview(notebook.id, false).isForReview)
+        XCTAssertFalse(try NotebookStore(root: root).notebook(notebook.id).isForReview)
+    }
+
     func testInboxKeepsScreenshotsUntilCleared() throws {
         let root = try directory(), store = try NotebookStore(root: root)
         try store.enqueueScreenshot(Data([1]), now: Date(timeIntervalSince1970: 1))

@@ -173,21 +173,21 @@ Compare meaning with every existing calendar occurrence and previous suggestion
 fill empty time: every activity needs real evidence, cited by sourceIds.
 Read the entire day before deciding chronology. An evening entry may describe
 morning chores before the first appointment. Its recording time is not the
-activity time. Several chapter-commentary entries between two appointments can
-support one leisure/reading block, NOT events from the fictional story. Likewise,
+activity time. In-app reading is already displayed automatically on the calendar's
+leisure timeline. Never suggest an event for it, including chapter commentary.
+Never make events from the fictional story. Likewise,
 video transcripts, quoted material and study notes describe content consumed,
 not things that happened to the user. A newspaper merely archived but unopened
 does not prove reading. "reading" sources are different: each is a stretch in
 which a story chapter was open AND being scrolled, so startedAt..endedAt is
-direct evidence the user was reading then, even with no commentary. Merge
-consecutive or closely spaced spans (several chapters, even several stories)
-into one leisure-reading block from the first startedAt to the last endedAt,
-splitting only at a long gap or another activity. activeMinutes below the wall
-span means pauses. Name the story in the title; never make events from what
-happens in the story. Group related evidence into meaningful activities.
+direct evidence the user was reading then, even with no commentary. These are
+already recorded leisure, supplied only as chronology anchors for other activities.
+Do not cite reading sources in proposed events. Group other related evidence
+into meaningful activities.
 For example, chores before two known events, chapter commentary between them,
-and a later account of talking with a brother can yield three suggestions:
-morning chores, leisure reading, and family time. Never duplicate the two events.
+and a later account of talking with a brother can yield two suggestions:
+morning chores and family time. Reading is already on the leisure timeline.
+Never duplicate the two events.
 Infer approximate time ranges only when supported by anchors or the account;
 explain estimates and uncertainty in evidence. Leave unknown clocks null. Do
 not stretch a few observations to occupy an entire gap without support.
@@ -284,6 +284,12 @@ def stage_events(db, proposed, context) -> list[dict]:
         ids = item.get('sourceIds')
         evidence = item.get('evidence')
         if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and i in source_map for i in ids):
+            continue
+        # The reader's durable spans already appear on the calendar. Enforce
+        # this even when a model ignores the reconstruction prompt.
+        if any(i.startswith('reading:') for i in ids):
+            continue
+        if all(source_map[i].get('chapterCommentary') for i in ids):
             continue
         if not isinstance(evidence, str) or not evidence.strip():
             continue

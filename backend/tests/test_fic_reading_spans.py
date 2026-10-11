@@ -105,7 +105,7 @@ def test_gather_day_reports_scrolled_chapters_as_reading(client):
     assert 'reading' in RECONSTRUCTION_PROMPT and 'scrolled' in RECONSTRUCTION_PROMPT
 
 
-def test_a_reading_block_can_be_staged_from_spans_alone(client):
+def test_reading_spans_cannot_be_staged_as_duplicate_events(client):
     fic_id, (one, two) = make_fic(title='Lighthouse', chapters=[('Arrival', 'a'), ('Storm', 'b')])
     span(client, fic_id, one, 'a', startedAt=START + 17 * 3600, endedAt=START + 17 * 3600 + 1500,
          activeSeconds=1400)
@@ -118,5 +118,40 @@ def test_a_reading_block_can_be_staged_from_spans_alone(client):
         'time': '21:00', 'endTime': '22:30', 'location': '', 'tags': ['leisure'],
         'evidence': 'Reader scroll spans 21:00–22:30.', 'sourceIds': ['reading:a', 'reading:b'],
     }], ctx)
-    assert len(staged) == 1
-    assert [s['label'] for s in staged[0]['sources']] == ['Lighthouse — Arrival', 'Lighthouse — Storm']
+    assert staged == []
+
+
+def test_calendar_reading_is_automatic_and_clipped_to_the_4am_day(client):
+    fic_id, (one, two) = make_fic(title='Lighthouse', chapters=[('Arrival', 'a'), ('Storm', 'b')])
+    span(client, fic_id, one, 'across', startedAt=START - 600, endedAt=START + 600, activeSeconds=1100)
+    span(client, fic_id, two, 'late', startedAt=END - 600, endedAt=END + 600, activeSeconds=1100)
+    span(client, fic_id, two, 'skim', activeSeconds=40)
+    span(client, fic_id, two, 'outside', startedAt=END, endedAt=END + 900, activeSeconds=900)
+    response = client.get(f'/api/calendar/reading/{DAY}')
+    assert response.status_code == 200
+    assert response.get_json() == [
+        {'id': 'across', 'title': 'Lighthouse', 'chapterNumber': 1, 'startedAt': START, 'endedAt': START + 600},
+        {'id': 'late', 'title': 'Lighthouse', 'chapterNumber': 2, 'startedAt': END - 600, 'endedAt': END},
+    ]
+    # The existing span's heartbeat moves the fill, without creating events.
+    span(client, fic_id, two, 'late', startedAt=END - 600, endedAt=END + 1200, activeSeconds=1600)
+    assert len(client.get(f'/api/calendar/reading/{DAY}').get_json()) == 2
+    assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 0
+
+
+def test_calendar_reading_validates_date_and_returns_empty_days(client):
+    assert client.get('/api/calendar/reading/not-a-date').status_code == 400
+    assert client.get(f'/api/calendar/reading/{DAY}').get_json() == []
+
+
+def test_chapter_commentary_does_not_generate_a_reading_suggestion(client):
+    ctx = {'day': DAY, 'sources': [{
+        'sourceId': 'journal:comment', 'recordedAt': '2026-07-13T21:00:00',
+        'chapterCommentary': [{'story': 'Lighthouse', 'chapter': 'Arrival'}],
+    }]}
+    proposal = {
+        'title': 'Leisure reading', 'description': 'A chapter', 'date': DAY,
+        'time': '21:00', 'endTime': '21:30', 'location': '', 'tags': ['leisure'],
+        'evidence': 'Chapter commentary', 'sourceIds': ['journal:comment'],
+    }
+    assert stage_events(get_db(), [proposal], ctx) == []

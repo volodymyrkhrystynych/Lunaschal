@@ -322,6 +322,28 @@ CREATE TABLE IF NOT EXISTS health_daily (
     PRIMARY KEY (date, type)
 );
 
+-- The iPhone's background location trail (backend/location/), uploaded in
+-- batches like Health. Keyed by an id the phone minted, so a batch replayed
+-- after a lost reply changes nothing -- and a visit, which iOS reports once on
+-- arrival and again on departure, is the same row both times. Times are REAL
+-- unix seconds read raw (`*_ts`), as in health_samples. `day_key` is the 4am
+-- day of the fix, stored because grouping millions of fixes by a computed day
+-- is the Journal card's whole query.
+CREATE TABLE IF NOT EXISTS location_points (
+    id TEXT PRIMARY KEY,
+    fix_ts REAL NOT NULL,
+    day_key TEXT NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    accuracy_m REAL,
+    altitude_m REAL,
+    speed_mps REAL,
+    kind TEXT NOT NULL,                   -- 'fine' | 'coarse' | 'visit'
+    departed_ts REAL,                     -- a visit's departure; NULL while still there
+    received_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_location_points_day ON location_points(day_key, fix_ts);
+
 CREATE TABLE IF NOT EXISTS mcp_servers (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
@@ -339,6 +361,11 @@ CREATE TABLE IF NOT EXISTS learning_folders (
     name TEXT UNIQUE NOT NULL,
     position INTEGER NOT NULL DEFAULT 0,
     evidence_provider_id TEXT REFERENCES mcp_servers(id) ON DELETE SET NULL,
+    -- Set on a folder the app owns ('review' = For review): it is created at
+    -- startup and cannot be renamed or deleted. NULL for the user's own.
+    -- Unique through idx_learning_folders_system, which connection.py makes
+    -- (ALTER TABLE ADD COLUMN cannot carry UNIQUE for an older database).
+    system_key TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -359,12 +386,28 @@ CREATE TABLE IF NOT EXISTS learning_cards (
     generation_context TEXT,
     fsrs_state TEXT,
     due INTEGER,
+    -- 'review' is a card with no back side: the pages of a journal entry the
+    -- user wrote (source_type 'journal_review', source_id = the entry), read
+    -- and self-rated. backend/learning/review_cards.py.
+    kind TEXT NOT NULL DEFAULT 'qa' CHECK(kind IN ('qa','review')),
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_learning_cards_due ON learning_cards(state, due);
 CREATE INDEX IF NOT EXISTS idx_learning_cards_folder ON learning_cards(folder_id, state);
+-- One review card per entry, so a replayed create cannot make a second.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_cards_journal_review
+    ON learning_cards(source_id) WHERE source_type = 'journal_review';
+
+-- A review card is the entry's pages; with the entry gone it has nothing to
+-- show. A trigger rather than a line in each of journal.py's delete paths.
+CREATE TRIGGER IF NOT EXISTS delete_review_card_with_journal_entry
+AFTER DELETE ON journal_entries
+BEGIN
+    DELETE FROM learning_cards
+    WHERE source_type = 'journal_review' AND source_id = OLD.id;
+END;
 
 CREATE TABLE IF NOT EXISTS learning_reviews (
     id TEXT PRIMARY KEY,

@@ -491,8 +491,18 @@ export interface LearningCard {
   derivedFrom: string | null;
   revisedFrom: string | null;
   due: string | null;
+  /** 'review' has no back side: its pages are read and self-rated. */
+  kind: 'qa' | 'review';
+  /** A review card's journal entry and its pages, in order. */
+  review?: LearningReviewPages;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface LearningReviewPages {
+  entryId: string;
+  title: string | null;
+  pages: { id: string; name: string; url: string }[];
 }
 
 export interface LearningStats {
@@ -517,6 +527,8 @@ export interface LearningFolder {
   activeCount: number;
   pendingCount: number;
   dueCount: number;
+  /** The app's own For review folder: cannot be renamed or deleted. */
+  system: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -1548,10 +1560,10 @@ export interface TodoPayload {
 
 // A day-scoped, ephemeral to-do shown in the Chat tab's bar above the input
 // box. Written instantly by the chat delegate's add_todos tool or the morning
-// briefing — there is no accept step. Resets at the next day boundary: the
-// list endpoint only ever returns today's rows, so an unfinished item from a
-// prior day just stops showing rather than needing to be purged.
+// briefing — there is no accept step. Yesterday's items remain available for
+// one day of review and promotion, using the same 4am day boundary.
 export interface ChatTodoItem {
+  previousDay?: boolean;
   id: string;
   dayKey: string;
   title: string;
@@ -1612,6 +1624,19 @@ export interface JournalNewspaper extends NewspaperIssue {
   archivedAt: string;
   markedPages: number;
   pages: NewspaperPageImage[];
+}
+
+/** A day the phone recorded a location trail, as the Journal feed's map card.
+ *  Sits at the day's last second (`archivedAt`), as the day's summary. The
+ *  image URL carries a version, so it changes whenever a late point or a new
+ *  located entry would change the picture (backend/location/days.py). */
+export interface JournalLocationDay {
+  date: string;
+  archivedAt: string;
+  pointCount: number;
+  placeCount: number;
+  entryCount: number;
+  imageUrl: string;
 }
 
 export interface NewspaperDownload {
@@ -3794,6 +3819,10 @@ export const api = {
   },
 
   calendar: {
+    reading: (date: string) =>
+      get<import('../lib/calendarReading').CalendarReadingSpan[]>(
+        `/api/calendar/reading/${date}`
+      ),
     listByRange: (start: string, end: string) =>
       get<CalendarEvent[]>(`/api/calendar?start=${start}&end=${end}`),
     listByDate: (date: string) =>
@@ -4815,6 +4844,9 @@ export const api = {
     purge: () => post<{ purged: number }>('/api/torrents/purge'),
   },
 
+  location: {
+    journal: () => get<JournalLocationDay[]>('/api/location/journal'),
+  },
   newspapers: {
     pressreader: () => get<PressReaderStatus>('/api/newspapers/pressreader'),
     setAutoDownload: (autoDownload: boolean) =>

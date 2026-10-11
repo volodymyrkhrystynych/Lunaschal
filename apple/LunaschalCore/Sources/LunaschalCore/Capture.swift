@@ -48,6 +48,7 @@ public struct CaptureFile: Codable, Equatable, Identifiable {
     public let attachmentID: String
     public let name: String
     public let contentType: String?
+    public let capturedAt: Date?
 
     public var id: String { attachmentID }
     public var isImage: Bool { contentType?.hasPrefix("image/") == true }
@@ -56,10 +57,11 @@ public struct CaptureFile: Codable, Equatable, Identifiable {
         ["image/", "video/", "audio/"].contains { contentType?.hasPrefix($0) == true }
     }
 
-    public init(name: String, contentType: String?, now: Date = Date()) {
+    public init(name: String, contentType: String?, capturedAt: Date? = nil, now: Date = Date()) {
         attachmentID = ULID.make(now: now)
         self.name = name
         self.contentType = contentType
+        self.capturedAt = capturedAt
     }
 }
 
@@ -143,6 +145,9 @@ public struct Capture: Codable, Identifiable, Equatable {
     /// once this one lands, and sync holds this one back until they have
     /// landed themselves, so the old one cannot arrive after its replacement.
     public internal(set) var replaces: [String] = []
+    /// A notebook saved with For review on: the server makes the entry a
+    /// learning card whose front is these pages.
+    public internal(set) var forReview = false
 
     /// The entry everything here is filed under.
     public var targetID: String { entryID ?? id }
@@ -197,7 +202,7 @@ public struct Capture: Codable, Identifiable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, attachmentID, createdAt, mode, kind, text, links, files, clips, state, lastError, snapshot
-        case latitude, longitude, weather, ficID, chapterID, entryID, mayBeOnServer, replaces
+        case latitude, longitude, weather, ficID, chapterID, entryID, mayBeOnServer, replaces, forReview
     }
 
     // Manifests written before an entry could hold several links stored one
@@ -224,6 +229,7 @@ public struct Capture: Codable, Identifiable, Equatable {
         entryID = try c.decodeIfPresent(String.self, forKey: .entryID)
         mayBeOnServer = try c.decodeIfPresent(Bool.self, forKey: .mayBeOnServer)
         replaces = try c.decodeIfPresent([String].self, forKey: .replaces) ?? []
+        forReview = try c.decodeIfPresent(Bool.self, forKey: .forReview) ?? false
         files = try c.decodeIfPresent([CaptureFile].self, forKey: .files) ?? []
         clips = try c.decodeIfPresent([CaptureClip].self, forKey: .clips) ?? []
         if let links = try c.decodeIfPresent([CaptureLink].self, forKey: .links) {

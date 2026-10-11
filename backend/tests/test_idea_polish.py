@@ -78,7 +78,12 @@ def test_voice_capture_fills_in_content_from_polish(client, monkeypatch):
     assert body['content'] == 'A grid of habits in the day view.'
 
 
-def test_voice_capture_leaves_content_empty_when_ai_unavailable(client):
+def test_voice_capture_leaves_content_empty_when_ai_unavailable(client, monkeypatch):
+    # Stub the model out rather than assume nothing answers on :8080 — on a
+    # machine running llama-server the real polish would fill `content` in.
+    def _boom(*a, **k):
+        raise RuntimeError('Connection error.')
+    monkeypatch.setattr('backend.ai.idea_polish.chat_text', _boom)
     r = client.post('/api/ideas/voice', json={'rawContent': 'grid of habits'})
     idea_id = r.get_json()['id']
     body = client.get(f'/api/ideas/{idea_id}').get_json()

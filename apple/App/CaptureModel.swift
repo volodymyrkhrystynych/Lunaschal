@@ -115,6 +115,12 @@ final class CaptureModel: ObservableObject {
     private let syncer: CaptureSync
     private let dailySyncer: DailySync
     private let healthSyncer: HealthSync
+    /// The background location trail behind the Journal's daily map.
+    let trail: LocationTracker
+    private let trailSyncer: TrailSync
+    /// One upload at a time: two passes draining the same outbox would each
+    /// drop the batch the other had already dropped.
+    private var trailUploading = false
     private lazy var healthSource: HealthKitSource? = HealthKitSource.isAvailable ? HealthKitSource() : nil
     private let replicaSyncer: ReplicaSync
     private let libraryWorker: LibraryDownload
@@ -158,6 +164,9 @@ final class CaptureModel: ObservableObject {
         dailySyncer = DailySync(store: daily)
         healthState = try HealthStateStore(root: store.root.appendingPathComponent("apple-health", isDirectory: true))
         healthSyncer = HealthSync(store: healthState)
+        let trailOutbox = try TrailOutbox(root: store.root.appendingPathComponent("location-trail", isDirectory: true))
+        trail = LocationTracker(outbox: trailOutbox)
+        trailSyncer = TrailSync(outbox: trailOutbox)
         workouts = try WorkoutStore(root: store.root.appendingPathComponent("workouts", isDirectory: true))
         workoutSyncer = WorkoutSync(store: workouts)
         pomodoros = try PomodoroStore(root: store.root.appendingPathComponent("pomodoro-outbox", isDirectory: true))
@@ -218,6 +227,32 @@ final class CaptureModel: ObservableObject {
         location.onFix = { [weak self] fix in
             self?.unsentFix = (fix.coordinate.latitude, fix.coordinate.longitude)
             self?.requestSync()
+        }
+        trail.onPoints = { [weak self] in self?.uploadTrailIfDue() }
+    }
+
+    /// Points arrive mostly while the app is in the background, woken by a
+    /// visit or a walk, where a full sync pass is far too much to start. So the
+    /// trail uploads on its own, when enough has piled up or it's been a while;
+    /// what's left is picked up by the next full pass.
+    private func uploadTrailIfDue() {
+        guard !trailUploading, let api = sharedAPI(cellular: allowCellular) else { return }
+        let status = trail.status
+        guard trail.pending >= 100 || status.lastAttempt.map({ Date().timeIntervalSince($0) > 10 * 60 }) ?? true
+        else { return }
+        Task { try? await syncTrail(using: api) }
+    }
+
+    private func syncTrail(using api: JournalAPI) async throws {
+        guard !trailUploading, TrailSync.isDue(trail.outbox) else { return }
+        trailUploading = true
+        defer { trailUploading = false; trail.refreshStatus() }
+        do {
+            try await trailSyncer.run(using: api)
+        } catch {
+            // The server refusing or garbling a batch is shown in Settings and
+            // doesn't fail the rest of the pass; being offline still does.
+            if Task.isCancelled || error is CancellationError || error is URLError || error is HTTPFailure { throw error }
         }
     }
 
@@ -514,7 +549,11 @@ final class CaptureModel: ObservableObject {
         // The notes' own video goes with them.
         if let video = notebook?.youtubeURL, !links.contains(video) { links.append(video) }
         do {
+            // Read from the store, not the copy passed in: the switch may have
+            // been flipped in the editor since the composer last looked.
+            let forReview = notebook.map { (try? notebooks.notebook($0.id))?.isForReview ?? $0.isForReview } ?? false
             let capture = try store.commitDraft(text: text, youtubeURLs: links, kind: kind, images: pages,
+                                                forReview: forReview,
                                                 location: location.recent)
             if let notebook {
                 do { try notebooks.markSaved(notebook.id, captureID: capture.id) }
@@ -603,6 +642,7 @@ final class CaptureModel: ObservableObject {
             let capture = try store.commitImages(text: text, youtubeURLs: notebook.youtubeURL.map { [$0] } ?? [],
                                                  images: pages,
                                                  replaces: notebook.newspaperDate == nil ? [] : notebook.savedCaptureIDs,
+                                                 forReview: notebook.isForReview,
                                                  location: location.recent)
             let saved = try notebooks.markSaved(notebook.id, captureID: capture.id)
             reloadCaptures(); requestSync()
@@ -1076,6 +1116,7 @@ final class CaptureModel: ObservableObject {
                 || !todoOutbox.list().isEmpty
                 || !jobStore.pending().isEmpty
                 || !screenshots.list().isEmpty
+                || TrailSync.isDue(trail.outbox)
                 || (healthSyncEnabled && HealthSync.isDue(healthState.status(), now: Date())), signedIn: signedIn,
             enabled: backgroundSyncEnabled, now: Date())
     }
@@ -1221,6 +1262,7 @@ final class CaptureModel: ObservableObject {
                 libraryRetryAt = Date().addingTimeInterval(600)
                 startLibraryDownload()
             }
+            try await timed("location") { try await syncTrail(using: api) }
             try await timed("health") { try await syncHealth(using: api, force: full) }
             // Once per device, after everything else has synced: never at launch,
             // where building the indexes on a large library outlasted the watchdog.
