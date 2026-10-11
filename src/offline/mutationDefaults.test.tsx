@@ -21,6 +21,7 @@ import {
   usePaperPageSave,
   usePaperImageAdd,
   usePaperPageAdd,
+  useFanficReadingSpan,
 } from './mutationDefaults';
 import { getPageSave, storePageSave } from './pageStore';
 import {
@@ -60,6 +61,45 @@ afterEach(() => {
 });
 
 describe('offline write queue', () => {
+  it('replayed reading spans refresh the leisure rail and wake/sleep bounds', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ success: true }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const qc = makeClient();
+    const readingKey = ['calendar', 'reading', '2026-07-13'];
+    const sleepKey = ['calendar', 'sleep', '2026-07-13'];
+    qc.setQueryData(readingKey, []);
+    qc.setQueryData(sleepKey, {});
+    const { result } = renderHook(() => useFanficReadingSpan(), {
+      wrapper: wrapperFor(qc),
+    });
+    onlineManager.setOnline(false);
+    act(() =>
+      result.current.mutate({
+        id: 'span',
+        ficId: 'fic',
+        chapterId: 'chapter',
+        startedAt: 1000,
+        endedAt: 1300,
+        activeSeconds: 300,
+        startFraction: 0,
+        endFraction: 1,
+      })
+    );
+    await waitFor(() => expect(result.current.isPaused).toBe(true));
+    expect(fetchMock).not.toHaveBeenCalled();
+    onlineManager.setOnline(true);
+    await act(async () => {
+      await qc.resumePausedMutations();
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(qc.getQueryState(readingKey)?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(sleepKey)?.isInvalidated).toBe(true);
+    qc.clear();
+  });
+
   it('journal create: optimistic insert, pause offline, replay with the client id on reconnect', async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,

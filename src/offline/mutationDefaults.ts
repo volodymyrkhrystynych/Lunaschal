@@ -839,10 +839,13 @@ const fanficProgressCfg = (
 });
 
 // Heartbeats only move a span forward server-side, so replaying them in any
-// order is harmless; nothing on screen reads spans, so nothing to invalidate.
-const fanficReadingSpanCfg = (): Cfg<{ success: boolean }, ReadingSpan> => ({
+// order is harmless. The calendar rail and derived sleep bounds read spans.
+const fanficReadingSpanCfg = (
+  qc: QueryClient
+): Cfg<{ success: boolean }, ReadingSpan> => ({
   ...ONLINE,
   mutationFn: span => api.fanfic.saveReadingSpan(span),
+  onSuccess: () => qc.invalidateQueries({ queryKey: ['calendar'] }),
 });
 
 const fanficSetReadCfg = (
@@ -1107,7 +1110,7 @@ export function registerOfflineMutationDefaults(qc: QueryClient): void {
     [MUTATION_KEYS.fanficSetRead, fanficSetReadCfg(qc) as Cfg<unknown, never>],
     [
       MUTATION_KEYS.fanficReadingSpan,
-      fanficReadingSpanCfg() as Cfg<unknown, never>,
+      fanficReadingSpanCfg(qc) as Cfg<unknown, never>,
     ],
     [
       MUTATION_KEYS.writingChapterUpdate,

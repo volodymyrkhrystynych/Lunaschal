@@ -1,8 +1,8 @@
 // Reading spans: a chapter open and being scrolled is the reader's evidence
 // that the user was reading, and when. One span is one continuous stretch of
 // scrolling in one chapter; the server upserts it by id
-// (PUT /api/fanfic/<fic>/reading-spans/<id>) and the briefing's day
-// reconstruction reads the result. All times are unix seconds.
+// (PUT /api/fanfic/<fic>/reading-spans/<id>) and the calendar's leisure
+// timeline displays the result. All times are unix seconds.
 
 /** No scroll for this long ends a span; the next scroll starts a new one. */
 export const IDLE_GAP_SECONDS = 5 * 60;

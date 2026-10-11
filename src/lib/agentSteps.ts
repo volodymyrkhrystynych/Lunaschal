@@ -89,7 +89,21 @@ export function parseDelegateProposals(
   if (!metadata) return [];
   try {
     const parsed = JSON.parse(metadata);
-    return Array.isArray(parsed?.proposals) ? parsed.proposals : [];
+    if (!Array.isArray(parsed?.proposals)) return [];
+    // Older briefings offered the reader's spans as events. They now appear
+    // automatically on the leisure rail; retain resolved history and mixed
+    // evidence, but stop asking the user to approve reading-only duplicates.
+    return parsed.proposals.filter(
+      (p: DelegateProposalRecord) =>
+        !(
+          p?.kind === 'calendar' &&
+          p.status === 'pending' &&
+          p.reconstructionDay &&
+          Array.isArray(p.sources) &&
+          p.sources.length > 0 &&
+          p.sources.every(source => source?.id?.startsWith('reading:'))
+        )
+    );
   } catch {
     return [];
   }
