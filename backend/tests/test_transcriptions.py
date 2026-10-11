@@ -38,6 +38,9 @@ def _stub_stt(monkeypatch, text='hello world'):
     # The multi-backend handles are cached for the process lifetime, so a stub
     # from one test must not survive into the next.
     stt.reset_draft_handles()
+    # Nor must the polish/merge pass reach a llama-server that happens to be
+    # running locally; tests that want it switch it back on themselves.
+    monkeypatch.setattr(transcribe_polish, 'is_ai_configured', lambda: False)
 
 
 @pytest.fixture(autouse=True)
