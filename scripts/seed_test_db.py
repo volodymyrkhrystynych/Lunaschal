@@ -1465,6 +1465,41 @@ def seed_apple_health(db):
         )
 
 
+def seed_location(db):
+    """The phone's location trail (backend/location/), so the Journal shows a
+    map card for today and yesterday: a morning at home, a recorded walk
+    downtown, an afternoon there, and coarse fixes on the way back -- the same
+    mix of fine routes and sparse jumps the phone really uploads. The seeded
+    journal entries sit near 43.6532,-79.3832, so they land on the map too."""
+    import math
+
+    received = ts(0)
+    rows = []
+    for days_ago in (0, 1):
+        start, _ = day_bounds(today_key(days_ago))
+        home, downtown = (43.6677, -79.3948), (43.6532, -79.3832)
+        rows.append((f'visit-{start}-home', start + 3 * 3600, today_key(days_ago), *home, 25.0,
+                     None, None, 'visit', start + 5 * 3600, received))
+        walk_start = start + 5 * 3600 + 120
+        for i in range(40):
+            f = i / 39
+            lat = home[0] + (downtown[0] - home[0]) * f
+            lon = home[1] + (downtown[1] - home[1]) * f + 0.0012 * math.sin(f * math.pi * 3)
+            rows.append((f'fix-{start}-{i:03d}', walk_start + i * 45, today_key(days_ago), lat, lon,
+                         8.0, 90.0, 1.4, 'fine', None, received))
+        arrive = walk_start + 40 * 45 + 60
+        rows.append((f'visit-{start}-downtown', arrive, today_key(days_ago), *downtown, 30.0,
+                     None, None, 'visit', arrive + 3 * 3600, received))
+        for i, (lat, lon) in enumerate(((43.6600, -79.3790), (43.6650, -79.3900))):
+            rows.append((f'sig-{start}-{i}', arrive + 3 * 3600 + (i + 1) * 900, today_key(days_ago),
+                         lat, lon, 300.0, None, None, 'coarse', None, received))
+    db.executemany(
+        'INSERT INTO location_points (id, fix_ts, day_key, latitude, longitude, accuracy_m, altitude_m,'
+        ' speed_mps, kind, departed_ts, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        rows,
+    )
+
+
 def _seed_weather(db):
     """The Lifestyle weather strip: a day's sunrise/sunset, its resolved
     location, and the hourly series drawn across it."""
@@ -2208,6 +2243,7 @@ def main() -> None:
     seed_lifestyle(db)
     seed_pomodoro(db)
     seed_apple_health(db)
+    seed_location(db)
     seed_piano(db)
     seed_practice(db)
     seed_notes(db)

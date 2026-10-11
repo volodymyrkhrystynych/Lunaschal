@@ -60,10 +60,15 @@ targets:
         NSMicrophoneUsageDescription: Record thoughts and save the original audio in your journal.
         NSCameraUsageDescription: Take photos to attach to your journal entries.
         NSLocationWhenInUseUsageDescription: Record where a journal or food entry was written, and show the weather there.
+        # Without this key iOS never offers "Always" at all -- the Settings page
+        # shows only Never / Ask Next Time / While Using. The background trail
+        # (LocationTracker, backend/location/) needs Always.
+        NSLocationAlwaysAndWhenInUseUsageDescription: With Always, Lunaschal records where you go during the day, even in the background, and draws a daily map in your journal showing your route and where each entry was written. It only goes to your own Lunaschal server.
+        NSMotionUsageDescription: Notice when you're walking, running or cycling, so precise GPS is on only then and your battery lasts the rest of the day.
         NSLocalNetworkUsageDescription: Connect to your personal Lunaschal server.
         NSHealthShareUsageDescription: Copy your sleep, workouts, exercise minutes and other Health data to your own Lunaschal server, so wake and sleep times fill in automatically and you can analyse it there.
         NSHealthUpdateUsageDescription: Lunaschal doesn't write to Health; it only copies your Health data to your own Lunaschal server.
-        UIBackgroundModes: [audio, processing]
+        UIBackgroundModes: [audio, processing, location]
         BGTaskSchedulerPermittedIdentifiers: [com.lunaschal.mobile.sync]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

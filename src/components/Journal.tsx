@@ -54,6 +54,7 @@ import type {
   DatedConversation,
   JournalEntry,
   JournalNewspaper,
+  JournalLocationDay,
   JournalPaper,
   JournalStudySource,
   JournalVoiceDraft,
@@ -314,6 +315,15 @@ export function Journal({
     queryFn: () => api.newspapers.journalIssues(),
     enabled: newspapersVisible,
   });
+  // A map per day the phone recorded where you went, pinned with that day's
+  // located entries (backend/location/days.py).
+  const locationVisible = !searchQuery && !selectedCuratedTagId;
+  const { data: journalLocation } = useQuery({
+    queryKey: ['location', 'journal'],
+    queryFn: () => api.location.journal(),
+    enabled: locationVisible,
+  });
+
   const [readingIssue, setReadingIssue] = useState<JournalNewspaper | null>(
     null
   );
@@ -660,7 +670,8 @@ export function Journal({
         foodVisible ? (journalFood ?? []) : [],
         taskEventsVisible ? (taskEvents ?? []) : [],
         newspapersVisible ? (journalNewspapers ?? []) : [],
-        studyVisible ? (journalStudy ?? []) : []
+        studyVisible ? (journalStudy ?? []) : [],
+        locationVisible ? (journalLocation ?? []) : []
       ),
     [
       entries,
@@ -678,6 +689,8 @@ export function Journal({
       journalNewspapers,
       studyVisible,
       journalStudy,
+      locationVisible,
+      journalLocation,
     ]
   );
   // Calendar events whose window covers a run of feedItems, rendered as a
@@ -718,6 +731,14 @@ export function Journal({
     }
     if (item.kind === 'food') {
       return <JournalFoodItem key={item.food.id} food={item.food} />;
+    }
+    if (item.kind === 'location') {
+      return (
+        <JournalLocationItem
+          key={`location-${item.location.date}`}
+          day={item.location}
+        />
+      );
     }
     if (item.kind === 'newspaper') {
       return (
@@ -1957,6 +1978,63 @@ const JournalNewspaperItem = memo(function JournalNewspaperItem({
               right there behind the header. */}
           <PageFilmstrip pages={pages} lightbox={lightbox} emptyLabel={null} />
           <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
+        </>
+      }
+    />
+  );
+});
+
+// A day's map in the journal feed: where the phone went, with an orange pin
+// wherever an entry was written. The picture is drawn server-side on first view
+// and its URL changes whenever the day does, so a card for today stays current
+// without anything here having to know. Non-selectable, like the other
+// derived cards.
+const JournalLocationItem = memo(function JournalLocationItem({
+  day,
+}: {
+  day: JournalLocationDay;
+}) {
+  const lightbox = useLightbox();
+  const dayLabel = formatDay(day.date + 'T00:00:00');
+  const summary = [
+    day.placeCount
+      ? `${day.placeCount} place${day.placeCount === 1 ? '' : 's'}`
+      : null,
+    day.entryCount
+      ? `${day.entryCount} ${day.entryCount === 1 ? 'entry' : 'entries'} pinned`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  return (
+    <ItemCard
+      title={
+        <div className="flex items-baseline justify-between gap-2 mb-2">
+          <span className="text-[var(--color-text)] truncate">
+            🗺️ Where you went — {dayLabel}
+          </span>
+          {summary && (
+            <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+              {summary}
+            </span>
+          )}
+        </div>
+      }
+      body={
+        <>
+          <button
+            type="button"
+            className="block w-full"
+            onClick={() => lightbox.open(day.imageUrl)}
+          >
+            <img
+              src={day.imageUrl}
+              alt={`Map of where you went on ${dayLabel}`}
+              loading="lazy"
+              className="w-full max-h-72 object-cover rounded-md"
+            />
+          </button>
+          <ImageLightbox src={lightbox.src} onClose={lightbox.close} />
         </>
       }
     />

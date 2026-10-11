@@ -228,6 +228,40 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(app.buttons["learning-replay"].exists)
     }
 
+    /// The location trail is switched on in Settings, which asks iOS for
+    /// location, and the section then says what the answer means: recording,
+    /// or what is still missing for Always and how to get there.
+    func testLocationTrailAsksForLocationAndExplainsTheAnswer() {
+        let app = XCUIApplication()
+        app.resetAuthorizationStatus(for: .location)
+        app.launch()
+        openMore(app, "Settings")
+        let toggle = app.switches["settings-location-trail"]
+        for _ in 0..<6 where !reachable(toggle) { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "No location trail switch in Settings")
+        // Settings survive between runs on one simulator; start from off.
+        if (toggle.value as? String) == "1" { toggle.switches.firstMatch.tap() }
+        XCTAssertEqual(toggle.value as? String, "0")
+        toggle.switches.firstMatch.tap()
+
+        // The Capture tab asks for While Using at launch, and XCTest's own
+        // interruption handler may already have answered that; iOS then holds
+        // the Always upgrade back until the app uses location in the
+        // background. So a prompt here is possible, not certain.
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        if alert.waitForExistence(timeout: 5) {
+            let allow = alert.buttons["Allow While Using App"]
+            (allow.exists ? allow : alert.buttons.element(boundBy: 1)).tap()
+        }
+
+        XCTAssertEqual(toggle.value as? String, "1")
+        let outcome = NSPredicate(format:
+            "label CONTAINS 'choose Always' OR label CONTAINS 'Choose Always' OR label CONTAINS 'low-power mode'")
+        XCTAssertTrue(app.staticTexts.containing(outcome).firstMatch.waitForExistence(timeout: 10),
+                      "The section doesn't say what the permission means for the trail")
+        snapshot(app, "location-trail-settings")
+    }
+
     func testDailyLogsWeightAndCaloriesWithoutAServer() {
         let app = XCUIApplication()
         app.launch()

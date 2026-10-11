@@ -1616,6 +1616,19 @@ export interface JournalNewspaper extends NewspaperIssue {
   pages: NewspaperPageImage[];
 }
 
+/** A day the phone recorded a location trail, as the Journal feed's map card.
+ *  Sits at the day's last second (`archivedAt`), as the day's summary. The
+ *  image URL carries a version, so it changes whenever a late point or a new
+ *  located entry would change the picture (backend/location/days.py). */
+export interface JournalLocationDay {
+  date: string;
+  archivedAt: string;
+  pointCount: number;
+  placeCount: number;
+  entryCount: number;
+  imageUrl: string;
+}
+
 export interface NewspaperDownload {
   date: string;
   status: 'queued' | 'downloading' | 'complete' | 'failed' | 'sign-in-required';
@@ -4817,6 +4830,9 @@ export const api = {
     purge: () => post<{ purged: number }>('/api/torrents/purge'),
   },
 
+  location: {
+    journal: () => get<JournalLocationDay[]>('/api/location/journal'),
+  },
   newspapers: {
     pressreader: () => get<PressReaderStatus>('/api/newspapers/pressreader'),
     setAutoDownload: (autoDownload: boolean) =>
