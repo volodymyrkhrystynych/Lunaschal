@@ -1,6 +1,7 @@
 #if DEBUG
 import Foundation
 import LunaschalCore
+import UIKit
 
 /// Launched with `-learningFixture`, More → Learning talks to an in-memory
 /// stand-in for `/api/learning` instead of the server, so the screen can be
@@ -11,6 +12,9 @@ import LunaschalCore
 /// Nothing is saved: a relaunch starts over. Debug builds only.
 enum LearningFixture {
     static let argument = "-learningFixture"
+    /// Adds a due review card, a notebook saved For review, at the front of
+    /// the deck. Separate so the tests that walk the ordinary deck keep it.
+    static let reviewArgument = "-learningReviewCard"
 
     static let server: LearningDemoServer? =
         ProcessInfo.processInfo.arguments.contains(argument) ? LearningDemoServer() : nil
@@ -24,6 +28,7 @@ actor LearningDemoServer: LearningTransport {
     }
 
     private var folders: [LearningFolder] = [
+        LearningFolder(id: "fixture-review", name: "For review", system: true),
         LearningFolder(id: "fixture-swift", name: "Swift"),
         LearningFolder(id: "fixture-bio", name: "Biology"),
     ]
@@ -76,6 +81,15 @@ actor LearningDemoServer: LearningTransport {
                  "They translate mRNA into proteins.",
                  folder: "fixture-bio", tags: ["cells"], state: "pending", source: "brain-dump"),
         ]
+        if ProcessInfo.processInfo.arguments.contains(LearningFixture.reviewArgument) {
+            let pages = (1...3).map { LearningReviewPages.Page(id: "fixture-page-\($0)", name: "Notes p\($0).jpg",
+                                                               url: "/api/journal/attachments/fixture-page-\($0)/file") }
+            cards.insert(LearningCard(id: "fixture-review-card", folderId: "fixture-review", question: "For review",
+                                      answer: "", sourceType: "journal_review",
+                                      due: iso.string(from: now.addingTimeInterval(-3_600)), kind: "review",
+                                      review: LearningReviewPages(entryId: "fixture-entry", title: "Fern life cycle",
+                                                                  pages: pages)), at: 0)
+        }
     }
 
     private func matches(_ card: LearningCard, _ filter: LearningFilter) -> Bool {
@@ -165,10 +179,35 @@ actor LearningDemoServer: LearningTransport {
     }
 
     func rate(_ answer: LearningSession.Answer, _ rating: LearningRating, grade: LearningGrade?) {
-        open[answer.card.id] = nil
-        guard let index = cards.firstIndex(where: { $0.id == answer.card.id }) else { return }
+        reschedule(answer.card.id, rating)
+    }
+
+    private func reschedule(_ id: String, _ rating: LearningRating) {
+        open[id] = nil
+        guard let index = cards.firstIndex(where: { $0.id == id }) else { return }
         let days: Double = [.again: 0.007, .hard: 1, .good: 3, .easy: 7][rating] ?? 1
         cards[index].due = ISO8601DateFormatter().string(from: Date().addingTimeInterval(days * 86_400))
+    }
+
+    func rateReview(_ card: LearningCard, _ rating: LearningRating, reviewID: String) {
+        reschedule(card.id, rating)
+    }
+
+    /// A tall page with its number on it, so a scroll through three is visible.
+    func reviewPage(_ page: LearningReviewPages.Page) async throws -> Data {
+        let number = page.name.filter(\.isNumber)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 600, height: 800)).image { context in
+            UIColor(white: 0.96, alpha: 1).setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 600, height: 800))
+            UIColor.systemBlue.withAlphaComponent(0.25).setStroke()
+            for y in stride(from: 80, to: 800, by: 40) {
+                context.cgContext.move(to: CGPoint(x: 40, y: y)); context.cgContext.addLine(to: CGPoint(x: 560, y: y))
+            }
+            context.cgContext.strokePath()
+            ("Page \(number)" as NSString).draw(at: CGPoint(x: 48, y: 24), withAttributes: [
+                .font: UIFont.systemFont(ofSize: 36, weight: .semibold), .foregroundColor: UIColor.darkGray])
+        }
+        return image.jpegData(compressionQuality: 0.8) ?? Data()
     }
 
     // MARK: Queue

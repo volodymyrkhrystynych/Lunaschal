@@ -199,6 +199,36 @@ final class OfflineCaptureTests: XCTestCase {
         snapshot(app, "5-browse")
     }
 
+    /// A notebook saved For review comes up as a card with no back side: its
+    /// pages one under another, then the ratings at the end of the scroll.
+    func testLearningReviewCardIsReadThenRated() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-learningFixture", "-learningReviewCard"]
+        app.launch()
+        openMore(app, "Learning")
+
+        let card = app.scrollViews["learning-review-card"]
+        XCTAssertTrue(card.waitForExistence(timeout: settle), "The review card didn't come first")
+        XCTAssertTrue(app.staticTexts["Card 1 of 7"].exists)
+        XCTAssertTrue(app.staticTexts["Fern life cycle"].exists)
+        XCTAssertFalse(app.textFields["learning-answer"].exists, "A review card has nothing to answer")
+        XCTAssertFalse(app.buttons["learning-flip"].exists)
+        XCTAssertTrue(app.images["learning-review-page-1"].waitForExistence(timeout: 10), "The first page didn't load")
+        snapshot(app, "review-card-top")
+
+        // The ratings are below the last page.
+        let good = app.buttons["learning-rate-Good"]
+        for _ in 0..<8 where !reachable(good) { card.swipeUp() }
+        XCTAssertTrue(app.images["learning-review-page-3"].exists, "Not every page is in the scroll")
+        XCTAssertTrue(reachable(good), "No ratings at the end of the pages")
+        snapshot(app, "review-card-ratings")
+        good.tap()
+
+        // Rated in place: on to an ordinary card, still answered as before.
+        XCTAssertTrue(app.textFields["learning-answer"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Card 2 of 7"].exists)
+    }
+
     /// Speech mode is switched in Settings, and an answer given with it on
     /// comes back with a summary to read aloud and a Replay button.
     func testLearningSpeechModeIsASettingAndOffersReplay() {
@@ -929,12 +959,22 @@ final class OfflineCaptureTests: XCTestCase {
 
         app.buttons["notebook-add-page"].tap()
         XCTAssertEqual(app.buttons["notebook-page"].label, "2 / 2")
+        // The video and For review live in the menu beside the picture one.
+        let more = app.buttons["notebook-more"]
+        more.tap()
+        XCTAssertTrue(app.buttons["notebook-youtube"].waitForExistence(timeout: 5))
         app.buttons["notebook-youtube"].tap()
         let link = app.alerts.textFields["YouTube video URL"]
         XCTAssertTrue(link.waitForExistence(timeout: 5))
         link.typeText("https://youtu.be/M7lc1UVf-VE")
         app.alerts.buttons["Add"].tap()
+        more.tap()
         XCTAssertTrue(app.buttons["YouTube video added"].waitForExistence(timeout: 5))
+        let forReview = app.buttons["notebook-for-review"]
+        XCTAssertTrue(forReview.exists)
+        XCTAssertFalse(forReview.isSelected, "For review starts off")
+        snapshot(app, "notebook-menu")
+        forReview.tap()
 
         // Back saves it; Draw lists it to continue, as the entry draft's notes.
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -945,6 +985,14 @@ final class OfflineCaptureTests: XCTestCase {
         row.tap()
         XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["notebook-page"].label, "1 / 2")
+        // The switch is kept with the notebook.
+        app.buttons["notebook-more"].tap()
+        XCTAssertTrue(app.buttons["notebook-for-review"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["notebook-for-review"].isSelected, "For review didn't stay on")
+        app.buttons["notebook-for-review"].tap()
+        app.buttons["notebook-more"].tap()
+        XCTAssertFalse(app.buttons["notebook-for-review"].isSelected)
+        app.buttons["notebook-for-review"].tap()
         app.buttons["notebook-save"].tap()
         // Saving goes back to Draw, where it now reads as filed.
         XCTAssertTrue(app.staticTexts["Saved to journal"].firstMatch.waitForExistence(timeout: 10)

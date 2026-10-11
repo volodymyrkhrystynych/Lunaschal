@@ -514,7 +514,11 @@ final class CaptureModel: ObservableObject {
         // The notes' own video goes with them.
         if let video = notebook?.youtubeURL, !links.contains(video) { links.append(video) }
         do {
+            // Read from the store, not the copy passed in: the switch may have
+            // been flipped in the editor since the composer last looked.
+            let forReview = notebook.map { (try? notebooks.notebook($0.id))?.isForReview ?? $0.isForReview } ?? false
             let capture = try store.commitDraft(text: text, youtubeURLs: links, kind: kind, images: pages,
+                                                forReview: forReview,
                                                 location: location.recent)
             if let notebook {
                 do { try notebooks.markSaved(notebook.id, captureID: capture.id) }
@@ -603,6 +607,7 @@ final class CaptureModel: ObservableObject {
             let capture = try store.commitImages(text: text, youtubeURLs: notebook.youtubeURL.map { [$0] } ?? [],
                                                  images: pages,
                                                  replaces: notebook.newspaperDate == nil ? [] : notebook.savedCaptureIDs,
+                                                 forReview: notebook.isForReview,
                                                  location: location.recent)
             let saved = try notebooks.markSaved(notebook.id, captureID: capture.id)
             reloadCaptures(); requestSync()

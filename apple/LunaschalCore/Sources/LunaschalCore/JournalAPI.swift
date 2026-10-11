@@ -119,6 +119,27 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         (error as? URLError)?.userInfo[failedBeforeSendingKey] as? Bool == true
     }
 
+    /// `POST /api/journal`'s body for a text capture.
+    static func entryBody(_ capture: Capture) -> [String: String] {
+        // Fic commentary goes up as raw_content, as the desktop reader's
+        // does: that is what queues the journal's polish pass, so a
+        // misheard character name is fixed like any other entry's.
+        var body = [
+            "id": capture.id, capture.ficID == nil ? "content" : "raw_content": capture.text,
+            "capturedAt": ISO8601DateFormatter().string(from: capture.createdAt),
+            "pendingAttachments": String(capture.links.count + capture.files.count + capture.clips.count)
+        ]
+        if let latitude = capture.latitude, let longitude = capture.longitude {
+            body["latitude"] = String(latitude)
+            body["longitude"] = String(longitude)
+        }
+        // The entries this one supersedes; the server deletes them once it is in.
+        if !capture.replaces.isEmpty { body["replaces"] = capture.replaces.joined(separator: ",") }
+        // Saved For review: the server makes the entry's pages a learning card.
+        if capture.forReview { body["forReview"] = "true" }
+        return body
+    }
+
     /// The entry itself, with the standalone recording if it is one. An
     /// addition to an entry already on the server skips this.
     private func createEntry(_ capture: Capture, audioURL: URL?) async throws {
@@ -127,21 +148,7 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         if capture.mode == .text {
             var req = request("api/journal", method: "POST")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            // Fic commentary goes up as raw_content, as the desktop reader's
-            // does: that is what queues the journal's polish pass, so a
-            // misheard character name is fixed like any other entry's.
-            var body = [
-                "id": capture.id, capture.ficID == nil ? "content" : "raw_content": capture.text,
-                "capturedAt": ISO8601DateFormatter().string(from: capture.createdAt),
-                "pendingAttachments": String(capture.links.count + capture.files.count + capture.clips.count)
-            ]
-            if let latitude = capture.latitude, let longitude = capture.longitude {
-                body["latitude"] = String(latitude)
-                body["longitude"] = String(longitude)
-            }
-            // The entries this one supersedes; the server deletes them once it is in.
-            if !capture.replaces.isEmpty { body["replaces"] = capture.replaces.joined(separator: ",") }
-            req.httpBody = try JSONEncoder().encode(body)
+            req.httpBody = try JSONEncoder().encode(Self.entryBody(capture))
             (data, response) = try await session.data(for: req)
         } else {
             guard let audioURL else { throw CaptureError.missingAudio }

@@ -21,6 +21,7 @@ from backend.ai.journal import (
 from backend.ai import jobs
 from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
 from backend.journal import archive, playable, storage, voice_drafts, youtube_import
+from backend.learning.review_cards import carry_review_card, ensure_review_card
 from backend.study import youtube
 from backend.tags import tags_json
 
@@ -363,6 +364,16 @@ def create_entry():
         # storing a row that looks located and isn't.
         coords=coord_pair(body.get('latitude'), body.get('longitude')),
     )
+    # A JSON true from the web, the string 'true' from the iPad, whose body is
+    # all strings.
+    if body.get('forReview') in (True, 'true'):
+        # The notebook's For review switch: the pages come back as a learning
+        # card. Before the replaced entries go, so a re-filed notebook keeps
+        # the card it had, and its schedule, rather than starting over.
+        db = get_db()
+        carry_review_card(db, replaces, id)
+        ensure_review_card(db, id)
+        db.commit()
     if replaces:
         # An iPad newspaper filed again later in the day stands in for the
         # entry it was filed as before, so the day keeps one. After the insert,

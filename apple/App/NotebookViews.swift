@@ -471,6 +471,15 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         } catch { self.error = error.localizedDescription; return false }
     }
 
+    // MARK: For review
+
+    /// The menu's switch: whether this notebook's Save also files its pages
+    /// as a learning card to read again later.
+    func setForReview(_ on: Bool) {
+        do { notebook = try store.setForReview(notebook.id, on) }
+        catch { self.error = error.localizedDescription }
+    }
+
     // MARK: Saving
 
     func scheduleCheckpoint() {
@@ -1322,11 +1331,23 @@ struct NotebookEditor: View {
             // tool picker would cover them.
             ToolbarItemGroup(placement: .topBarLeading) { pageControls }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button { linkText = model.notebook.youtubeURL ?? ""; editingLink = true } label: {
-                    Label(model.notebook.youtubeURL == nil ? "Add YouTube video" : "YouTube video added",
-                          systemImage: model.notebook.youtubeURL == nil ? "play.rectangle" : "play.rectangle.fill")
+                // What goes with the entry rather than on the page. The icon
+                // fills when anything here is set, so it isn't hidden away.
+                Menu {
+                    Button { linkText = model.notebook.youtubeURL ?? ""; editingLink = true } label: {
+                        Label(model.notebook.youtubeURL == nil ? "Add YouTube video" : "YouTube video added",
+                              systemImage: model.notebook.youtubeURL == nil ? "play.rectangle" : "play.rectangle.fill")
+                    }
+                    .accessibilityIdentifier("notebook-youtube")
+                    Toggle(isOn: Binding(get: { model.notebook.isForReview }, set: { model.setForReview($0) })) {
+                        Label("For review", systemImage: "graduationcap")
+                    }
+                    .accessibilityIdentifier("notebook-for-review")
+                } label: {
+                    Label("More", systemImage: model.notebook.youtubeURL != nil || model.notebook.isForReview
+                          ? "line.3.horizontal.circle.fill" : "line.3.horizontal")
                 }
-                .accessibilityIdentifier("notebook-youtube")
+                .accessibilityIdentifier("notebook-more")
                 Menu {
                     Button("Paste image", systemImage: "doc.on.clipboard") { Task { await model.pasteImage() } }
                     Button("Insert from library", systemImage: "photo.on.rectangle") { choosingPhotos = true }

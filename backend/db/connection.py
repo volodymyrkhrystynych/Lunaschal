@@ -246,6 +246,7 @@ def init_db() -> None:
     _ensure_practice_recall_columns(db)
     _ensure_piano_attempt_metrics(db)
     _ensure_learning_attempts_speech_requested(db)
+    _ensure_learning_review(db)
     _ensure_study_position(db)
     _ensure_study_paper(db)
     _ensure_study_archive_requested(db)
@@ -594,6 +595,25 @@ def _ensure_learning_attempts_speech_requested(db: sqlite3.Connection) -> None:
     if 'speech_requested' not in cols:
         db.execute('ALTER TABLE learning_attempts ADD COLUMN speech_requested INTEGER NOT NULL DEFAULT 0')
         db.commit()
+
+
+def _ensure_learning_review(db: sqlite3.Connection) -> None:
+    """Review cards (`learning_cards.kind`) and the For review folder they live
+    in. The folder is made here rather than on the first review card so it is
+    always in the list, and a folder the user already called "For review" is
+    adopted instead of colliding with the UNIQUE name."""
+    from backend.learning.review_cards import ensure_review_folder
+    cols = {r[1] for r in db.execute('PRAGMA table_info(learning_cards)')}
+    if 'kind' not in cols:
+        db.execute("ALTER TABLE learning_cards ADD COLUMN kind TEXT NOT NULL DEFAULT 'qa'"
+                   " CHECK(kind IN ('qa','review'))")
+    cols = {r[1] for r in db.execute('PRAGMA table_info(learning_folders)')}
+    if 'system_key' not in cols:
+        db.execute('ALTER TABLE learning_folders ADD COLUMN system_key TEXT')
+    db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_folders_system'
+               ' ON learning_folders(system_key) WHERE system_key IS NOT NULL')
+    ensure_review_folder(db)
+    db.commit()
 
 
 def _ensure_fic_update_pending(db: sqlite3.Connection) -> None:

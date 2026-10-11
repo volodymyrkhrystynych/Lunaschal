@@ -473,6 +473,39 @@ def seed_learning(db):
         (new_id(), card_ids[0], card_ids[0], 'manual_edit', 'el puento', 'el puente',
          '- el puento\n+ el puente', 0, None, 'Typo in the original answer.', ts(2)),
     )
+    seed_review_card(db)
+
+
+def seed_review_card(db):
+    """A notebook saved For review on the iPad: a journal entry whose pages are
+    two images, and the review card that shows them. Due now rather than at
+    the next 4am a real one starts at, so the demo deck has one to read."""
+    from backend.journal.storage import attachment_dir, attachment_path
+    from backend.learning.review_cards import SOURCE_TYPE, ensure_review_folder
+
+    entry_id = new_id()
+    db.execute(
+        'INSERT INTO journal_entries (id, content, raw_content, title, tags, created_at, updated_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (entry_id, '', None, 'Fern life cycle', tags_json(['study']), ts(3), ts(3)),
+    )
+    for position, label in enumerate(['Notes p1: spores, prothallus', 'Notes p2: sporophyte']):
+        attachment_id = new_id()
+        attachment_dir(attachment_id).mkdir(parents=True, exist_ok=True)
+        img_path = attachment_path(attachment_id, 'jpg')
+        placeholder_image(img_path, label, size=(768, 1024), color=(80, 100, 90))
+        db.execute(
+            'INSERT INTO journal_attachments (id, entry_id, kind, name, path, mime, size, position, created_at)'
+            " VALUES (?, ?, 'image', ?, ?, 'image/jpeg', ?, ?, ?)",
+            (attachment_id, entry_id, f'Notes p{position + 1}.jpg', str(img_path),
+             img_path.stat().st_size, position, ts(3)),
+        )
+    db.execute(
+        'INSERT INTO learning_cards (id, folder_id, question, answer, state, kind, source_type,'
+        ' source_id, due, created_at, updated_at)'
+        " VALUES (?, ?, 'For review', '', 'active', 'review', ?, ?, ?, ?, ?)",
+        (new_id(), ensure_review_folder(db), SOURCE_TYPE, entry_id, ts(1), ts(3), ts(3)),
+    )
 
 
 def seed_cookbook(db):

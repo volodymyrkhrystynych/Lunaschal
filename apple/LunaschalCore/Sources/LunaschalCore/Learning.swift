@@ -18,17 +18,45 @@ public struct LearningCard: Codable, Equatable, Identifiable {
     public var revisedFrom: String?
     /// ISO time it next comes due; nil until approved.
     public var due: String?
+    /// "qa", or "review" for a notebook saved For review. Optional only so a
+    /// server from before review cards still decodes.
+    public var kind: String?
+    /// A review card's entry and its pages.
+    public var review: LearningReviewPages?
 
     public init(id: String, folderId: String? = nil, question: String, answer: String, state: String = "active",
                 tags: [String] = [], sourceType: String? = nil, derivedFrom: String? = nil, revisedFrom: String? = nil,
-                due: String? = nil) {
+                due: String? = nil, kind: String? = nil, review: LearningReviewPages? = nil) {
         self.id = id; self.folderId = folderId; self.question = question; self.answer = answer; self.state = state
         self.tags = tags; self.sourceType = sourceType; self.derivedFrom = derivedFrom; self.revisedFrom = revisedFrom
-        self.due = due
+        self.due = due; self.kind = kind; self.review = review
     }
+
+    /// No back side: its pages are read, then rated. Never answered or graded.
+    public var isReview: Bool { kind == "review" }
 
     public var dueDate: Date? { due.flatMap(TodoRules.date(iso:)) }
     public func isDue(at now: Date = Date()) -> Bool { dueDate.map { $0 <= now } ?? false }
+}
+
+/// A review card's front: the journal entry it was saved as, and that
+/// entry's pages in order. Read live, so a title written later shows up.
+public struct LearningReviewPages: Codable, Equatable {
+    public struct Page: Codable, Equatable, Identifiable {
+        public let id: String
+        public let name: String
+        /// Server-relative, e.g. /api/journal/attachments/<id>/file.
+        public let url: String
+        public init(id: String, name: String, url: String) { self.id = id; self.name = name; self.url = url }
+    }
+
+    public let entryId: String?
+    public let title: String?
+    public let pages: [Page]
+
+    public init(entryId: String?, title: String? = nil, pages: [Page]) {
+        self.entryId = entryId; self.title = title; self.pages = pages
+    }
 }
 
 public struct LearningStats: Codable, Equatable {
@@ -47,7 +75,11 @@ public struct LearningFolder: Codable, Equatable, Identifiable {
     public let id: String
     public let name: String
     public var dueCount: Int
-    public init(id: String, name: String, dueCount: Int = 0) { self.id = id; self.name = name; self.dueCount = dueCount }
+    /// The app's own For review folder. Optional for an older server.
+    public var system: Bool?
+    public init(id: String, name: String, dueCount: Int = 0, system: Bool? = nil) {
+        self.id = id; self.name = name; self.dueCount = dueCount; self.system = system
+    }
 }
 
 /// Narrows review, stats and browsing to one folder and/or one tag.
@@ -177,6 +209,10 @@ public struct LearningSession: Equatable {
     public private(set) var cards: [LearningCard]
     public private(set) var answers: [Answer]
     public private(set) var resultIndex = 0
+    /// Review cards rated straight from their pages. They have no answer to
+    /// save, so they never become an answer or reach the results pass; once
+    /// rated they are no longer due, so a rebuilt deck can't bring one back.
+    public private(set) var reviewed: Set<String> = []
 
     /// `/due` sorts cards with an open attempt first, so the answered ones are
     /// always at the front of the deck and the next card is at their count.
@@ -193,33 +229,48 @@ public struct LearningSession: Equatable {
 
     public var total: Int { cards.count }
     public var isEmpty: Bool { cards.isEmpty }
-    public var inResults: Bool { !cards.isEmpty && answers.count >= cards.count }
+    private var done: Int { answers.count + reviewed.count }
+    public var inResults: Bool { !cards.isEmpty && !answers.isEmpty && done >= cards.count }
+    /// Every card was a review card and all are rated: nothing to show results
+    /// for, so the deck is fetched again.
+    public var isFinished: Bool { !cards.isEmpty && answers.isEmpty && done >= cards.count }
 
-    /// The card waiting for an answer, during the answering pass.
+    /// The card waiting for an answer (or, for a review card, a rating),
+    /// during the answering pass.
     public var card: LearningCard? {
-        inResults ? nil : cards.first { card in !answers.contains { $0.card.id == card.id } }
+        inResults ? nil : cards.first { card in
+            !reviewed.contains(card.id) && !answers.contains { $0.card.id == card.id }
+        }
     }
 
     /// The answer being rated, during the results pass.
     public var result: Answer? { inResults && answers.indices.contains(resultIndex) ? answers[resultIndex] : nil }
 
     /// 1-based, for "Card 3 of 10".
-    public var position: Int { inResults ? resultIndex + 1 : min(answers.count + 1, total) }
+    public var position: Int { inResults ? resultIndex + 1 : min(done + 1, total) }
 
     /// Records the current card as answered and returns what to save. `voice`
     /// when any of it was dictated through the mic, as the desktop marks it.
     public mutating func answer(_ text: String, voice: Bool = false, speech: Bool = false,
                                 id: String = ULID.make()) -> Answer? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let card, !trimmed.isEmpty else { return nil }
+        guard let card, !card.isReview, !trimmed.isEmpty else { return nil }
         let answer = Answer(id: id, card: card, skipped: false, text: trimmed, voice: voice, speech: speech)
         answers.append(answer)
         return answer
     }
 
+    /// Takes the current review card off the deck once it has been rated.
+    @discardableResult
+    public mutating func markReviewed() -> LearningCard? {
+        guard let card, card.isReview else { return nil }
+        reviewed.insert(card.id)
+        return card
+    }
+
     /// Flips past the current card; its answer is shown in the results pass.
     public mutating func skip(id: String = ULID.make()) -> Answer? {
-        guard let card else { return nil }
+        guard let card, !card.isReview else { return nil }
         let answer = Answer(id: id, card: card, skipped: true, text: nil)
         answers.append(answer)
         return answer

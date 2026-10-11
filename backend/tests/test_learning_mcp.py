@@ -10,6 +10,12 @@ from backend.ai import llm, mcp_client
 
 # ---------------------------------------------------------------- pure helpers
 
+def _user_folders(client):
+    """The folder list without the app's own For review folder, which every
+    database has from startup."""
+    return [f for f in client.get('/api/learning/folders').json if not f['system']]
+
+
 def test_mcp_tools_to_openai():
     tools = [SimpleNamespace(
         name='search_docs',
@@ -70,7 +76,7 @@ def test_mcp_server_crud(client):
     fid = client.post('/api/learning/folders', json={'name': 'F'}).json['id']
     client.patch(f'/api/learning/folders/{fid}', json={'evidenceProviderId': sid})
     assert client.delete(f'/api/learning/mcp-servers/{sid}').status_code == 200
-    assert client.get('/api/learning/folders').json[0]['evidenceProviderId'] is None
+    assert _user_folders(client)[0]['evidenceProviderId'] is None
 
 
 # ---------------------------------------------------------------- agent loop
