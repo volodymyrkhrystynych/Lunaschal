@@ -213,7 +213,17 @@ class AlertItem:
     alert_at: int | None  # unix seconds from the alert row's <time data-time>
 
 
+@dataclass
+class AlertsPage:
+    items: list[AlertItem]
+    last_page: int
+
+
 def parse_alerts(html: str, domain: str) -> list[AlertItem]:
+    return parse_alerts_page(html, domain).items
+
+
+def parse_alerts_page(html: str, domain: str) -> AlertsPage:
     """Thread references from an /account/alerts page. Each alert row links
     to its content; only rows with a direct thread link are kept — resolving
     bare /posts/ links (reply/quote alerts) would cost a request each.
@@ -232,7 +242,7 @@ def parse_alerts(html: str, domain: str) -> list[AlertItem]:
         if not ref:
             continue
         items.append(AlertItem(ref=ref, alert_at=_time_value(row.select_one('time[data-time]'))))
-    return items
+    return AlertsPage(items=items, last_page=_last_page(soup))
 
 
 @dataclass

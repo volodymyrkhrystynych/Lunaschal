@@ -773,74 +773,15 @@ def start_collection_scan():
 
 @bp.post('/refresh-alerts')
 def refresh_alerts():
-    """Scan page 1 of each cookie'd site's alerts page and queue updates for
-    the unique threads mentioned: library fics get flagged, unknown threads
-    get a placeholder fic that the drain worker imports.
-
-    A fic is no longer skipped for having been fetched more recently than its
-    alert. That comparison assumed an alert is the only way a thread changes,
-    but XenForo raises none when an author edits an existing post — so
-    "checked since the alert" regularly meant "reported up to date while a
-    revised chapter sat unread". A check on an unchanged fic is cheap."""
-    db = get_db()
-    domains = [
-        r['domain'] for r in
-        db.execute('SELECT domain FROM site_cookies ORDER BY domain').fetchall()
-        if r['domain'] in KNOWN_SITES
-    ]
-    if not domains:
+    """Queue only forum activity not covered by a successful download."""
+    from backend.fanfic import alerts
+    if not any(r['domain'] in KNOWN_SITES for r in
+               get_db().execute('SELECT domain FROM site_cookies')):
         return jsonify({'error': 'No site cookies configured — paste your forum'
                         ' session cookies in Settings → Fanfic site cookies first'}), 400
-
-    errors: dict[str, str] = {}
-    alerts_seen = 0
-    # (site, thread_id) -> (ref, newest alert timestamp)
-    newest: dict[tuple[str, str], tuple[xenforo.ThreadRef, int | None]] = {}
-    for domain in domains:
-        try:
-            items = download.fetch_alerts(domain)
-        except Exception as e:
-            errors[domain] = str(e)
-            continue
-        alerts_seen += len(items)
-        for item in items:
-            key = (item.ref.domain, item.ref.thread_id)
-            prev = newest.get(key)
-            if prev is None or (item.alert_at or 0) > (prev[1] or 0):
-                newest[key] = (item.ref, item.alert_at)
-
-    flagged = new_imports = skipped_active = 0
-    now = int(time.time())
-    for (site, thread_id), (ref, _alert_at) in newest.items():
-        row = db.execute(
-            'SELECT id, update_pending, download_status'
-            ' FROM fics WHERE site=? AND thread_id=?', (site, thread_id)).fetchone()
-        if row:
-            if (row['update_pending'] or row['download_status'] == 'downloading'
-                    or download.is_active(row['id'])):
-                skipped_active += 1
-            else:
-                db.execute('UPDATE fics SET update_pending=1 WHERE id=?', (row['id'],))
-                flagged += 1
-        else:
-            placeholder = ref.slug.replace('-', ' ').strip() or 'Importing…'
-            db.execute(
-                'INSERT INTO fics(id, title, source_type, source_url, site, thread_id,'
-                ' update_pending, created_at, updated_at) VALUES (?,?,?,?,?,?,1,?,?)',
-                (str(ULID()), placeholder, 'xenforo', ref.thread_url, ref.domain,
-                 ref.thread_id, now, now))
-            new_imports += 1
-    db.commit()
-    # Always poke the drain worker, even if nothing was freshly flagged here —
-    # a prior crash/restart can leave fics stuck at update_pending=1 with no
-    # worker running to drain them (nothing else resumes that queue on
-    # startup), and start_drain() is a cheap no-op when there's nothing to do.
+    result = alerts.refresh()
     _start_drain_bg()
-    return jsonify({
-        'flagged': flagged, 'newImports': new_imports,
-        'skippedActive': skipped_active,
-        'alertsSeen': alerts_seen, 'errors': errors,
-    })
+    return jsonify(result)
 
 
 @bp.post('/scan-watched/<domain>')

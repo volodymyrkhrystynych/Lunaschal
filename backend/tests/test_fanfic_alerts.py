@@ -115,12 +115,8 @@ def test_refresh_updates_stale_and_imports_unknown(client, fake_net):
     assert stale['lastCheckedAt'] is not None
 
 
-def test_refresh_checks_fic_fetched_after_its_alert(client, fake_net):
-    """A fic checked more recently than its newest alert is still checked.
-
-    Being newer than the alert used to mean "skip", which assumed an alert is
-    the only way a thread changes. XenForo raises none when an author edits an
-    existing post, so that shortcut hid revisions indefinitely."""
+def test_refresh_skips_fic_fetched_after_its_alert(client, fake_net):
+    """Old alerts cost no per-fic requests; edits remain a manual deep check."""
     fic_id = _import_fic(client)
     _set_last_checked(fic_id, 1700000000)  # newer than every alert
     fake_net['pages'].update(_thread_pages(OTHER))
@@ -128,12 +124,11 @@ def test_refresh_checks_fic_fetched_after_its_alert(client, fake_net):
 
     before = len(fake_net['log'])
     body = client.post('/api/fanfic/refresh-alerts').get_json()
-    assert body['flagged'] == 1
+    assert body['flagged'] == 0
     assert body['newImports'] == 1
-    assert 'skippedFresh' not in body
-    # and it really was walked, not just flagged
+    assert body['skippedFresh'] == 1
     fetched = fake_net['log'][before:]
-    assert any('a-test-fic.12345' in url for url in fetched)
+    assert not any('a-test-fic.12345' in url for url in fetched)
 
 
 def test_refresh_skips_already_queued_fic(client, fake_net, monkeypatch):
@@ -152,6 +147,106 @@ def test_refresh_skips_already_queued_fic(client, fake_net, monkeypatch):
     assert body['flagged'] == 0
     assert body['newImports'] == 0
     assert body['skippedActive'] == 2
+
+
+@pytest.mark.parametrize('domain', [SITE, SV, 'forum.questionablequesting.com'])
+@pytest.mark.parametrize('alert_at,checked,status,flagged', [
+    (100, 101, 'complete', 0),
+    (100, 100, 'complete', 1),  # same-second ordering is unknown
+    (102, 101, 'complete', 1),
+    (None, 101, 'complete', 1),
+    (100, None, 'complete', 1),
+    (100, 101, 'error', 1),
+])
+def test_alert_timestamp_gate(domain, alert_at, checked, status, flagged, monkeypatch):
+    from backend.db.connection import get_db
+    from backend.fanfic import alerts, xenforo
+    db = get_db()
+    db.execute('INSERT INTO site_cookies(domain,cookie,updated_at) VALUES (?,?,0)', (domain, 'fake'))
+    db.execute('INSERT INTO fics(id,title,site,thread_id,source_type,download_status,last_checked_at,'
+               'created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,0)',
+               ('fic', 'Story', domain, '12345', 'xenforo', status, checked))
+    db.commit()
+    ref = xenforo.parse_thread_ref(f'https://{domain}/threads/story.12345/')
+    monkeypatch.setattr(download, 'fetch_alerts', lambda _: [xenforo.AlertItem(ref, alert_at)])
+    result = alerts.refresh()
+    assert result['flagged'] == flagged
+    assert result['skippedFresh'] == 1 - flagged
+    assert db.execute("SELECT update_pending FROM fics WHERE id='fic'").fetchone()[0] == flagged
+
+
+def test_successful_check_uses_start_time_and_later_alert_is_not_lost(client, fake_net, monkeypatch):
+    from backend.db.connection import get_db
+    from backend.fanfic import alerts, xenforo
+    fic_id = _import_fic(client)
+    _put_cookie(client)
+    clock = [1700000000]
+    monkeypatch.setattr(download.time, 'time', lambda: clock[0])
+    fetch = download._fetch
+    def slow_fetch(url):
+        result = fetch(url)
+        clock[0] += 100
+        return result
+    monkeypatch.setattr(download, '_fetch', slow_fetch)
+    download.run_check_updates(fic_id)
+    checked = get_db().execute('SELECT last_checked_at FROM fics WHERE id=?', (fic_id,)).fetchone()[0]
+    assert checked == 1700000000
+    assert clock[0] > checked
+    monkeypatch.setattr(download, 'fetch_alerts', lambda _: [
+        xenforo.AlertItem(xenforo.parse_thread_ref(THREAD), checked + 50)])
+    assert alerts.refresh()['flagged'] == 1
+
+
+def test_failed_check_does_not_advance_timestamp(client, fake_net, monkeypatch):
+    from backend.db.connection import get_db
+    fic_id = _import_fic(client)
+    _set_last_checked(fic_id, 123)
+    def broken(url):
+        raise RuntimeError('offline')
+    monkeypatch.setattr(download, '_fetch', broken)
+    download.run_check_updates(fic_id)
+    row = get_db().execute('SELECT last_checked_at,download_status FROM fics WHERE id=?',
+                           (fic_id,)).fetchone()
+    assert tuple(row) == (123, 'error')
+
+
+def test_partial_reader_walk_does_not_mark_fic_current(client, fake_net):
+    from backend.db.connection import get_db
+    fic_id = _import_fic(client)
+    _set_last_checked(fic_id, 123)
+    fake_net['pages'][f'{THREAD}/reader/page-2?threadmark_category=1'] = '<html>Unreadable</html>'
+    download.run_check_updates(fic_id, deep=True)
+    row = get_db().execute('SELECT last_checked_at,download_status FROM fics WHERE id=?',
+                           (fic_id,)).fetchone()
+    assert tuple(row) == (123, 'error')
+
+
+def test_second_refresh_only_fetches_alerts(client, fake_net):
+    _put_cookie(client)
+    fake_net['pages'].update(_thread_pages(OTHER))
+    client.post('/api/fanfic/refresh-alerts')
+    before = len(fake_net['log'])
+    result = client.post('/api/fanfic/refresh-alerts').get_json()
+    assert result['skippedFresh'] == 2
+    assert result['flagged'] == result['newImports'] == 0
+    assert fake_net['log'][before:] == [ALERTS_URL]
+
+
+@pytest.mark.parametrize('domain', [SITE, SV, 'forum.questionablequesting.com'])
+def test_alert_fetch_includes_later_pages(domain, monkeypatch):
+    calls = []
+    def fetch(url):
+        calls.append(url)
+        page = 2 if '?page=2' in url else 1
+        html = f'''<li class="js-alert"><a href="/threads/story.{page}/">Story</a>
+        <time data-time="{100 + page}"></time></li>
+        <nav class="pageNav-main"><a class="pageNav-page">2</a></nav>'''
+        return FakeResp(html, url)
+    monkeypatch.setattr(download, '_fetch', fetch)
+    items = download.fetch_alerts(domain)
+    assert [item.ref.thread_id for item in items] == ['1', '2']
+    assert calls == [f'https://{domain}/account/alerts',
+                     f'https://{domain}/account/alerts?page=2']
 
 
 def test_refresh_still_drains_when_nothing_newly_flagged(client, fake_net):

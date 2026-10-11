@@ -287,6 +287,7 @@ export interface RefreshAlertsResult {
   flagged: number;
   newImports: number;
   skippedActive: number;
+  skippedFresh: number;
   alertsSeen: number;
   errors: Record<string, string>;
 }
