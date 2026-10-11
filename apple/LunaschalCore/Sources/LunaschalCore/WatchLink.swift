@@ -54,8 +54,6 @@ public enum WatchComplication {
     public static let transcribeKind = "transcribe"
     public static let launcherKind = "launcher"
     public static let workoutKind = "workout"
-    public static let timerKinds = [pomodoroKind, focusKind, timeoutKind]
-    public static let recordingKinds = [recordKind, transcribeKind]
     /// Control kinds, for `ControlCenter.reloadControls(ofKind:)`.
     public static let focusControl = "control.focus"
     public static let timeoutControl = "control.timeout"

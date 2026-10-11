@@ -92,10 +92,7 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         }
         if recorder.activeID == nil { recordingMode = nil; recordingSince = nil }
         else if recordingSince == nil { recordingSince = Date() }
-        for kind in WatchComplication.recordingKinds { WidgetCenter.shared.reloadTimelines(ofKind: kind) }
-        WidgetCenter.shared.reloadTimelines(ofKind: WatchComplication.launcherKind)
-        ControlCenter.shared.reloadControls(ofKind: WatchComplication.recordControl)
-        ControlCenter.shared.reloadControls(ofKind: WatchComplication.transcribeControl)
+        PomodoroEngine.redraw()
     }
 
     func reload() {
@@ -247,6 +244,10 @@ private struct WatchCaptureView: View {
                 model.reload(); model.sendPending(); model.pomodoro.refresh(); model.pomodoro.sendPending()
                 model.workout.refresh()
                 if let link = PomodoroEngine.takePendingLink() { open(link) }
+            } else if value == .inactive {
+                // The face is coming back: draw it from the latest state, in
+                // case a reload made mid-change was dropped.
+                PomodoroEngine.redraw()
             }
         }
     }

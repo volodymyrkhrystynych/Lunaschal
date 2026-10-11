@@ -550,6 +550,14 @@ publicly to make CI work: simulator capture tests never contact it.
   an unsigned `CODE_SIGNING_ALLOWED=NO` build gets "client is not entitled"
   from the alarm service and shows "Couldn't set the alarm". The buzz with the
   wrist down, and Stop/Restart ending it, need the device.
+- A running timer (Focus, Break, Timeout, Workout) shows on every timer
+  complication as the system Timer draws one: an emptying ring with the time
+  left inside it, the time with a gauge in a corner. A recording turns its Record
+  or Transcribe complication, launcher button and Control red, keeping the same
+  icon. Every change reloads all complications and Controls, and the app reloads
+  them again as the face comes back; before this, timer changes never reloaded
+  the launcher row. Builds in the watchOS simulator; how it looks on the face
+  needs the device.
 - Settings checks the actual Foundation Models text-model and locale availability,
   including disabled/ineligible/not-ready states. Generation and local speech
   recognition remain optional later layers. Server transcription is the only

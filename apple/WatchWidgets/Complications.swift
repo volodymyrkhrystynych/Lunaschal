@@ -72,23 +72,56 @@ extension TimerChoice {
     var link: WatchLink { .start(kind) }
 }
 
+extension PomodoroKind {
+    /// The colour a run's ring is drawn in, matching its page in the app.
+    var tint: Color {
+        switch self {
+        case .work: return .indigo
+        case .break: return .green
+        case .timeout: return .teal
+        }
+    }
+}
+
 extension RecordingChoice {
     var widgetKind: String { self == .record ? WatchComplication.recordKind : WatchComplication.transcribeKind }
     var controlKind: String { self == .record ? WatchComplication.recordControl : WatchComplication.transcribeControl }
     var link: WatchLink { self == .record ? .record : .transcribe }
 }
 
-/// A countdown ring, for the circular families.
-struct CountdownRing: View {
-    let run: PomodoroTimer.Run
+/// A run counting down, the way the system Timer draws one: a ring that
+/// empties with the time left inside it, the time with a gauge in a corner,
+/// the time after the icon inline. Every timer complication uses it.
+struct Countdown: View {
+    let span: ClosedRange<Date>
+    let symbol: String
+    var tint: Color = .orange
+    @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        ProgressView(timerInterval: run.startedAt...run.endsAt, countsDown: true) {
-            EmptyView()
-        } currentValueLabel: {
-            Text(timerInterval: run.startedAt...run.endsAt, countsDown: true).monospacedDigit()
+        switch family {
+        case .accessoryCorner:
+            Text(timerInterval: span, countsDown: true)
+                .font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
+                .minimumScaleFactor(0.6)
+                .widgetLabel {
+                    ProgressView(timerInterval: span, countsDown: true,
+                                 label: { EmptyView() }, currentValueLabel: { EmptyView() })
+                        .tint(tint)
+                }
+        case .accessoryInline:
+            Label { Text(timerInterval: span, countsDown: true).monospacedDigit() } icon: { Image(systemName: symbol) }
+        default:
+            ProgressView(timerInterval: span, countsDown: true) {
+                EmptyView()
+            } currentValueLabel: {
+                Text(timerInterval: span, countsDown: true)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .minimumScaleFactor(0.6)
+            }
+            .progressViewStyle(.circular)
+            .tint(tint)
         }
-        .progressViewStyle(.circular)
     }
 }
 
@@ -151,14 +184,6 @@ struct PomodoroComplicationView: View {
     @ViewBuilder private func running(_ run: PomodoroTimer.Run) -> some View {
         let span = run.startedAt...run.endsAt
         switch family {
-        case .accessoryCorner:
-            Image(systemName: run.kind.symbol).font(.title3)
-                .widgetLabel {
-                    ProgressView(timerInterval: span, countsDown: true,
-                                 label: { EmptyView() }, currentValueLabel: { EmptyView() })
-                }
-        case .accessoryInline:
-            Label { Text(timerInterval: span, countsDown: true) } icon: { Image(systemName: run.kind.symbol) }
         case .accessoryRectangular:
             VStack(alignment: .leading, spacing: 2) {
                 Label(run.kind.label, systemImage: run.kind.symbol).font(.headline)
@@ -168,7 +193,7 @@ struct PomodoroComplicationView: View {
                              label: { EmptyView() }, currentValueLabel: { EmptyView() })
             }.frame(maxWidth: .infinity, alignment: .leading)
         default:
-            CountdownRing(run: run)
+            Countdown(span: span, symbol: run.kind.symbol, tint: run.kind.tint)
         }
     }
 
@@ -216,19 +241,7 @@ struct TimerButtonView: View {
 
     var body: some View {
         if case .running(let run) = state, choice.owns(run) {
-            switch family {
-            case .accessoryCorner:
-                Image(systemName: run.kind.symbol).font(.title3)
-                    .widgetLabel {
-                        ProgressView(timerInterval: run.startedAt...run.endsAt, countsDown: true,
-                                     label: { EmptyView() }, currentValueLabel: { EmptyView() })
-                    }
-            case .accessoryInline:
-                Label { Text(timerInterval: run.startedAt...run.endsAt, countsDown: true) }
-                    icon: { Image(systemName: run.kind.symbol) }
-            default:
-                CountdownRing(run: run)
-            }
+            Countdown(span: run.startedAt...run.endsAt, symbol: run.kind.symbol, tint: run.kind.tint)
         } else {
             let minutes = choice.kind.minutes
             switch family {
@@ -299,7 +312,7 @@ struct LauncherView: View {
 
     @ViewBuilder private func recording(_ choice: RecordingChoice) -> some View {
         if let status = entry.recording, status.mode == choice.mode {
-            button(choice.link, symbol: "stop.fill", tint: .red) {
+            button(choice.link, symbol: choice.symbol, tint: .red) {
                 Text(status.startedAt, style: .timer).monospacedDigit()
             }
         } else {
@@ -353,24 +366,7 @@ struct WorkoutGlyph: View {
             default: Glyph(symbol: "dumbbell")
             }
         case .running(let startedAt, let endsAt):
-            let span = startedAt...endsAt
-            switch family {
-            case .accessoryCorner:
-                Image(systemName: "dumbbell").font(.title3)
-                    .widgetLabel {
-                        ProgressView(timerInterval: span, countsDown: true,
-                                     label: { EmptyView() }, currentValueLabel: { EmptyView() })
-                    }
-            case .accessoryInline:
-                Label { Text(timerInterval: span, countsDown: true) } icon: { Image(systemName: "dumbbell") }
-            default:
-                ProgressView(timerInterval: span, countsDown: true) {
-                    EmptyView()
-                } currentValueLabel: {
-                    Text(timerInterval: span, countsDown: true).monospacedDigit()
-                }
-                .progressViewStyle(.circular)
-            }
+            Countdown(span: startedAt...endsAt, symbol: "dumbbell", tint: .orange)
         case .ringing:
             switch family {
             case .accessoryCorner: Image(systemName: "bell.fill").font(.title2).widgetLabel("Rest's over")
@@ -406,12 +402,13 @@ struct RecordingGlyph: View {
     @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        let symbol = status == nil ? choice.symbol : "stop.fill"
+        // On: the same icon, in red, so the face says which kind of clip is going.
+        let symbol = choice.symbol
         switch family {
         case .accessoryCorner:
             if let status {
-                Image(systemName: symbol).font(.title2).foregroundStyle(.red)
-                    .widgetLabel { Text(status.startedAt, style: .timer) }
+                Image(systemName: symbol).font(.title2).foregroundStyle(.red).widgetAccentable()
+                    .widgetLabel { Text(status.startedAt, style: .timer).foregroundStyle(.red) }
             } else {
                 Image(systemName: symbol).font(.title2).widgetLabel(choice.title)
             }
@@ -422,8 +419,12 @@ struct RecordingGlyph: View {
                 Label(choice.title, systemImage: symbol)
             }
         default:
-            Glyph(symbol: symbol, tint: status == nil ? nil : .red)
-                .accessibilityLabel(status == nil ? choice.title : "Stop \(choice.title.lowercased())")
+            ZStack {
+                if status != nil { Circle().fill(.red.opacity(0.3)) } else { AccessoryWidgetBackground() }
+                Image(systemName: symbol).font(.title2).foregroundStyle(status == nil ? Color.primary : .red)
+            }
+            .widgetAccentable(status != nil)
+            .accessibilityLabel(status == nil ? choice.title : "Stop \(choice.title.lowercased())")
         }
     }
 }

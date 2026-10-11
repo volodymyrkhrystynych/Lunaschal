@@ -77,8 +77,7 @@ final class WorkoutModel: NSObject, ObservableObject, WKExtendedRuntimeSessionDe
         body(&timer)
         guard timer != before else { return }
         do { try timer.save(to: stateURL) } catch { message = error.localizedDescription }
-        WidgetCenter.shared.reloadTimelines(ofKind: WatchComplication.workoutKind)
-        WidgetCenter.shared.reloadTimelines(ofKind: WatchComplication.launcherKind)
+        PomodoroEngine.redraw()
         wake()
     }
 

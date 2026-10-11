@@ -61,10 +61,12 @@ struct PomodoroEngine {
                                          trigger: UNTimeIntervalNotificationTrigger(timeInterval: wait, repeats: false)))
     }
 
+    /// Redraws every complication and Control. They all read one entry,
+    /// so reloading only the kinds a change "belongs" to is how the launcher
+    /// row went on showing a bare Focus button through a whole run.
     static func redraw() {
-        for kind in WatchComplication.timerKinds { WidgetCenter.shared.reloadTimelines(ofKind: kind) }
-        ControlCenter.shared.reloadControls(ofKind: WatchComplication.focusControl)
-        ControlCenter.shared.reloadControls(ofKind: WatchComplication.timeoutControl)
+        WidgetCenter.shared.reloadAllTimelines()
+        ControlCenter.shared.reloadAllControls()
     }
 
     /// Moves a timer kept in the app's own container, from a build before the
