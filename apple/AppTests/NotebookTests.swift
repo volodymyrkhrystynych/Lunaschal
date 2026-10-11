@@ -155,6 +155,20 @@ func solid(_ color: UIColor, _ size: CGSize) -> CGImage? {
 
 @MainActor
 final class NotebookEditorTests: XCTestCase {
+    func testInitialToolMatchesThePickerWithoutAToolChange() throws {
+        let store = try store()
+        let controller = NotebookCanvasController(model: NotebookEditorModel(store: store, notebook: try store.create()))
+        controller.picker.selectedToolItem = PKToolPickerInkingItem(type: .marker, color: .red, width: 12)
+        controller.loadViewIfNeeded()
+        let chosen = try XCTUnwrap(controller.picker.selectedToolItem as? PKToolPickerInkingItem).inkingTool
+        let active = try XCTUnwrap(controller.paper.drawingTool as? PKInkingTool)
+        XCTAssertEqual(active.inkType, chosen.inkType)
+        XCTAssertEqual(active.color, chosen.color)
+        XCTAssertEqual(active.width, chosen.width)
+        XCTAssertEqual(controller.picker.colorUserInterfaceStyle, .light)
+        XCTAssertEqual(controller.picker.overrideUserInterfaceStyle, .light)
+    }
+
     private func store() throws -> NotebookStore {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -430,6 +444,22 @@ final class NotebookEditorTests: XCTestCase {
         XCTAssertFalse(scrolls.isEmpty, "PaperKit scrolls with a UIScrollView")
         // A palm slipping past palm rejection used to slide the page; two fingers still pinch and pan.
         XCTAssertTrue(scrolls.allSatisfy { $0.panGestureRecognizer.minimumNumberOfTouches == 2 })
+    }
+
+    func testToolChangeAfterInsertingPhotoReturnsFirstResponderToCanvas() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = shown(model)
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 300, height: 200))))
+        controller.show(page: model.current, revision: model.revision)
+        let selectionEditor = UITextField(frame: CGRect(x: 0, y: 0, width: 100, height: 30))
+        controller.view.addSubview(selectionEditor)
+        selectionEditor.becomeFirstResponder()
+        XCTAssertTrue(selectionEditor.isFirstResponder)
+        controller.toolPickerSelectedToolItemDidChange(controller.picker)
+        XCTAssertTrue(controller.paper.isFirstResponder)
+        XCTAssertFalse(selectionEditor.isFirstResponder)
+        XCTAssertFalse(NotebookPage.isBlank(try XCTUnwrap(controller.paper.markup)))
     }
 
     func testTheNewspaperColumnStillScrollsWithOneFinger() throws {

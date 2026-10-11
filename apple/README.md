@@ -29,7 +29,8 @@ what each device can currently do and which work remains device-only.
 - **iPad notebooks** (Capture → **Notes** or **Newspaper**, top right). A
   full-window PaperKit canvas with the tab bar hidden: Pencil ink,
   pictures that can be moved and resized, text boxes and shapes from the tool
-  picker's **+**.
+  picker's **+**. The initial drawing tool is applied on open, and the picker
+  uses light-page ink colours even when the rest of the app uses dark mode.
   **Notes** are A4 pages, one at a time, each fitted whole to the window so
   nothing scrolls. **Only a finger that lands at a side of the screen** (within
   44 pt) turns a page: in from the right edge for the next page, in from the
@@ -61,10 +62,10 @@ what each device can currently do and which work remains device-only.
   checkpoint and Save.
   **Notes belong to the entry draft**: Notes reopens the draft's notebook until the
   entry is saved, and the composer lists it under Attachments (tap to reopen,
-  swipe to take it out of the entry; it stays in Draw). **Save entry** — in the
-  composer, or **Save entry** inside the notes — files the typed text, links,
+  swipe to take it out of the entry; it stays in Draw). **Save** — in the
+  composer, or **Save** inside the notes — files the typed text, links,
   clips, files and the notes' pages (as JPEGs, blank pages dropped) as one journal
-  entry. Save food entry leaves the notes in the draft.
+  entry. Food leaves the notes in the draft.
   A **newspaper's Save** files its cover plus the pages written on (found from the
   ink itself) and the notebook's one YouTube link. Saving the same issue again
   (**Update entry**) files every page written on so far and **replaces** the
@@ -92,7 +93,8 @@ what each device can currently do and which work remains device-only.
   is iPhone-only); with no notebook open, its screenshot waits for the next one.
 
 - The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
-  default) is the composer below; **Daily** logs the day's selfie (front camera),
+  default) is the composer below; **Daily** logs the day's selfie (front camera,
+  flash initially off),
   body weight, calorie entries and voluntary spending. Each is saved on the device
   first, keyed by the
   4am day it was logged on, and uploads to the Lifestyle routes on the next sync.
@@ -102,12 +104,12 @@ what each device can currently do and which work remains device-only.
   Calories take one line, split as the desktop card does it (`CalorieLine`, a port
   of `parseCalorieEntry`): "chicken and rice, ~600" becomes the food and its count.
   Swipe a calorie row left to delete it, including entries already on the server.
-  **Voluntary spending** takes only an amount in CAD and a free-text category
-  (for example, `15` and `McDonald's` or `30` and `Groceries`), shows today's total,
+  **Voluntary spending** takes one line with a free-text category followed by
+  an amount in CAD (for example, `McDonald's 15` or `Groceries 30.25`), shows today's total,
   and supports the same swipe deletion. Purchases and deletes queue offline and
   survive relaunch. Amounts are stored as integer cents in `spending_logs`.
   The backend and portable Swift tests cover replay and deletion during an upload;
-  the new simulator tests have not been run locally.
+  single-line spending capture, relaunch and deletion passed in the iPhone simulator.
 - **Workout** (the third Capture page) is the desktop's workout log: one set or
   activity per line ("bicep curls 20, 10" in lb, "squats 10" bodyweight, bare
   "20, 10" for the selected pill, "walking 30" minutes), recent-exercise pills,
@@ -151,7 +153,7 @@ what each device can currently do and which work remains device-only.
   forecast is cached so it shows offline. With location permission, the Capture
   tab takes a fix when shown and sends it to `POST /api/lifestyle/weather/location`,
   so the forecast is for where the phone is.
-- Weather on entries. Save entry and Save food entry attach the fix if it is under
+- Weather on entries. Save and Food attach the fix if it is under
   15 minutes old; Save never waits for GPS. The server's entry-weather sweep
   (`backend/weather/entry.py`, woken by each save) looks the weather up for the
   entry's own place and capture hour, so an entry saved offline still gets the
@@ -160,7 +162,7 @@ what each device can currently do and which work remains device-only.
   after saving, at most every ten minutes).
 - Offline typed journal entries. On the phone, **Transcribe** and **Record**
   add clips to the Capture tab's draft; stopping keeps the clip there, and
-  only **Save entry** turns the draft into one entry. Clips upload through the
+  only **Save** turns the draft into one entry. Clips upload through the
   recordings route under that entry's id, in recorded order, so the server
   appends Transcribe clips' words after the typed text. Both modes retain the
   original mono AAC file. The draft (text, links, clips, photos, files)
@@ -173,13 +175,17 @@ what each device can currently do and which work remains device-only.
   staged into the same draft and uploaded after the entry is
   created, each under its own client-minted attachment ID. Passed in
   simulator for the library picker; the camera needs a device.
-- **Save food entry** (bottom middle, between Discard and **Save entry**) files
+- **Food** (bottom middle, between Discard and **Save**) files
   the same draft in the food log instead: text, photos/videos and clips, under
-  client-minted meal and media IDs, with the capture time the server now keeps.
+  client-minted meal and media IDs. A photo's original capture time dates the
+  meal locally and on upload; without photo metadata it uses the save time.
   YouTube links stay in the composer for the next journal entry, and the
   button is disabled while a non-media file is attached. Clips go through the
   food recordings route, which transcribes each one into the meal's note.
   Passed in simulator offline; uploading to a real server is untested.
+  The YouTube field's Paste button validates and adds the copied link in one tap.
+  Pasting images into the entry text box stages them as photo attachments;
+  existing words stay intact and the images survive closing the app.
 - **Editing a server entry or a meal** (Journal → open it → Edit) offers the
   Capture tab's own buttons: Transcribe, Record, Take photo, Choose photo and
   Attach file, plus YouTube links for a journal entry. What they make waits in

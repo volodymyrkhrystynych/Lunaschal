@@ -1,5 +1,8 @@
 import Foundation
 import XCTest
+#if canImport(ImageIO)
+import ImageIO
+#endif
 @testable import LunaschalCore
 
 final class FoodCaptureTests: XCTestCase {
@@ -39,6 +42,45 @@ final class FoodCaptureTests: XCTestCase {
         XCTAssertThrowsError(try store.commitDraft(text: " ", youtubeURLs: [], kind: .food)) {
             XCTAssertEqual($0 as? CaptureError, .emptyText)
         }
+    }
+
+    func testMealUsesPhotoTimeAndKeepsItAcrossRestart() throws {
+        let taken = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = try store.stageFile(data: Data("jpeg".utf8), name: "Meal.jpg", contentType: "image/jpeg", capturedAt: taken)
+        let reopened = try CaptureStore(root: root)
+        let meal = try reopened.commitDraft(text: "Lunch", youtubeURLs: [], kind: .food)
+        XCTAssertEqual(meal.createdAt, taken)
+        XCTAssertEqual(try reopened.load(meal.id).files.first?.capturedAt, taken)
+    }
+
+    #if canImport(ImageIO)
+    func testPhotoExifTimeIsExtractedBeforeSavingMeal() throws {
+        let pixels = Data([255, 0, 0, 255])
+        let provider = try XCTUnwrap(CGDataProvider(data: pixels as CFData))
+        let image = try XCTUnwrap(CGImage(width: 1, height: 1, bitsPerComponent: 8, bitsPerPixel: 32,
+                                          bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                                          provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let bytes = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(bytes, "public.jpeg" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, [kCGImagePropertyExifDictionary: [
+            kCGImagePropertyExifDateTimeOriginal: "2023:11:14 17:13:20",
+            kCGImagePropertyExifOffsetTimeOriginal: "-05:00"
+        ]] as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        _ = try store.stageFile(data: bytes as Data, name: "Meal.jpg", contentType: "image/jpeg")
+        let meal = try store.commitDraft(text: "Dinner", youtubeURLs: [], kind: .food)
+        XCTAssertEqual(meal.createdAt, Date(timeIntervalSince1970: 1_700_000_000))
+    }
+    #endif
+
+    func testJournalKeepsSaveTimeAndOldFilesDecodeWithoutPhotoTime() throws {
+        let old = Data("{\"attachmentID\":\"\(ULID.make())\",\"name\":\"Meal.jpg\",\"contentType\":\"image/jpeg\"}".utf8)
+        XCTAssertNil(try JSONDecoder().decode(CaptureFile.self, from: old).capturedAt)
+        _ = try store.stageFile(data: Data("jpeg".utf8), name: "Meal.jpg", contentType: "image/jpeg",
+                                capturedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let saved = Date(timeIntervalSince1970: 1_790_000_000)
+        XCTAssertEqual(try store.commitDraft(text: "Journal", youtubeURLs: [], now: saved).createdAt, saved)
     }
 
     func testAFileTheFoodLogCannotKeepStaysInTheDraft() throws {

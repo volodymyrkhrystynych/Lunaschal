@@ -48,6 +48,7 @@ public struct CaptureFile: Codable, Equatable, Identifiable {
     public let attachmentID: String
     public let name: String
     public let contentType: String?
+    public let capturedAt: Date?
 
     public var id: String { attachmentID }
     public var isImage: Bool { contentType?.hasPrefix("image/") == true }
@@ -56,10 +57,11 @@ public struct CaptureFile: Codable, Equatable, Identifiable {
         ["image/", "video/", "audio/"].contains { contentType?.hasPrefix($0) == true }
     }
 
-    public init(name: String, contentType: String?, now: Date = Date()) {
+    public init(name: String, contentType: String?, capturedAt: Date? = nil, now: Date = Date()) {
         attachmentID = ULID.make(now: now)
         self.name = name
         self.contentType = contentType
+        self.capturedAt = capturedAt
     }
 }
 

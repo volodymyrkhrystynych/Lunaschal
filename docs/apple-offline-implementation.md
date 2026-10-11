@@ -1,5 +1,30 @@
 # Apple apps and offline experience — implementation tracker
 
+Capture follow-up (2026-10-11, `fix/capture-photo-tools`):
+
+- Capture actions are Food and Save; YouTube Paste validates and adds the link.
+- The entry text box accepts image paste into persistent draft attachments,
+  preserves existing text and retains standard text paste.
+  Two image/text paste app tests and two iPhone composer UI tests passed,
+  including draft recovery after relaunch and saving the pasted image.
+- Food captures retain the photo's original EXIF time locally and across upload,
+  falling back to the save time when no photo timestamp is available.
+- Notebook tool changes return first responder to PaperKit after image insertion.
+- Photo timestamps and legacy manifests have portable regression coverage;
+  paste and notebook responder changes have simulator regression tests.
+- Local verification: 470 Swift core tests, three iPhone capture UI tests and
+  one iPad notebook tool regression passed. Physical Pencil testing remains
+  unverified.
+
+Full local CI verification (2026-10-11): 470 Swift core tests and 21 Python
+helper tests passed; unsigned device archive validation and the Watch simulator
+build passed. All five iPhone shards passed on fresh, seeded simulators (90 tests:
+49 app unit tests and 41 UI tests). Spending swipe-to-delete passed on CI's
+configured retry. All six iPad CI selections passed, including the drawing
+reopen rerun after teaching the test to scroll past existing notebooks. The
+exact Linux Swift 6.2 container job was not available locally; core tests ran
+with macOS Swift 6.3.3. Signing and TestFlight distribution were not run.
+
 Last updated: 2026-10-04. Working branch: `fix/apple-library-navigation`.
 
 Books-library follow-up:
@@ -655,13 +680,19 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
       New photo/document attachment capture and share-extension imports remain open.
 - [x] Save YouTube URLs and commentary offline; queue server metadata/import work.
 - [x] Capture → Daily: swipe to delete calorie entries; voluntary spending with an
-      amount in CAD and a free-text category, a daily total and swipe deletion.
+      amount in CAD at the end of a single free-text category line (e.g. `Coffee 4.50`),
+      a daily total and swipe deletion. Earlier two-field drafts migrate on open.
       Purchases use `spending_logs` with whole cents, client ULIDs and the original
       4am day/capture timestamp. Creates and deletions persist in the Daily outbox;
       deleting during an upload cannot be overwritten by its response, and a
       replayed deletion treats 404 as success. Synced deletion markers keep stale
       server snapshots from bringing rows back. Backend and portable Swift tests
-      passed; simulator coverage added but not run locally.
+      passed; single-line spending capture, relaunch and deletion passed in the
+      iPhone simulator. All 471 portable Swift tests and 18 notebook editor tests
+      on the iPad simulator passed for these fixes.
+      Selfies now open with flash off. Notebooks explicitly apply the initial
+      picker tool and use light-page ink colours; Pencil and camera behaviour
+      still require device verification.
 - [ ] Show archive playback availability without preventing URL/commentary capture.
 - [ ] Complete share-extension support: fic/YouTube links and journal screenshots
       are implemented; audio and documents remain outstanding. Image shares (up to 20) preserve original bytes in `ScreenshotOutbox`, upload through
