@@ -305,17 +305,26 @@ def _fetch_binary(url: str) -> tuple[bytes, str]:
 
 
 def fetch_alerts(domain: str) -> list[xenforo.AlertItem]:
-    """Fetch and parse page 1 of a site's /account/alerts. Requires a stored
-    session cookie — guests are redirected to the login page, which is
+    """Walk a site's /account/alerts, including activity pushed off page one
+    between polls. Requires a stored session cookie — guests are redirected
+    to the login page, which is
     reported as a blocked fetch rather than an empty alert list."""
-    resp = _fetch(f'https://{domain}/account/alerts')
-    items = xenforo.parse_alerts(resp.text, domain)
-    logged_out = '/login' in urlparse(str(resp.url)).path or \
-        (not items and '/login/login' in resp.text)
-    if logged_out:
-        raise FetchBlockedError(
-            f'{domain}: not logged in — paste a fresh Cookie header in'
-            ' Settings → Fanfic site cookies.')
+    items = []
+    page = 1
+    while True:
+        url = f'https://{domain}/account/alerts'
+        resp = _fetch(url if page == 1 else f'{url}?page={page}')
+        parsed = xenforo.parse_alerts_page(resp.text, domain)
+        logged_out = '/login' in urlparse(str(resp.url)).path or \
+            (not parsed.items and '/login/login' in resp.text)
+        if logged_out:
+            raise FetchBlockedError(
+                f'{domain}: not logged in — paste a fresh Cookie header in'
+                ' Settings → Fanfic site cookies.')
+        items.extend(parsed.items)
+        if page >= parsed.last_page:
+            break
+        page += 1
     return items
 
 
@@ -712,7 +721,7 @@ def _update_chapter(db, chapter_id: str, post: xenforo.ReaderPost,
     )
 
 
-def _finalize_fic(db, fic_id: str, cover: str | None) -> None:
+def _finalize_fic(db, fic_id: str, cover: str | None, *, checked_at: int) -> None:
     agg = db.execute(
         'SELECT COUNT(*) AS n, COALESCE(SUM(word_count), 0) AS words'
         ' FROM fic_chapters WHERE fic_id=?', (fic_id,)).fetchone()
@@ -721,7 +730,7 @@ def _finalize_fic(db, fic_id: str, cover: str | None) -> None:
         'UPDATE fics SET chapter_count=?, word_count=?, download_status=?,'
         ' download_error=NULL, deep_pending=0, last_checked_at=?, updated_at=?,'
         ' cover_path=COALESCE(cover_path, ?) WHERE id=?',
-        (agg['n'], agg['words'], 'complete', now, now, cover, fic_id),
+        (agg['n'], agg['words'], 'complete', checked_at, now, cover, fic_id),
     )
     db.execute('DELETE FROM fanfic_browser_requests WHERE fic_id=?', (fic_id,))
     db.commit()
@@ -820,6 +829,8 @@ def _walk_category_reader(db, fic_id: str, ref: xenforo.ThreadRef,
             raise
         reader = xenforo.parse_reader_page(resp.text)
         if not reader.posts:
+            if saw_posts:
+                raise ValueError('Reader page contained no chapters before the walk finished')
             return WalkResult(inserted, updated, saw_posts, first_author)
         saw_posts = True
         if first_author is None:
@@ -910,8 +921,7 @@ def _walk_category_via_thread(db, fic_id: str, ref: xenforo.ThreadRef,
                     harvested_meta[post.post_id] = str(resp.url)
         post = harvested.get(item.post_id)
         if post is None:
-            print(f'Fanfic thread-walk: post {item.post_id} not found on its page, skipping')
-            continue
+            raise ValueError(f'Threadmarked post {item.post_id} not found on its page')
         saw_posts = True
         if first_author is None:
             first_author = post.author
@@ -949,6 +959,7 @@ def _walk_category_via_thread(db, fic_id: str, ref: xenforo.ThreadRef,
 
 def run_import(fic_id: str, ref: xenforo.ThreadRef) -> None:
     db = get_db()
+    checked_at = int(time.time())
     try:
         _update_progress(fic_id, phase='index')
         index = xenforo.parse_threadmarks_index(_fetch(ref.threadmarks_url).text)
@@ -983,7 +994,7 @@ def run_import(fic_id: str, ref: xenforo.ThreadRef) -> None:
 
         if author and not index.author:
             db.execute('UPDATE fics SET author=? WHERE id=?', (author, fic_id))
-        _finalize_fic(db, fic_id, _first_local_image(db, fic_id))
+        _finalize_fic(db, fic_id, _first_local_image(db, fic_id), checked_at=checked_at)
         _update_progress(fic_id, phase='done', done=True)
     except Exception as e:
         print(f'Fanfic import failed for {fic_id}: {e}')
@@ -1056,6 +1067,9 @@ def run_check_updates(fic_id: str, deep: bool = False) -> None:
     Deep only ever runs when explicitly asked for. Authors revising published
     chapters is rare enough that paying a full re-walk on a timer would cost
     far more requests than it recovers."""
+    # Only commit this boundary on success. Completion time would swallow an
+    # alert arriving after the index was fetched, during a long download.
+    checked_at = int(time.time())
     db = get_db()
     row = db.execute('SELECT source_url,source_type FROM fics WHERE id=?', (fic_id,)).fetchone()
     from backend.fanfic import collections, sites
@@ -1131,7 +1145,7 @@ def run_check_updates(fic_id: str, deep: bool = False) -> None:
         except Exception as e:
             print(f'Fanfic image repair failed for {fic_id}: {e}')
 
-        _finalize_fic(db, fic_id, _first_local_image(db, fic_id))
+        _finalize_fic(db, fic_id, _first_local_image(db, fic_id), checked_at=checked_at)
         _update_progress(fic_id, phase='done', done=True)
     except Exception as e:
         print(f'Fanfic update check failed for {fic_id}: {e}')

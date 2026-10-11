@@ -37,7 +37,7 @@ def _fetch_for(url, **owner):
     return _fetch(url)
 
 
-def queue_work(ref: sites.WorkRef) -> tuple[str, bool]:
+def queue_work(ref: sites.WorkRef, *, check_updates: bool = False) -> tuple[str, bool]:
     db = get_db()
     now, fic_id = int(time.time()), str(ULID())
     result = db.execute(
@@ -47,13 +47,17 @@ def queue_work(ref: sites.WorkRef) -> tuple[str, bool]:
          ref.url, ref.site, ref.id, now, now))
     created = result.rowcount > 0
     if not created:
-        row = db.execute('SELECT id,download_status FROM fics WHERE site=? AND thread_id=?',
+        row = db.execute('SELECT id,download_status,last_checked_at FROM fics WHERE site=? AND thread_id=?',
                          (ref.site, ref.id)).fetchone()
         fic_id = row['id']
-        if row['download_status'] == 'error':
+        needs_check = (
+            ref.updated_at is not None
+            and (row['last_checked_at'] is None or ref.updated_at >= row['last_checked_at'])
+        ) or (check_updates and ref.site == pacing.DOMAIN and ref.updated_at is None)
+        if row['download_status'] == 'error' or (
+                row['download_status'] != 'downloading' and needs_check):
             db.execute('UPDATE fics SET update_pending=1 WHERE id=?', (fic_id,))
-    # Scanning an existing story enriches its history without downloading it
-    # again. Missing dates on later scans never erase a previously saved date.
+    # Missing addition dates never erase previously saved account history.
     db.execute('UPDATE fics SET source_favorited_at=COALESCE(?,source_favorited_at),'
                'source_followed_at=COALESCE(?,source_followed_at) WHERE id=?',
                (ref.favorited_at, ref.followed_at, fic_id))
@@ -66,6 +70,13 @@ def queue_work(ref: sites.WorkRef) -> tuple[str, bool]:
 
 def run_work(fic_id: str, url: str, deep: bool = False) -> None:
     db = get_db()
+    checked_at = int(time.time())
+    # Browser retries reuse pages from earlier attempts. The oldest request's
+    # creation is a conservative boundary for the snapshot we actually read.
+    cached = db.execute('SELECT MIN(created_at) AS oldest FROM fanfic_browser_requests'
+                        ' WHERE fic_id=?', (fic_id,)).fetchone()['oldest']
+    if cached is not None:
+        checked_at = min(checked_at, cached)
     try:
         ref = sites.parse_work_url(url)
         if ref is None:
@@ -128,7 +139,7 @@ def run_work(fic_id: str, url: str, deep: bool = False) -> None:
                            ' WHERE id=?', (fic_id, fic_id, fic_id))
                 db.commit()
             download._bump_progress(fic_id, 1)
-        download._finalize_fic(db, fic_id, None)
+        download._finalize_fic(db, fic_id, None, checked_at=checked_at)
         download._update_progress(fic_id, phase='done', done=True)
     except pacing.DeferredDownload as exc:
         db.execute("UPDATE fics SET download_status='error',update_pending=1,deep_pending=?,"
@@ -190,7 +201,7 @@ def run_scan(scan_id: str) -> None:
             else:
                 refs, next_url = sites.parse_collection(response.text, url)
             for ref in refs:
-                _, created = queue_work(ref)
+                _, created = queue_work(ref, check_updates=True)
                 found += 1
                 imported += int(created)
             urls = ([next_url] if next_url else []) + urls[1:]

@@ -45,6 +45,7 @@ def submit(job, payload, client=CLIENT):
 
 
 def test_browser_import_preserves_pages_across_disconnect_and_restart(clock):
+    started = int(clock[0])
     fic_id = queue()
     first = browser.poll(CLIENT)['request']
     assert first['navigate'] and first['url'] == URL
@@ -65,6 +66,7 @@ def test_browser_import_preserves_pages_across_disconnect_and_restart(clock):
     answer(second, 2)  # Lost acknowledgement is harmless.
     download.run_drain_pending()
     assert get_db().execute('SELECT chapter_count,download_status FROM fics').fetchone()[:] == (2, 'complete')
+    assert get_db().execute('SELECT last_checked_at FROM fics').fetchone()[0] == started
     assert get_db().execute('SELECT id FROM fic_chapters WHERE position=1').fetchone()[0] == chapter
     assert not get_db().execute('SELECT 1 FROM fanfic_browser_requests').fetchone()
 

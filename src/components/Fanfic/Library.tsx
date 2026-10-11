@@ -192,6 +192,7 @@ export function Library({ onOpen }: LibraryProps) {
       if (r.newImports)
         parts.push(`${r.newImports} new import${r.newImports > 1 ? 's' : ''}`);
       if (r.skippedActive) parts.push(`${r.skippedActive} already queued`);
+      if (r.skippedFresh) parts.push(`${r.skippedFresh} already up to date`);
       if (parts.length === 0)
         parts.push(`no library threads among ${r.alertsSeen} alerts`);
       const siteErrors = Object.entries(r.errors).map(

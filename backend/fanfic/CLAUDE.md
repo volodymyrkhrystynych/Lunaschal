@@ -132,7 +132,31 @@ existing chapter bodies or changing their IDs and reading state.
 - A **deep** check walks every reader page and compares each post against the saved chapter. `fic_chapters.edited_at` holds XenForo's "Last edited" timestamp — parsed from `.message-lastEdit`, which sits in the same `<article>` the body does, so it costs no extra request. A changed chapter is rewritten **in place**: `position` is never touched, or a typo fix would reshuffle reading order and the last-read pointer.
 - **Deep only ever runs when asked** (`{"deep": true}`, the Deep button; `fics.deep_pending` carries the request to the drain worker). There is deliberately no cadence and no auto-escalation: authors revising already-published chapters is rare, so re-walking every fic on a timer would spend far more requests than it recovers.
 - **`edited_at` is left NULL by the migration on purpose.** A post with no edit notice also parses to `None`, so unchanged chapters compare equal and a first deep scan doesn't rewrite the whole library.
-- **`refresh-alerts` no longer skips a fic for being fetched more recently than its alert.** That comparison assumed an alert is the only way a thread changes; with edits raising none, "checked since the alert" regularly meant reporting a fic current while a revised chapter sat unread.
+- **Alert refreshes skip activity already covered by a successful check**
+  (`alerts.py`, shared by the route and `alert_scheduler.py`). For all three
+  forums, the newest alert per thread must be older than `last_checked_at`
+  and the fic must be complete before it is skipped. Missing timestamps,
+  same-second alerts and failed downloads remain eligible. Manual Update
+  and Deep bypass this gate; ordinary checks never recovered silent edits
+  anyway. Refresh reports `skippedFresh` and the Library displays it.
+- **`last_checked_at` records the start of the last successful check**, not
+  its completion: an alert arriving while chapters download must remain
+  eligible. Failed/cancelled checks do not advance it. FF.net browser retries
+  use the oldest cached request's creation time, since those pages can be
+  older than the worker attempt that finally completes.
+- **The server polls after one startup minute, then every randomized 30–90
+  minutes**, within `LUNASCHAL_NO_SCHEDULERS`. Forum alert pagination is
+  followed so a busy hour does not hide page-two activity. Saved forum
+  sessions are required. FF.net uses both followed/favorite account lists
+  when a cookie or browser mode is configured, through the existing durable
+  collection scans; active checkpoints and site pauses/cooldowns are
+  preserved. Browser mode still needs its connected extension tabs.
+- **FF.net collection scans compare the Updated column**, independently of
+  Added/Favorited/Followed. Precise timestamps skip covered updates;
+  date-only values use the end of that UTC day so another same-day update
+  cannot be skipped. Missing dates conservatively queue an ordinary check.
+  This can recheck today's updates, but older completed stories incur no
+  story requests. AO3 and Patreon collection behavior is unchanged.
 
 ## Reading spans (`fic_reading_spans`)
 

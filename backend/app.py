@@ -144,6 +144,8 @@ def create_app():
         from backend.fanfic.pacing import start_scheduler
         start_scheduler()
         start_scans()
+        from backend.fanfic.alert_scheduler import start_scheduler as start_alert_scheduler
+        start_alert_scheduler()
         from backend.ai.jobs import start_job_worker
         start_job_worker()
         from backend.newspapers.scheduler import start_newspaper_scheduler
