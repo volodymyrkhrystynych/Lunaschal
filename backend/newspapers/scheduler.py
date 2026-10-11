@@ -2,7 +2,7 @@
 
 With auto-download on, a day's issue is queued by whichever comes first: the
 day's first journal entry (`queue_for_journal_entry`), or a time picked at
-random between 18:00 and 22:00 Toronto. Either way it gets `MAX_ATTEMPTS`
+random between 05:00 and 07:00 Toronto. Either way it gets `MAX_ATTEMPTS`
 tries an hour apart, and a later trigger on the same day does not reset them.
 """
 import logging
@@ -25,17 +25,17 @@ _thread = None
 
 TORONTO = ZoneInfo('America/Toronto')
 MAX_ATTEMPTS = 2
-EVENING_START_HOUR = 18
-EVENING_END_HOUR = 22
+MORNING_START_HOUR = 5
+MORNING_END_HOUR = 7
 
 
-def evening_minute(date):
-    """Minutes past midnight at which `date`'s evening download fires.
+def morning_minute(date):
+    """Minutes past midnight at which `date`'s morning download fires.
 
     Seeded by the date so the pick survives a restart rather than being re-rolled
     on every boot (which would skew it towards whichever boot came first)."""
     return random.Random(f'newspaper:{date}').randrange(
-        EVENING_START_HOUR * 60, EVENING_END_HOUR * 60)
+        MORNING_START_HOUR * 60, MORNING_END_HOUR * 60)
 
 
 def _auto_download_enabled(db):
@@ -77,7 +77,7 @@ def tick(now=None):
     local = datetime.fromtimestamp(now, TORONTO)
     db = get_db()
     today = local.date().isoformat()
-    if _auto_download_enabled(db) and local.hour * 60 + local.minute >= evening_minute(today):
+    if _auto_download_enabled(db) and local.hour * 60 + local.minute >= morning_minute(today):
         queue_issue(today, wake=False)
     with _lock:
         # A successful interactive reconnect wakes requests blocked by sign-in.

@@ -62,18 +62,18 @@ def enable_auto_download():
     get_db().commit()
 
 
-def test_evening_minute_is_stable_and_inside_six_to_ten_pm():
-    minutes = [scheduler.evening_minute(f'2026-09-{day:02d}') for day in range(1, 31)]
-    assert all(18 * 60 <= m < 22 * 60 for m in minutes)
+def test_morning_minute_is_stable_and_inside_five_to_seven_am():
+    minutes = [scheduler.morning_minute(f'2026-09-{day:02d}') for day in range(1, 31)]
+    assert all(5 * 60 <= m < 7 * 60 for m in minutes)
     assert len(set(minutes)) > 1  # actually random from day to day
-    assert scheduler.evening_minute('2026-09-06') == scheduler.evening_minute('2026-09-06')
+    assert scheduler.morning_minute('2026-09-06') == scheduler.morning_minute('2026-09-06')
 
 
-def test_daily_schedule_waits_for_the_random_evening_time_and_deduplicates(monkeypatch):
+def test_daily_schedule_waits_for_the_random_morning_time_and_deduplicates(monkeypatch):
     enable_auto_download()
     monkeypatch.setattr(pressreader, 'download_issue', lambda date: issues.store_issue(date, BytesIO(pdf_bytes())))
-    at = scheduler.evening_minute('2026-09-06')
-    scheduler.tick(toronto('2026-09-06', 6 * 60))
+    at = scheduler.morning_minute('2026-09-06')
+    scheduler.tick(toronto('2026-09-06', 5 * 60 - 1))
     scheduler.tick(toronto('2026-09-06', at - 1))
     assert get_db().execute('SELECT count(*) FROM newspaper_downloads').fetchone()[0] == 0
     scheduler.tick(toronto('2026-09-06', at))
@@ -82,8 +82,18 @@ def test_daily_schedule_waits_for_the_random_evening_time_and_deduplicates(monke
     assert job()['status'] == 'complete'
 
 
-def test_evening_schedule_respects_the_auto_download_setting():
-    scheduler.tick(toronto('2026-09-06', 22 * 60 - 1))
+def test_morning_schedule_respects_the_auto_download_setting():
+    scheduler.tick(toronto('2026-09-06', 7 * 60 - 1))
+    assert get_db().execute('SELECT count(*) FROM newspaper_downloads').fetchone()[0] == 0
+
+
+def test_morning_schedule_skips_an_issue_already_archived(monkeypatch):
+    enable_auto_download()
+    issues.store_issue('2026-09-06', BytesIO(pdf_bytes()))
+    def forbidden(date):
+        pytest.fail('An archived issue should not be downloaded again')
+    monkeypatch.setattr(pressreader, 'download_issue', forbidden)
+    scheduler.tick(toronto('2026-09-06', 7 * 60))
     assert get_db().execute('SELECT count(*) FROM newspaper_downloads').fetchone()[0] == 0
 
 
@@ -198,9 +208,9 @@ def test_automatic_queue_does_not_busy_spin_on_a_failed_issue(monkeypatch):
         raise pressreader.DownloadError('Not yet available')
     monkeypatch.setattr(pressreader, 'download_issue', fail)
     scheduler._wake.clear()
-    scheduler.tick(toronto('2026-09-06', 22 * 60 - 2))
+    scheduler.tick(toronto('2026-09-06', 7 * 60 - 2))
     assert not scheduler._wake.is_set()
-    scheduler.tick(toronto('2026-09-06', 22 * 60 - 1))
+    scheduler.tick(toronto('2026-09-06', 7 * 60 - 1))
     assert not scheduler._wake.is_set()
     assert job()['attempts'] == 1
 
