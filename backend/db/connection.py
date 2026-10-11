@@ -155,7 +155,6 @@ def init_db() -> None:
     _ensure_journal_attachment_youtube(db)
     _migrate_flashcards_to_learning(db)
     _ensure_prevent_sleep(db)
-    _ensure_nudge_settings(db)
     _ensure_briefing_settings(db)
     _ensure_research_settings(db)
     _ensure_timeout_settings(db)
@@ -1185,15 +1184,6 @@ def _ensure_prevent_sleep(db: sqlite3.Connection) -> None:
     if 'prevent_sleep' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN prevent_sleep INTEGER DEFAULT 0')
         db.commit()
-
-
-def _ensure_nudge_settings(db: sqlite3.Connection) -> None:
-    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
-    if 'nudge_enabled' not in cols:
-        db.execute('ALTER TABLE settings ADD COLUMN nudge_enabled INTEGER DEFAULT 1')
-    if 'nudge_interval_minutes' not in cols:
-        db.execute('ALTER TABLE settings ADD COLUMN nudge_interval_minutes INTEGER DEFAULT 45')
-    db.commit()
 
 
 def _ensure_briefing_settings(db: sqlite3.Connection) -> None:

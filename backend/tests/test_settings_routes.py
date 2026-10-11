@@ -77,21 +77,15 @@ def test_measure_base_gpu_vram_leaves_unset_on_malformed_output(monkeypatch):
     assert settings._gpu_total_vram_mb is None
 
 
-def test_get_settings_defaults_nudge_enabled_and_45_minute_interval(client):
-    resp = client.get('/api/settings')
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data['nudgeEnabled'] is True
-    assert data['nudgeIntervalMinutes'] == 45
-
-
-def test_patch_settings_updates_nudge_fields(client):
-    resp = client.patch('/api/settings/ai', json={'nudgeEnabled': False, 'nudgeIntervalMinutes': 20})
+def test_task_nudge_settings_are_gone(client):
+    # The spoken task check-in was removed from the STT listener; its
+    # settings must not linger as a switch that controls nothing.
+    resp = client.patch('/api/settings/ai', json={'nudgeEnabled': True, 'nudgeIntervalMinutes': 20})
     assert resp.status_code == 200
 
     data = client.get('/api/settings').get_json()
-    assert data['nudgeEnabled'] is False
-    assert data['nudgeIntervalMinutes'] == 20
+    assert 'nudgeEnabled' not in data
+    assert 'nudgeIntervalMinutes' not in data
 
 
 def test_get_settings_llm_generation_defaults(client):

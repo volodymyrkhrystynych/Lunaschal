@@ -855,8 +855,6 @@ export interface AppSettings {
   transcribePolishEnabled: boolean;
   preventSleep: boolean;
   meetingEchoCancel: boolean;
-  nudgeEnabled: boolean;
-  nudgeIntervalMinutes: number;
   briefingEnabled: boolean;
   briefingHour: number;
   briefingModel: string | null;

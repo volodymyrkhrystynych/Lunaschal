@@ -2111,7 +2111,7 @@ def seed_infra(db):
     db.execute(
         'UPDATE settings SET ai_provider = ?, llama_url = ?, llama_model = ?, '
         'stt_backend = ?, tts_backend = ?, whisper_model = ?, stt_device = ?, '
-        'voice_pipeline_enabled = 0, nudge_enabled = 0, briefing_enabled = 0, '
+        'voice_pipeline_enabled = 0, briefing_enabled = 0, '
         "stt_screenshot_key = '', "
         'email_sync_enabled = 0, research_enabled = 0, jobs_paused = 1, '
         # Never seed a paused demo: the switch lives at the top of Settings and

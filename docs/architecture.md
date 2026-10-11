@@ -94,7 +94,7 @@ flowchart LR
     end
 
     subgraph VOICE["OS-level voice — stt/"]
-        LISTENER["listener.py<br/>hotkeys · voice chat ·<br/>commands · task nudges"]
+        LISTENER["listener.py<br/>hotkeys · voice chat ·<br/>commands"]
         CHECKIN["morning_checkin.py"]
     end
 
