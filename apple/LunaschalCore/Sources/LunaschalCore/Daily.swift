@@ -105,6 +105,21 @@ public struct CalorieLine: Equatable {
     }
 }
 
+/// A purchase typed as a category followed by a CAD amount, e.g. "Coffee 4.50".
+public struct SpendingLine: Equatable {
+    public let category: String
+    public let amountCents: Int
+
+    public static func parse(_ text: String) -> SpendingLine? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separator = trimmed.lastIndex(where: { $0.isWhitespace }) else { return nil }
+        let category = String(trimmed[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let amount = String(trimmed[trimmed.index(after: separator)...])
+        guard !category.isEmpty, let cents = SpendingAmount.cents(amount) else { return nil }
+        return SpendingLine(category: category, amountCents: cents)
+    }
+}
+
 /// The Daily tab's outbox. One JSON manifest per log, the selfie's bytes
 /// beside it. Call from one executor (the app uses MainActor).
 public final class DailyStore {

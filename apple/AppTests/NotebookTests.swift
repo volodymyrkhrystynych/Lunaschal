@@ -155,6 +155,20 @@ func solid(_ color: UIColor, _ size: CGSize) -> CGImage? {
 
 @MainActor
 final class NotebookEditorTests: XCTestCase {
+    func testInitialToolMatchesThePickerWithoutAToolChange() throws {
+        let store = try store()
+        let controller = NotebookCanvasController(model: NotebookEditorModel(store: store, notebook: try store.create()))
+        controller.picker.selectedToolItem = PKToolPickerInkingItem(type: .marker, color: .red, width: 12)
+        controller.loadViewIfNeeded()
+        let chosen = try XCTUnwrap(controller.picker.selectedToolItem as? PKToolPickerInkingItem).inkingTool
+        let active = try XCTUnwrap(controller.paper.drawingTool as? PKInkingTool)
+        XCTAssertEqual(active.inkType, chosen.inkType)
+        XCTAssertEqual(active.color, chosen.color)
+        XCTAssertEqual(active.width, chosen.width)
+        XCTAssertEqual(controller.picker.colorUserInterfaceStyle, .light)
+        XCTAssertEqual(controller.picker.overrideUserInterfaceStyle, .light)
+    }
+
     private func store() throws -> NotebookStore {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }

@@ -627,6 +627,7 @@ struct CameraPicker: UIViewControllerRepresentable {
         let picker = UIImagePickerController()
         picker.sourceType = .camera
         if front && UIImagePickerController.isCameraDeviceAvailable(.front) { picker.cameraDevice = .front }
+        if front { picker.cameraFlashMode = .off }
         picker.delegate = context.coordinator
         return picker
     }

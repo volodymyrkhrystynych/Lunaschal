@@ -765,6 +765,9 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         view.backgroundColor = .secondarySystemBackground
         view.clipsToBounds = true
         overrideUserInterfaceStyle = .light
+        // The page is always white, including when the app is in dark mode.
+        picker.overrideUserInterfaceStyle = .light
+        picker.colorUserInterfaceStyle = .light
         addChild(paper)
         paper.view.frame = view.bounds
         paper.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -780,6 +783,10 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         if #available(iOS 26.1, *) { paper.showsHorizontalScrollIndicator = false }
         picker.addObserver(paper)
         picker.addObserver(self)
+        // Registering an observer only delivers future changes. Apply the
+        // current tool now so the first Pencil stroke has visible ink too.
+        applyDrawingTool(picker)
+        paper.toolPickerIsRulerActiveDidChange(picker)
         picker.accessoryItem = UIBarButtonItem(image: UIImage(systemName: "plus.circle"),
                                                primaryAction: UIAction { [weak self] _ in self?.showInsertMenu() })
         if !model.isColumn {
@@ -835,6 +842,9 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         }
         picker.setVisible(true, forFirstResponder: paper)
         paper.becomeFirstResponder()
+        // Showing the picker can restore its saved selection.
+        applyDrawingTool(picker)
+        paper.toolPickerIsRulerActiveDidChange(picker)
         // Again once the bars and the tool picker are in place: PaperKit moves
         // the content for them as they arrive, which left the top of the
         // first page hidden under the navigation bar.
@@ -1119,7 +1129,14 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     /// Return tool changes to the canvas and reapply the chosen tool there.
     func toolPickerSelectedToolItemDidChange(_ toolPicker: PKToolPicker) {
         paper.becomeFirstResponder()
+        applyDrawingTool(toolPicker)
+    }
+
+    private func applyDrawingTool(_ toolPicker: PKToolPicker) {
         paper.toolPickerSelectedToolItemDidChange(toolPicker)
+        // PaperKit's observer alone can leave drawingTool at its default
+        // until the picker is interacted with. Seed the actual canvas tool.
+        if let tool = toolPicker.selectedToolItem.tool { paper.drawingTool = tool }
     }
 
     private func showInsertMenu() {

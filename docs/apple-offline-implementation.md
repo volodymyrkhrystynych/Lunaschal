@@ -674,13 +674,19 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
       New photo/document attachment capture and share-extension imports remain open.
 - [x] Save YouTube URLs and commentary offline; queue server metadata/import work.
 - [x] Capture → Daily: swipe to delete calorie entries; voluntary spending with an
-      amount in CAD and a free-text category, a daily total and swipe deletion.
+      amount in CAD at the end of a single free-text category line (e.g. `Coffee 4.50`),
+      a daily total and swipe deletion. Earlier two-field drafts migrate on open.
       Purchases use `spending_logs` with whole cents, client ULIDs and the original
       4am day/capture timestamp. Creates and deletions persist in the Daily outbox;
       deleting during an upload cannot be overwritten by its response, and a
       replayed deletion treats 404 as success. Synced deletion markers keep stale
       server snapshots from bringing rows back. Backend and portable Swift tests
-      passed; simulator coverage added but not run locally.
+      passed; single-line spending capture, relaunch and deletion passed in the
+      iPhone simulator. All 471 portable Swift tests and 18 notebook editor tests
+      on the iPad simulator passed for these fixes.
+      Selfies now open with flash off. Notebooks explicitly apply the initial
+      picker tool and use light-page ink colours; Pencil and camera behaviour
+      still require device verification.
 - [ ] Show archive playback availability without preventing URL/commentary capture.
 - [ ] Complete share-extension support: fic/YouTube links and journal screenshots
       are implemented; audio and documents remain outstanding. Image shares (up to 20) preserve original bytes in `ScreenshotOutbox`, upload through

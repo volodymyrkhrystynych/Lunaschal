@@ -11,6 +11,7 @@ struct DailyView: View {
     @State private var calorieError: String?
     @AppStorage("dailySpendingAmountDraft") private var spendingAmount = ""
     @AppStorage("dailySpendingCategoryDraft") private var spendingCategory = ""
+    @AppStorage("dailySpendingLineDraft") private var spendingLine = ""
     @State private var spendingError: String?
     @State private var showCamera = false
     @FocusState private var typing: Bool
@@ -105,16 +106,22 @@ struct DailyView: View {
                         }
                     }
                 }
-                TextField("Category, e.g. Groceries or McDonald's", text: $spendingCategory)
-                    .focused($typing).accessibilityLabel("Spending category")
                 HStack {
-                    TextField("Amount (CAD)", text: $spendingAmount)
-                        .keyboardType(.decimalPad).focused($typing).accessibilityLabel("Spending amount")
+                    TextField("Coffee 4.50", text: $spendingLine)
+                        .focused($typing)
+                        .submitLabel(.done)
+                        .onSubmit(addSpending)
+                        .accessibilityLabel("Spending")
                     Button("Add", action: addSpending)
-                        .disabled(spendingCategory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || spendingAmount.isEmpty)
+                        .disabled(spendingLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityLabel("Add spending")
                 }
-                if let error = spendingError { Text(error).font(.footnote).foregroundStyle(.red) }
+                if let error = spendingError {
+                    Text(error).font(.footnote).foregroundStyle(.red)
+                } else if let preview = SpendingLine.parse(spendingLine) {
+                    Text("\(preview.category) — \(money(preview.amountCents))")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             } header: {
                 HStack {
                     Text("Voluntary spending")
@@ -122,8 +129,7 @@ struct DailyView: View {
                     Text("\(money(today.totalCents)) today").monospacedDigit()
                 }
             }
-            .onChange(of: spendingAmount) { _, _ in spendingError = nil }
-            .onChange(of: spendingCategory) { _, _ in spendingError = nil }
+            .onChange(of: spendingLine) { _, _ in spendingError = nil }
             if !refused.isEmpty {
                 Section("Not accepted by the server") {
                     ForEach(refused) { log in
@@ -144,7 +150,14 @@ struct DailyView: View {
         .scrollDismissesKeyboard(.interactively)
         .refreshable { model.requestSync(manual: true) }
         // Today's record on the server, when the page is shown rather than every pass.
-        .task { await model.refreshDailyStatus() }
+        .task {
+            // Preserve a draft entered in the previous two-field form.
+            if spendingLine.isEmpty {
+                spendingLine = [spendingCategory, spendingAmount].filter { !$0.isEmpty }.joined(separator: " ")
+            }
+            spendingCategory = ""; spendingAmount = ""
+            await model.refreshDailyStatus()
+        }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker(front: true) { _ = model.logSelfie($0) }.ignoresSafeArea()
         }
@@ -162,12 +175,12 @@ struct DailyView: View {
     }
 
     private func addSpending() {
-        guard let cents = SpendingAmount.cents(spendingAmount) else {
-            spendingError = DailyError.invalidAmount.localizedDescription
+        guard let entry = SpendingLine.parse(spendingLine) else {
+            spendingError = "End the line with an amount in CAD, e.g. \"Coffee 4.50\""
             return
         }
-        if model.logSpending(cents, category: spendingCategory) {
-            spendingAmount = ""; spendingCategory = ""; spendingError = nil; typing = false
+        if model.logSpending(entry.amountCents, category: entry.category) {
+            spendingLine = ""; spendingError = nil; typing = false
         }
     }
 

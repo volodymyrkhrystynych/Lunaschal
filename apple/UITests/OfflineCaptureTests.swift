@@ -311,20 +311,16 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: settle))
         app.segmentedControls.buttons["Daily"].tap()
         let category = "Groceries " + UUID().uuidString.prefix(8)
-        let categoryField = app.textFields["Spending category"]
+        let categoryField = app.textFields["Spending"]
         for _ in 0..<10 where !categoryField.exists || !categoryField.isHittable { app.swipeUp() }
         XCTAssertTrue(categoryField.exists)
         categoryField.tap()
         if let old = categoryField.value as? String, old != categoryField.placeholderValue {
             categoryField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
         }
-        categoryField.typeText(category)
-        let amount = app.textFields["Spending amount"]
-        amount.tap()
-        if let old = amount.value as? String, old != amount.placeholderValue {
-            amount.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
-        }
-        amount.typeText("30.25")
+        XCTAssertFalse(app.textFields["Spending category"].exists)
+        XCTAssertFalse(app.textFields["Spending amount"].exists)
+        categoryField.typeText(category + " 30.25")
         app.buttons["Add spending"].tap()
         XCTAssertTrue(app.staticTexts[category].waitForExistence(timeout: settle))
         app.terminate()

@@ -29,7 +29,8 @@ what each device can currently do and which work remains device-only.
 - **iPad notebooks** (Capture → **Notes** or **Newspaper**, top right). A
   full-window PaperKit canvas with the tab bar hidden: Pencil ink,
   pictures that can be moved and resized, text boxes and shapes from the tool
-  picker's **+**.
+  picker's **+**. The initial drawing tool is applied on open, and the picker
+  uses light-page ink colours even when the rest of the app uses dark mode.
   **Notes** are A4 pages, one at a time, each fitted whole to the window so
   nothing scrolls. **Only a finger that lands at a side of the screen** (within
   44 pt) turns a page: in from the right edge for the next page, in from the
@@ -92,7 +93,8 @@ what each device can currently do and which work remains device-only.
   is iPhone-only); with no notebook open, its screenshot waits for the next one.
 
 - The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
-  default) is the composer below; **Daily** logs the day's selfie (front camera),
+  default) is the composer below; **Daily** logs the day's selfie (front camera,
+  flash initially off),
   body weight, calorie entries and voluntary spending. Each is saved on the device
   first, keyed by the
   4am day it was logged on, and uploads to the Lifestyle routes on the next sync.
@@ -102,12 +104,12 @@ what each device can currently do and which work remains device-only.
   Calories take one line, split as the desktop card does it (`CalorieLine`, a port
   of `parseCalorieEntry`): "chicken and rice, ~600" becomes the food and its count.
   Swipe a calorie row left to delete it, including entries already on the server.
-  **Voluntary spending** takes only an amount in CAD and a free-text category
-  (for example, `15` and `McDonald's` or `30` and `Groceries`), shows today's total,
+  **Voluntary spending** takes one line with a free-text category followed by
+  an amount in CAD (for example, `McDonald's 15` or `Groceries 30.25`), shows today's total,
   and supports the same swipe deletion. Purchases and deletes queue offline and
   survive relaunch. Amounts are stored as integer cents in `spending_logs`.
   The backend and portable Swift tests cover replay and deletion during an upload;
-  the new simulator tests have not been run locally.
+  single-line spending capture, relaunch and deletion passed in the iPhone simulator.
 - **Workout** (the third Capture page) is the desktop's workout log: one set or
   activity per line ("bicep curls 20, 10" in lb, "squats 10" bodyweight, bare
   "20, 10" for the selected pill, "walking 30" minutes), recent-exercise pills,
