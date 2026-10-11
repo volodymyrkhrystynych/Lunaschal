@@ -1115,6 +1115,13 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         if abs(shown.minY - fitted.minY) < 80, abs(shown.width - fitted.width) < 2 { fit() }
     }
 
+    /// An inserted picture can leave its selection editor as first responder.
+    /// Return tool changes to the canvas and reapply the chosen tool there.
+    func toolPickerSelectedToolItemDidChange(_ toolPicker: PKToolPicker) {
+        paper.becomeFirstResponder()
+        paper.toolPickerSelectedToolItemDidChange(toolPicker)
+    }
+
     private func showInsertMenu() {
         let menu = MarkupEditViewController(supportedFeatureSet: .latest)
         menu.delegate = paper
@@ -1407,7 +1414,7 @@ struct NotebookEditor: View {
     }
 
     private var saveTitle: String {
-        if isDraftNotes { return "Save entry" }
+        if isDraftNotes { return "Save" }
         if model.isNewspaper && !model.notebook.savedCaptureIDs.isEmpty { return "Update entry" }
         return "Save"
     }

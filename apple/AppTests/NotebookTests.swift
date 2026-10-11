@@ -432,6 +432,22 @@ final class NotebookEditorTests: XCTestCase {
         XCTAssertTrue(scrolls.allSatisfy { $0.panGestureRecognizer.minimumNumberOfTouches == 2 })
     }
 
+    func testToolChangeAfterInsertingPhotoReturnsFirstResponderToCanvas() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = shown(model)
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 300, height: 200))))
+        controller.show(page: model.current, revision: model.revision)
+        let selectionEditor = UITextField(frame: CGRect(x: 0, y: 0, width: 100, height: 30))
+        controller.view.addSubview(selectionEditor)
+        selectionEditor.becomeFirstResponder()
+        XCTAssertTrue(selectionEditor.isFirstResponder)
+        controller.toolPickerSelectedToolItemDidChange(controller.picker)
+        XCTAssertTrue(controller.paper.isFirstResponder)
+        XCTAssertFalse(selectionEditor.isFirstResponder)
+        XCTAssertFalse(NotebookPage.isBlank(try XCTUnwrap(controller.paper.markup)))
+    }
+
     func testTheNewspaperColumnStillScrollsWithOneFinger() throws {
         let store = try store()
         let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try issuePDF(pages: 2), pageCount: 2)

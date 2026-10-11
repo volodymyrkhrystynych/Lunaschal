@@ -1,5 +1,30 @@
 # Apple apps and offline experience — implementation tracker
 
+Capture follow-up (2026-10-11, `fix/capture-photo-tools`):
+
+- Capture actions are Food and Save; YouTube Paste validates and adds the link.
+- The entry text box accepts image paste into persistent draft attachments,
+  preserves existing text and retains standard text paste.
+  Two image/text paste app tests and two iPhone composer UI tests passed,
+  including draft recovery after relaunch and saving the pasted image.
+- Food captures retain the photo's original EXIF time locally and across upload,
+  falling back to the save time when no photo timestamp is available.
+- Notebook tool changes return first responder to PaperKit after image insertion.
+- Photo timestamps and legacy manifests have portable regression coverage;
+  paste and notebook responder changes have simulator regression tests.
+- Local verification: 470 Swift core tests, three iPhone capture UI tests and
+  one iPad notebook tool regression passed. Physical Pencil testing remains
+  unverified.
+
+Full local CI verification (2026-10-11): 470 Swift core tests and 21 Python
+helper tests passed; unsigned device archive validation and the Watch simulator
+build passed. All five iPhone shards passed on fresh, seeded simulators (90 tests:
+49 app unit tests and 41 UI tests). Spending swipe-to-delete passed on CI's
+configured retry. All six iPad CI selections passed, including the drawing
+reopen rerun after teaching the test to scroll past existing notebooks. The
+exact Linux Swift 6.2 container job was not available locally; core tests ran
+with macOS Swift 6.3.3. Signing and TestFlight distribution were not run.
+
 Last updated: 2026-10-04. Working branch: `fix/apple-library-navigation`.
 
 Books-library follow-up:

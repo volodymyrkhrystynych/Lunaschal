@@ -208,6 +208,7 @@ private struct CaptureComposer: View {
     @State private var saving = false
     @State private var confirmingDiscard = false
     @FocusState private var typing: Bool
+    @State private var typingText = false
 
     private var links: [String] { draftLinks.split(separator: "\n").map(String.init) }
     private var linkList: Binding<[String]> {
@@ -233,9 +234,13 @@ private struct CaptureComposer: View {
     var body: some View {
         Form {
             Section {
-                TextEditor(text: $text).frame(minHeight: 160).accessibilityLabel("Journal text")
-                    .focused($typing)
-                AttachmentButtons(model: model, recorder: recorder) { saved = false; typing = false }
+                CaptureEntryEditor(text: $text, focused: $typingText) { image in
+                    guard let data = image.pngData() else { return }
+                    model.stage { try $0.stageFile(data: data, name: "Pasted image \(ULID.make()).png", contentType: "image/png") }
+                    saved = false
+                }
+                .frame(minHeight: 160)
+                AttachmentButtons(model: model, recorder: recorder) { saved = false; typing = false; typingText = false }
                 if saved { Text("Saved on this device").foregroundStyle(.secondary) }
             }
             if !model.draft.isEmpty || notes != nil {
@@ -260,13 +265,13 @@ private struct CaptureComposer: View {
                 Spacer()
                 // Glass rather than a plain tint: the form scrolls under this
                 // bar, and an unblurred button prints the rows through itself.
-                Button { saveFood() } label: { Label("Save food entry", systemImage: "fork.knife") }
+                Button { saveFood() } label: { Label("Food", systemImage: "fork.knife") }
                     .buttonStyle(.glass)
                     .disabled(!canSaveFood)
                     .accessibilityHint(model.draft.files.allSatisfy(\.isFoodMedia) ? ""
                         : "Food entries hold photos, videos and recordings only.")
                 Spacer()
-                Button { save() } label: { Label("Save entry", systemImage: "checkmark") }
+                Button { save() } label: { Label("Save", systemImage: "checkmark") }
                     .buttonStyle(.borderedProminent)
                     .disabled(!canSave || saving)
             }
@@ -274,6 +279,8 @@ private struct CaptureComposer: View {
             .padding()
         }
         .onChange(of: text) { _, value in if !value.isEmpty { saved = false } }
+        .onChange(of: typing) { _, focused in if focused { typingText = false } }
+        .onChange(of: typingText) { _, focused in if focused { typing = false } }
         .alert("Discard this draft?", isPresented: $confirmingDiscard) {
             Button("Discard", role: .destructive) { discard() }
             Button("Cancel", role: .cancel) {}
@@ -284,7 +291,7 @@ private struct CaptureComposer: View {
 
     private func discard() {
         guard model.discardComposerDraft() else { return }
-        text = ""; draftLinks = ""; youtubeURL = ""; saved = false; typing = false
+        text = ""; draftLinks = ""; youtubeURL = ""; saved = false; typing = false; typingText = false
     }
 
     private func save() {
@@ -308,13 +315,13 @@ private struct CaptureComposer: View {
     }
 
     private func cleared() {
-        text = ""; draftLinks = ""; saved = true; typing = false
+        text = ""; draftLinks = ""; saved = true; typing = false; typingText = false
     }
 
     private func saveFood() {
         // Links, a half-typed URL and the notes are left where they are, for the next entry.
         if model.saveEntry(text, youtubeURLs: [], kind: .food) {
-            text = ""; saved = true; typing = false
+            text = ""; saved = true; typing = false; typingText = false
         }
     }
 }
@@ -377,7 +384,7 @@ struct AttachmentButtons: View {
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { image in
                 guard let data = image.jpegData(compressionQuality: 0.9) else { return }
-                model.stage { try $0.stageFile(data: data, name: photoName("jpg"), contentType: "image/jpeg", into: entryID) }
+                model.stage { try $0.stageFile(data: data, name: photoName("jpg"), contentType: "image/jpeg", into: entryID, capturedAt: Date()) }
                 onUse()
             }.ignoresSafeArea()
         }
@@ -463,6 +470,61 @@ struct StagedAttachmentRows: View {
     }
 }
 
+/// Keep ordinary text editing while routing clipboard pictures to the draft.
+struct CaptureEntryEditor: UIViewRepresentable {
+    @Binding var text: String
+    var focused: Binding<Bool>
+    var onPasteImage: (UIImage) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> CaptureEntryTextView {
+        let view = CaptureEntryTextView()
+        view.delegate = context.coordinator
+        view.backgroundColor = .clear
+        view.font = .preferredFont(forTextStyle: .body)
+        view.adjustsFontForContentSizeCategory = true
+        view.accessibilityLabel = "Journal text"
+        view.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        view.onPasteImage = onPasteImage
+        return view
+    }
+
+    func updateUIView(_ view: CaptureEntryTextView, context: Context) {
+        context.coordinator.parent = self
+        view.onPasteImage = onPasteImage
+        if view.text != text { view.text = text }
+        if focused.wrappedValue, !view.isFirstResponder { view.becomeFirstResponder() }
+        if !focused.wrappedValue, view.isFirstResponder { view.resignFirstResponder() }
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: CaptureEntryEditor
+        init(_ parent: CaptureEntryEditor) { self.parent = parent }
+        func textViewDidChange(_ textView: UITextView) { parent.text = textView.text }
+        func textViewDidBeginEditing(_ textView: UITextView) { parent.focused.wrappedValue = true }
+        func textViewDidEndEditing(_ textView: UITextView) { parent.focused.wrappedValue = false }
+    }
+}
+
+final class CaptureEntryTextView: UITextView {
+    var onPasteImage: ((UIImage) -> Void)?
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), UIPasteboard.general.hasImages { return true }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        let clipboard = UIPasteboard.general
+        if clipboard.hasImages, let images = clipboard.images, !images.isEmpty, let onPasteImage {
+            for image in images { onPasteImage(image) }
+            return
+        }
+        super.paste(sender)
+    }
+}
+
 /// The YouTube links going onto an entry, and the field a new one is typed in.
 struct YouTubeLinksSection: View {
     @ObservedObject var model: CaptureModel
@@ -482,6 +544,14 @@ struct YouTubeLinksSection: View {
                     .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                     .focused(typing)
                     .onSubmit { if Self.add(typed: $typed, to: $links, model: model) { onChange() } }
+                PasteButton(payloadType: String.self) { values in
+                    guard let value = values.first else { return }
+                    typed = value
+                    if Self.add(typed: $typed, to: $links, model: model) { onChange() }
+                }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Paste and add YouTube link")
+                .accessibilityIdentifier("youtube-paste")
                 Button("Add link") { if Self.add(typed: $typed, to: $links, model: model) { onChange() } }
                     .disabled(typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }

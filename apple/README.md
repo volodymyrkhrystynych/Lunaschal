@@ -61,10 +61,10 @@ what each device can currently do and which work remains device-only.
   checkpoint and Save.
   **Notes belong to the entry draft**: Notes reopens the draft's notebook until the
   entry is saved, and the composer lists it under Attachments (tap to reopen,
-  swipe to take it out of the entry; it stays in Draw). **Save entry** — in the
-  composer, or **Save entry** inside the notes — files the typed text, links,
+  swipe to take it out of the entry; it stays in Draw). **Save** — in the
+  composer, or **Save** inside the notes — files the typed text, links,
   clips, files and the notes' pages (as JPEGs, blank pages dropped) as one journal
-  entry. Save food entry leaves the notes in the draft.
+  entry. Food leaves the notes in the draft.
   A **newspaper's Save** files its cover plus the pages written on (found from the
   ink itself) and the notebook's one YouTube link. Saving the same issue again
   (**Update entry**) files every page written on so far and **replaces** the
@@ -138,7 +138,7 @@ what each device can currently do and which work remains device-only.
   forecast is cached so it shows offline. With location permission, the Capture
   tab takes a fix when shown and sends it to `POST /api/lifestyle/weather/location`,
   so the forecast is for where the phone is.
-- Weather on entries. Save entry and Save food entry attach the fix if it is under
+- Weather on entries. Save and Food attach the fix if it is under
   15 minutes old; Save never waits for GPS. The server's entry-weather sweep
   (`backend/weather/entry.py`, woken by each save) looks the weather up for the
   entry's own place and capture hour, so an entry saved offline still gets the
@@ -147,7 +147,7 @@ what each device can currently do and which work remains device-only.
   after saving, at most every ten minutes).
 - Offline typed journal entries. On the phone, **Transcribe** and **Record**
   add clips to the Capture tab's draft; stopping keeps the clip there, and
-  only **Save entry** turns the draft into one entry. Clips upload through the
+  only **Save** turns the draft into one entry. Clips upload through the
   recordings route under that entry's id, in recorded order, so the server
   appends Transcribe clips' words after the typed text. Both modes retain the
   original mono AAC file. The draft (text, links, clips, photos, files)
@@ -160,13 +160,17 @@ what each device can currently do and which work remains device-only.
   staged into the same draft and uploaded after the entry is
   created, each under its own client-minted attachment ID. Passed in
   simulator for the library picker; the camera needs a device.
-- **Save food entry** (bottom middle, between Discard and **Save entry**) files
+- **Food** (bottom middle, between Discard and **Save**) files
   the same draft in the food log instead: text, photos/videos and clips, under
-  client-minted meal and media IDs, with the capture time the server now keeps.
+  client-minted meal and media IDs. A photo's original capture time dates the
+  meal locally and on upload; without photo metadata it uses the save time.
   YouTube links stay in the composer for the next journal entry, and the
   button is disabled while a non-media file is attached. Clips go through the
   food recordings route, which transcribes each one into the meal's note.
   Passed in simulator offline; uploading to a real server is untested.
+  The YouTube field's Paste button validates and adds the copied link in one tap.
+  Pasting images into the entry text box stages them as photo attachments;
+  existing words stay intact and the images survive closing the app.
 - **Editing a server entry or a meal** (Journal → open it → Edit) offers the
   Capture tab's own buttons: Transcribe, Record, Take photo, Choose photo and
   Attach file, plus YouTube links for a journal entry. What they make waits in
