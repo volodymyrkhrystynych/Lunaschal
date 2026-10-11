@@ -15,6 +15,10 @@ public protocol LearningTransport: AnyObject {
     func learningFolders() async throws -> [LearningFolder]
     func saveAttempt(_ answer: LearningSession.Answer) async throws
     func rate(_ answer: LearningSession.Answer, _ rating: LearningRating, grade: LearningGrade?) async throws
+    /// Rates a review card from its pages: self-rated, with no attempt behind it.
+    func rateReview(_ card: LearningCard, _ rating: LearningRating, reviewID: String) async throws
+    /// One of a review card's pages, as image data.
+    func reviewPage(_ page: LearningReviewPages.Page) async throws -> Data
     func learningQueue() async throws -> [LearningCard]
     func approveQueued(_ id: String, force: Bool) async throws -> LearningApproval
     func regenerateCard(_ id: String, direction: String) async throws -> [DraftCard]
@@ -81,6 +85,20 @@ extension JournalAPI {
         _ = try await chatJSON("api/learning/cards/\(try Self.pathID(answer.card.id))/review", Body(
             reviewId: try Self.pathID(answer.id), rating: rating.rawValue, suggestedRating: suggested,
             userAnswer: userAnswer, coverage: coverage, answerMode: answer.answerMode))
+    }
+
+    /// The review id is minted per rating, so a resend of the same tap
+    /// doesn't advance the schedule twice.
+    public func rateReview(_ card: LearningCard, _ rating: LearningRating, reviewID: String) async throws {
+        struct Body: Encodable { let reviewId: String; let rating: Int; let answerMode: String }
+        _ = try await chatJSON("api/learning/cards/\(try Self.pathID(card.id))/review", Body(
+            reviewId: try Self.pathID(reviewID), rating: rating.rawValue, answerMode: "self"))
+    }
+
+    /// Built from the page's id rather than the url it came with, so nothing
+    /// the server sends can point the request anywhere but an attachment.
+    public func reviewPage(_ page: LearningReviewPages.Page) async throws -> Data {
+        try await get("api/journal/attachments/\(try Self.pathID(page.id))/file", [:])
     }
 
     // MARK: Approval queue

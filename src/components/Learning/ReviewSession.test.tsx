@@ -15,7 +15,7 @@ import type {
 } from '../../hooks/api';
 
 // prettier-ignore
-const { CARD1, CARD2, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks } = vi.hoisted(() => {
+const { CARD1, CARD2, REVIEW_CARD, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks } = vi.hoisted(() => {
   const CARD1: LearningCard = {
     id: 'c1',
     folderId: null,
@@ -28,6 +28,7 @@ const { CARD1, CARD2, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks } = vi.hoist
     derivedFrom: null,
     revisedFrom: null,
     due: '2026-07-17T00:00:00Z',
+    kind: 'qa',
     createdAt: '2026-07-01T00:00:00Z',
     updatedAt: '2026-07-01T00:00:00Z',
   };
@@ -36,6 +37,24 @@ const { CARD1, CARD2, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks } = vi.hoist
     id: 'c2',
     question: 'What is hoisting?',
     answer: 'Declarations are moved to the top of their scope.',
+  };
+  // A notebook saved For review: no back side, just its pages.
+  const REVIEW_CARD: LearningCard = {
+    ...CARD1,
+    id: 'r1',
+    question: 'For review',
+    answer: '',
+    kind: 'review',
+    sourceType: 'journal_review',
+    sourceId: 'e1',
+    review: {
+      entryId: 'e1',
+      title: 'Fern life cycle',
+      pages: [
+        { id: 'p1', name: 'Notes p1.jpg', url: '/api/journal/attachments/p1/file' },
+        { id: 'p2', name: 'Notes p2.jpg', url: '/api/journal/attachments/p2/file' },
+      ],
+    },
   };
   const GRADE: GradeResult = {
     coverage: {
@@ -86,7 +105,7 @@ const { CARD1, CARD2, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks } = vi.hoist
     chat: vi.fn(),
     listMcpServers: vi.fn(),
   };
-  return { CARD1, CARD2, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks };
+  return { CARD1, CARD2, REVIEW_CARD, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks };
 });
 
 vi.mock('../../hooks/api', () => ({
@@ -615,6 +634,56 @@ describe('ReviewSession', () => {
       const input = await openChatAfterGrading();
       fireEvent.keyDown(input, { code: 'Digit1' });
       expect(mocks.review).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('review cards', () => {
+    it('shows the pages stacked with the ratings and no answer box', async () => {
+      mocks.getDue.mockResolvedValue([REVIEW_CARD]);
+      renderSession();
+      expect(await screen.findByText('Fern life cycle')).toBeTruthy();
+      const pages = screen.getAllByRole('img') as HTMLImageElement[];
+      expect(pages.map(p => p.getAttribute('src'))).toEqual([
+        '/api/journal/attachments/p1/file',
+        '/api/journal/attachments/p2/file',
+      ]);
+      expect(screen.queryByPlaceholderText(/Type your answer/)).toBeNull();
+      expect(screen.queryByText('Flip')).toBeNull();
+      expect(screen.getByText('How well do you remember this?')).toBeTruthy();
+    });
+
+    it('rates straight from the pages, self-rated, without an attempt', async () => {
+      mocks.getDue.mockResolvedValue([REVIEW_CARD, CARD1]);
+      renderSession();
+      await screen.findByText('Fern life cycle');
+      fireEvent.click(screen.getByText('Hard'));
+      await waitFor(() =>
+        expect(mocks.review).toHaveBeenCalledWith(
+          'r1',
+          expect.objectContaining({ rating: 2, answerMode: 'self' })
+        )
+      );
+      expect(mocks.saveAttempt).not.toHaveBeenCalled();
+      // On to the ordinary card, which still asks for an answer.
+      expect(await screen.findByText('What is a closure?')).toBeTruthy();
+      expect(screen.getByText('Card 2 of 2')).toBeTruthy();
+    });
+
+    it('a deck of only review cards starts over once rated', async () => {
+      mocks.getDue.mockResolvedValue([REVIEW_CARD]);
+      renderSession();
+      await screen.findByText('Fern life cycle');
+      mocks.getDue.mockResolvedValue([]);
+      fireEvent.click(screen.getByText('Good'));
+      expect(await screen.findByText('All caught up!')).toBeTruthy();
+    });
+
+    it('says so when the pages have not uploaded yet', async () => {
+      mocks.getDue.mockResolvedValue([
+        { ...REVIEW_CARD, review: { entryId: 'e1', title: null, pages: [] } },
+      ]);
+      renderSession();
+      expect(await screen.findByText(/pages haven't arrived yet/)).toBeTruthy();
     });
   });
 });

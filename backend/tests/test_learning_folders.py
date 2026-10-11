@@ -1,6 +1,12 @@
 """Folder CRUD, provider binding, and card/tag filtering."""
 
 
+def _user_folders(client):
+    """The folder list without the app's own For review folder, which every
+    database has from startup."""
+    return [f for f in client.get('/api/learning/folders').json if not f['system']]
+
+
 def _make_card(client, question='Q?', answer='A.', **extra):
     r = client.post('/api/learning/cards', json={'question': question, 'answer': answer, **extra})
     assert r.status_code == 201
@@ -28,12 +34,12 @@ def test_folder_crud(client):
     assert client.post('/api/learning/folders', json={'name': 'Python'}).status_code == 400
     assert client.post('/api/learning/folders', json={}).status_code == 400
 
-    folders = client.get('/api/learning/folders').json
+    folders = _user_folders(client)
     assert [f['name'] for f in folders] == ['Python']
     assert folders[0]['activeCount'] == 0
 
     assert client.patch(f'/api/learning/folders/{fid}', json={'name': 'Py'}).status_code == 200
-    assert client.get('/api/learning/folders').json[0]['name'] == 'Py'
+    assert _user_folders(client)[0]['name'] == 'Py'
     assert client.patch('/api/learning/folders/nope', json={'name': 'x'}).status_code == 404
 
 
@@ -42,7 +48,7 @@ def test_folder_counts_and_card_filter(client):
     in_folder = _make_card(client, folderId=fid)
     _make_card(client, question='Other?', answer='Other.')
 
-    folder = client.get('/api/learning/folders').json[0]
+    folder = _user_folders(client)[0]
     assert folder['activeCount'] == 1
     assert folder['dueCount'] == 1  # manual cards are due immediately
 
@@ -68,7 +74,7 @@ def test_evidence_provider_binding(client):
     assert client.patch(
         f'/api/learning/folders/{fid}', json={'evidenceProviderId': sid}
     ).status_code == 200
-    folder = client.get('/api/learning/folders').json[0]
+    folder = _user_folders(client)[0]
     assert folder['evidenceProviderId'] == sid
     assert folder['evidenceProviderName'] == 'ctx7'
 
@@ -76,7 +82,7 @@ def test_evidence_provider_binding(client):
     assert client.patch(
         f'/api/learning/folders/{fid}', json={'evidenceProviderId': None}
     ).status_code == 200
-    assert client.get('/api/learning/folders').json[0]['evidenceProviderId'] is None
+    assert _user_folders(client)[0]['evidenceProviderId'] is None
 
 
 def test_tag_normalization_and_filtering(client):

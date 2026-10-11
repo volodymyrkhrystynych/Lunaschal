@@ -171,4 +171,70 @@ final class LearningTests: XCTestCase {
         XCTAssertEqual(String(decoding: JournalAPI.ttsForm("You missed A & B = 2?"), as: UTF8.self),
                        "text=You%20missed%20A%20%26%20B%20%3D%202%3F")
     }
+
+    // MARK: Review cards
+
+    private func review(_ id: String) -> LearningCard {
+        LearningCard(id: id, question: "For review", answer: "", sourceType: "journal_review", kind: "review",
+                     review: LearningReviewPages(entryId: "e\(id)", pages: []))
+    }
+
+    func testDecodesAReviewCardAndItsPages() throws {
+        // As `_cards_to_dicts` writes one: the entry's pages attached.
+        let cards = try JSONDecoder().decode([LearningCard].self, from: Data("""
+        [{"id":"r1","folderId":"f0","question":"For review","answer":"","state":"active","tags":[],
+          "sourceType":"journal_review","sourceId":"e1","derivedFrom":null,"revisedFrom":null,
+          "due":"2026-10-05T12:00:00+00:00","kind":"review",
+          "review":{"entryId":"e1","title":null,"pages":[
+            {"id":"p1","name":"Notes p1.jpg","url":"/api/journal/attachments/p1/file"},
+            {"id":"p2","name":"Notes p2.jpg","url":"/api/journal/attachments/p2/file"}]}}]
+        """.utf8))
+        XCTAssertTrue(cards[0].isReview)
+        XCTAssertNil(cards[0].review?.title)
+        XCTAssertEqual(cards[0].review?.pages.map(\.id), ["p1", "p2"])
+        XCTAssertFalse(card("q").isReview, "A server from before review cards sends no kind")
+
+        let folders = try JSONDecoder().decode([LearningFolder].self, from: Data(
+            #"[{"id":"f0","name":"For review","dueCount":1,"system":true},{"id":"f1","name":"Rust","dueCount":0}]"#.utf8))
+        XCTAssertEqual(folders.map(\.system), [true, nil])
+    }
+
+    func testAReviewCardIsRatedInPlaceAndNeverAnswered() {
+        var session = LearningSession(due: [card("1"), review("2"), card("3")], attempts: [])
+        _ = session.answer("one", id: "a1")
+        XCTAssertEqual(session.card?.id, "2")
+        XCTAssertEqual(session.position, 2)
+        XCTAssertNil(session.answer("text", id: "x"), "A review card takes no answer")
+        XCTAssertNil(session.skip(id: "x"), "Nor is it flipped past")
+
+        XCTAssertEqual(session.markReviewed()?.id, "2")
+        XCTAssertEqual(session.card?.id, "3")
+        XCTAssertEqual(session.position, 3)
+        XCTAssertNil(session.markReviewed(), "An ordinary card isn't marked reviewed")
+        _ = session.answer("three", id: "a3")
+
+        XCTAssertTrue(session.inResults)
+        XCTAssertFalse(session.isFinished)
+        XCTAssertEqual(session.answers.map(\.id), ["a1", "a3"], "The results pass leaves the review card out")
+    }
+
+    func testADeckOfOnlyReviewCardsFinishesWithoutResults() {
+        var session = LearningSession(due: [review("1"), review("2")], attempts: [])
+        session.markReviewed()
+        XCTAssertFalse(session.isFinished)
+        session.markReviewed()
+        XCTAssertTrue(session.isFinished)
+        XCTAssertFalse(session.inResults)
+        XCTAssertNil(session.card)
+        XCTAssertNil(session.result)
+    }
+
+    func testAResumedSessionReachesItsReviewCardAfterTheAnswers() {
+        let attempts = [LearningAttempt(id: "a1", cardId: "1", mode: "answered", answer: "one")]
+        var session = LearningSession(due: [card("1"), review("2")], attempts: attempts)
+        XCTAssertEqual(session.card?.id, "2")
+        session.markReviewed()
+        XCTAssertTrue(session.inResults)
+        XCTAssertEqual(session.result?.id, "a1")
+    }
 }

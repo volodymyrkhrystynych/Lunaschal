@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import LunaschalCore
 import SwiftUI
+import UIKit
 
 /// The Learning screen: the desktop's review session, approval queue and card
 /// browser. Unlike Todo there is no outbox. Grading needs the server's model
@@ -39,6 +40,8 @@ final class LearningModel: ObservableObject {
     private var player: AVAudioPlayer?
     /// Answers already read aloud, so a summary plays once on its own.
     private var spoken = Set<String>()
+    /// Review card pages fetched so far, by attachment id.
+    private var pages: [String: UIImage] = [:]
 
     init(capture: CaptureModel) { self.capture = capture }
 
@@ -186,6 +189,35 @@ final class LearningModel: ObservableObject {
                 session = next
             }
         } catch { failed(error) }
+    }
+
+    /// Rates the review card on screen from its pages and moves on. It was
+    /// never answered, so nothing waits on a grade; a deck that was all review
+    /// cards is fetched again, as the end of the results pass is.
+    func rateReview(_ rating: LearningRating) async {
+        guard !sending, var next = session, let card = next.card, card.isReview, let api = api() else { return }
+        sending = true
+        defer { sending = false }
+        do {
+            try await api.rateReview(card, rating, reviewID: ULID.make())
+            next.markReviewed()
+            if next.isFinished {
+                await loadSession()
+                await refresh()
+            } else {
+                session = next
+            }
+        } catch { failed(error) }
+    }
+
+    /// A review card's page, kept for the screen's lifetime so scrolling back
+    /// up doesn't fetch it again. Nil when it couldn't be fetched.
+    func reviewPage(_ page: LearningReviewPages.Page) async -> UIImage? {
+        if let cached = pages[page.id] { return cached }
+        guard let api = transport(), let data = try? await api.reviewPage(page),
+              let image = UIImage(data: data) else { return nil }
+        pages[page.id] = image
+        return image
     }
 
     // MARK: Speech mode

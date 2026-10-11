@@ -262,6 +262,16 @@ what each device can currently do and which work remains device-only.
   in-memory stand-in with sample folders, tags, due and queued cards and a
   word-match grader, so the screen can be seen without one; a UI test runs a
   whole review against it.
+- Review cards: on the iPad notebook, the menu beside the picture button holds
+  the notebook's YouTube video and a **For review** switch, kept per notebook.
+  Saving with it on files the entry as usual and sends `forReview`, and the
+  server makes a learning card in the built-in For review folder, first due at
+  the next 4am. It has no back side: in Review its pages are stacked down one
+  scroll with Again/Hard/Good/Easy after the last, rated straight from there
+  with no answer and no grade, in the same deck as every other card. Menu,
+  switch and reading/rating against `-learningFixture -learningReviewCard`
+  passed in simulator (iPad and iPhone); not yet run against a server or
+  verified on device.
 - Offline YouTube links attached to an entry (any number per entry), with
   optional commentary kept separate from the attachments. A link-only entry has
   an empty text body, just like the web composer. Drafts and stable entry and

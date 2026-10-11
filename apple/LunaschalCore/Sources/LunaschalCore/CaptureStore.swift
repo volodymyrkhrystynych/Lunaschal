@@ -292,7 +292,7 @@ public final class CaptureStore {
     /// `images` are the draft notebook's rendered pages, filed after what was
     /// staged; the notebook itself is let go with the rest of the draft.
     public func commitDraft(text: String, youtubeURLs: [String], kind: CaptureKind = .journal,
-                            images: [(data: Data, name: String)] = [],
+                            images: [(data: Data, name: String)] = [], forReview: Bool = false,
                             location: (latitude: Double, longitude: Double)? = nil,
                             now: Date = Date()) throws -> Capture {
         let staged = try draft()
@@ -300,8 +300,10 @@ public final class CaptureStore {
         let pages = try writeImages(kind == .food ? [] : images, now: now)
         let capture: Capture
         do {
+            // A meal is never a review card, as it never takes the notebook.
             capture = try commit(text: text, youtubeURLs: youtubeURLs, kind: kind, files: staged.files + pages,
-                                 clips: staged.clips, location: location, now: now)
+                                 clips: staged.clips, forReview: forReview && kind == .journal,
+                                 location: location, now: now)
         } catch {
             for file in pages { try? fm.removeItem(at: fileURL(file)) }
             throw error
@@ -353,13 +355,13 @@ public final class CaptureStore {
     /// names entries this one supersedes (see `Capture.replaces`).
     @discardableResult
     public func commitImages(text: String, youtubeURLs: [String], images: [(data: Data, name: String)],
-                             replaces: [String] = [],
+                             replaces: [String] = [], forReview: Bool = false,
                              location: (latitude: Double, longitude: Double)? = nil,
                              now: Date = Date()) throws -> Capture {
         let files = try writeImages(images, now: now)
         do {
             return try commit(text: text, youtubeURLs: youtubeURLs, kind: .journal, files: files, clips: [],
-                              replaces: replaces, location: location, now: now)
+                              replaces: replaces, forReview: forReview, location: location, now: now)
         } catch {
             for file in files { try? fm.removeItem(at: fileURL(file)) }
             throw error
@@ -409,7 +411,7 @@ public final class CaptureStore {
     }
 
     private func commit(text: String, youtubeURLs: [String], kind: CaptureKind, files: [CaptureFile],
-                        clips: [CaptureClip], replaces: [String] = [],
+                        clips: [CaptureClip], replaces: [String] = [], forReview: Bool = false,
                         location: (latitude: Double, longitude: Double)?, now: Date) throws -> Capture {
         let links = kind == .food ? [] : try youtubeURLs.map(YouTubeLink.canonical)
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -419,6 +421,7 @@ public final class CaptureStore {
         capture.latitude = location?.latitude
         capture.longitude = location?.longitude
         capture.replaces = replaces
+        capture.forReview = forReview
         try save(capture)
         return capture
     }

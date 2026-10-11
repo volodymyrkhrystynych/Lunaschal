@@ -491,8 +491,18 @@ export interface LearningCard {
   derivedFrom: string | null;
   revisedFrom: string | null;
   due: string | null;
+  /** 'review' has no back side: its pages are read and self-rated. */
+  kind: 'qa' | 'review';
+  /** A review card's journal entry and its pages, in order. */
+  review?: LearningReviewPages;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface LearningReviewPages {
+  entryId: string;
+  title: string | null;
+  pages: { id: string; name: string; url: string }[];
 }
 
 export interface LearningStats {
@@ -517,6 +527,8 @@ export interface LearningFolder {
   activeCount: number;
   pendingCount: number;
   dueCount: number;
+  /** The app's own For review folder: cannot be renamed or deleted. */
+  system: boolean;
   createdAt: string;
   updatedAt: string;
 }

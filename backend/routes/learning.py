@@ -6,6 +6,7 @@ from ulid import ULID
 
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.learning.dedup import embed_answer
+from backend.learning.review_cards import SOURCE_TYPE as REVIEW_SOURCE, review_payloads
 from backend.tags import tags_json
 
 bp = Blueprint('learning', __name__, url_prefix='/api/learning')
@@ -26,6 +27,26 @@ def _card_to_dict(row) -> dict:
         d.pop(key, None)
     d['tags'] = json.loads(d['tags']) if d.get('tags') else []
     return d
+
+
+def _cards_to_dicts(rows) -> list[dict]:
+    """`_card_to_dict` for each row, with a review card's pages attached."""
+    cards = [_card_to_dict(r) for r in rows]
+    entry_ids = [c['sourceId'] for c in cards if c.get('sourceType') == REVIEW_SOURCE and c.get('sourceId')]
+    payloads = review_payloads(get_db(), entry_ids)
+    for card in cards:
+        if card.get('kind') == 'review':
+            card['review'] = payloads.get(card.get('sourceId')) or {
+                'entryId': card.get('sourceId'), 'title': None, 'pages': []}
+    return cards
+
+
+def _no_back_side(row):
+    """The 400 for a route that needs an answer to work on, given a review
+    card (which has none), else None."""
+    if row['kind'] == 'review':
+        return jsonify({'error': 'A review card has no answer to work on'}), 400
+    return None
 
 
 def _get_card(id):
@@ -70,7 +91,15 @@ def list_folders():
         """,
         (int(time.time()),),
     ).fetchall()
-    return jsonify([row_to_dict(r) for r in rows])
+    folders = [row_to_dict(r) for r in rows]
+    for folder in folders:
+        folder['system'] = folder.pop('systemKey', None) is not None
+    return jsonify(folders)
+
+
+def _system_folder(db, id) -> bool:
+    row = db.execute('SELECT system_key FROM learning_folders WHERE id=?', (id,)).fetchone()
+    return bool(row and row['system_key'])
 
 
 @bp.post('/folders')
@@ -102,6 +131,8 @@ def update_folder(id):
         return jsonify({'error': 'Not found'}), 404
     updates: dict = {}
     if 'name' in body and (body['name'] or '').strip():
+        if _system_folder(db, id):
+            return jsonify({'error': 'This folder belongs to the app and keeps its name'}), 409
         updates['name'] = body['name'].strip()
     if 'position' in body:
         updates['position'] = int(body['position'])
@@ -122,6 +153,8 @@ def update_folder(id):
 @bp.delete('/folders/<id>')
 def delete_folder(id):
     db = get_db()
+    if _system_folder(db, id):
+        return jsonify({'error': 'This folder belongs to the app and cannot be deleted'}), 409
     db.execute('DELETE FROM learning_folders WHERE id=?', (id,))
     db.commit()
     return jsonify({'success': True})
@@ -276,6 +309,8 @@ def verify_card(id):
     row = _get_card(id)
     if not row or row['state'] != 'active':
         return jsonify({'error': 'Not found'}), 404
+    if refused := _no_back_side(row):
+        return refused
     return _run_verification(row)
 
 
@@ -288,6 +323,8 @@ def verify_followup(id):
     row = _get_card(id)
     if not row or row['state'] != 'active':
         return jsonify({'error': 'Not found'}), 404
+    if refused := _no_back_side(row):
+        return refused
     return _run_verification(row, followup=question,
                              transcript=body.get('transcript') or None)
 
@@ -312,6 +349,8 @@ def chat_card(id):
     row = _get_card(id)
     if not row or row['state'] != 'active':
         return jsonify({'error': 'Not found'}), 404
+    if refused := _no_back_side(row):
+        return refused
 
     if 'mcpServerId' in body:
         server_id = body['mcpServerId']
@@ -484,7 +523,7 @@ def list_queue():
     rows = get_db().execute(
         "SELECT * FROM learning_cards WHERE state='pending' ORDER BY created_at"
     ).fetchall()
-    return jsonify([_card_to_dict(r) for r in rows])
+    return jsonify(_cards_to_dicts(rows))
 
 
 @bp.post('/queue/<id>/approve')
@@ -601,7 +640,7 @@ def list_cards():
         ' ORDER BY created_at DESC LIMIT ? OFFSET ?',
         [*params, limit, offset],
     ).fetchall()
-    return jsonify([_card_to_dict(r) for r in rows])
+    return jsonify(_cards_to_dicts(rows))
 
 
 @bp.get('/cards/<id>')
@@ -609,7 +648,7 @@ def get_card(id):
     row = _get_card(id)
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(_card_to_dict(row))
+    return jsonify(_cards_to_dicts([row])[0])
 
 
 @bp.post('/cards')
@@ -690,6 +729,8 @@ def revise_card(id):
     row = _get_card(id)
     if not row or row['state'] != 'active':
         return jsonify({'error': 'Not found'}), 404
+    if refused := _no_back_side(row):
+        return refused
 
     new_question = (body.get('question') or '').strip() or row['question']
     old_answer = row['answer']
@@ -785,7 +826,7 @@ def get_due():
         f' ORDER BY (a.id IS NULL), due LIMIT {DECK_SIZE}',
         [int(time.time()), *params],
     ).fetchall()
-    return jsonify([_card_to_dict(r) for r in rows])
+    return jsonify(_cards_to_dicts(rows))
 
 
 @bp.get('/stats')
@@ -850,6 +891,9 @@ def save_attempt():
     row = _get_card(card_id) if card_id else None
     if not row or row['state'] != 'active':
         return jsonify({'error': 'Not found'}), 404
+    # Rated straight from the page: an attempt would queue a grade of nothing.
+    if refused := _no_back_side(row):
+        return refused
 
     answer = (body.get('answer') or '').strip() or None
     if mode == 'answered' and not answer:

@@ -23,6 +23,7 @@ import {
 import { MessageMarkdown } from '../MessageMarkdown';
 import { CardChat } from './CardChat';
 import { CoverageResult } from './CoverageResult';
+import { ReviewPages } from './ReviewPages';
 import { VerificationPanel } from './VerificationPanel';
 
 interface Props {
@@ -63,6 +64,9 @@ export function ReviewSession({ folderId, tag }: Props) {
   const [answer, setAnswer] = useState('');
   const [usedVoice, setUsedVoice] = useState(false);
   const [attempts, setAttempts] = useState<Attempt[]>([]);
+  // Review cards rated straight from their pages this session. They have no
+  // answer to save, so they never become an attempt or reach the results pass.
+  const [reviewedCount, setReviewedCount] = useState(0);
   const [resultIndex, setResultIndex] = useState(0);
   const [ratingOverride, setRatingOverride] = useState<number | null>(null);
   const [verifying, setVerifying] = useState<LearningCard | null>(null);
@@ -128,6 +132,7 @@ export function ReviewSession({ folderId, tag }: Props) {
     // card is at their count.
     setIndex(restored.length);
     setResultIndex(0);
+    setReviewedCount(0);
   }, [due, saved, sessionCards]);
 
   const total = sessionCards?.length ?? 0;
@@ -145,8 +150,11 @@ export function ReviewSession({ folderId, tag }: Props) {
     }
   }, [total, setLevel]);
   const phase: 'answer' | 'results' =
-    total > 0 && attempts.length >= total ? 'results' : 'answer';
+    total > 0 && attempts.length + reviewedCount >= total
+      ? 'results'
+      : 'answer';
   const card = sessionCards?.[index];
+  const reading = phase === 'answer' && card?.kind === 'review';
 
   // The grade lives on the saved attempt row, not in component state — that's
   // what lets it survive a reload and keep filling in while you're away.
@@ -268,8 +276,15 @@ export function ReviewSession({ folderId, tag }: Props) {
     setAttempts([]);
     setIndex(0);
     setResultIndex(0);
+    setReviewedCount(0);
     setShowChat(false);
   };
+
+  // A deck that was all review cards has no results pass to end it.
+  useEffect(() => {
+    if (total > 0 && attempts.length === 0 && reviewedCount >= total)
+      void finishSession();
+  }, [total, attempts.length, reviewedCount]);
 
   const advanceResult = () => {
     setShowChat(false);
@@ -307,33 +322,54 @@ export function ReviewSession({ folderId, tag }: Props) {
     advanceResult();
   };
 
+  // A review card is rated as soon as its pages have been read. Its own ULID
+  // is the review's idempotency key, as an attempt's would be.
+  const rateReviewCard = (rating: number) => {
+    if (!card || card.kind !== 'review') return;
+    review.mutate({
+      cardId: card.id,
+      reviewId: ulid(),
+      rating,
+      answerMode: 'self',
+    });
+    setRatingOverride(null);
+    setReviewedCount(c => c + 1);
+    setIndex(i => i + 1);
+  };
+
   useShortcutScope(2, {
-    // Move the highlighted rating during the results pass.
+    // Move the highlighted rating during the results pass, or under a review
+    // card's pages.
     next: () => {
-      if (phase === 'results') setRatingOverride(Math.min(selRating + 1, 4));
+      if (phase === 'results' || reading)
+        setRatingOverride(Math.min(selRating + 1, 4));
     },
     prev: () => {
-      if (phase === 'results') setRatingOverride(Math.max(selRating - 1, 1));
+      if (phase === 'results' || reading)
+        setRatingOverride(Math.max(selRating - 1, 1));
     },
     record: () => {
-      if (phase !== 'answer' || !card) return;
+      if (phase !== 'answer' || !card || reading) return;
       if (recorder.status === 'recording') recorder.stop();
       else if (recorder.status === 'idle') recorder.start();
     },
     check: () => {
-      if (phase === 'answer') submitAnswer();
+      if (phase === 'answer' && !reading) submitAnswer();
     },
     // Space skips the current card in the answering pass; in the results pass
     // it commits the highlighted rating. D is left alone — it must never
     // touch card state.
     flip: () => {
-      if (phase === 'answer') {
+      if (reading) {
+        if (!reviewBusy) rateReviewCard(selRating);
+      } else if (phase === 'answer') {
         skipCard();
       } else if (current && !reviewBusy) {
         submitRating(selRating);
       }
     },
     rate: rating => {
+      if (reading && !reviewBusy) return rateReviewCard(rating);
       if (phase !== 'results' || !current || reviewBusy) return;
       submitRating(rating);
     },
@@ -350,6 +386,44 @@ export function ReviewSession({ folderId, tag }: Props) {
         </div>
         <div className="text-[var(--color-text-muted)]">
           No cards due for review right now.
+        </div>
+      </div>
+    );
+  }
+
+  if (reading && card) {
+    return (
+      <div className="max-w-xl mx-auto">
+        <div className="bg-[var(--color-surface)] rounded-lg border border-white/10 overflow-hidden">
+          <div className="h-1 bg-white/5">
+            <div
+              className="h-full bg-[var(--color-primary)] transition-all duration-300"
+              style={{ width: `${((index + 1) / total) * 100}%` }}
+            />
+          </div>
+          <div className="p-4 sm:p-8 space-y-4">
+            <div className="text-center text-sm text-[var(--color-text-muted)]">
+              Card {index + 1} of {total} · For review
+            </div>
+            <ReviewPages review={card.review} />
+            <div className="text-center text-sm text-[var(--color-text-muted)]">
+              How well do you remember this?
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {RATINGS.map(r => (
+                <button
+                  key={r.value}
+                  onClick={() => rateReviewCard(r.value)}
+                  disabled={reviewBusy}
+                  className={`py-3 ${r.color} text-white rounded-lg hover:opacity-80 transition-all disabled:opacity-50 font-medium ${
+                    selRating === r.value ? 'ring-2 ring-white' : 'opacity-70'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     );
