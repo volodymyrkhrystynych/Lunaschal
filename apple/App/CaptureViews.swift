@@ -35,9 +35,20 @@ struct CaptureRoot: View {
                     .tabItem { Label("Study", systemImage: "doc.text") }
                 NavigationStack { DrawingLibraryView(model: model) }
                     .tabItem { Label("Draw", systemImage: "pencil.tip") }
+                // Let iPadOS own overflow when Split View narrows the tab bar.
+                NavigationStack { LibraryView(model: model) }
+                    .tabItem { Label("Library", systemImage: "books.vertical") }
+                NavigationStack { JobsFeedView(capture: model) }
+                    .tabItem { Label("Jobs", systemImage: "briefcase") }
+                NavigationStack { LearningView(learning: learning) }
+                    .tabItem { Label("Learning", systemImage: "graduationcap") }
+                    .badge(learning.stats.due)
+                NavigationStack { ConnectionSettings(model: model) }
+                    .tabItem { Label("Settings", systemImage: "gear") }
+            } else {
+                NavigationStack { MoreMenu(model: model, learning: learning) }
+                    .tabItem { Label("More", systemImage: "line.3.horizontal") }
             }
-            NavigationStack { MoreMenu(model: model, learning: learning) }
-                .tabItem { Label("More", systemImage: "line.3.horizontal") }
         }
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }

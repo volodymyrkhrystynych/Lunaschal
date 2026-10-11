@@ -123,6 +123,7 @@ jobs:
             -test-timeouts-enabled YES -default-test-execution-time-allowance 300 \
             -derivedDataPath apple/DerivedData -resultBundlePath apple/TestResults.xcresult \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingWorkspaceReopensWithoutAServer \
+            -only-testing:LunaschalUITests/OfflineCaptureTests/testIPadDestinationsOpenWithoutAnAppMoreMenu \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testNewspaperScrollsAsOneColumn \

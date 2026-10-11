@@ -255,8 +255,10 @@ what each device can currently do and which work remains device-only.
   per-link attachment IDs are preserved. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
-- Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
-  Study and Draw. Journal's toolbar has Sync on the left and a Journal/Calendar
+- Native Capture / Journal / Chat / Todo / More tabs on iPhone. iPad has
+  Capture, Journal, Chat, Todo, Study, Draw, Library, Jobs, Learning and Settings
+  as individual tabs; iPadOS manages overflow in narrow windows without an app
+  More menu. Journal's toolbar has Sync on the left and a Journal/Calendar
   switch on the right. The Journal page is the desktop's feed: one newest-first timeline
   with inline photos, playable voice clips (desktop WebM clips arrive as an AAC copy),
   videos and YouTube posters, and calendar events' category-coloured borders around the

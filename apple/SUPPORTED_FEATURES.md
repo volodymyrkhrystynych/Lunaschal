@@ -39,7 +39,10 @@ has been validated. Exact commits and CI results are recorded in the
 
 The iPhone tabs are Capture, Journal, Chat, Todo, and More. More holds Library,
 Jobs, Learning and Settings; the workout log is Capture → Workout. Chat is the desktop's Chat
-tab, and Todo is the tasks card from the desktop's Lifestyle tab (see README.md). iPad also has Study and Draw, and hides the tab bar while a drawing,
+tab, and Todo is the tasks card from the desktop's Lifestyle tab (see README.md).
+iPad exposes Library, Jobs, Learning and Settings as individual tabs alongside
+Capture, Journal, Chat, Todo, Study and Draw; iPadOS owns narrow-window overflow
+without an app More menu. It hides the tab bar while a drawing,
 a notebook (Capture → Notes / Newspaper) or a Study annotation is open, so its toolbar doesn't overflow;
 native drawing creation/editing is iPad-only, and so are Paper previews, since they live under Study.
 A notes notebook turns pages with a finger swipe (with a **+ New page** marker past the last page) and a
