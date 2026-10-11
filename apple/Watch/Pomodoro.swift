@@ -134,44 +134,52 @@ final class PomodoroModel: ObservableObject {
     }
 }
 
-struct PomodoroView: View {
+/// The Focus or Timeout page: one big button when nothing is going, the
+/// countdown for the run this page owns, or the choices once it is up.
+struct TimerPage: View {
+    let choice: TimerChoice
     @ObservedObject var model: PomodoroModel
-    @Environment(\.scenePhase) private var phase
+    /// Turns to the page that owns the run, when this page's button was
+    /// pressed while the other timer is going.
+    let show: (TimerChoice) -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                switch model.timer.state {
-                case .idle:
-                    Button("Focus 25 / 5", systemImage: PomodoroKind.work.symbol) { model.start(.work) }
-                    Button("Timeout 10", systemImage: PomodoroKind.timeout.symbol) { model.start(.timeout) }
-                case .running(let run):
-                    Text(run.kind.label).font(.headline)
-                    Text(timerInterval: run.startedAt...run.endsAt, countsDown: true)
-                        .font(.system(size: 40, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                    ProgressView(timerInterval: run.startedAt...run.endsAt, countsDown: true,
-                                 label: { EmptyView() }, currentValueLabel: { EmptyView() })
-                    Button("Cancel", role: .destructive) { model.perform(.cancel) }
-                case .finished(let kind):
-                    Text(kind == .break ? "Break's over" : "\(kind.label) done").font(.headline)
-                    ForEach(model.timer.choices, id: \.self) { choice in
-                        switch choice {
-                        case .continue:
-                            Button(continueLabel(kind)) { model.perform(.continue) }
-                        case .takeBreak:
-                            Button("Break · \(PomodoroKind.break.minutes) min") { model.perform(.takeBreak) }
-                        }
+        VStack(spacing: 6) {
+            switch model.timer.state {
+            case .running(let run) where choice.owns(run):
+                Label(run.kind.label, systemImage: run.kind.symbol).font(.headline)
+                Text(timerInterval: run.startedAt...run.endsAt, countsDown: true)
+                    .font(.system(size: 40, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                ProgressView(timerInterval: run.startedAt...run.endsAt, countsDown: true,
+                             label: { EmptyView() }, currentValueLabel: { EmptyView() })
+                    .tint(tint)
+                Button("Cancel", role: .destructive) { model.perform(.cancel) }
+            case .finished(let kind) where choice.owns(kind):
+                Text(kind == .break ? "Break's over" : "\(kind.label) done").font(.headline)
+                ForEach(model.timer.choices, id: \.self) { next in
+                    switch next {
+                    case .continue:
+                        Button(continueLabel(kind)) { model.perform(.continue) }.tint(tint)
+                    case .takeBreak:
+                        Button("Break · \(PomodoroKind.break.minutes) min") { model.perform(.takeBreak) }
                     }
-                    Button("Cancel", role: .destructive) { model.perform(.cancel) }
                 }
-                if let message = model.message { Text(message).font(.footnote) }
+                Button("Cancel", role: .destructive) { model.perform(.cancel) }
+            default:
+                BigButton(title: "\(choice.title) \(choice.kind.minutes)", symbol: choice.kind.symbol, tint: tint) {
+                    if model.press(choice.kind) == .alreadyGoing, let other = owner, other != choice { show(other) }
+                }
             }
+            if let message = model.message { Text(message).font(.footnote) }
         }
-        .navigationTitle("Timer")
-        .onAppear { model.refresh() }
-        .onChange(of: phase) { _, value in if value == .active { model.refresh() } }
+        .accessibilityIdentifier("page.\(choice.rawValue)")
     }
+
+    private var tint: Color { choice == .focus ? .indigo : .teal }
+
+    /// Which page the timer's current run (or finished run) belongs to.
+    private var owner: TimerChoice? { model.timer.owner }
 
     private func continueLabel(_ kind: PomodoroKind) -> String {
         switch kind {
@@ -182,22 +190,43 @@ struct PomodoroView: View {
     }
 }
 
-/// The row on the Watch's main list: what the timer is doing at a glance.
-struct PomodoroRow: View {
-    @ObservedObject var model: PomodoroModel
+extension PomodoroTimer {
+    /// The page whose run is going or waiting for a choice, if any.
+    var owner: TimerChoice? {
+        switch state {
+        case .idle: return nil
+        case .running(let run): return run.kind == .timeout ? .timeout : .focus
+        case .finished(let kind): return kind == .timeout ? .timeout : .focus
+        }
+    }
+}
+
+/// A page's one action, filling the screen.
+struct BigButton: View {
+    let title: String
+    let symbol: String
+    let tint: Color
+    /// Icon beside the title rather than above it, for a page that has
+    /// another control under its main one.
+    var compact = false
+    let action: () -> Void
 
     var body: some View {
-        switch model.timer.state {
-        case .idle:
-            Label("Pomodoro timer", systemImage: "timer")
-        case .running(let run):
-            HStack {
-                Label(run.kind.label, systemImage: "timer")
-                Spacer()
-                Text(timerInterval: run.startedAt...run.endsAt, countsDown: true).monospacedDigit()
+        Button(action: action) {
+            Group {
+                if compact {
+                    Label(title, systemImage: symbol).font(.title3.weight(.semibold))
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: symbol).font(.system(size: 44, weight: .semibold))
+                        Text(title).font(.title3.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.6)
+                    }
+                }
             }
-        case .finished(let kind):
-            Label(kind == .break ? "Break's over" : "\(kind.label) done", systemImage: "bell")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .buttonStyle(.borderedProminent)
+        .buttonBorderShape(.roundedRectangle(radius: 24))
+        .tint(tint)
     }
 }

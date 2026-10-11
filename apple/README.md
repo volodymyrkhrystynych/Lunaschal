@@ -567,6 +567,28 @@ publicly to make CI work: simulator capture tests never contact it.
   checking the simulator without tapping. The countdown, end-of-timer choices and
   relaunch passed in the watchOS simulator; notification buttons and the
   Watch-to-phone transfer need paired devices.
+- The Watch opens on full-screen pages swiped horizontally: Focus, Timeout,
+  Workout, Record, Transcribe, then the recordings log. Each complication (and
+  each launcher button) opens its own page and acts at once; the app opens on
+  whichever timer is already going.
+- Workout is a 90-second rest timer (`RestTimer` in LunaschalCore), separate
+  from the pomodoro and never logged. When it ends the Watch buzzes every 1.5 s
+  until Stop or Restart, using a smart-alarm `WKExtendedRuntimeSession`
+  (`WKBackgroundModes: alarm`) scheduled for the end of each run, with a
+  notification as fallback. Debug builds take `-RestSeconds 5`. The pages, the
+  countdown, the ringing screen and the repeating haptic (in the system log)
+  passed in the watchOS simulator, **but only with an ad-hoc (`-`) signature**:
+  an unsigned `CODE_SIGNING_ALLOWED=NO` build gets "client is not entitled"
+  from the alarm service and shows "Couldn't set the alarm". The buzz with the
+  wrist down, and Stop/Restart ending it, need the device.
+- A running timer (Focus, Break, Timeout, Workout) shows on every timer
+  complication as the system Timer draws one: an emptying ring with the time
+  left inside it, the time with a gauge in a corner. A recording turns its Record
+  or Transcribe complication, launcher button and Control red, keeping the same
+  icon. Every change reloads all complications and Controls, and the app reloads
+  them again as the face comes back; before this, timer changes never reloaded
+  the launcher row. Builds in the watchOS simulator; how it looks on the face
+  needs the device.
 - Settings checks the actual Foundation Models text-model and locale availability,
   including disabled/ineligible/not-ready states. Generation and local speech
   recognition remain optional later layers. Server transcription is the only
