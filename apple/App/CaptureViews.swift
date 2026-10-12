@@ -273,11 +273,11 @@ private struct CaptureComposer: View {
         // however far the form has scrolled.
         .safeAreaInset(edge: .bottom) {
             HStack {
-                // Icon only, so three fit on a phone; it asks before clearing anything.
+                // Icons only, so all four fit on a phone; the titles stay as
+                // their accessibility labels. Discard asks before clearing anything.
                 Button(role: .destructive) { confirmingDiscard = true } label: {
                     Label("Discard draft", systemImage: "trash")
                 }
-                .labelStyle(.iconOnly)
                 .buttonStyle(.glass)
                 .disabled(!hasDraft || recorder.activeID != nil)
                 Spacer()
@@ -289,7 +289,7 @@ private struct CaptureComposer: View {
                     .accessibilityHint(model.draft.files.allSatisfy(\.isFoodMedia) ? ""
                         : "Food entries hold photos, videos and recordings only.")
                 Spacer()
-                Button { saveSpending() } label: { Label("Spent", systemImage: "receipt") }
+                Button { saveSpending() } label: { Label("Spent", systemImage: "banknote") }
                     .buttonStyle(.glass)
                     .disabled(!canSaveSpending)
                     .accessibilityLabel("Save spending")
@@ -300,6 +300,7 @@ private struct CaptureComposer: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!canSave || saving)
             }
+            .labelStyle(.iconOnly)
             .controlSize(.large)
             .padding()
         }
@@ -783,7 +784,7 @@ struct CaptureDetail: View {
     @ViewBuilder private func details(_ capture: Capture) -> some View {
         Section {
             if capture.kind == .food { Label("Food log entry", systemImage: "fork.knife") }
-            if capture.kind == .spending { Label("Spending entry", systemImage: "receipt") }
+            if capture.kind == .spending { Label("Spending entry", systemImage: "banknote") }
             Text(capture.createdAt, format: .dateTime)
             Text(captureStatus(capture))
             if let error = capture.lastError { Text(error).foregroundStyle(.orange) }

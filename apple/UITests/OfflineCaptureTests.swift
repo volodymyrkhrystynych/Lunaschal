@@ -672,11 +672,14 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertGreaterThan(moved.frame.maxY, beforeMoving.maxY + 100)
 
         // Wake time set by hand, offline: the morning is shaded at once.
+        // There is no Save — tapping above the sheet to close it keeps the change.
         app.buttons["calendar-sleep"].tap()
         let wake = app.switches["sleep-set-wake"]
         XCTAssertTrue(wake.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["Sleep"].buttons["Save"].exists)
         if (wake.value as? String) != "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
-        saveForm(app, "Sleep")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap()
+        XCTAssertTrue(app.navigationBars["Sleep"].waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["sleep-band-morning"].waitForExistence(timeout: 5))
 
         // Leave the day as it was found: the simulator keeps what runs queue.
@@ -690,8 +693,10 @@ final class OfflineCaptureTests: XCTestCase {
             deleteFromEdit(app, title: name)
         }
         app.buttons["calendar-sleep"].tap()
+        XCTAssertTrue(wake.waitForExistence(timeout: 5))
         if (wake.value as? String) == "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
-        saveForm(app, "Sleep")
+        app.navigationBars["Sleep"].buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Sleep"].waitForNonExistence(timeout: 5))
 
         // Enabling a mode is temporary, never a preference restored on launch.
         XCTAssertEqual(mode.value as? String, "off")

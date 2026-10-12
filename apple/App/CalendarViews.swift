@@ -371,7 +371,9 @@ private struct SleepBandView: View {
 
 /// The day's wake and sleep, corrected by hand. Each starts from what's shown,
 /// derived or not; switching one off hands it back to the server's guess from
-/// the day's activity.
+/// the day's activity. There is no Save: closing the sheet any way at all —
+/// Done, a swipe, a tap above it — keeps what it shows, since a time picked
+/// and then dismissed was a time meant, and a wrong one is one tap to fix.
 private struct SleepEditor: View {
     let day: String
     let sleep: SleepDay?
@@ -381,6 +383,8 @@ private struct SleepEditor: View {
     @State private var wake: Date
     @State private var setSleep: Bool
     @State private var bedtime: Date
+    /// What the sheet opened with, so closing it unchanged queues nothing.
+    @State private var opened: (String?, String?) = (nil, nil)
 
     init(day: String, sleep: SleepDay?, save: @escaping (String?, String?) -> Bool) {
         self.day = day
@@ -391,21 +395,24 @@ private struct SleepEditor: View {
             let wall = ts.map { CalendarTimeline.minutes(CalendarSleep.clock($0)) ?? fallback } ?? fallback
             return Calendar.current.date(bySettingHour: wall / 60, minute: wall % 60, second: 0, of: noon) ?? noon
         }
-        _setWake = State(initialValue: sleep?.wakeSource == "manual")
-        _wake = State(initialValue: clock(sleep?.wakeAt, 7 * 60))
-        _setSleep = State(initialValue: sleep?.sleepSource == "manual")
-        _bedtime = State(initialValue: clock(sleep?.sleepAt, 23 * 60))
+        let setWake = sleep?.wakeSource == "manual", wake = clock(sleep?.wakeAt, 7 * 60)
+        let setSleep = sleep?.sleepSource == "manual", bedtime = clock(sleep?.sleepAt, 23 * 60)
+        _setWake = State(initialValue: setWake)
+        _wake = State(initialValue: wake)
+        _setSleep = State(initialValue: setSleep)
+        _bedtime = State(initialValue: bedtime)
+        _opened = State(initialValue: (setWake ? Self.hhmm(wake) : nil, setSleep ? Self.hhmm(bedtime) : nil))
     }
 
-    private func hhmm(_ date: Date) -> String {
+    private static func hhmm(_ date: Date) -> String {
         let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
         return CalendarTimeline.time((parts.hour ?? 0) * 60 + (parts.minute ?? 0))
     }
 
     /// The server refuses a bedtime that isn't after waking, on the 4am day.
     private var problem: String? {
-        guard setWake, setSleep, let w = CalendarTimeline.minutes(hhmm(wake)),
-              let s = CalendarTimeline.minutes(hhmm(bedtime)) else { return nil }
+        guard setWake, setSleep, let w = CalendarTimeline.minutes(Self.hhmm(wake)),
+              let s = CalendarTimeline.minutes(Self.hhmm(bedtime)) else { return nil }
         return CalendarTimeline.offset(fromWall: s) <= CalendarTimeline.offset(fromWall: w)
             ? "Bedtime has to come after waking up." : nil
     }
@@ -439,22 +446,26 @@ private struct SleepEditor: View {
                     .accessibilityIdentifier("sleep-set-sleep")
                     if setSleep { DatePicker("Time", selection: $bedtime, displayedComponents: .hourAndMinute) }
                 } footer: {
-                    Text(problem ?? "A time before 4am counts as this day — a 01:30 bedtime is tonight. Switched off, a time comes from when you were active.")
+                    Text(problem.map { "\($0) Not kept until it does." }
+                         ?? "A time before 4am counts as this day — a 01:30 bedtime is tonight. Switched off, a time comes from when you were active. Changes are kept as soon as you close this.")
                         .foregroundStyle(problem == nil ? Color.secondary : Color.red)
                 }
             }
             .navigationTitle("Sleep")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        if save(setWake ? hhmm(wake) : nil, setSleep ? hhmm(bedtime) : nil) { dismiss() }
-                    }
-                    .disabled(problem != nil)
-                }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
+        .onDisappear(perform: keep)
+    }
+
+    /// Queues the shown times if they differ from what the sheet opened with.
+    /// A bedtime before waking would be refused by the server, so it is dropped.
+    private func keep() {
+        let shown = (setWake ? Self.hhmm(wake) : nil, setSleep ? Self.hhmm(bedtime) : nil)
+        guard problem == nil, shown != opened else { return }
+        if save(shown.0, shown.1) { opened = shown }
     }
 }
 
