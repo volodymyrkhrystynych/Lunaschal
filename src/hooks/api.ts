@@ -2525,7 +2525,7 @@ export interface WorkoutExercise {
 }
 
 export interface WorkoutSession {
-  captureKind?: 'strength' | 'outdoor' | null;
+  captureKind?: 'strength' | 'outdoor' | 'health' | null;
   startedAt?: string | null;
   endedAt?: string | null;
   id: string;
@@ -2615,6 +2615,17 @@ export interface ExerciseProgression {
   name: string;
   displayName: string;
   points: ProgressionPoint[];
+}
+
+export interface SleepNight {
+  date: string;
+  start: number | null;
+  end: number | null;
+  asleepMinutes: number | null;
+  awakeMinutes: number | null;
+  interruptions: number | null;
+  efficiency: number | null;
+  unobservedMinutes: number | null;
 }
 
 export interface BodyWeightLog {
@@ -5097,6 +5108,10 @@ export const api = {
       ),
     health: (days = 28) =>
       get<HealthActivity>(`/api/apple-health/activity?days=${days}`),
+    sleep: (to: string) =>
+      get<{ days: SleepNight[] }>(
+        `/api/apple-health/sleep?to=${encodeURIComponent(to)}`
+      ),
     exercises: {
       list: () => get<ExerciseSummary[]>('/api/lifestyle/exercises'),
       progression: (name: string) =>
@@ -5116,7 +5131,7 @@ export const api = {
         if (params?.end) qp.set('end', params.end);
         return get<BodyWeightLog[]>(`/api/lifestyle/weight?${qp}`);
       },
-      log: (data: { date?: string; weight: number }) =>
+      log: (data: { date?: string; weight: number; unit?: 'kg' | 'lb' }) =>
         post<BodyWeightLog>('/api/lifestyle/weight', data),
       delete: (id: string) =>
         del<{ success: boolean }>(`/api/lifestyle/weight/${id}`),
