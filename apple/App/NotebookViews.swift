@@ -716,10 +716,10 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 // MARK: Canvas
 
 /// PaperKit's markup view. A paged notebook shows one page at a time, the
-/// newspaper page (if any) drawn underneath as its content view, and a finger
-/// swipe turns it. A column shows the whole issue as one scroll fitted to the
+/// newspaper page (if any) drawn underneath as its content view, turned by
+/// the toolbar's buttons. A column shows the whole issue as one scroll fitted to the
 /// width, each page's newsprint underneath its stretch of the column.
-final class NotebookCanvasController: UIViewController, PaperMarkupViewController.Delegate, UIGestureRecognizerDelegate {
+final class NotebookCanvasController: UIViewController, PaperMarkupViewController.Delegate {
     let model: NotebookEditorModel
     let paper = PaperMarkupViewController(markup: nil, supportedFeatureSet: .latest)
     private(set) lazy var drawingToolbar = DrawingToolbar(presenter: self)
@@ -737,14 +737,11 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     private var slotLockedViews: [Int: UIImageView] = [:]
     private var loadedSlots: Set<Int> = []
     private let thumbnails = DispatchQueue(label: "notebook.newsprint", qos: .userInitiated)
-    // Turning a notes page by finger.
-    private let swipe = FingerDragObserver()
     #if DEBUG
     /// What is shown, in canvas units, for UI tests to read: PaperKit's
     /// scroll view is not in the accessibility tree.
     private let visibleProbe = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
     #endif
-    private let marker = NewPageMarker()
     private var disabledBackSwipes: [UIGestureRecognizer] = []
 
     /// SwiftUI's navigation stack. A representable's controller is not always
@@ -760,7 +757,6 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     }
     /// PaperKit's scroll views, once found and told one finger doesn't scroll.
     private let heldScrolls = NSHashTable<UIScrollView>.weakObjects()
-    private var swipeThreshold: CGFloat = PageSwipe.minimum
 
     init(model: NotebookEditorModel) {
         self.model = model
@@ -781,8 +777,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         paper.didMove(toParent: self)
         paper.delegate = self
         paper.isEditable = model.loaded
-        // The Pencil writes; a finger scrolls, zooms and moves pictures —
-        // and turns a notes page.
+        // The Pencil writes; a finger scrolls, zooms and moves pictures.
         paper.directTouchAutomaticallyDraws = false
         // Sideways only ever means zoomed in; a scroll bar along the bottom
         // would suggest otherwise.
@@ -794,25 +789,6 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
             if let tool = favorite.tool { paper.drawingTool = tool }
             else if favorite.kind == "ruler" { paper.isRulerActive.toggle() }
             else if favorite.kind == "insert" { showInsertMenu() }
-        }
-        if !model.isColumn {
-            swipe.delegate = self
-            swipe.shouldTrack = { [weak self] in !(self?.isZoomedIn ?? true) }
-            swipe.edgeAt = { [weak self] point in
-                guard let self else { return nil }
-                return PageSwipe.edge(startX: point.x, width: self.view.bounds.width)
-            }
-            swipe.onBegin = { [weak self] in self?.beginSwipe() }
-            swipe.onMove = { [weak self] dx in self?.moveSwipe(dx) }
-            swipe.onEnd = { [weak self] dx, cancelled in self?.endSwipe(dx, cancelled: cancelled) }
-            view.addGestureRecognizer(swipe)
-            marker.isHidden = true
-            marker.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(marker)
-            NSLayoutConstraint.activate([
-                marker.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
-                marker.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            ])
         }
         #if DEBUG
         visibleProbe.isAccessibilityElement = true
@@ -837,9 +813,9 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         holdPageStill()
-        // A notes page turns from either side; the system's swipe back from
-        // the left edge would take the whole notebook away instead. The Back
-        // button stays.
+        // Nothing on a notes page moves sideways — the toolbar turns and adds
+        // pages — and the system's swipe back from the left edge would take
+        // the whole notebook away under a stray palm. The Back button stays.
         if !model.isColumn, let stack = hostNavigation {
             var backSwipes = [stack.interactivePopGestureRecognizer]
             if #available(iOS 26.0, *) { backSwipes.append(stack.interactiveContentPopGestureRecognizer) }
@@ -1059,67 +1035,6 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         }
     }
 
-    /// Zoomed in past the whole-page fit, a sideways drag is looking around
-    /// the page, not asking to turn it.
-    private var isZoomedIn: Bool {
-        guard model.pages.indices.contains(shownPage), view.bounds.width > 0 else { return false }
-        let fitted = NotebookFit.whole(model.pageBounds(shownPage), in: view.bounds.size)
-        return paper.contentVisibleFrame.width < fitted.width * 0.97
-    }
-
-    /// The observer never claims a touch, so PaperKit's own gestures carry on
-    /// beside it; letting them recognize together is what keeps it fed.
-    func gestureRecognizer(_ recognizer: UIGestureRecognizer,
-                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
-
-    func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        !(touch.view?.isDescendant(of: drawingToolbar) ?? false)
-    }
-
-    private func beginSwipe() {
-        let page = model.pageBounds(shownPage)
-        let fitted = NotebookFit.whole(page, in: view.bounds.size)
-        // The page's on-screen width: a third of that is a deliberate turn.
-        swipeThreshold = PageSwipe.threshold(pageWidth: view.bounds.width * page.width / max(fitted.width, 1))
-    }
-
-    private func moveSwipe(_ dx: CGFloat) {
-        let preview = PageSwipe.preview(dx: dx, index: model.current, count: model.pageCount, threshold: swipeThreshold)
-        paper.view.transform = CGAffineTransform(translationX: preview.offset, y: 0)
-        marker.update(preview)
-    }
-
-    private func endSwipe(_ dx: CGFloat, cancelled: Bool) {
-        finishSwipe(cancelled ? .stay
-                    : PageSwipe.outcome(dx: dx, index: model.current, count: model.pageCount, threshold: swipeThreshold))
-    }
-
-    private func finishSwipe(_ outcome: PageSwipe.Outcome) {
-        marker.update(.idle)
-        let width = view.bounds.width
-        let turn: (CGFloat, () -> Void)?
-        switch outcome {
-        case .stay: turn = nil
-        case .next: turn = (-1, { [model] in model.go(to: model.current + 1) })
-        case .previous: turn = (1, { [model] in model.go(to: model.current - 1) })
-        case .newPage: turn = (-1, { [model] in model.addPage() })
-        }
-        // Before the page slides away: the ink on it is the model's from here.
-        if turn != nil { flushInk() }
-        guard let (direction, change) = turn else {
-            UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut) { self.paper.view.transform = .identity }
-            return
-        }
-        // Out the side it was pushed, in from the other with the new page.
-        UIView.animate(withDuration: 0.16, delay: 0, options: .curveEaseIn) {
-            self.paper.view.transform = CGAffineTransform(translationX: direction * width, y: 0)
-        } completion: { _ in
-            change()
-            self.paper.view.transform = CGAffineTransform(translationX: -direction * width, y: 0)
-            UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut) { self.paper.view.transform = .identity }
-        }
-    }
-
     private func showInsertMenu() {
         let menu = MarkupEditViewController(supportedFeatureSet: .latest)
         menu.delegate = paper
@@ -1133,129 +1048,6 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         drawingToolbar.refreshUndo()
         guard let markup = paperMarkupViewController.markup else { return }
         model.canvasChanged(markup, page: model.isColumn ? 0 : shownPage)
-    }
-}
-
-/// Watches one finger drag across a notes page without ever claiming the
-/// touch. A pan recognizer would compete with PaperKit's own — drawing,
-/// moving a picture, scrolling — and lose to whichever claims the touch
-/// first; this stays a bystander, so they keep working and it still sees the
-/// whole drag. A second finger makes it a pinch, and it lets go.
-final class FingerDragObserver: UIGestureRecognizer {
-    /// Asked once the drag has a direction; false leaves the drag alone.
-    var shouldTrack: () -> Bool = { true }
-    /// The side of the view a drag starting here pulls from; nil (anywhere
-    /// but near a side) leaves the drag alone.
-    var edgeAt: (CGPoint) -> PageSwipe.Edge? = { _ in nil }
-    var onBegin: () -> Void = {}
-    var onMove: (CGFloat) -> Void = { _ in }
-    var onEnd: (CGFloat, Bool) -> Void = { _, _ in }
-    private var start: CGPoint?
-    private var edge: PageSwipe.Edge?
-    /// Nil until the finger has moved far enough to say which way it is going.
-    private var sideways: Bool?
-    private static let decideAfter: CGFloat = 12
-
-    init() {
-        super.init(target: nil, action: nil)
-        cancelsTouchesInView = false
-        delaysTouchesBegan = false
-        delaysTouchesEnded = false
-        allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
-    }
-
-    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
-    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
-
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        guard start == nil, numberOfTouches == 1, let touch = touches.first else { abandon(); return }
-        start = touch.location(in: view?.window)
-        edge = edgeAt(touch.location(in: view))
-    }
-
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        guard let start, numberOfTouches == 1, let touch = touches.first else { return }
-        let point = touch.location(in: view?.window)
-        let dx = point.x - start.x, dy = point.y - start.y
-        if sideways == nil, hypot(dx, dy) >= Self.decideAfter {
-            sideways = edge != nil && abs(dx) > abs(dy) && shouldTrack()
-            if sideways == true { onBegin() }
-        }
-        if sideways == true, let edge { onMove(PageSwipe.pull(dx: dx, from: edge)) }
-    }
-
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-        finish(touches, cancelled: false)
-    }
-
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-        finish(touches, cancelled: true)
-    }
-
-    private func finish(_ touches: Set<UITouch>, cancelled: Bool) {
-        if sideways == true, let start, let edge, let touch = touches.first {
-            onEnd(PageSwipe.pull(dx: touch.location(in: view?.window).x - start.x, from: edge), cancelled)
-        }
-        state = .failed
-    }
-
-    /// A second finger: a pinch, not a page turn.
-    private func abandon() {
-        if sideways == true { onEnd(0, true) }
-        sideways = false
-        state = .failed
-    }
-
-    override func reset() {
-        start = nil
-        edge = nil
-        sideways = nil
-    }
-}
-
-/// Shown while a finger drags forwards off the last notes page: what lifting
-/// will do, filling as the drag nears the threshold. Never takes a touch.
-final class NewPageMarker: UIView {
-    private let circle = UIImageView(image: UIImage(systemName: "plus.circle.fill"))
-    private let label = UILabel()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isUserInteractionEnabled = false
-        isAccessibilityElement = true
-        accessibilityIdentifier = "notebook-new-page-marker"
-        circle.preferredSymbolConfiguration = .init(pointSize: 56, weight: .regular)
-        label.font = .preferredFont(forTextStyle: .footnote).withTraits(.traitBold)
-        label.textAlignment = .center
-        let stack = UIStackView(arrangedSubviews: [circle, label])
-        stack.axis = .vertical
-        stack.alignment = .center
-        stack.spacing = 8
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-        ])
-    }
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    func update(_ preview: PageSwipe.Preview) {
-        isHidden = !preview.creating
-        guard preview.creating else { return }
-        let text = preview.armed ? "Release for a new page" : "New page"
-        label.text = text
-        accessibilityLabel = text
-        circle.tintColor = preview.armed ? .tintColor : .secondaryLabel
-        alpha = 0.35 + 0.65 * preview.progress
-        let scale = 0.7 + 0.3 * preview.progress
-        circle.transform = CGAffineTransform(scaleX: scale, y: scale)
-    }
-}
-
-private extension UIFont {
-    func withTraits(_ traits: UIFontDescriptor.SymbolicTraits) -> UIFont {
-        fontDescriptor.withSymbolicTraits(traits).map { UIFont(descriptor: $0, size: 0) } ?? self
     }
 }
 

@@ -34,7 +34,7 @@ xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingWorkspaceReopensWithoutAServer
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testNewspaperScrollsAsOneColumn
-#        -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesPagesTurnWithASwipe
+#        -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesPagesDoNotTurnWithASwipe
 
 xcodebuild -project apple/Lunaschal.xcodeproj -scheme LunaschalWatch \
   -sdk watchsimulator -destination 'generic/platform=watchOS Simulator' \

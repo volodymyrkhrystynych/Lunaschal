@@ -1864,66 +1864,9 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(waitForLabel(counter, equalTo: "p. 4 / 4"))
     }
 
-    /// A notes page turns sideways on a swipe, and finishing that swipe on
-    /// the last page makes a new one; backwards from the first does nothing.
-    func testDrawingFavoritesCanBeAddedMovedAndReopened() {
-        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
-        let app = XCUIApplication()
-        app.launch()
-        let notes = app.buttons["capture-notes"]
-        XCTAssertTrue(notes.waitForExistence(timeout: 10))
-        detachDraftNotes(app)
-        notes.tap()
-        let tools = app.buttons["drawing-all-tools"]
-        XCTAssertTrue(tools.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["Undo"].exists)
-        XCTAssertTrue(app.buttons["Redo"].exists)
-        tools.tap()
-        app.buttons["Add Fountain pen favorite"].tap()
-        let save = app.buttons["Save favorite"]
-        XCTAssertTrue(save.waitForExistence(timeout: 5))
-        save.tap()
-        XCTAssertTrue(app.buttons["Fountain pen"].firstMatch.waitForExistence(timeout: 5))
-        tools.tap()
-        let left = app.buttons["Left"]
-        let toolList = app.descendants(matching: .any).matching(identifier: "drawing-tools-list").firstMatch
-        XCTAssertTrue(toolList.waitForExistence(timeout: 5))
-        for _ in 0..<10 where !left.exists || !left.isHittable { toolList.swipeUp() }
-        XCTAssertTrue(left.isHittable)
-        left.tap()
-        let handle = app.buttons["drawing-toolbar-move"]
-        XCTAssertTrue(handle.waitForExistence(timeout: 5))
-        XCTAssertLessThan(handle.frame.midX, app.windows.firstMatch.frame.midX)
-        let before = handle.frame
-        app.terminate()
-        app.launch()
-        XCTAssertTrue(notes.waitForExistence(timeout: 10))
-        notes.tap()
-        XCTAssertTrue(handle.waitForExistence(timeout: 10))
-        XCTAssertEqual(handle.frame.minX, before.minX, accuracy: 2)
-        XCTAssertTrue(app.buttons["Fountain pen"].firstMatch.exists)
-        // Drag the handle back to the bottom and verify the horizontal layout.
-        let pageBeforeDrag = app.buttons["notebook-page"].label
-        let end = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
-        handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.2, thenDragTo: end)
-        XCTAssertGreaterThan(handle.frame.minY, app.windows.firstMatch.frame.midY)
-        XCTAssertEqual(app.buttons["notebook-page"].label, pageBeforeDrag)
-        guard let newestFavorite = app.buttons.matching(NSPredicate(format: "label == %@", "Fountain pen")).allElementsBoundByIndex.last else {
-            XCTFail("The new favorite should be on the toolbar")
-            return
-        }
-        let favoriteID = newestFavorite.identifier
-        let favorite = app.buttons[favoriteID]
-        let oldX = favorite.frame.minX
-        favorite.press(forDuration: 1)
-        app.buttons["Move earlier"].tap()
-        XCTAssertLessThan(favorite.frame.minX, oldX)
-        favorite.press(forDuration: 1)
-        app.buttons["Remove favorite"].tap()
-        XCTAssertFalse(favorite.exists)
-    }
-
-    func testNotesPagesTurnWithASwipe() {
+    /// Nothing on a notes page moves sideways: a drag from either side, or
+    /// anywhere else, neither turns nor adds a page. The toolbar does both.
+    func testNotesPagesDoNotTurnWithASwipe() {
         guard UIDevice.current.userInterfaceIdiom == .pad else { return }
         let app = XCUIApplication()
         app.launch()
@@ -1941,31 +1884,33 @@ final class OfflineCaptureTests: XCTestCase {
 
         let window = app.windows.firstMatch
         let shown = app.otherElements["notebook-visible-frame"]
-        // Turning happens only from a side of the screen: a finger anywhere
-        // else may be a palm, and moves nothing at all.
         let rightEdge = window.coordinate(withNormalizedOffset: CGVector(dx: 0.985, dy: 0.5))
         let leftEdge = window.coordinate(withNormalizedOffset: CGVector(dx: 0.015, dy: 0.5))
         let right = window.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
         let left = window.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5))
         let before = shown.value as? String
+        // Off the last page from the right edge: no new page.
+        rightEdge.press(forDuration: 0.05, thenDragTo: left)
         right.press(forDuration: 0.05, thenDragTo: left)
-        XCTAssertEqual(counter.label, "\(total) / \(total)", "a drag mid-page is not a page turn")
+        sleep(1)
+        XCTAssertEqual(counter.label, "\(total) / \(total)", "a swipe never adds a page")
+        XCTAssertFalse(app.otherElements["notebook-new-page-marker"].exists)
         let middle = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         middle.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)))
         middle.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.8)))
         sleep(1)
         XCTAssertEqual(shown.value as? String, before, "one finger never scrolls a notes page")
-        // A short drag from the side springs back.
-        rightEdge.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
-        XCTAssertEqual(counter.label, "\(total) / \(total)")
-        // A deliberate one off the last page adds a page.
-        rightEdge.press(forDuration: 0.05, thenDragTo: left)
+        // The button is how a page is added.
+        app.buttons["notebook-add-page"].tap()
         XCTAssertTrue(waitForLabel(counter, equalTo: "\(total + 1) / \(total + 1)"))
         attach(app, "notes new page")
-        // And back, from the other side.
+        // Back from the left edge: neither a page turn nor Back.
         leftEdge.press(forDuration: 0.05, thenDragTo: right)
+        sleep(1)
+        XCTAssertEqual(counter.label, "\(total + 1) / \(total + 1)", "a swipe never turns a page")
+        XCTAssertTrue(app.buttons["notebook-save"].exists, "the left edge doesn't leave the notebook")
+        app.buttons["Previous page"].tap()
         XCTAssertTrue(waitForLabel(counter, equalTo: "\(total) / \(total + 1)"))
-        XCTAssertTrue(app.buttons["notebook-save"].exists, "the left edge turns the page, not Back")
         // A page fits whole either way up: no vertical scrolling sideways on.
         XCUIDevice.shared.orientation = .landscapeLeft
         addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
@@ -1976,11 +1921,6 @@ final class OfflineCaptureTests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         XCTAssertTrue(waitForValue(shown) { frame in frame[1] + frame[3] >= 1753.5 && frame[0] + frame[2] >= 1239.5 })
 
-        // Backwards from the first page: nothing.
-        for _ in 1..<max(total, 1) { app.buttons["Previous page"].tap() }
-        XCTAssertEqual(counter.label, "1 / \(total + 1)")
-        leftEdge.press(forDuration: 0.05, thenDragTo: right)
-        XCTAssertEqual(counter.label, "1 / \(total + 1)")
         // Leave no notes in the entry draft for the next test.
         app.navigationBars.buttons.element(boundBy: 0).tap()
         detachDraftNotes(app)

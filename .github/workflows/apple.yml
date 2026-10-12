@@ -127,7 +127,7 @@ jobs:
             -only-testing:LunaschalUITests/OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testNewspaperScrollsAsOneColumn \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesPagesTurnWithASwipe \
+            -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesPagesDoNotTurnWithASwipe \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesComeBackFromTheEntryDraftAndSaveWithIt \
             CODE_SIGNING_ALLOWED=NO test
       - uses: actions/upload-artifact@v4
