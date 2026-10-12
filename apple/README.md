@@ -526,8 +526,10 @@ publicly to make CI work: simulator capture tests never contact it.
 - The Watch has a pomodoro timer: Focus (25 minutes, then Continue, a 5-minute
   Break, or Cancel) and Timeout (10 minutes, then Continue or Cancel). Rules are
   `PomodoroTimer` in LunaschalCore; the state is saved, so a relaunch resumes from
-  the end time. A local notification carries the same buttons, since the app is
-  suspended with the wrist down. Each finished or cancelled run goes to the phone
+  the end time. At the end the Watch buzzes until Continue, Break or Cancel, by
+  the same alarm as Workout (below); a local notification just after the end
+  carries the same buttons, as the fallback for a run a Control started while
+  the app was asleep, which gets no alarm until the app next comes forward. Each finished or cancelled run goes to the phone
   by `transferUserInfo` and is deleted from the Watch only after the phone replies
   `pomodoroStored`; the phone's `pomodoro-outbox` uploads it to
   `POST /api/lifestyle/pomodoro/sessions`, and Lifestyle shows it on the Focus card.
@@ -543,16 +545,21 @@ publicly to make CI work: simulator capture tests never contact it.
 - Workout is a 90-second rest timer (`RestTimer` in LunaschalCore), separate
   from the pomodoro and never logged. When it ends the Watch buzzes every 1.5 s
   until Stop or Restart, using a smart-alarm `WKExtendedRuntimeSession`
-  (`WKBackgroundModes: alarm`) scheduled for the end of each run, with a
-  notification as fallback. Debug builds take `-RestSeconds 5`. The pages, the
+  (`WKBackgroundModes: alarm`), with a notification as fallback. An app gets
+  one such session at a time, so `WatchAlarm` keeps one for every timer,
+  scheduled for the earliest end, buzzing while any timer that rang is
+  unanswered; dismissing it from the system's alarm screen stops Workout and
+  only silences a finished pomodoro. Debug builds take `-RestSeconds 5`. The pages, the
   countdown, the ringing screen and the repeating haptic (in the system log)
   passed in the watchOS simulator, **but only with an ad-hoc (`-`) signature**:
   an unsigned `CODE_SIGNING_ALLOWED=NO` build gets "client is not entitled"
   from the alarm service and shows "Couldn't set the alarm". The buzz with the
-  wrist down, and Stop/Restart ending it, need the device.
+  wrist down, and Stop/Restart ending it, need the device. A 6-second Focus run
+  (`-PomodoroSeconds 6`) scheduled the same session and repeated the haptic in
+  the simulator too.
 - A running timer (Focus, Break, Timeout, Workout) shows on every timer
-  complication as the system Timer draws one: an emptying ring with the time
-  left inside it, the time with a gauge in a corner. A recording turns its Record
+  complication as the system Timer draws one: a ring round the whole edge that
+  empties, with the time left centred inside it, the time with a gauge in a corner. A recording turns its Record
   or Transcribe complication, launcher button and Control red, keeping the same
   icon. Every change reloads all complications and Controls, and the app reloads
   them again as the face comes back; before this, timer changes never reloaded

@@ -8,10 +8,11 @@ import LunaschalCore
 /// LunaschalCore; this owns the clock, the end-of-timer notification and
 /// handing finished runs to the phone.
 ///
-/// The notification (scheduled by `PomodoroEngine`) is what tells you the
-/// time is up: an app with the wrist down is suspended, so nothing in-process
-/// can be relied on to fire. Its buttons are the same Continue / Break /
-/// Cancel as the screen.
+/// At the end, `WatchAlarm` buzzes until Continue, Break or Cancel, as the
+/// Workout timer does. The notification (scheduled by `PomodoroEngine`, just
+/// after the end) is the fallback for a run with no alarm: one started by a
+/// Control while the app was asleep. Its buttons are the same Continue /
+/// Break / Cancel as the screen.
 @MainActor
 final class PomodoroModel: ObservableObject {
     enum Action: String { case `continue` = "pomodoro.continue", takeBreak = "pomodoro.break", cancel = "pomodoro.cancel" }
@@ -21,6 +22,8 @@ final class PomodoroModel: ObservableObject {
     /// State, outbox and notification live here, shared with the Controls,
     /// which can change the timer while this app is asleep.
     let engine: PomodoroEngine
+    /// After every change, so the alarm can follow.
+    var onChange: (() -> Void)?
     var outbox: PomodoroStore { engine.outbox }
     private let shortenedTo: TimeInterval?
     private var tick: Task<Void, Never>?
@@ -98,6 +101,7 @@ final class PomodoroModel: ObservableObject {
             let (next, result, closed) = try engine.apply(change, shortenedTo: shortenedTo)
             timer = next
             wake()
+            onChange?()
             if !closed.isEmpty { sendPending() }
             return result
         } catch {
