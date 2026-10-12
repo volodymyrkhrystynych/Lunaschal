@@ -719,11 +719,10 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 /// newspaper page (if any) drawn underneath as its content view, and a finger
 /// swipe turns it. A column shows the whole issue as one scroll fitted to the
 /// width, each page's newsprint underneath its stretch of the column.
-final class NotebookCanvasController: UIViewController, PaperMarkupViewController.Delegate, UIGestureRecognizerDelegate,
-                                      PKToolPickerObserver {
+final class NotebookCanvasController: UIViewController, PaperMarkupViewController.Delegate, UIGestureRecognizerDelegate {
     let model: NotebookEditorModel
     let paper = PaperMarkupViewController(markup: nil, supportedFeatureSet: .latest)
-    let picker = PKToolPicker()
+    private(set) lazy var drawingToolbar = DrawingToolbar(presenter: self)
     private var shownPage = -1
     private var shownRevision = -1
     private var shownLocked: Data?
@@ -774,9 +773,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         view.backgroundColor = .secondarySystemBackground
         view.clipsToBounds = true
         overrideUserInterfaceStyle = .light
-        // The page is always white, including when the app is in dark mode.
-        picker.overrideUserInterfaceStyle = .light
-        picker.colorUserInterfaceStyle = .light
+        // The page and its ink colors stay light even when the app is dark.
         addChild(paper)
         paper.view.frame = view.bounds
         paper.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -790,14 +787,14 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         // Sideways only ever means zoomed in; a scroll bar along the bottom
         // would suggest otherwise.
         if #available(iOS 26.1, *) { paper.showsHorizontalScrollIndicator = false }
-        picker.addObserver(paper)
-        picker.addObserver(self)
-        // Registering an observer only delivers future changes. Apply the
-        // current tool now so the first Pencil stroke has visible ink too.
-        applyDrawingTool(picker)
-        paper.toolPickerIsRulerActiveDidChange(picker)
-        picker.accessoryItem = UIBarButtonItem(image: UIImage(systemName: "plus.circle"),
-                                               primaryAction: UIAction { [weak self] _ in self?.showInsertMenu() })
+        drawingToolbar.undoManagerProvider = { [weak self] in self?.paper.undoManager }
+        drawingToolbar.onSelect = { [weak self] favorite in
+            guard let self else { return }
+            paper.becomeFirstResponder()
+            if let tool = favorite.tool { paper.drawingTool = tool }
+            else if favorite.kind == "ruler" { paper.isRulerActive.toggle() }
+            else if favorite.kind == "insert" { showInsertMenu() }
+        }
         if !model.isColumn {
             swipe.delegate = self
             swipe.shouldTrack = { [weak self] in !(self?.isZoomedIn ?? true) }
@@ -825,6 +822,8 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         view.addSubview(visibleProbe)
         #endif
         show(page: model.current, revision: model.revision)
+        view.addSubview(drawingToolbar)
+        drawingToolbar.activateInitialTool()
     }
 
     private func reportVisibleFrame() {
@@ -849,14 +848,9 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
                 disabledBackSwipes.append(recognizer)
             }
         }
-        picker.setVisible(true, forFirstResponder: paper)
         paper.becomeFirstResponder()
-        // Showing the picker can restore its saved selection.
-        applyDrawingTool(picker)
-        paper.toolPickerIsRulerActiveDidChange(picker)
-        // Again once the bars and the tool picker are in place: PaperKit moves
-        // the content for them as they arrive, which left the top of the
-        // first page hidden under the navigation bar.
+        drawingToolbar.refreshUndo()
+        // Fit again after the surrounding navigation bars have settled.
         DispatchQueue.main.async { [weak self] in self?.fit() }
     }
 
@@ -864,11 +858,11 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         super.viewWillDisappear(animated)
         for recognizer in disabledBackSwipes { recognizer.isEnabled = true }
         disabledBackSwipes = []
-        picker.setVisible(false, forFirstResponder: paper)
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        drawingToolbar.position()
         holdPageStill()
         // A rotation or a Split View resize refits the page being read.
         if view.bounds.size != fittedSize { fit() }
@@ -1078,6 +1072,10 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     func gestureRecognizer(_ recognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
+    func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        !(touch.view?.isDescendant(of: drawingToolbar) ?? false)
+    }
+
     private func beginSwipe() {
         let page = model.pageBounds(shownPage)
         let fitted = NotebookFit.whole(page, in: view.bounds.size)
@@ -1122,41 +1120,17 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         }
     }
 
-    /// The tool picker arriving (or moving) makes PaperKit shift the content
-    /// to clear it, which left the top of the first page under the navigation
-    /// bar. Put the fit back — unless the reader has already scrolled away.
-    func toolPickerFramesObscuredDidChange(_ toolPicker: PKToolPicker) {
-        guard view.bounds.width > 0 else { return }
-        let page = model.isColumn ? model.pageRect(model.current) : model.pageBounds(shownPage)
-        let fitted = model.isColumn ? NotebookColumn.visibleFrame(slot: page, view: view.bounds.size)
-                                    : NotebookFit.whole(page, in: view.bounds.size)
-        let shown = paper.contentVisibleFrame
-        if abs(shown.minY - fitted.minY) < 80, abs(shown.width - fitted.width) < 2 { fit() }
-    }
-
-    /// An inserted picture can leave its selection editor as first responder.
-    /// Return tool changes to the canvas and reapply the chosen tool there.
-    func toolPickerSelectedToolItemDidChange(_ toolPicker: PKToolPicker) {
-        paper.becomeFirstResponder()
-        applyDrawingTool(toolPicker)
-    }
-
-    private func applyDrawingTool(_ toolPicker: PKToolPicker) {
-        paper.toolPickerSelectedToolItemDidChange(toolPicker)
-        // PaperKit's observer alone can leave drawingTool at its default
-        // until the picker is interacted with. Seed the actual canvas tool.
-        if let tool = toolPicker.selectedToolItem.tool { paper.drawingTool = tool }
-    }
-
     private func showInsertMenu() {
         let menu = MarkupEditViewController(supportedFeatureSet: .latest)
         menu.delegate = paper
         menu.modalPresentationStyle = .popover
-        menu.popoverPresentationController?.sourceItem = picker.accessoryItem
+        menu.popoverPresentationController?.sourceView = drawingToolbar
+        menu.popoverPresentationController?.sourceRect = drawingToolbar.bounds
         present(menu, animated: true)
     }
 
     func paperMarkupViewControllerDidChangeMarkup(_ paperMarkupViewController: PaperMarkupViewController) {
+        drawingToolbar.refreshUndo()
         guard let markup = paperMarkupViewController.markup else { return }
         model.canvasChanged(markup, page: model.isColumn ? 0 : shownPage)
     }

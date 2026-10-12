@@ -596,6 +596,19 @@ relaunch tests, Watch compilation, and the inspected unsigned device archive
 
 ### M5 — PencilKit drawing and annotations
 
+The Notes/Newspaper PaperKit surface now uses a compact favorites toolbar with
+Undo/Redo, all native ink types, both erasers, selection, ruler and insertion.
+Color/width presets, ordering and edge docking are saved per device. A handle
+drags the bar between edges; All tools also offers accessible positioning buttons.
+Toolbar touches are excluded from notebook page-turn gestures. Physical Pencil
+and palm-rejection behavior still need device verification.
+Passed on the iPad Pro 13-inch (M5) simulator: 4 toolbar tests and 18 notebook
+editor tests, plus UI tests for adding/reordering/removing favorites, relaunching,
+moving the toolbar without turning a page, and notebook page swipes. Coverage
+includes undo/redo actions, all eight ink types, persisted preferences and bounds
+after resizing. These checks used unsigned `xcodebuild ... test`; this is not
+physical-device verification.
+
 Prototype this early, alongside M0–M2, because drawing quality is a primary
 motivation. Final integration depends on the M3 conflict/storage contract.
 
