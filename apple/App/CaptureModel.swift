@@ -29,6 +29,8 @@ final class CaptureModel: ObservableObject {
     /// The food log's meals in the feed, and each one's media.
     @Published private(set) var foodRecords: [SyncChange] = []
     @Published private(set) var foodMedia: [String: [JournalAttachmentItem]] = [:]
+    @Published private(set) var spendingRecords: [SyncChange] = []
+    @Published private(set) var spendingMedia: [String: [JournalAttachmentItem]] = [:]
     /// Calendar occurrences that can border a run of the journal feed, as on the web.
     @Published private(set) var journalOccurrences: [CalendarOccurrence] = []
     /// Series templates and their exceptions; the calendar expands them per view.
@@ -57,6 +59,8 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var selfieThumbnail: (id: String, data: Data)?
     /// The last weather the server sent, kept on disk so it shows offline.
     @Published private(set) var weather: WeatherDay?
+    @Published private(set) var sleepWeek: SleepWeek?
+    @Published private(set) var sleepError: String?
     private var weatherFetchedAt: Date?
     let location = LocationProvider()
     /// The Workout page: queued sets, and the server's recent exercises and workouts.
@@ -211,6 +215,10 @@ final class CaptureModel: ObservableObject {
         recentExercises = (try? JSONDecoder().decode([RecentExercise].self, from: Data(contentsOf: workoutCache("recent")))) ?? []
         recentWorkouts = (try? JSONDecoder().decode([WorkoutSession].self, from: Data(contentsOf: workoutCache("sessions")))) ?? []
         weather = try? JSONDecoder().decode(WeatherDay.self, from: Data(contentsOf: weatherCache))
+        #if DEBUG
+        try SleepWeekFixture.seedIfAsked(at: healthSleepCache)
+        #endif
+        sleepWeek = try? JSONDecoder().decode(SleepWeek.self, from: Data(contentsOf: healthSleepCache))
         pendingEdits = try replica.edits().filter { Self.feedCollections.contains($0.operation.collection) }
         Task { await reloadJournal(); await reloadCalendar() }
         refreshLibraryBytes()
@@ -310,6 +318,9 @@ final class CaptureModel: ObservableObject {
         defer { healthStatus = healthState.status() }
         do {
             try await healthSyncer.run(source: healthSource, transport: api)
+            await refreshDaily(using: api)
+            await refreshWorkouts(using: api)
+            await refreshSleep(using: api)
         } catch {
             if Task.isCancelled || error is CancellationError || error is URLError || error is HTTPFailure { throw error }
         }
@@ -353,11 +364,15 @@ final class CaptureModel: ObservableObject {
             let feed = try await reader.read { store in
                 let records = try store.newestRecords(collection: "journal_entries", query: query, limit: limit)
                 let meals = try store.newestRecords(collection: "food_entries", query: query, limit: limit)
+                let purchases = try store.newestRecords(collection: "spending_logs", query: query, limit: limit)
                 return JournalFeedRead(
                     records: records, count: try store.count(collection: "journal_entries", query: query),
                     attachments: try store.relatedRecords(collection: "journal_attachments", field: "entryId", values: records.map(\.id)),
                     meals: meals,
                     mealMedia: try store.relatedRecords(collection: "food_media", field: "entryId", values: meals.map(\.id)),
+                    purchases: purchases,
+                    purchaseMedia: try store.relatedRecords(collection: "spending_media", field: "entryId",
+                                                            values: purchases.map(\.id)),
                     edits: try store.edits().filter { collections.contains($0.operation.collection) })
             }
             guard load == journalLoads else { return }
@@ -366,16 +381,18 @@ final class CaptureModel: ObservableObject {
             journalAttachments = JournalAttachmentItem.grouped(feed.attachments)
             foodRecords = feed.meals
             foodMedia = JournalAttachmentItem.groupedFood(feed.mealMedia)
+            spendingRecords = feed.purchases
+            spendingMedia = JournalAttachmentItem.groupedSpending(feed.purchaseMedia)
             pendingEdits = feed.edits
             placeJournalOccurrences()
         } catch { message = error.localizedDescription }
     }
 
     /// The collections whose saved edits the Journal feed lists.
-    static let feedCollections: Set<String> = ["journal_entries", "food_entries"]
+    static let feedCollections: Set<String> = ["journal_entries", "food_entries", "spending_logs"]
 
     /// What a sync pass has to touch for the Journal feed to read again.
-    static let feedScope = Set(["journal_entries", "journal_attachments"] + FoodSync.collections)
+    static let feedScope = Set(["journal_entries", "journal_attachments"] + FoodSync.collections + SpendingSync.collections)
 
     /// The categorised calendar occurrences around the days the feed covers,
     /// for its borders. A search shows matches, not a day, so it has none, as
@@ -746,7 +763,8 @@ final class CaptureModel: ObservableObject {
         // A WebM clip downloaded with the library is the original, which the
         // phone cannot play; the server's AAC copy is fetched instead.
         // A meal's media has no converted copy to ask for.
-        let playable = !thumbnail && item.media == .audio && !item.phonePlayable && item.collection != "food_media"
+        let playable = !thumbnail && item.media == .audio && !item.phonePlayable
+            && item.collection != "food_media" && item.collection != "spending_media"
         if !thumbnail, !playable,
            let saved = try? media.downloaded(collection: item.collection, id: item.id) { return saved }
         let name = item.id + (thumbnail ? ".poster" : playable ? ".m4a" : "")
@@ -921,6 +939,7 @@ final class CaptureModel: ObservableObject {
     func refreshDailyStatus() async {
         guard let api = chatAPI() else { return }
         await refreshDaily(using: api)
+        await refreshSleep(using: api)
     }
 
     private func refreshWorkouts(using api: JournalAPI) async {
@@ -982,6 +1001,18 @@ final class CaptureModel: ObservableObject {
 
     // Not `.json`: the capture store reads every .json in its root as a capture.
     private var weatherCache: URL { store.root.appendingPathComponent("weather-today.cache") }
+    private var healthSleepCache: URL { store.root.appendingPathComponent("sleep-week.cache") }
+
+    private func refreshSleep(using api: JournalAPI) async {
+        do {
+            let fresh = try await api.sleepWeek(ending: DayKey.of(Date()))
+            sleepWeek = fresh
+            sleepError = nil
+            try? JSONEncoder().encode(fresh).write(to: healthSleepCache, options: .atomic)
+        } catch {
+            sleepError = "Could not refresh sleep. Showing the last available readings."
+        }
+    }
 
     /// The forecast changes hourly at most, and every sync would otherwise ask.
     private func refreshWeather(using api: JournalAPI) async {
@@ -1213,8 +1244,10 @@ final class CaptureModel: ObservableObject {
             let caps = try await timed("capabilities") { try await serverCapabilities(api) }
             let calendar = CalendarSync.supported(by: caps.collections)
             let food = FoodSync.supported(by: caps.collections)
+            let spending = SpendingSync.supported(by: caps.collections)
             let libraryScope = LibraryDownload.collections(knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge"))
-            let scopes = [Self.journalScope, CalendarSync.collections, libraryScope, FoodSync.collections]
+            let scopes = [Self.journalScope, CalendarSync.collections, libraryScope, FoodSync.collections,
+                          SpendingSync.collections]
             var pull = scopes.map { _ in true }
             if !full, caps.syncStatus {
                 pull = try await timed("check for changes") { try await replicaSyncer.scopesToPull(using: api, scopes: scopes) }
@@ -1229,6 +1262,11 @@ final class CaptureModel: ObservableObject {
             if food, pull[3] {
                 changed.formUnion(try await timed("food log") {
                     try await replicaSyncer.run(using: api, collections: FoodSync.collections)
+                })
+            }
+            if spending, pull[4] {
+                changed.formUnion(try await timed("spending") {
+                    try await replicaSyncer.run(using: api, collections: SpendingSync.collections)
                 })
             }
             if calendar, pull[1] {
@@ -1546,15 +1584,16 @@ final class CaptureModel: ObservableObject {
     /// running is stopped into the entry's draft first.
     func saveEdit(_ record: SyncChange, changes: [String: JSONValue], youtubeURLs: [String] = []) -> Bool {
         if recorder.activeID != nil { recorder.stop() }
-        let kind: CaptureKind = record.collection == "food_entries" ? .food : .journal
+        let kind: CaptureKind = record.collection == "food_entries" ? .food
+            : record.collection == "spending_logs" ? .spending : .journal
         do {
             // Checked before anything is written, so a refused addition never
             // leaves the words queued without it, or the reverse.
             if !changes.isEmpty, try replica.edits().contains(where: {
                 $0.operation.collection == record.collection && $0.operation.recordId == record.id
             }) { throw ReplicaError.editAlreadyPending }
-            if kind == .food, try !store.draft(for: record.id).files.allSatisfy(\.isFoodMedia) {
-                throw CaptureError.notFoodMedia
+            if kind.isMediaLog, try !store.draft(for: record.id).files.allSatisfy(kind.accepts) {
+                throw kind == .spending ? CaptureError.notSpendingMedia : CaptureError.notFoodMedia
             }
             try store.commitAdditions(to: record.id, kind: kind, youtubeURLs: youtubeURLs)
             if !changes.isEmpty { _ = try replica.queue(record: record, data: changes) }
@@ -1667,5 +1706,7 @@ private struct JournalFeedRead {
     let attachments: [SyncChange]
     let meals: [SyncChange]
     let mealMedia: [SyncChange]
+    let purchases: [SyncChange]
+    let purchaseMedia: [SyncChange]
     let edits: [PendingEdit]
 }

@@ -143,6 +143,7 @@ public struct WorkoutSession: Codable, Equatable, Identifiable {
     public let date: String
     public let locationType: String
     public let captureKind: String?
+    public let notes: String?
     public let durationMinutes: Int?
     public let intensityRating: Int?
     public let exercises: [Exercise]

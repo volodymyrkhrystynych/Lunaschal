@@ -25,13 +25,12 @@ function dayLabel(iso: string): string {
 }
 
 /**
- * What the Watch recorded, apart from what was logged by hand: Apple's
+ * Apple's daily totals alongside the source workouts:
  * exercise minutes per day (every brisk walk, not only the sessions in the
  * workout log), steps, and the workouts the Watch tracked.
  *
- * Deliberately its own card rather than more boxes in the activity heatmap —
- * those five hues are full, and a gym session the user rated is a different
- * kind of fact from minutes a sensor counted.
+ * Workouts also feed the workout log and heatmap automatically. The daily
+ * totals stay here: exercise minutes include activity outside those workouts.
  */
 export function HealthCard() {
   const { data, isLoading } = useQuery({

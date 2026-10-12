@@ -10,6 +10,7 @@ import type {
   JournalNewspaper,
   JournalStudySource,
   JournalLocationDay,
+  SpendingEntry,
 } from '../hooks/api';
 
 function entry(id: string, createdAt: string): JournalEntry {
@@ -130,8 +131,27 @@ function locationDay(date: string, archivedAt: string): JournalLocationDay {
   };
 }
 
+function purchase(id: string, createdAt: string): SpendingEntry {
+  return {
+    id,
+    date: createdAt.slice(0, 10),
+    category: 'Coffee',
+    merchant: null,
+    amountCents: 450,
+    rawContent: null,
+    notes: null,
+    latitude: null,
+    longitude: null,
+    reading: false,
+    media: [],
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
 function idOf(i: FeedItem): string {
   if (i.kind === 'location') return `map-${i.location.date}`;
+  if (i.kind === 'spending') return i.spending.id;
   if (i.kind === 'entry') return i.entry.id;
   if (i.kind === 'study') return i.study.id;
   if (i.kind === 'transcription') return i.transcription.id;
@@ -425,5 +445,21 @@ describe('buildFeed', () => {
       'map-2026-07-06',
     ]);
     expect(feed[1]).toEqual({ kind: 'location', location: days[0] });
+  });
+
+  it('interleaves purchases by when they were made, non-selectable', () => {
+    const entries = [
+      entry('e1', '2026-07-08T21:00:00'),
+      entry('e2', '2026-07-08T09:00:00'),
+    ];
+    const spent = [
+      purchase('p1', '2026-07-08T12:30:00'),
+      purchase('p2', '2026-07-08T08:00:00'),
+    ];
+    const feed = buildFeed(entries, [], [], [], [], [], [], [], [], spent);
+    expect(feed.map(idOf)).toEqual(['e1', 'p1', 'e2', 'p2']);
+    expect(feed[1]).toEqual({ kind: 'spending', spending: spent[0] });
+    // Only entries carry an index for keyboard selection.
+    expect(feed.filter(i => i.kind === 'entry')).toHaveLength(2);
   });
 });

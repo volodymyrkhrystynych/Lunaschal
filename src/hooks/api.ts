@@ -2515,6 +2515,37 @@ export interface FoodJournalItem {
   media: FoodMedia[];
 }
 
+// A purchase, typed on the Daily page or captured as a receipt/clip. Media is
+// food's shape exactly, so the feed draws both with the same components.
+export type SpendingMedia = FoodMedia;
+
+export interface SpendingEntry {
+  id: string;
+  /** 4am day key the purchase is filed under. */
+  date: string;
+  category: string | null;
+  merchant: string | null;
+  /** CAD cents; null until a receipt or clip has been read. */
+  amountCents: number | null;
+  rawContent: string | null;
+  notes: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  /** A receipt, a clip or the structuring pass is still queued. */
+  reading: boolean;
+  media: SpendingMedia[];
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface SpendingDay {
+  date: string;
+  totalCents: number;
+  /** Purchases on this day whose amount is not known yet — not in the total. */
+  pendingCount: number;
+  byCategory: Record<string, number>;
+}
+
 // --- Lifestyle (workouts, heatmap, trends, body weight, selfies, calories) ---
 // Tasks are deliberately absent: the Lifestyle tab renders daily tasks and
 // to-dos through api.tasks/api.todos rather than a parallel list of its own.
@@ -2549,7 +2580,7 @@ export interface WorkoutExercise {
 }
 
 export interface WorkoutSession {
-  captureKind?: 'strength' | 'outdoor' | null;
+  captureKind?: 'strength' | 'outdoor' | 'health' | null;
   startedAt?: string | null;
   endedAt?: string | null;
   id: string;
@@ -2639,6 +2670,17 @@ export interface ExerciseProgression {
   name: string;
   displayName: string;
   points: ProgressionPoint[];
+}
+
+export interface SleepNight {
+  date: string;
+  start: number | null;
+  end: number | null;
+  asleepMinutes: number | null;
+  awakeMinutes: number | null;
+  interruptions: number | null;
+  efficiency: number | null;
+  unobservedMinutes: number | null;
 }
 
 export interface BodyWeightLog {
@@ -3546,6 +3588,12 @@ export const api = {
     },
     deleteMedia: (mediaId: string) =>
       del<{ success: boolean }>(`/api/cookbook/media/${mediaId}`),
+  },
+
+  spending: {
+    journal: () => get<SpendingEntry[]>('/api/spending/journal'),
+    trends: (days = 30) =>
+      get<SpendingDay[]>(`/api/spending/trends?days=${days}`),
   },
 
   food: {
@@ -5128,6 +5176,10 @@ export const api = {
       ),
     health: (days = 28) =>
       get<HealthActivity>(`/api/apple-health/activity?days=${days}`),
+    sleep: (to: string) =>
+      get<{ days: SleepNight[] }>(
+        `/api/apple-health/sleep?to=${encodeURIComponent(to)}`
+      ),
     exercises: {
       list: () => get<ExerciseSummary[]>('/api/lifestyle/exercises'),
       progression: (name: string) =>
@@ -5147,7 +5199,7 @@ export const api = {
         if (params?.end) qp.set('end', params.end);
         return get<BodyWeightLog[]>(`/api/lifestyle/weight?${qp}`);
       },
-      log: (data: { date?: string; weight: number }) =>
+      log: (data: { date?: string; weight: number; unit?: 'kg' | 'lb' }) =>
         post<BodyWeightLog>('/api/lifestyle/weight', data),
       delete: (id: string) =>
         del<{ success: boolean }>(`/api/lifestyle/weight/${id}`),

@@ -28,9 +28,14 @@ what each device can currently do and which work remains device-only.
 
 - **iPad notebooks** (Capture → **Notes** or **Newspaper**, top right). A
   full-window PaperKit canvas with the tab bar hidden: Pencil ink,
-  pictures that can be moved and resized, text boxes and shapes from the tool
-  picker's **+**. The initial drawing tool is applied on open, and the picker
-  uses light-page ink colours even when the rest of the app uses dark mode.
+  pictures that can be moved and resized, text boxes and shapes from **All tools →
+  Insert shape or text**. A slim 44-point favorites bar replaces the native palette:
+  Undo/Redo, saved color/width presets, and All tools (all eight inks, object/pixel
+  erasers, selection, ruler and insertion). Use the star beside a tool to add a
+  favorite; hold a favorite to edit, reorder or remove it. Drag the handle to any
+  edge, or choose an edge in All tools. Favorites and position persist on this
+  device; long lists scroll inside the bar. The initial favorite is applied on
+  open, with light-page ink colors even when the app uses dark mode.
   **Notes** are A4 pages, one at a time, each fitted whole to the window so
   nothing scrolls. **Only a finger that lands at a side of the screen** (within
   44 pt) turns a page: in from the right edge for the next page, in from the
@@ -110,6 +115,16 @@ what each device can currently do and which work remains device-only.
   survive relaunch. Amounts are stored as integer cents in `spending_logs`.
   The backend and portable Swift tests cover replay and deletion during an upload;
   single-line spending capture, relaunch and deletion passed in the iPhone simulator.
+  A purchase can also be **captured like a meal**: the composer's **Spent** button
+  (beside Food) files the draft's words, receipt photos and clips under
+  `/api/spending`, where the server reads the merchant, category and amount out
+  of the receipt and the transcript. Until it has, the purchase shows a dash in
+  the Journal and Daily counts it as "being read" beside the total, never as $0.
+  Purchases replicate as `spending_logs`/`spending_media` into the Journal feed,
+  where merchant, category, amount and notes can be corrected offline. Videos are
+  refused (the server keeps photos and voice only). Composer layout and an offline
+  purchase reaching the feed passed in the iPhone simulator; camera capture of a real
+  receipt and the server's reading of it have not been verified on device.
 - **Workout** (the third Capture page) is the desktop's workout log: one set or
   activity per line ("bicep curls 20, 10" in lb, "squats 10" bodyweight, bare
   "20, 10" for the selected pill, "walking 30" minutes), recent-exercise pills,
@@ -118,6 +133,15 @@ what each device can currently do and which work remains device-only.
   saved on the device, and uploaded in order with a device-minted id and the time
   they were logged, so a replay is a no-op and sets done offline still group into
   the workout they belong to. Rating and location need the server.
+- **Sleep in Capture → Daily** shows seven nights of asleep/awake bars; tap a
+  night for duration, recorded interruptions and sleep efficiency (continuity,
+  not a subjective quality rating). Missing or in-bed-only readings remain
+  unknown. The last response is cached offline and dates roll forward without
+  treating missing nights as zero sleep. Health workouts automatically enter
+  the workout log; bodyweight is backfilled in kg with the user's historical
+  140 cutoff, preserving manual corrections. New weight inputs are labelled kg.
+  Night selection and cached readings after relaunch passed in the iPhone
+  simulator; real Health recording is not yet verified on device.
 - **Apple Health sync** (Settings → Apple Health, off until turned on). Reads
   every Health type the app has a unit for -- sleep stages, workouts, exercise
   minutes, steps, heart rate, HRV, vitals, body, nutrition, symptoms -- through
@@ -322,7 +346,10 @@ what each device can currently do and which work remains device-only.
   other journal activity intervenes; screenshots do not become entry text.
   Grouping follows server arrival order, including offline retries. Timestamps
   record when each image was shared. Core and backend tests cover persistence,
-  retries and grouping; native share-sheet verification remains pending.
+  retries and grouping. Image intake tries alternate representations if a
+  source cannot supply its first image format, with data and UIKit-image
+  fallbacks; these paths pass simulator unit tests. Sharing from the system
+  screenshot preview on a signed device remains unverified.
   Other saved material is grouped
   under Study. Download controls remain in More → Settings → Library downloads.
   Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:
@@ -557,8 +584,10 @@ publicly to make CI work: simulator capture tests never contact it.
 - The Watch has a pomodoro timer: Focus (25 minutes, then Continue, a 5-minute
   Break, or Cancel) and Timeout (10 minutes, then Continue or Cancel). Rules are
   `PomodoroTimer` in LunaschalCore; the state is saved, so a relaunch resumes from
-  the end time. A local notification carries the same buttons, since the app is
-  suspended with the wrist down. Each finished or cancelled run goes to the phone
+  the end time. At the end the Watch buzzes until Continue, Break or Cancel, by
+  the same alarm as Workout (below); a local notification just after the end
+  carries the same buttons, as the fallback for a run a Control started while
+  the app was asleep, which gets no alarm until the app next comes forward. Each finished or cancelled run goes to the phone
   by `transferUserInfo` and is deleted from the Watch only after the phone replies
   `pomodoroStored`; the phone's `pomodoro-outbox` uploads it to
   `POST /api/lifestyle/pomodoro/sessions`, and Lifestyle shows it on the Focus card.
@@ -574,16 +603,21 @@ publicly to make CI work: simulator capture tests never contact it.
 - Workout is a 90-second rest timer (`RestTimer` in LunaschalCore), separate
   from the pomodoro and never logged. When it ends the Watch buzzes every 1.5 s
   until Stop or Restart, using a smart-alarm `WKExtendedRuntimeSession`
-  (`WKBackgroundModes: alarm`) scheduled for the end of each run, with a
-  notification as fallback. Debug builds take `-RestSeconds 5`. The pages, the
+  (`WKBackgroundModes: alarm`), with a notification as fallback. An app gets
+  one such session at a time, so `WatchAlarm` keeps one for every timer,
+  scheduled for the earliest end, buzzing while any timer that rang is
+  unanswered; dismissing it from the system's alarm screen stops Workout and
+  only silences a finished pomodoro. Debug builds take `-RestSeconds 5`. The pages, the
   countdown, the ringing screen and the repeating haptic (in the system log)
   passed in the watchOS simulator, **but only with an ad-hoc (`-`) signature**:
   an unsigned `CODE_SIGNING_ALLOWED=NO` build gets "client is not entitled"
   from the alarm service and shows "Couldn't set the alarm". The buzz with the
-  wrist down, and Stop/Restart ending it, need the device.
+  wrist down, and Stop/Restart ending it, need the device. A 6-second Focus run
+  (`-PomodoroSeconds 6`) scheduled the same session and repeated the haptic in
+  the simulator too.
 - A running timer (Focus, Break, Timeout, Workout) shows on every timer
-  complication as the system Timer draws one: an emptying ring with the time
-  left inside it, the time with a gauge in a corner. A recording turns its Record
+  complication as the system Timer draws one: a ring round the whole edge that
+  empties, with the time left centred inside it, the time with a gauge in a corner. A recording turns its Record
   or Transcribe complication, launcher button and Control red, keeping the same
   icon. Every change reloads all complications and Controls, and the app reloads
   them again as the face comes back; before this, timer changes never reloaded

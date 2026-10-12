@@ -626,6 +626,8 @@ public final class ReplicaStore {
         case "journal_entries": editable = ["content", "title", "tags"]
         // A meal's words only, and never a delete: the server refuses both.
         case "food_entries" where !delete: editable = FoodSync.editableFields
+        // A purchase's words and amount, never a delete: the same server rule.
+        case "spending_logs" where !delete: editable = SpendingSync.editableFields
         default: throw ReplicaError.invalidEdit
         }
         guard !record.deleted, (delete ? data.isEmpty : !data.isEmpty), Set(data.keys).isSubset(of: editable) else {

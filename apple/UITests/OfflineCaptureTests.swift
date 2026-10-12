@@ -329,6 +329,8 @@ final class OfflineCaptureTests: XCTestCase {
         daily.tap()
         // Weather heads the page, whether or not this simulator has a forecast cached.
         XCTAssertTrue(app.staticTexts["Weather"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Sleep · past 7 nights"].exists)
+        for _ in 0..<5 where !app.buttons["Take selfie"].exists && !app.buttons["Retake selfie"].exists { app.swipeUp() }
         XCTAssertTrue(app.buttons["Take selfie"].waitForExistence(timeout: 5)
                       || app.buttons["Retake selfie"].exists)
 
@@ -338,13 +340,14 @@ final class OfflineCaptureTests: XCTestCase {
         // Letters only: a name ending in digits would rightly parse as its count.
         let meal = "Oats " + String((0..<6).map { _ in "ABCDEFGHJKMNPQRSTVWXYZ".randomElement()! })
         let field = app.textFields["Body weight"]
+        for _ in 0..<5 where !field.isHittable { app.swipeUp() }
         field.tap()
         field.typeText(weight)
         // A tap while the number pad is still rising can be dropped; retry once.
         let log = app.buttons["Log weight"]
         log.tap()
-        if !app.staticTexts[weight].waitForExistence(timeout: 3), log.isEnabled { log.tap() }
-        XCTAssertTrue(app.staticTexts[weight].waitForExistence(timeout: 5))
+        if !app.staticTexts["\(weight) kg"].waitForExistence(timeout: 3), log.isEnabled { log.tap() }
+        XCTAssertTrue(app.staticTexts["\(weight) kg"].waitForExistence(timeout: 5))
 
         // One line, as on the desktop: no count at the end is refused, and a
         // trailing count becomes the calories.
@@ -377,11 +380,16 @@ final class OfflineCaptureTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
         app.segmentedControls.buttons["Daily"].tap()
-        XCTAssertTrue(app.staticTexts[weight].waitForExistence(timeout: 5))
+        for _ in 0..<5 where !app.staticTexts["\(weight) kg"].exists { app.swipeUp() }
+        XCTAssertTrue(app.staticTexts["\(weight) kg"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Saved on this device · Waiting to sync"].exists)
-        for _ in 0..<5 where !app.staticTexts[meal].exists { app.swipeUp() }
+        for _ in 0..<5 where !app.staticTexts[meal].isHittable { app.swipeUp() }
         XCTAssertTrue(app.staticTexts[meal].exists)
-        app.staticTexts[meal].swipeLeft()
+        let mealRow = app.staticTexts[meal]
+        // Swipe across the row, not the short label (which can stop short of
+        // revealing the action after the taller sleep card moves the layout).
+        let row = mealRow.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5))
+        row.withOffset(CGVector(dx: 260, dy: 0)).press(forDuration: 0.05, thenDragTo: row)
         if app.buttons["Delete"].exists { app.buttons["Delete"].tap() }
         XCTAssertTrue(app.staticTexts[meal].waitForNonExistence(timeout: settle))
         app.terminate()
@@ -394,6 +402,30 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(app.staticTexts[meal].exists, "A deleted calorie entry stays gone after relaunch")
         app.segmentedControls.buttons["Entry"].tap()
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
+    }
+
+    func testSleepWeekSelectsNightsAndSurvivesOfflineRelaunch() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-sleepWeekFixture"]
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        app.segmentedControls.buttons["Daily"].tap()
+        XCTAssertTrue(app.staticTexts["100% sleep efficiency"].waitForExistence(timeout: 5))
+        let interrupted = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "7h 45m")).firstMatch
+        XCTAssertTrue(interrupted.exists)
+        interrupted.tap()
+        XCTAssertTrue(app.staticTexts["97% sleep efficiency"].exists)
+        XCTAssertTrue(app.staticTexts["7h 45m asleep · 1 recorded interruptions · 15 min awake"].exists)
+        let missing = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "no sleep reading")).firstMatch
+        missing.tap()
+        XCTAssertTrue(app.staticTexts["No sleep reading for this night."].exists)
+        app.terminate()
+        app.launchArguments = []
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        app.segmentedControls.buttons["Daily"].tap()
+        XCTAssertTrue(app.staticTexts["100% sleep efficiency"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "7h 45m")).firstMatch.exists)
     }
 
     func testDailySpendingSavesOfflineAndSwipesToDelete() {
@@ -1567,6 +1599,35 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(app.staticTexts[link].exists)
     }
 
+    func testSaveSpendingSitsBetweenFoodAndSaveAndFilesAPurchase() {
+        let app = XCUIApplication()
+        app.launch()
+        let food = app.buttons["Food"]
+        let spending = app.buttons["Save spending"]
+        let save = app.buttons["Save"]
+        XCTAssertTrue(spending.waitForExistence(timeout: 10))
+        // Discard · Food · Spent · Save, on one line.
+        XCTAssertLessThan(food.frame.maxX, spending.frame.minX, "Food sits left of Spent")
+        XCTAssertLessThan(spending.frame.maxX, save.frame.minX, "Spent sits left of Save")
+        XCTAssertEqual(spending.frame.midY, save.frame.midY, accuracy: 4)
+        XCTAssertLessThanOrEqual(save.frame.maxX, app.windows.firstMatch.frame.maxX, "All four fit on the phone")
+        XCTAssertFalse(spending.isEnabled, "Nothing to file yet")
+
+        let purchase = "Coffee with Sam 4.50 \(UUID().uuidString.prefix(8))"
+        let editor = app.textViews["Journal text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.tap()
+        editor.typeText(purchase)
+        XCTAssertTrue(spending.isEnabled)
+        spending.tap()
+        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
+
+        selectTab(app, "Journal")
+        XCTAssertTrue(app.staticTexts[purchase].waitForExistence(timeout: 10))
+        app.staticTexts[purchase].tap()
+        XCTAssertTrue(app.staticTexts["Spending entry"].waitForExistence(timeout: 5))
+    }
+
     func testCaptureActionsShareOneLineAndAPhotoAttachesToTheEntry() {
         let app = XCUIApplication()
         app.launch()
@@ -1805,6 +1866,63 @@ final class OfflineCaptureTests: XCTestCase {
 
     /// A notes page turns sideways on a swipe, and finishing that swipe on
     /// the last page makes a new one; backwards from the first does nothing.
+    func testDrawingFavoritesCanBeAddedMovedAndReopened() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        detachDraftNotes(app)
+        notes.tap()
+        let tools = app.buttons["drawing-all-tools"]
+        XCTAssertTrue(tools.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Undo"].exists)
+        XCTAssertTrue(app.buttons["Redo"].exists)
+        tools.tap()
+        app.buttons["Add Fountain pen favorite"].tap()
+        let save = app.buttons["Save favorite"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5))
+        save.tap()
+        XCTAssertTrue(app.buttons["Fountain pen"].firstMatch.waitForExistence(timeout: 5))
+        tools.tap()
+        let left = app.buttons["Left"]
+        let toolList = app.descendants(matching: .any).matching(identifier: "drawing-tools-list").firstMatch
+        XCTAssertTrue(toolList.waitForExistence(timeout: 5))
+        for _ in 0..<10 where !left.exists || !left.isHittable { toolList.swipeUp() }
+        XCTAssertTrue(left.isHittable)
+        left.tap()
+        let handle = app.buttons["drawing-toolbar-move"]
+        XCTAssertTrue(handle.waitForExistence(timeout: 5))
+        XCTAssertLessThan(handle.frame.midX, app.windows.firstMatch.frame.midX)
+        let before = handle.frame
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        notes.tap()
+        XCTAssertTrue(handle.waitForExistence(timeout: 10))
+        XCTAssertEqual(handle.frame.minX, before.minX, accuracy: 2)
+        XCTAssertTrue(app.buttons["Fountain pen"].firstMatch.exists)
+        // Drag the handle back to the bottom and verify the horizontal layout.
+        let pageBeforeDrag = app.buttons["notebook-page"].label
+        let end = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
+        handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.2, thenDragTo: end)
+        XCTAssertGreaterThan(handle.frame.minY, app.windows.firstMatch.frame.midY)
+        XCTAssertEqual(app.buttons["notebook-page"].label, pageBeforeDrag)
+        guard let newestFavorite = app.buttons.matching(NSPredicate(format: "label == %@", "Fountain pen")).allElementsBoundByIndex.last else {
+            XCTFail("The new favorite should be on the toolbar")
+            return
+        }
+        let favoriteID = newestFavorite.identifier
+        let favorite = app.buttons[favoriteID]
+        let oldX = favorite.frame.minX
+        favorite.press(forDuration: 1)
+        app.buttons["Move earlier"].tap()
+        XCTAssertLessThan(favorite.frame.minX, oldX)
+        favorite.press(forDuration: 1)
+        app.buttons["Remove favorite"].tap()
+        XCTAssertFalse(favorite.exists)
+    }
+
     func testNotesPagesTurnWithASwipe() {
         guard UIDevice.current.userInterfaceIdiom == .pad else { return }
         let app = XCUIApplication()

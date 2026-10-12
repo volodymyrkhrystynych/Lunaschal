@@ -6,7 +6,9 @@ import { TasksSection } from '../Tasks';
 import { ActivityHeatmap } from './ActivityHeatmap';
 import { CaloriesCard } from './CaloriesCard';
 import { FocusCard } from './FocusCard';
+import { SpendingCard } from './SpendingCard';
 import { HealthCard } from './HealthCard';
+import { SleepCard } from './SleepCard';
 import { BodyWeightCard, Progression } from './Progression';
 import { SelfieCard } from './SelfieCard';
 import { TrendsChart } from './TrendsChart';
@@ -114,7 +116,9 @@ export function Lifestyle() {
             <WorkoutLog />
             <FocusCard />
             <HealthCard />
+            <SleepCard />
             {!needsCalories && <CaloriesCard />}
+            <SpendingCard />
             <WeatherCard />
             {!needsSelfie && <SelfieCard />}
             <Progression hideBodyWeight={needsWeight} />

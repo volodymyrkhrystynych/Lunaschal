@@ -18,7 +18,7 @@ struct JournalFeedView: View {
     /// What this device holds that the server's record doesn't show yet. An
     /// addition to an entry is shown on that entry, never as one of its own.
     private var localCaptures: [Capture] {
-        let onServer = Set(model.journalRecords.map(\.id) + model.foodRecords.map(\.id))
+        let onServer = Set(model.journalRecords.map(\.id) + model.foodRecords.map(\.id) + model.spendingRecords.map(\.id))
         // Once the server's entry (or meal) is here it stands in for the
         // capture, which shares its id, so the card keeps its place in the list.
         return model.captures.filter { capture in
@@ -35,7 +35,10 @@ struct JournalFeedView: View {
         let meals = model.foodRecords.map {
             FeedItem.meal($0, JournalTimestamp.parse($0.data?["createdAt"]?.string) ?? .distantPast)
         }
-        return (records + meals + localCaptures.map { FeedItem.capture($0) }).sorted { $0.time > $1.time }
+        let purchases = model.spendingRecords.map {
+            FeedItem.purchase($0, JournalTimestamp.parse($0.data?["createdAt"]?.string) ?? .distantPast)
+        }
+        return (records + meals + purchases + localCaptures.map { FeedItem.capture($0) }).sorted { $0.time > $1.time }
     }
 
     var body: some View {
@@ -74,7 +77,8 @@ struct JournalFeedView: View {
         .scrollPosition(id: $anchor, anchor: .top)
         .background(Color(.systemGroupedBackground))
         .overlay {
-            if localCaptures.isEmpty && model.journalRecords.isEmpty && model.foodRecords.isEmpty && model.pendingEdits.isEmpty {
+            if localCaptures.isEmpty && model.journalRecords.isEmpty && model.foodRecords.isEmpty
+                && model.spendingRecords.isEmpty && model.pendingEdits.isEmpty {
                 ContentUnavailableView(searching ? "No matching entries" : "No captures yet", systemImage: "book.closed")
             }
         }
@@ -100,6 +104,7 @@ struct JournalFeedView: View {
         switch item {
         case .entry(let record, _): EntryCard(model: model, record: record)
         case .meal(let record, _): FoodEntryCard(model: model, record: record)
+        case .purchase(let record, _): SpendingEntryCard(model: model, record: record)
         case .capture(let capture):
             NavigationLink { CaptureDetail(model: model, id: capture.id) } label: {
                 LocalCaptureCard(model: model, capture: capture)
@@ -110,20 +115,26 @@ struct JournalFeedView: View {
     private enum FeedItem {
         case entry(SyncChange, Date)
         case meal(SyncChange, Date)
+        case purchase(SyncChange, Date)
         case capture(Capture)
         var id: String {
             switch self {
             case .entry(let record, _): return record.id
             case .meal(let record, _): return "meal:" + record.id
+            case .purchase(let record, _): return "purchase:" + record.id
             // The entry's own id: the same card before and after it syncs.
             case .capture(let capture):
                 let id = capture.snapshot?.id ?? capture.id
-                return capture.kind == .food ? "meal:" + id : id
+                switch capture.kind {
+                case .food: return "meal:" + id
+                case .spending: return "purchase:" + id
+                case .journal: return id
+                }
             }
         }
         var time: Date {
             switch self {
-            case .entry(_, let time), .meal(_, let time): return time
+            case .entry(_, let time), .meal(_, let time), .purchase(_, let time): return time
             case .capture(let capture): return capture.createdAt
             }
         }
@@ -235,6 +246,7 @@ private struct LocalCaptureCard: View {
                 ? (capture.files.first?.name ?? (capture.links.isEmpty ? "Recording" : "Journal entry")) : capture.text))
                 .lineLimit(2)
             if capture.kind == .food { Label("Food log", systemImage: "fork.knife").font(.caption) }
+            if capture.kind == .spending { Label("Spending", systemImage: "receipt").font(.caption) }
             let photos = capture.files.filter(\.isImage).compactMap { try? model.store.fileURL($0) }
             if !photos.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -429,7 +441,7 @@ struct FoodRecordView: View {
                     TextEditor(text: $notes).frame(minHeight: 160).focused($typing)
                         .accessibilityLabel("Meal notes")
                     AttachmentButtons(model: model, recorder: model.recorder, entryID: record.id,
-                                      foodOnly: true) { typing = false }
+                                      kind: .food) { typing = false }
                 }
                 if !staged.isEmpty {
                     Section("Adding") { StagedAttachmentRows(model: model, recorder: model.recorder, draft: staged) }
@@ -469,6 +481,150 @@ struct FoodRecordView: View {
 
     private func startEditing() {
         dish = meal?.dish ?? ""; place = meal?.place ?? ""; notes = meal?.notes ?? ""
+        editing = true
+    }
+}
+
+// MARK: Purchases
+
+/// One purchase: where, what for and how much, with its receipt and any clip.
+/// A line typed on the Daily page has nothing else, and is just that row.
+private struct SpendingEntryCard: View {
+    @ObservedObject var model: CaptureModel
+    let record: SyncChange
+
+    private var purchase: SpendingEntryRecord? { SpendingEntryRecord(record: record) }
+    private var media: [JournalAttachmentItem] { model.spendingMedia[record.id] ?? [] }
+
+    var body: some View {
+        FeedCard {
+            NavigationLink { SpendingRecordView(model: model, record: record) } label: {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Label(purchase?.heading ?? "Purchase", systemImage: "receipt").font(.headline).lineLimit(2)
+                        Spacer()
+                        SpendingAmountText(cents: purchase?.amountCents).font(.headline)
+                    }
+                    if let created = purchase?.createdAt {
+                        Text(created, format: .dateTime.month(.abbreviated).day().hour().minute())
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let body = purchase?.body {
+                        Text(body).font(.body).lineLimit(4).multilineTextAlignment(.leading)
+                    }
+                    PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("spending-entry")
+            MealMedia(model: model, media: media)
+        }
+    }
+}
+
+/// An amount in CAD, or a dash while the receipt has not been read — never $0.
+private struct SpendingAmountText: View {
+    let cents: Int?
+
+    var body: some View {
+        if let cents {
+            Text((Decimal(cents) / 100).formatted(.currency(code: "CAD"))).monospacedDigit()
+        } else {
+            Text("—").foregroundStyle(.secondary).accessibilityLabel("Amount not read yet")
+        }
+    }
+}
+
+/// A purchase opened from the Journal: read it, or correct what was read out
+/// of the receipt and add photos and recordings. Saved on the device first.
+struct SpendingRecordView: View {
+    @ObservedObject var model: CaptureModel
+    let record: SyncChange
+    @State private var editing = false
+    @State private var merchant = ""
+    @State private var category = ""
+    @State private var amount = ""
+    @State private var notes = ""
+    @State private var amountError: String?
+    @FocusState private var typing: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    private var purchase: SpendingEntryRecord? { SpendingEntryRecord(record: record) }
+    private var staged: CaptureDraft { model.entryDrafts[record.id] ?? CaptureDraft() }
+    private var shownAmount: String {
+        purchase?.amountCents.map { String(format: "%d.%02d", $0 / 100, $0 % 100) } ?? ""
+    }
+    private var changes: [String: JSONValue] {
+        var out: [String: JSONValue] = [:]
+        if merchant != purchase?.merchant ?? "" { out["merchant"] = .string(merchant) }
+        if category != purchase?.category ?? "" { out["category"] = .string(category) }
+        if notes != purchase?.notes ?? "" { out["notes"] = .string(notes) }
+        if amount != shownAmount, let cents = SpendingAmount.cents(amount) { out["amountCents"] = .number(Double(cents)) }
+        return out
+    }
+
+    var body: some View {
+        Form {
+            if editing {
+                Section {
+                    TextField("Merchant", text: $merchant).focused($typing)
+                    TextField("Category", text: $category).focused($typing)
+                    TextField("Amount (CAD)", text: $amount).keyboardType(.decimalPad).focused($typing)
+                        .accessibilityLabel("Spending amount")
+                    if let amountError { Text(amountError).font(.footnote).foregroundStyle(.red) }
+                    TextEditor(text: $notes).frame(minHeight: 120).focused($typing)
+                        .accessibilityLabel("Purchase notes")
+                    AttachmentButtons(model: model, recorder: model.recorder, entryID: record.id,
+                                      kind: .spending) { typing = false }
+                }
+                if !staged.isEmpty {
+                    Section("Adding") { StagedAttachmentRows(model: model, recorder: model.recorder, draft: staged) }
+                }
+                Section {
+                    Button("Save edit on this device") { save() }
+                        .disabled(changes.isEmpty && staged.isEmpty && amount == shownAmount)
+                    Button("Cancel", role: .cancel) { model.discardEdit(record.id); editing = false }
+                }
+            } else {
+                Section {
+                    LabeledContent("Amount") { SpendingAmountText(cents: purchase?.amountCents) }
+                    if let merchant = purchase?.merchant { LabeledContent("Merchant", value: merchant) }
+                    if let category = purchase?.category { LabeledContent("Category", value: category) }
+                    if let created = purchase?.createdAt { LabeledContent("Spent", value: created.formatted()) }
+                    if let notes = purchase?.notes { Text(notes).textSelection(.enabled) }
+                    if let raw = purchase?.rawContent, raw != purchase?.notes {
+                        DisclosureGroup("What was written and said") { Text(raw).textSelection(.enabled) }
+                    }
+                    PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
+                }
+                let media = model.spendingMedia[record.id] ?? []
+                if !media.isEmpty {
+                    Section("Receipt and recordings") { MealMedia(model: model, media: media) }
+                }
+            }
+        }
+        .navigationTitle(purchase?.heading ?? "Purchase").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !editing { ToolbarItem(placement: .primaryAction) { Button("Edit") { startEditing() } } }
+        }
+        .onAppear { if !editing && !staged.isEmpty { startEditing() } }
+        .onChange(of: amount) { _, _ in amountError = nil }
+    }
+
+    private func save() {
+        // An amount can be corrected but not cleared, and never rounded.
+        if amount != shownAmount, SpendingAmount.cents(amount) == nil {
+            amountError = DailyError.invalidAmount.localizedDescription
+            return
+        }
+        if model.saveEdit(record, changes: changes) { dismiss() }
+    }
+
+    private func startEditing() {
+        merchant = purchase?.merchant ?? ""; category = purchase?.category ?? ""
+        notes = purchase?.notes ?? ""; amount = shownAmount
         editing = true
     }
 }

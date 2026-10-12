@@ -91,7 +91,7 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
     public func send(_ capture: Capture, audioURL: URL?, files: [URL], clips: [URL]) async throws {
         guard files.count == capture.files.count else { throw CaptureError.missingFile }
         guard clips.count == capture.clips.count else { throw CaptureError.missingAudio }
-        if capture.kind == .food { return try await sendFood(capture, files: files, clips: clips) }
+        if capture.kind.isMediaLog { return try await sendFood(capture, files: files, clips: clips) }
         if capture.entryID == nil {
             do { try await createEntry(capture, audioURL: audioURL) }
             catch let error as URLError where Self.neverConnected.contains(error.code) {
@@ -228,7 +228,8 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         if capture.entryID == nil || !capture.files.isEmpty {
             let body = try FoodMultipart(capture: capture, files: files)
             defer { try? FileManager.default.removeItem(at: body.url) }
-            let path = capture.entryID == nil ? "api/food" : "api/food/\(capture.targetID)/media"
+            let route = capture.kind.route
+            let path = capture.entryID == nil ? route : "\(route)/\(capture.targetID)/media"
             var req = request(path, method: "POST")
             req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
             let (data, response) = try await session.upload(for: req, fromFile: body.url)
@@ -239,7 +240,7 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
             let body = try FoodRecordingMultipart(capture: capture, clip: clip,
                                                   position: capture.entryID == nil ? files.count + index : nil, audioURL: url)
             defer { try? FileManager.default.removeItem(at: body.url) }
-            var req = request("api/food/recordings", method: "POST")
+            var req = request("\(capture.kind.route)/recordings", method: "POST")
             req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
             let (clipData, clipResponse) = try await session.upload(for: req, fromFile: body.url)
             try check(clipData, clipResponse)
@@ -450,13 +451,16 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
     }
 
     /// Where a feed attachment's bytes are: a journal attachment's routes, or
-    /// a meal's media file, which has no poster or converted copy.
+    /// a meal's or a purchase's media file, which has no poster or converted copy.
     public func attachmentURL(_ item: JournalAttachmentItem, thumbnail: Bool = false, playable: Bool = false) throws -> URL {
-        guard item.collection == "food_media" else {
-            return try journalAttachmentURL(item.id, thumbnail: thumbnail, playable: playable)
+        let route: String
+        switch item.collection {
+        case "food_media": route = "api/food/media"
+        case "spending_media": route = "api/spending/media"
+        default: return try journalAttachmentURL(item.id, thumbnail: thumbnail, playable: playable)
         }
         guard ULID.isValid(item.id), !thumbnail else { throw CaptureError.invalidID }
-        return server.appendingPathComponent("api/food/media/\(item.id)")
+        return server.appendingPathComponent("\(route)/\(item.id)")
     }
 
     /// Saves a journal attachment's file, or its poster, to `destination`,
@@ -514,8 +518,8 @@ extension JournalAPI: DailyTransport {
         switch log.kind {
         case .weight:
             guard let weight = log.weight else { throw DailyError.invalidWeight }
-            struct Body: Encodable { let weight: Double; let date: String }
-            data = try await postJSON("api/lifestyle/weight", Body(weight: weight, date: log.day))
+            struct Body: Encodable { let weight: Double; let date: String; let unit: String? }
+            data = try await postJSON("api/lifestyle/weight", Body(weight: weight, date: log.day, unit: log.weightUnit))
         case .calories:
             guard let calories = log.calories, let text = log.description else { throw DailyError.invalidCalories }
             // An Int field, so the count goes over the wire as 600 and never 600.0.
@@ -565,26 +569,32 @@ extension JournalAPI: DailyTransport {
         let selfies = try JSONDecoder().decode([Selfie].self, from: await get("api/lifestyle/selfies", ["limit": "1"]))
         let calories = try JSONDecoder().decode(Calories.self, from: await get("api/lifestyle/calories", ["date": day]))
         guard calories.date == day else { throw CaptureError.invalidResponse }
-        struct Spending: Decodable { let date: String; let entries: [DailyStatus.Spending] }
+        struct Spending: Decodable { let date: String; let entries: [DailyStatus.Spending]; let pendingCount: Int? }
         // A phone can be updated before its server. Keep the other Daily
         // sections readable until the new spending endpoint is deployed.
         var spending: [DailyStatus.Spending] = []
+        var pendingSpending: Int?
         do {
             let reply = try JSONDecoder().decode(Spending.self, from: await get("api/lifestyle/spending", ["date": day]))
             guard reply.date == day else { throw CaptureError.invalidResponse }
             spending = reply.entries
+            pendingSpending = reply.pendingCount
         } catch let error as HTTPFailure where error.status == 404 {}
         return DailyStatus(
             day: day,
             weight: weights.last { $0.date == day }?.weight,
             selfie: selfies.first { $0.date == day }.map { DailyStatus.Selfie(id: $0.id) },
             entries: calories.entries.map { DailyStatus.Entry(id: $0.id, description: $0.description, calories: $0.calories) },
-            spending: spending)
+            spending: spending, pendingSpending: pendingSpending)
     }
 
     /// Today's weather where the server last knew the user to be.
     public func weatherToday() async throws -> WeatherDay {
         try WeatherDay.decode(await get("api/lifestyle/weather/today", [:]))
+    }
+
+    public func sleepWeek(ending day: String) async throws -> SleepWeek {
+        try JSONDecoder().decode(SleepWeek.self, from: await get("api/apple-health/sleep", ["to": day]))
     }
 
     /// Tells the server where the phone is, which also resyncs today's weather
@@ -753,21 +763,23 @@ public struct AttachmentMultipart {
     }
 }
 
-/// `POST /api/food`: the meal's text and capture time, how many clips will
+/// `POST /api/food` (or `/api/spending`): the text and capture time, how many clips will
 /// follow, and every photo with the id it was given on this device.
 public struct FoodMultipart {
     public let url: URL
     public let boundary: String
 
     public init(capture: Capture, files: [URL]) throws {
-        guard capture.kind == .food, ULID.isValid(capture.targetID), files.count == capture.files.count,
+        guard capture.kind.isMediaLog, ULID.isValid(capture.targetID), files.count == capture.files.count,
               capture.files.allSatisfy({ ULID.isValid($0.attachmentID) }) else { throw CaptureError.invalidID }
         var parts: [MultipartFile] = []
         for (file, source) in zip(capture.files, files) {
             guard (try source.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
                 throw CaptureError.missingFile
             }
-            guard file.isFoodMedia, let type = file.contentType else { throw CaptureError.notFoodMedia }
+            guard capture.kind.accepts(file), let type = file.contentType else {
+                throw capture.kind == .spending ? CaptureError.notSpendingMedia : CaptureError.notFoodMedia
+            }
             parts.append(MultipartFile(field: "media", filename: file.name, contentType: type, source: source))
         }
         let ids = String(decoding: try JSONEncoder().encode(capture.files.map(\.attachmentID)), as: UTF8.self)

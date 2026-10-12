@@ -172,6 +172,7 @@ struct LibraryDownloadSettings: View {
     @AppStorage("download-newspaper_frontpages") private var frontpages = true
     @AppStorage("download-fics") private var pdfBooks = true
     @AppStorage("download-food_media") private var foodMedia = true
+    @AppStorage("download-spending_media") private var spendingMedia = true
     @State private var importLink = ""
     @State private var waitingImports = 0
 
@@ -232,6 +233,7 @@ struct LibraryDownloadSettings: View {
                 Toggle("PDF books", isOn: $pdfBooks)
                 Toggle("Journal attachments", isOn: $journalMedia)
                 Toggle("Food photos and recordings", isOn: $foodMedia)
+                Toggle("Receipts and spending recordings", isOn: $spendingMedia)
                 Toggle("Study documents", isOn: $studyMedia)
                 Toggle("Paper previews", isOn: $paperPreviews)
                 Toggle("Editable native drawings", isOn: $nativeInk)

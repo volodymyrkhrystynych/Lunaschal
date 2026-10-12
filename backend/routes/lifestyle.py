@@ -22,6 +22,7 @@ from ulid import ULID
 
 from backend.ai import jobs
 from backend.ai.workouts import parse_workout
+from backend.apple_health.lifestyle import KG_PER_LB, legacy_weight_kg
 from backend.capture_time import optional_capture_time
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.day_boundary import DAY_ROLLOVER_HOUR, day_bounds, day_key_for
@@ -673,7 +674,7 @@ def list_weight():
     if err:
         return jsonify({'error': err}), 400
 
-    query = 'SELECT id, date, weight, created_at, updated_at FROM body_weight_logs'
+    query = 'SELECT id, date, weight, weight_unit, created_at, updated_at FROM body_weight_logs'
     clauses, params = [], []
     if start:
         clauses.append('date >= ?')
@@ -698,6 +699,11 @@ def log_weight():
         return jsonify({'error': err}), 400
     if weight is None:
         return jsonify({'error': 'weight is required'}), 400
+    unit = body.get('unit')
+    if unit not in (None, 'kg', 'lb'):
+        return jsonify({'error': 'unit must be kg or lb'}), 400
+    weight = (legacy_weight_kg(weight) if unit is None else
+              weight * KG_PER_LB if unit == 'lb' else weight)
     day, err = _parse_date(body.get('date'), _today())
     if err:
         return jsonify({'error': err}), 400
@@ -705,14 +711,15 @@ def log_weight():
     now = int(time.time())
     db = get_db()
     db.execute(
-        'INSERT INTO body_weight_logs(id, date, weight, created_at, updated_at)'
-        ' VALUES (?,?,?,?,?)'
-        ' ON CONFLICT(date) DO UPDATE SET weight=excluded.weight, updated_at=excluded.updated_at',
+        'INSERT INTO body_weight_logs(id, date, weight, weight_unit, created_at, updated_at)'
+        ' VALUES (?,?,?,\'kg\',?,?)'
+        ' ON CONFLICT(date) DO UPDATE SET weight=excluded.weight, weight_unit=\'kg\','
+        ' health_sample_id=NULL, updated_at=excluded.updated_at',
         (str(ULID()), day, weight, now, now),
     )
     db.commit()
     row = db.execute(
-        'SELECT id, date, weight, created_at, updated_at FROM body_weight_logs WHERE date=?',
+        'SELECT id, date, weight, weight_unit, created_at, updated_at FROM body_weight_logs WHERE date=?',
         (day,),
     ).fetchone()
     return jsonify(row_to_dict(row)), 201
@@ -940,8 +947,20 @@ def list_spending():
     rows = get_db().execute(
         'SELECT * FROM spending_logs WHERE date=? ORDER BY created_at, id', (day,),
     ).fetchall()
-    entries = [row_to_dict(row) for row in rows]
-    return jsonify({'date': day, 'entries': entries,
+    # Shipped phones decode every entry as a non-null category and amount, and
+    # one that fails takes the whole Daily page down with it. So a receipt that
+    # has not been read yet is counted, not listed, and a read one whose
+    # category is still empty is named by its merchant. The full rows,
+    # nulls and all, are /api/spending's.
+    entries, pending = [], 0
+    for row in rows:
+        if row['amount_cents'] is None:
+            pending += 1
+            continue
+        entry = row_to_dict(row)
+        entry['category'] = row['category'] or row['merchant'] or 'Purchase'
+        entries.append(entry)
+    return jsonify({'date': day, 'entries': entries, 'pendingCount': pending,
                     'totalCents': sum(entry['amountCents'] for entry in entries)})
 
 
@@ -972,8 +991,8 @@ def log_spending():
     created_at = min(captured_at, clock) if captured_at is not None else clock
     db = get_db()
     db.execute(
-        'INSERT OR IGNORE INTO spending_logs (id, date, category, amount_cents, created_at)'
-        ' VALUES (?,?,?,?,?)', (entry_id, day, category.strip(), cents, created_at),
+        'INSERT OR IGNORE INTO spending_logs (id, date, category, amount_cents, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?)', (entry_id, day, category.strip(), cents, created_at, created_at),
     )
     db.commit()
     return jsonify(row_to_dict(db.execute('SELECT * FROM spending_logs WHERE id=?', (entry_id,)).fetchone())), 201

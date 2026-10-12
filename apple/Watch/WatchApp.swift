@@ -32,6 +32,8 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     let recorder: Recorder
     let pomodoro: PomodoroModel
     let workout: WorkoutModel
+    /// The buzz at the end of Focus, Timeout and Workout.
+    let alarm = WatchAlarm()
     @Published var captures: [Capture] = []
     @Published var received: Set<String> = []
     @Published var uploaded: Set<String> = []
@@ -54,10 +56,36 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         try store.recoverInterruptedRecordings()
         recorder.onChange = { [weak self] in self?.reload(); self?.sendPending(); self?.publishRecording() }
         recorder.onError = { [weak self] in self?.message = $0.localizedDescription }
+        pomodoro.onChange = { [weak self] in self?.syncAlarm() }
+        workout.onChange = { [weak self] in self?.syncAlarm() }
+        alarm.onRing = { [weak self] in self?.pomodoro.refresh(); self?.workout.refresh() }
+        alarm.onDismiss = { [weak self] in
+            // Dismissing Workout's buzz is its Stop; a finished pomodoro still
+            // waits on the page for Continue, Break or Cancel.
+            if self?.workout.timer.isRinging == true { self?.workout.stop() }
+        }
+        alarm.onError = { [weak self] text in
+            guard let self else { return }
+            if let rest = self.workout.timer.endsAt, rest <= self.pomodoro.timer.run?.endsAt ?? .distantFuture {
+                self.workout.message = text
+            } else {
+                self.pomodoro.message = text
+            }
+        }
+        syncAlarm()
         reload()
         publishRecording() // clears a status left behind by a crash mid-clip
         WCSession.default.delegate = self
         WCSession.default.activate()
+    }
+
+    /// Hands the alarm both timers' next end and whichever of them is up.
+    func syncAlarm() {
+        let ends = [pomodoro.timer.run?.endsAt, workout.timer.endsAt].compactMap { $0 }
+        var ringing: Set<String> = []
+        if workout.timer.isRinging { ringing.insert(WatchAlarm.rest) }
+        if case .finished = pomodoro.timer.state { ringing.insert(WatchAlarm.pomodoro) }
+        alarm.update(WatchAlarm.Plan(nextEnd: ends.min(), ringing: ringing))
     }
 
     /// Starts a clip in `mode`, or stops and saves the one going. One press
@@ -236,6 +264,13 @@ private struct WatchCaptureView: View {
             #endif
             if let link = PomodoroEngine.takePendingLink() { open(link) }
         }
+        .onChange(of: model.workout.timer.isRinging) { _, ringing in
+            if ringing { page = .workout }
+        }
+        .onChange(of: model.pomodoro.timer.state) { _, state in
+            // The alarm brings the app forward; show the timer that is up.
+            if case .finished = state, let owner = model.pomodoro.timer.owner { page = WatchPage(owner) }
+        }
         .onOpenURL { url in
             if let link = WatchLink(url: url) { open(link) }
         }
@@ -243,6 +278,7 @@ private struct WatchCaptureView: View {
             if value == .active {
                 model.reload(); model.sendPending(); model.pomodoro.refresh(); model.pomodoro.sendPending()
                 model.workout.refresh()
+                model.syncAlarm() // schedules for a run a Control started while asleep
                 if let link = PomodoroEngine.takePendingLink() { open(link) }
             } else if value == .inactive {
                 // The face is coming back: draw it from the latest state, in
@@ -361,10 +397,10 @@ final class WatchLifecycle: NSObject, WKApplicationDelegate, UNUserNotificationC
         }
         completeIfIdle()
     }
-    /// The Workout alarm, when the app was not running at the end of the rest.
+    /// The timers' alarm, when the app was not running at an end.
     func handle(_ extendedRuntimeSession: WKExtendedRuntimeSession) {
         guard case .success(let model) = WatchModel.startup else { extendedRuntimeSession.invalidate(); return }
-        model.workout.adopt(extendedRuntimeSession)
+        model.alarm.adopt(extendedRuntimeSession)
     }
 
     /// A button on the timer's notification: Continue, Break or Cancel.

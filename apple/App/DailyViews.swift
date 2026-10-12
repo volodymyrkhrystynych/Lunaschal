@@ -26,6 +26,9 @@ struct DailyView: View {
         let today = summary
         Form {
             Section("Weather") { WeatherCard(weather: model.weather) }
+            Section("Sleep · past 7 nights") {
+                SleepWeekView(week: model.sleepWeek, error: model.sleepError)
+            }
             Section("Selfie") {
                 selfie(today)
                 Button { typing = false; showCamera = true } label: {
@@ -37,12 +40,12 @@ struct DailyView: View {
                     HStack {
                         Text("Today")
                         Spacer()
-                        Text(value.formatted(.number.precision(.fractionLength(0...1)))).monospacedDigit()
+                        Text("\(value.formatted(.number.precision(.fractionLength(0...1)))) kg").monospacedDigit()
                     }
                     if today.weightWaiting { waiting }
                 }
                 HStack {
-                    TextField(today.weight == nil ? "Today's weight" : "Correct today's weight", text: $weight)
+                    TextField(today.weight == nil ? "Today's weight (kg)" : "Correct today's weight (kg)", text: $weight)
                         .keyboardType(.decimalPad).focused($typing)
                         .accessibilityLabel("Body weight")
                     Button("Log weight") {
@@ -120,6 +123,13 @@ struct DailyView: View {
                     Text(error).font(.footnote).foregroundStyle(.red)
                 } else if let preview = SpendingLine.parse(spendingLine) {
                     Text("\(preview.category) — \(money(preview.amountCents))")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                // Captured receipts the server has not read an amount out of
+                // yet: not in the total, and not listed until they have one.
+                if today.pendingSpending > 0 {
+                    Label(today.pendingSpending == 1 ? "1 receipt being read" : "\(today.pendingSpending) receipts being read",
+                          systemImage: "receipt")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             } header: {
