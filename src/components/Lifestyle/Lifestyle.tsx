@@ -6,6 +6,7 @@ import { TasksSection } from '../Tasks';
 import { ActivityHeatmap } from './ActivityHeatmap';
 import { CaloriesCard } from './CaloriesCard';
 import { FocusCard } from './FocusCard';
+import { SpendingCard } from './SpendingCard';
 import { HealthCard } from './HealthCard';
 import { BodyWeightCard, Progression } from './Progression';
 import { SelfieCard } from './SelfieCard';
@@ -115,6 +116,7 @@ export function Lifestyle() {
             <FocusCard />
             <HealthCard />
             {!needsCalories && <CaloriesCard />}
+            <SpendingCard />
             <WeatherCard />
             {!needsSelfie && <SelfieCard />}
             <Progression hideBodyWeight={needsWeight} />

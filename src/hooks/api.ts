@@ -2515,6 +2515,37 @@ export interface FoodJournalItem {
   media: FoodMedia[];
 }
 
+// A purchase, typed on the Daily page or captured as a receipt/clip. Media is
+// food's shape exactly, so the feed draws both with the same components.
+export type SpendingMedia = FoodMedia;
+
+export interface SpendingEntry {
+  id: string;
+  /** 4am day key the purchase is filed under. */
+  date: string;
+  category: string | null;
+  merchant: string | null;
+  /** CAD cents; null until a receipt or clip has been read. */
+  amountCents: number | null;
+  rawContent: string | null;
+  notes: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  /** A receipt, a clip or the structuring pass is still queued. */
+  reading: boolean;
+  media: SpendingMedia[];
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface SpendingDay {
+  date: string;
+  totalCents: number;
+  /** Purchases on this day whose amount is not known yet — not in the total. */
+  pendingCount: number;
+  byCategory: Record<string, number>;
+}
+
 // --- Lifestyle (workouts, heatmap, trends, body weight, selfies, calories) ---
 // Tasks are deliberately absent: the Lifestyle tab renders daily tasks and
 // to-dos through api.tasks/api.todos rather than a parallel list of its own.
@@ -3546,6 +3577,12 @@ export const api = {
     },
     deleteMedia: (mediaId: string) =>
       del<{ success: boolean }>(`/api/cookbook/media/${mediaId}`),
+  },
+
+  spending: {
+    journal: () => get<SpendingEntry[]>('/api/spending/journal'),
+    trends: (days = 30) =>
+      get<SpendingDay[]>(`/api/spending/trends?days=${days}`),
   },
 
   food: {

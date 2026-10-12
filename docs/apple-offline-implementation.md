@@ -679,6 +679,14 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
 - [x] Add historical Journal browsing, editing, attachment readers, and conflict resolution.
       New photo/document attachment capture and share-extension imports remain open.
 - [x] Save YouTube URLs and commentary offline; queue server metadata/import work.
+- [x] Spending captured like a meal: the composer's Spent button saves the draft's
+      words, receipt photos and clips as a `.spending` capture through the food
+      log's upload path at `/api/spending` (videos refused before upload, since the
+      server drops them and the acknowledgement would never arrive). Purchases
+      replicate as `spending_logs`/`spending_media` into the Journal feed with an
+      editable merchant, category, amount and notes; Daily counts unread receipts
+      beside its total. Portable Swift tests and the composer/feed UI test passed in
+      the iPhone simulator; real receipt capture not yet verified on device.
 - [x] Capture → Daily: swipe to delete calorie entries; voluntary spending with an
       amount in CAD at the end of a single free-text category line (e.g. `Coffee 4.50`),
       a daily total and swipe deletion. Earlier two-field drafts migrate on open.

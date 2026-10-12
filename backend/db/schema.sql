@@ -1330,17 +1330,51 @@ CREATE TABLE IF NOT EXISTS calorie_logs (
 
 CREATE INDEX IF NOT EXISTS idx_calorie_logs_date ON calorie_logs(date);
 
--- Voluntary purchases logged in Capture > Daily. Amounts are CAD cents,
--- never floating point; the client ID makes offline uploads replay-safe.
+-- Voluntary purchases. Amounts are CAD cents, never floating point; the client
+-- ID makes offline uploads replay-safe. Two ways in, one ledger: a line typed
+-- in Capture > Daily (category + amount, nothing else), and a capture shaped
+-- like a meal — a receipt photo and/or a clip spoken over it — which arrives
+-- with neither, so both are nullable until the structuring pass reads them out
+-- of the receipt and the transcript. A hand edit always wins over that pass,
+-- and a NULL amount is left out of every total rather than counted as zero.
+-- Widened from the typed-only shape by _migrate_spending_entries.
 CREATE TABLE IF NOT EXISTS spending_logs (
     id TEXT PRIMARY KEY,
-    date TEXT NOT NULL,
-    category TEXT NOT NULL,
-    amount_cents INTEGER NOT NULL CHECK(amount_cents > 0 AND amount_cents <= 100000000),
-    created_at INTEGER NOT NULL
+    date TEXT NOT NULL,                   -- 4am day of created_at, fixed at capture
+    category TEXT,
+    amount_cents INTEGER CHECK(amount_cents IS NULL OR (amount_cents > 0 AND amount_cents <= 100000000)),
+    merchant TEXT,
+    raw_content TEXT,                     -- exactly as typed/spoken
+    notes TEXT,
+    generated_notes TEXT,                 -- last AI version; manual edits win
+    latitude REAL,
+    longitude REAL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_spending_logs_date ON spending_logs(date);
+
+-- A receipt photo or a clip about a purchase; food_media's shape and rules.
+-- The receipt's reading (description) is what the structuring pass takes the
+-- merchant and the total from.
+CREATE TABLE IF NOT EXISTS spending_media (
+    id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL REFERENCES spending_logs(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,                   -- 'image' | 'audio'
+    path TEXT NOT NULL,
+    mime TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    transcript TEXT,
+    transcript_status TEXT NOT NULL DEFAULT 'idle',   -- idle|running|done|error
+    transcript_error TEXT,
+    description TEXT,
+    description_status TEXT NOT NULL DEFAULT 'idle',
+    description_error TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_spending_media_entry ON spending_media(entry_id);
 
 -- Pomodoro runs from the Watch: a 25-minute work block, the 5-minute break
 -- after one, or a 10-minute timeout. One row per run, under the id the Watch

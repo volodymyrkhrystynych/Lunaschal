@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from backend.food import storage as food
+from backend.spending import storage as spending
 from backend.journal import storage as journal
 from backend.paper import storage as paper
 from backend.study import storage as study
@@ -32,6 +33,7 @@ MEDIA = {
     'newspaper_frontpages': ('image_path', newspapers.resolve_stored_path),
     'fics': ('id', _fic_pdf_path),
     'food_media': ('path', food.resolve_stored_path),
+    'spending_media': ('path', spending.resolve_stored_path),
 }
 
 

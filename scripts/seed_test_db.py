@@ -28,7 +28,7 @@ from pathlib import Path
 
 REQUIRED_ENV_VARS = [
     'DATABASE_URL', 'FANFIC_ROOT', 'MEETINGS_ROOT', 'JOURNAL_ROOT',
-    'JOURNAL_DRAFTS_ROOT', 'LIFESTYLE_ROOT', 'FOOD_ROOT', 'RECIPE_ROOT',
+    'JOURNAL_DRAFTS_ROOT', 'LIFESTYLE_ROOT', 'FOOD_ROOT', 'SPENDING_ROOT', 'RECIPE_ROOT',
     'CHAT_ROOT', 'PAPER_ROOT', 'JOBS_ROOT', 'NEWSPAPERS_ROOT', 'NEWSPAPERS_ARCHIVE_ROOT',
     'NOTEBOOK_ROOT', 'EMAIL_MEDIA_ROOT', 'PIANO_ROOT', 'PIANO_ARCHIVE_ROOT',
     'FILES_ROOT', 'TORRENT_ROOT', 'STUDY_ROOT', 'STUDY_ARCHIVE_ROOT',
@@ -593,9 +593,47 @@ def seed_food(db, recipe_id):
         )
     for category, cents in [("McDonald's", 1500), ('Groceries', 3000)]:
         db.execute(
-            'INSERT INTO spending_logs (id, date, category, amount_cents, created_at) VALUES (?, ?, ?, ?, ?)',
-            (new_id(), today, category, cents, ts(0)),
+            'INSERT INTO spending_logs (id, date, category, amount_cents, created_at, updated_at)'
+            ' VALUES (?, ?, ?, ?, ?, ?)',
+            (new_id(), today, category, cents, ts(0), ts(0)),
         )
+    seed_spending_receipts(db)
+
+
+def seed_spending_receipts(db):
+    """A purchase captured the meal way: a receipt photo, a clip over it, and
+    what the structuring pass read out of both — settled, never mid-read."""
+    from backend.spending.storage import media_path
+
+    entry_id = new_id()
+    db.execute(
+        'INSERT INTO spending_logs (id, date, category, amount_cents, merchant, raw_content, notes,'
+        ' generated_notes, latitude, longitude, created_at, updated_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        (entry_id, today_key(1), 'Groceries', 4286, 'Loblaws',
+         'picked up the week\'s groceries, the strawberries were on sale',
+         "Picked up the week's groceries; the strawberries were on sale.",
+         "Picked up the week's groceries; the strawberries were on sale.",
+         43.6532, -79.3832, ts(1), ts(1)),
+    )
+    image_id, audio_id = new_id(), new_id()
+    img_path = media_path(entry_id, image_id, 'jpg')
+    placeholder_image(img_path, 'receipt', size=(480, 900), color=(235, 232, 220))
+    db.execute(
+        'INSERT INTO spending_media (id, entry_id, kind, path, mime, position, description,'
+        " description_status, created_at) VALUES (?, ?, 'image', ?, 'image/jpeg', 0, ?, 'done', ?)",
+        (image_id, entry_id, str(img_path),
+         'LOBLAWS\nSTRAWBERRIES 1LB  4.99\nMILK 2L  5.49\nSUBTOTAL 40.12\nHST 2.74\nTOTAL 42.86',
+         ts(1)),
+    )
+    wav_path = media_path(entry_id, audio_id, 'wav')
+    placeholder_audio(wav_path)
+    db.execute(
+        'INSERT INTO spending_media (id, entry_id, kind, path, mime, position, transcript,'
+        " transcript_status, created_at) VALUES (?, ?, 'audio', ?, 'audio/wav', 1, ?, 'done', ?)",
+        (audio_id, entry_id, str(wav_path),
+         "picked up the week's groceries, the strawberries were on sale", ts(1)),
+    )
 
 
 def seed_fanfic(db, journal_ids):

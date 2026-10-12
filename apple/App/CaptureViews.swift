@@ -242,6 +242,12 @@ private struct CaptureComposer: View {
         (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.draft.isEmpty)
             && model.draft.files.allSatisfy(\.isFoodMedia)
     }
+    /// A purchase is the meal's shape with no videos: a receipt photo, a clip
+    /// about it, or a few words ("coffee with Sam, 4.50").
+    private var canSaveSpending: Bool {
+        (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.draft.isEmpty)
+            && model.draft.files.allSatisfy(\.isSpendingMedia)
+    }
 
     var body: some View {
         Form {
@@ -282,6 +288,13 @@ private struct CaptureComposer: View {
                     .disabled(!canSaveFood)
                     .accessibilityHint(model.draft.files.allSatisfy(\.isFoodMedia) ? ""
                         : "Food entries hold photos, videos and recordings only.")
+                Spacer()
+                Button { saveSpending() } label: { Label("Spent", systemImage: "receipt") }
+                    .buttonStyle(.glass)
+                    .disabled(!canSaveSpending)
+                    .accessibilityLabel("Save spending")
+                    .accessibilityHint(model.draft.files.allSatisfy(\.isSpendingMedia) ? ""
+                        : "Spending entries hold photos and recordings only.")
                 Spacer()
                 Button { save() } label: { Label("Save", systemImage: "checkmark") }
                     .buttonStyle(.borderedProminent)
@@ -336,6 +349,14 @@ private struct CaptureComposer: View {
             text = ""; saved = true; typing = false; typingText = false
         }
     }
+
+    /// The same as a meal, filed as a purchase: the server reads the amount,
+    /// the merchant and the category out of the receipt and what was said.
+    private func saveSpending() {
+        if model.saveEntry(text, youtubeURLs: [], kind: .spending) {
+            text = ""; saved = true; typing = false; typingText = false
+        }
+    }
 }
 
 /// The composer's one line of icon buttons: the two microphone modes, then the
@@ -344,19 +365,28 @@ private struct CaptureComposer: View {
 ///
 /// Shared by the Capture tab (`entryID` nil, its own draft) and by editing a
 /// journal entry or a meal, where everything lands in that entry's draft and
-/// is sent only when the edit is saved. `foodOnly` limits Attach file to what
-/// the food log keeps: pictures, videos and voice memos.
+/// is sent only when the edit is saved. `kind` limits Attach file to what that
+/// log keeps: pictures, videos and voice memos for a meal, no videos for a
+/// purchase.
 struct AttachmentButtons: View {
     @ObservedObject var model: CaptureModel
     @ObservedObject var recorder: Recorder
     var entryID: String? = nil
-    var foodOnly = false
+    var kind: CaptureKind = .journal
     /// Called when a button is used: the composer clears its "Saved" note and
     /// drops the keyboard.
     var onUse: () -> Void = {}
     @State private var showCamera = false
     @State private var showFiles = false
     @State private var photoItems: [PhotosPickerItem] = []
+
+    private var importable: [UTType] {
+        switch kind {
+        case .journal: return [.item]
+        case .food: return [.image, .movie, .audio]
+        case .spending: return [.image, .audio]
+        }
+    }
 
     var body: some View {
         Group {
@@ -400,7 +430,7 @@ struct AttachmentButtons: View {
                 onUse()
             }.ignoresSafeArea()
         }
-        .fileImporter(isPresented: $showFiles, allowedContentTypes: foodOnly ? [.image, .movie, .audio] : [.item],
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: importable,
                       allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
             for url in urls {
@@ -736,7 +766,7 @@ struct CaptureDetail: View {
                     details(capture)
                 }
             }
-            .navigationTitle(capture.snapshot?.title ?? (capture.kind == .food ? "Meal" : "Capture"))
+            .navigationTitle(capture.snapshot?.title ?? (capture.kind == .food ? "Meal" : capture.kind == .spending ? "Purchase" : "Capture"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // Only while the server certainly has none of it: a re-sent
@@ -753,6 +783,7 @@ struct CaptureDetail: View {
     @ViewBuilder private func details(_ capture: Capture) -> some View {
         Section {
             if capture.kind == .food { Label("Food log entry", systemImage: "fork.knife") }
+            if capture.kind == .spending { Label("Spending entry", systemImage: "receipt") }
             Text(capture.createdAt, format: .dateTime)
             Text(captureStatus(capture))
             if let error = capture.lastError { Text(error).foregroundStyle(.orange) }

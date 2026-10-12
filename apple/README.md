@@ -110,6 +110,16 @@ what each device can currently do and which work remains device-only.
   survive relaunch. Amounts are stored as integer cents in `spending_logs`.
   The backend and portable Swift tests cover replay and deletion during an upload;
   single-line spending capture, relaunch and deletion passed in the iPhone simulator.
+  A purchase can also be **captured like a meal**: the composer's **Spent** button
+  (beside Food) files the draft's words, receipt photos and clips under
+  `/api/spending`, where the server reads the merchant, category and amount out
+  of the receipt and the transcript. Until it has, the purchase shows a dash in
+  the Journal and Daily counts it as "being read" beside the total, never as $0.
+  Purchases replicate as `spending_logs`/`spending_media` into the Journal feed,
+  where merchant, category, amount and notes can be corrected offline. Videos are
+  refused (the server keeps photos and voice only). Composer layout and an offline
+  purchase reaching the feed passed in the iPhone simulator; camera capture of a real
+  receipt and the server's reading of it have not been verified on device.
 - **Workout** (the third Capture page) is the desktop's workout log: one set or
   activity per line ("bicep curls 20, 10" in lb, "squats 10" bodyweight, bare
   "20, 10" for the selected pill, "walking 30" minutes), recent-exercise pills,

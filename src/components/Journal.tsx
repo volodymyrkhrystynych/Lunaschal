@@ -59,6 +59,7 @@ import type {
   JournalStudySource,
   JournalVoiceDraft,
   FoodJournalItem,
+  SpendingEntry,
   TaskEvent,
 } from '../hooks/api';
 import {
@@ -75,6 +76,11 @@ import { ClipStrip } from './ClipRecorder';
 import { LocationButton, useLocationAsk } from './LocationButton';
 import type { Coords } from '../lib/geo';
 import { MealClips, visualMedia } from './Food/MealClips';
+import {
+  isCompactSpending,
+  spendingAmountLabel,
+  spendingTitle,
+} from '../lib/spending';
 import { LoadingState, ErrorBanner } from './LoadStates';
 
 // Opened straight from the feed rather than by sending the user to the
@@ -297,6 +303,15 @@ export function Journal({
     // a background worker, with nothing on this side to invalidate from.
     refetchInterval: q =>
       hasRunningMealTranscript(q.state.data) ? 4000 : false,
+  });
+
+  // Purchases, typed or captured as receipts, under the same rule as food. A
+  // receipt is read on a background worker, so poll while one is.
+  const { data: journalSpending } = useQuery({
+    queryKey: ['spending', 'journal'],
+    queryFn: () => api.spending.journal(),
+    enabled: foodVisible,
+    refetchInterval: q => (q.state.data?.some(p => p.reading) ? 4000 : false),
   });
 
   // Study sources filed into the Journal: one card per sitting, carrying the
@@ -671,7 +686,8 @@ export function Journal({
         taskEventsVisible ? (taskEvents ?? []) : [],
         newspapersVisible ? (journalNewspapers ?? []) : [],
         studyVisible ? (journalStudy ?? []) : [],
-        locationVisible ? (journalLocation ?? []) : []
+        locationVisible ? (journalLocation ?? []) : [],
+        foodVisible ? (journalSpending ?? []) : []
       ),
     [
       entries,
@@ -691,6 +707,7 @@ export function Journal({
       journalStudy,
       locationVisible,
       journalLocation,
+      journalSpending,
     ]
   );
   // Calendar events whose window covers a run of feedItems, rendered as a
@@ -731,6 +748,11 @@ export function Journal({
     }
     if (item.kind === 'food') {
       return <JournalFoodItem key={item.food.id} food={item.food} />;
+    }
+    if (item.kind === 'spending') {
+      return (
+        <JournalSpendingItem key={item.spending.id} entry={item.spending} />
+      );
     }
     if (item.kind === 'location') {
       return (
@@ -2101,6 +2123,94 @@ function JournalTaskEventItem({
     </button>
   );
 }
+
+// A purchase in the journal feed. A line typed on the Daily page is one row,
+// as small as a task event; a receipt or a clip gets a card with the photo and
+// what was said. View-only, like a meal.
+const JournalSpendingItem = memo(function JournalSpendingItem({
+  entry,
+}: {
+  entry: SpendingEntry;
+}) {
+  const lightbox = useLightbox();
+  const title = spendingTitle(entry);
+  const amount = spendingAmountLabel(entry);
+  const dayLabel = formatDayTime(entry.createdAt);
+
+  if (isCompactSpending(entry)) {
+    return (
+      <div className="flex items-baseline gap-2 px-3 py-1.5 text-xs text-[var(--color-text-muted)]">
+        <span aria-hidden>💳</span>
+        <span className="min-w-0 truncate text-[var(--color-text)]">
+          {title}
+        </span>
+        <span className="tabular-nums text-[var(--color-text)]">{amount}</span>
+        <span className="ml-auto shrink-0 opacity-70">{dayLabel}</span>
+      </div>
+    );
+  }
+
+  const geoLink = mapLink(entry.latitude, entry.longitude);
+  const photos = visualMedia(entry.media).filter(m => m.kind === 'image');
+  return (
+    <ItemCard
+      title={
+        <span className="text-[var(--color-text)] truncate">
+          🧾 {title}
+          {geoLink && (
+            <a
+              href={geoLink}
+              target="_blank"
+              rel="noreferrer"
+              onClick={e => e.stopPropagation()}
+              className="text-[var(--color-text-muted)] underline hover:text-[var(--color-text)]"
+            >
+              {' '}
+              · 🗺️ map
+            </a>
+          )}
+        </span>
+      }
+      meta={
+        <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+          <span className="tabular-nums text-[var(--color-text)] mr-2">
+            {amount}
+          </span>
+          {dayLabel}
+        </span>
+      }
+      body={
+        <>
+          {entry.notes && (
+            <div className="text-sm text-[var(--color-text)] whitespace-pre-wrap mb-2">
+              {entry.notes}
+            </div>
+          )}
+          <MealClips media={entry.media} />
+          {photos.length > 0 && (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {photos.map(m => (
+                <button
+                  key={m.id}
+                  onClick={() => lightbox.open(m.url)}
+                  className="shrink-0 h-28 rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
+                  title="View receipt"
+                >
+                  <img
+                    src={m.url}
+                    alt="Receipt"
+                    className="h-full w-auto object-contain"
+                  />
+                </button>
+              ))}
+            </div>
+          )}
+          <ImageLightbox src={lightbox.src} onClose={lightbox.close} />
+        </>
+      }
+    />
+  );
+});
 
 // A food-log entry in the journal feed: dish/place/rating with a media
 // filmstrip. View-only here — editing happens in the Food tab.

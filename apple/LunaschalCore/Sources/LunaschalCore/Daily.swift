@@ -256,10 +256,14 @@ public struct DailyStatus: Equatable {
     public var selfie: Selfie?
     public var entries: [Entry]
     public var spending: [Spending]
+    /// Purchases captured as a receipt or clip that the server has not read an
+    /// amount out of yet. Not in `spending`; nil from a server that predates them.
+    public var pendingSpending: Int?
 
-    public init(day: String, weight: Double? = nil, selfie: Selfie? = nil, entries: [Entry] = [], spending: [Spending] = []) {
+    public init(day: String, weight: Double? = nil, selfie: Selfie? = nil, entries: [Entry] = [], spending: [Spending] = [],
+                pendingSpending: Int? = nil) {
         self.day = day; self.weight = weight; self.selfie = selfie; self.entries = entries
-        self.spending = spending
+        self.spending = spending; self.pendingSpending = pendingSpending
     }
 }
 
@@ -290,6 +294,8 @@ public struct DailySummary: Equatable {
     public var total: Int { entries.reduce(0) { $0 + $1.calories } }
     public var spending: [Spending] = []
     public var totalCents: Int { spending.reduce(0) { $0 + $1.amountCents } }
+    /// Receipts the server is still reading; shown beside the total, not in it.
+    public var pendingSpending = 0
     public var hasSelfie: Bool { localSelfie != nil || serverSelfie != nil }
 
     public init(day: String, server: DailyStatus?, local: [DailyLog]) {
@@ -298,6 +304,7 @@ public struct DailySummary: Equatable {
         let status = server?.day == day ? server : nil
         weight = status?.weight
         serverSelfie = status?.selfie
+        pendingSpending = status?.pendingSpending ?? 0
         let known = Set(status?.entries.map(\.id) ?? [])
         entries = (status?.entries ?? []).map { Entry(id: $0.id, description: $0.description, calories: $0.calories, waiting: false) }
         let knownSpending = Set(status?.spending.map(\.id) ?? [])
