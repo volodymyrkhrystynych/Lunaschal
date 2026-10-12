@@ -26,7 +26,7 @@
   "OfflineCaptureTests/testNewspaperScrollsAsOneColumn": 0.09,
   "OfflineCaptureTests/testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal": 11.202,
   "OfflineCaptureTests/testNotesComeBackFromTheEntryDraftAndSaveWithIt": 9.704,
-  "OfflineCaptureTests/testNotesPagesTurnWithASwipe": 0.091,
+  "OfflineCaptureTests/testNotesPagesDoNotTurnWithASwipe": 0.091,
   "OfflineCaptureTests/testOpeningAFicThatIsNotDownloadedShowsItDownloading": 41.341,
   "OfflineCaptureTests/testSaveFoodEntrySitsLeftOfSaveEntryAndLeavesTheLinks": 49.479,
   "OfflineCaptureTests/testSettingsImportsAFicByLink": 33.839,

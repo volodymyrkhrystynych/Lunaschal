@@ -61,9 +61,9 @@ Capture, Journal, Chat, Todo, Study and Draw; iPadOS owns narrow-window overflow
 without an app More menu. It hides the tab bar while a drawing,
 a notebook (Capture → Notes / Newspaper) or a Study annotation is open, so its toolbar doesn't overflow;
 native drawing creation/editing is iPad-only, and so are Paper previews, since they live under Study.
-A notes notebook turns pages with a finger swipe (with a **+ New page** marker past the last page) and a
+A notes notebook never moves sideways — pages turn and are added only from the toolbar — and a
 newspaper notebook is one continuous scroll fitted to the width; both passed in simulator
-(`testNotesPagesTurnWithASwipe`, `testNewspaperScrollsAsOneColumn`, portrait and landscape), and neither
+(`testNotesPagesDoNotTurnWithASwipe`, `testNewspaperScrollsAsOneColumn`, portrait and landscape), and neither
 has been verified on device — in particular how a finger and a Pencil share the page.
 Ink not yet reported by PaperKit survives an added page, a page turn and Save (AppTests
 `…KeepsInkTheCanvasHadNotReported`); Notes reopening from the entry draft and saving with

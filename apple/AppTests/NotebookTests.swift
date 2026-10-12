@@ -507,11 +507,14 @@ final class NotebookEditorTests: XCTestCase {
         let store = try store()
         let notebook = try store.create()
         let model = NotebookEditorModel(store: store, notebook: notebook)
-        drawUnreported(try inked(model.pages[0]), on: canvas(model))
+        // Held, as the editor holds it: the model's reference is weak.
+        let controller = canvas(model)
+        drawUnreported(try inked(model.pages[0]), on: controller)
         let files = await model.renderForSave()
         XCTAssertEqual(files.map(\.name), ["Notes p1.jpg"])
         await model.checkpoint()
         XCTAssertEqual(try store.notebook(notebook.id).markedPages, [0])
+        withExtendedLifetime(controller) {}
     }
 
     func testAPageAddedToAColumnKeepsInkTheCanvasHadNotReported() throws {
