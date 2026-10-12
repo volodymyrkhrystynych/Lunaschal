@@ -22,6 +22,7 @@ from ulid import ULID
 
 from backend.ai import jobs
 from backend.ai.workouts import parse_workout
+from backend.apple_health.lifestyle import KG_PER_LB, legacy_weight_kg
 from backend.capture_time import optional_capture_time
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.day_boundary import DAY_ROLLOVER_HOUR, day_bounds, day_key_for
@@ -673,7 +674,7 @@ def list_weight():
     if err:
         return jsonify({'error': err}), 400
 
-    query = 'SELECT id, date, weight, created_at, updated_at FROM body_weight_logs'
+    query = 'SELECT id, date, weight, weight_unit, created_at, updated_at FROM body_weight_logs'
     clauses, params = [], []
     if start:
         clauses.append('date >= ?')
@@ -698,6 +699,11 @@ def log_weight():
         return jsonify({'error': err}), 400
     if weight is None:
         return jsonify({'error': 'weight is required'}), 400
+    unit = body.get('unit')
+    if unit not in (None, 'kg', 'lb'):
+        return jsonify({'error': 'unit must be kg or lb'}), 400
+    weight = (legacy_weight_kg(weight) if unit is None else
+              weight * KG_PER_LB if unit == 'lb' else weight)
     day, err = _parse_date(body.get('date'), _today())
     if err:
         return jsonify({'error': err}), 400
@@ -705,14 +711,15 @@ def log_weight():
     now = int(time.time())
     db = get_db()
     db.execute(
-        'INSERT INTO body_weight_logs(id, date, weight, created_at, updated_at)'
-        ' VALUES (?,?,?,?,?)'
-        ' ON CONFLICT(date) DO UPDATE SET weight=excluded.weight, updated_at=excluded.updated_at',
+        'INSERT INTO body_weight_logs(id, date, weight, weight_unit, created_at, updated_at)'
+        ' VALUES (?,?,?,\'kg\',?,?)'
+        ' ON CONFLICT(date) DO UPDATE SET weight=excluded.weight, weight_unit=\'kg\','
+        ' health_sample_id=NULL, updated_at=excluded.updated_at',
         (str(ULID()), day, weight, now, now),
     )
     db.commit()
     row = db.execute(
-        'SELECT id, date, weight, created_at, updated_at FROM body_weight_logs WHERE date=?',
+        'SELECT id, date, weight, weight_unit, created_at, updated_at FROM body_weight_logs WHERE date=?',
         (day,),
     ).fetchone()
     return jsonify(row_to_dict(row)), 201

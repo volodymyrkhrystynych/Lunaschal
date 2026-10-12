@@ -329,6 +329,8 @@ final class OfflineCaptureTests: XCTestCase {
         daily.tap()
         // Weather heads the page, whether or not this simulator has a forecast cached.
         XCTAssertTrue(app.staticTexts["Weather"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Sleep · past 7 nights"].exists)
+        for _ in 0..<5 where !app.buttons["Take selfie"].exists && !app.buttons["Retake selfie"].exists { app.swipeUp() }
         XCTAssertTrue(app.buttons["Take selfie"].waitForExistence(timeout: 5)
                       || app.buttons["Retake selfie"].exists)
 
@@ -338,13 +340,14 @@ final class OfflineCaptureTests: XCTestCase {
         // Letters only: a name ending in digits would rightly parse as its count.
         let meal = "Oats " + String((0..<6).map { _ in "ABCDEFGHJKMNPQRSTVWXYZ".randomElement()! })
         let field = app.textFields["Body weight"]
+        for _ in 0..<5 where !field.isHittable { app.swipeUp() }
         field.tap()
         field.typeText(weight)
         // A tap while the number pad is still rising can be dropped; retry once.
         let log = app.buttons["Log weight"]
         log.tap()
-        if !app.staticTexts[weight].waitForExistence(timeout: 3), log.isEnabled { log.tap() }
-        XCTAssertTrue(app.staticTexts[weight].waitForExistence(timeout: 5))
+        if !app.staticTexts["\(weight) kg"].waitForExistence(timeout: 3), log.isEnabled { log.tap() }
+        XCTAssertTrue(app.staticTexts["\(weight) kg"].waitForExistence(timeout: 5))
 
         // One line, as on the desktop: no count at the end is refused, and a
         // trailing count becomes the calories.
@@ -377,11 +380,16 @@ final class OfflineCaptureTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
         app.segmentedControls.buttons["Daily"].tap()
-        XCTAssertTrue(app.staticTexts[weight].waitForExistence(timeout: 5))
+        for _ in 0..<5 where !app.staticTexts["\(weight) kg"].exists { app.swipeUp() }
+        XCTAssertTrue(app.staticTexts["\(weight) kg"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Saved on this device · Waiting to sync"].exists)
-        for _ in 0..<5 where !app.staticTexts[meal].exists { app.swipeUp() }
+        for _ in 0..<5 where !app.staticTexts[meal].isHittable { app.swipeUp() }
         XCTAssertTrue(app.staticTexts[meal].exists)
-        app.staticTexts[meal].swipeLeft()
+        let mealRow = app.staticTexts[meal]
+        // Swipe across the row, not the short label (which can stop short of
+        // revealing the action after the taller sleep card moves the layout).
+        let row = mealRow.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5))
+        row.withOffset(CGVector(dx: 260, dy: 0)).press(forDuration: 0.05, thenDragTo: row)
         if app.buttons["Delete"].exists { app.buttons["Delete"].tap() }
         XCTAssertTrue(app.staticTexts[meal].waitForNonExistence(timeout: settle))
         app.terminate()
@@ -394,6 +402,30 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(app.staticTexts[meal].exists, "A deleted calorie entry stays gone after relaunch")
         app.segmentedControls.buttons["Entry"].tap()
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
+    }
+
+    func testSleepWeekSelectsNightsAndSurvivesOfflineRelaunch() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-sleepWeekFixture"]
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        app.segmentedControls.buttons["Daily"].tap()
+        XCTAssertTrue(app.staticTexts["100% sleep efficiency"].waitForExistence(timeout: 5))
+        let interrupted = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "7h 45m")).firstMatch
+        XCTAssertTrue(interrupted.exists)
+        interrupted.tap()
+        XCTAssertTrue(app.staticTexts["97% sleep efficiency"].exists)
+        XCTAssertTrue(app.staticTexts["7h 45m asleep · 1 recorded interruptions · 15 min awake"].exists)
+        let missing = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "no sleep reading")).firstMatch
+        missing.tap()
+        XCTAssertTrue(app.staticTexts["No sleep reading for this night."].exists)
+        app.terminate()
+        app.launchArguments = []
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        app.segmentedControls.buttons["Daily"].tap()
+        XCTAssertTrue(app.staticTexts["100% sleep efficiency"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "7h 45m")).firstMatch.exists)
     }
 
     func testDailySpendingSavesOfflineAndSwipesToDelete() {

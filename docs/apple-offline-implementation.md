@@ -715,6 +715,14 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
       picker tool and use light-page ink colours; Pencil and camera behaviour
       still require device verification.
 - [ ] Show archive playback availability without preventing URL/commentary capture.
+- [x] Health → Lifestyle: automatic workout imports and bodyweight backfill in
+      kg using the historical 140 cutoff. Capture → Daily and web Lifestyle show
+      seven nights of sleep, recorded awake intervals and continuity efficiency.
+      Native caches the week; missing dates remain unknown. Server and portable
+      Swift tests cover import replay, manual precedence, mixed units, duplicate
+      sleep sources and missing coverage. iPhone simulator tests passed for night
+      selection, cached sleep after relaunch and offline weight/calorie logging.
+      Real Health data remains device-unverified.
 - [ ] Complete share-extension support: fic/YouTube links and journal screenshots
       are implemented; audio and documents remain outstanding. Image shares (up to 20) preserve original bytes in `ScreenshotOutbox`, upload through
       `POST /api/journal/screenshots`, and retry during app sync. The existing server

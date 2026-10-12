@@ -133,6 +133,15 @@ what each device can currently do and which work remains device-only.
   saved on the device, and uploaded in order with a device-minted id and the time
   they were logged, so a replay is a no-op and sets done offline still group into
   the workout they belong to. Rating and location need the server.
+- **Sleep in Capture → Daily** shows seven nights of asleep/awake bars; tap a
+  night for duration, recorded interruptions and sleep efficiency (continuity,
+  not a subjective quality rating). Missing or in-bed-only readings remain
+  unknown. The last response is cached offline and dates roll forward without
+  treating missing nights as zero sleep. Health workouts automatically enter
+  the workout log; bodyweight is backfilled in kg with the user's historical
+  140 cutoff, preserving manual corrections. New weight inputs are labelled kg.
+  Night selection and cached readings after relaunch passed in the iPhone
+  simulator; real Health recording is not yet verified on device.
 - **Apple Health sync** (Settings → Apple Health, off until turned on). Reads
   every Health type the app has a unit for -- sleep stages, workouts, exercise
   minutes, steps, heart rate, HRV, vitals, body, nutrition, symptoms -- through

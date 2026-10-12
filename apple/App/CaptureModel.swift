@@ -59,6 +59,8 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var selfieThumbnail: (id: String, data: Data)?
     /// The last weather the server sent, kept on disk so it shows offline.
     @Published private(set) var weather: WeatherDay?
+    @Published private(set) var sleepWeek: SleepWeek?
+    @Published private(set) var sleepError: String?
     private var weatherFetchedAt: Date?
     let location = LocationProvider()
     /// The Workout page: queued sets, and the server's recent exercises and workouts.
@@ -213,6 +215,10 @@ final class CaptureModel: ObservableObject {
         recentExercises = (try? JSONDecoder().decode([RecentExercise].self, from: Data(contentsOf: workoutCache("recent")))) ?? []
         recentWorkouts = (try? JSONDecoder().decode([WorkoutSession].self, from: Data(contentsOf: workoutCache("sessions")))) ?? []
         weather = try? JSONDecoder().decode(WeatherDay.self, from: Data(contentsOf: weatherCache))
+        #if DEBUG
+        try SleepWeekFixture.seedIfAsked(at: healthSleepCache)
+        #endif
+        sleepWeek = try? JSONDecoder().decode(SleepWeek.self, from: Data(contentsOf: healthSleepCache))
         pendingEdits = try replica.edits().filter { Self.feedCollections.contains($0.operation.collection) }
         Task { await reloadJournal(); await reloadCalendar() }
         refreshLibraryBytes()
@@ -312,6 +318,9 @@ final class CaptureModel: ObservableObject {
         defer { healthStatus = healthState.status() }
         do {
             try await healthSyncer.run(source: healthSource, transport: api)
+            await refreshDaily(using: api)
+            await refreshWorkouts(using: api)
+            await refreshSleep(using: api)
         } catch {
             if Task.isCancelled || error is CancellationError || error is URLError || error is HTTPFailure { throw error }
         }
@@ -930,6 +939,7 @@ final class CaptureModel: ObservableObject {
     func refreshDailyStatus() async {
         guard let api = chatAPI() else { return }
         await refreshDaily(using: api)
+        await refreshSleep(using: api)
     }
 
     private func refreshWorkouts(using api: JournalAPI) async {
@@ -991,6 +1001,18 @@ final class CaptureModel: ObservableObject {
 
     // Not `.json`: the capture store reads every .json in its root as a capture.
     private var weatherCache: URL { store.root.appendingPathComponent("weather-today.cache") }
+    private var healthSleepCache: URL { store.root.appendingPathComponent("sleep-week.cache") }
+
+    private func refreshSleep(using api: JournalAPI) async {
+        do {
+            let fresh = try await api.sleepWeek(ending: DayKey.of(Date()))
+            sleepWeek = fresh
+            sleepError = nil
+            try? JSONEncoder().encode(fresh).write(to: healthSleepCache, options: .atomic)
+        } catch {
+            sleepError = "Could not refresh sleep. Showing the last available readings."
+        }
+    }
 
     /// The forecast changes hourly at most, and every sync would otherwise ask.
     private func refreshWeather(using api: JournalAPI) async {

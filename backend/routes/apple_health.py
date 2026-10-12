@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from flask import Blueprint, Response, jsonify, request
 
 from backend.day_boundary import day_key_for
-from backend.apple_health import ingest, queries
+from backend.apple_health import ingest, queries, nights
 
 bp = Blueprint('apple_health', __name__, url_prefix='/api/apple-health')
 
@@ -96,6 +96,18 @@ def activity():
     except ValueError:
         return jsonify({'error': 'days must be a number'}), 400
     return jsonify(queries.activity(day_key_for(), days))
+
+
+@bp.get('/sleep')
+def sleep_week():
+    last = request.args.get('to', day_key_for())
+    try:
+        if not _DATE_RE.fullmatch(last):
+            raise ValueError()
+        date.fromisoformat(last)
+        return jsonify(nights.sleep_week(last))
+    except (ValueError, OverflowError):
+        return jsonify({'error': 'to must be a real YYYY-MM-DD date'}), 400
 
 
 @bp.get('/export.csv')

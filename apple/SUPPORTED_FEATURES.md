@@ -47,6 +47,12 @@ has been validated. Exact commits and CI results are recorded in the
 | Food, Lifestyle                  | Use the existing web app; native Food is Food, plus meals in the Journal feed whose dish/place/notes can be edited and media added offline; native Lifestyle is Capture → Daily only                                                                                                                                                                    | Not exposed                                                                                                                       | Existing web app requirements apply                                                                   |
 | Practice and Notebook            | Intentionally omitted from native navigation                                                                                                                                                                                                                                                                                                            | Not exposed                                                                                                                       | Existing Linux/web app remains available                                                              |
 
+Capture → Daily includes a seven-night sleep graph with selectable nights,
+recorded interruptions and sleep efficiency, using cached readings offline.
+Health sync automatically logs workouts and backfills bodyweight in kg;
+manual weight corrections take priority. Real Health recording and background
+delivery still require device verification.
+
 The iPhone tabs are Capture, Journal, Chat, Todo, and More. More holds Library,
 Jobs, Learning and Settings; the workout log is Capture → Workout. Chat is the desktop's Chat
 tab, and Todo is the tasks card from the desktop's Lifestyle tab (see README.md).

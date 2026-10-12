@@ -518,8 +518,8 @@ extension JournalAPI: DailyTransport {
         switch log.kind {
         case .weight:
             guard let weight = log.weight else { throw DailyError.invalidWeight }
-            struct Body: Encodable { let weight: Double; let date: String }
-            data = try await postJSON("api/lifestyle/weight", Body(weight: weight, date: log.day))
+            struct Body: Encodable { let weight: Double; let date: String; let unit: String? }
+            data = try await postJSON("api/lifestyle/weight", Body(weight: weight, date: log.day, unit: log.weightUnit))
         case .calories:
             guard let calories = log.calories, let text = log.description else { throw DailyError.invalidCalories }
             // An Int field, so the count goes over the wire as 600 and never 600.0.
@@ -591,6 +591,10 @@ extension JournalAPI: DailyTransport {
     /// Today's weather where the server last knew the user to be.
     public func weatherToday() async throws -> WeatherDay {
         try WeatherDay.decode(await get("api/lifestyle/weather/today", [:]))
+    }
+
+    public func sleepWeek(ending day: String) async throws -> SleepWeek {
+        try JSONDecoder().decode(SleepWeek.self, from: await get("api/apple-health/sleep", ["to": day]))
     }
 
     /// Tells the server where the phone is, which also resyncs today's weather
