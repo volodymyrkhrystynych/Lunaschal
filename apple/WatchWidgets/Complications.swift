@@ -89,8 +89,8 @@ extension RecordingChoice {
     var link: WatchLink { self == .record ? .record : .transcribe }
 }
 
-/// A run counting down, the way the system Timer draws one: a ring that
-/// empties with the time left inside it, the time with a gauge in a corner,
+/// A run counting down, the way the system Timer draws one: a ring round the
+/// edge that empties, with the time left centred inside it, the time with a gauge in a corner,
 /// the time after the icon inline. Every timer complication uses it.
 struct Countdown: View {
     let span: ClosedRange<Date>
@@ -112,15 +112,26 @@ struct Countdown: View {
         case .accessoryInline:
             Label { Text(timerInterval: span, countsDown: true).monospacedDigit() } icon: { Image(systemName: symbol) }
         default:
-            ProgressView(timerInterval: span, countsDown: true) {
-                EmptyView()
-            } currentValueLabel: {
-                Text(timerInterval: span, countsDown: true)
-                    .font(.system(size: 13, weight: .semibold, design: .rounded)).monospacedDigit()
-                    .minimumScaleFactor(0.6)
+            ZStack {
+                AccessoryWidgetBackground()
+                // The ring runs round the whole edge and empties as the time
+                // goes, like the system Timer's; the time sits in the middle.
+                ProgressView(timerInterval: span, countsDown: true,
+                             label: { EmptyView() }, currentValueLabel: { EmptyView() })
+                    .progressViewStyle(.circular)
+                    .tint(tint)
+                    .widgetAccentable()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Text(timerInterval: span, countsDown: true, showsHours: false)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .minimumScaleFactor(0.5)
+                    .lineLimit(1)
+                    // A timer's text is laid out at its widest; centring it
+                    // takes both of these.
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 7)
             }
-            .progressViewStyle(.circular)
-            .tint(tint)
         }
     }
 }

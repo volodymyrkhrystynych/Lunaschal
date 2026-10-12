@@ -45,7 +45,9 @@ struct PomodoroEngine {
         return (timer, result, closed)
     }
 
-    /// One pending notification at most, for the run going now.
+    /// One pending notification at most, for the run going now. A few
+    /// seconds after the end, so the app's alarm, when it has one, can take
+    /// it back before it shows.
     static func schedule(_ timer: PomodoroTimer) {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [notificationID])
@@ -56,7 +58,7 @@ struct PomodoroEngine {
         content.body = run.kind == .work ? "Continue, take a break, or stop." : "Continue or stop."
         content.sound = .default
         content.categoryIdentifier = run.kind.rawValue
-        let wait = max(1, run.endsAt.timeIntervalSinceNow)
+        let wait = max(1, run.endsAt.timeIntervalSinceNow + 3)
         center.add(UNNotificationRequest(identifier: notificationID, content: content,
                                          trigger: UNTimeIntervalNotificationTrigger(timeInterval: wait, repeats: false)))
     }
