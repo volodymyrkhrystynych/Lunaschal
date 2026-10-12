@@ -322,7 +322,10 @@ what each device can currently do and which work remains device-only.
   other journal activity intervenes; screenshots do not become entry text.
   Grouping follows server arrival order, including offline retries. Timestamps
   record when each image was shared. Core and backend tests cover persistence,
-  retries and grouping; native share-sheet verification remains pending.
+  retries and grouping. Image intake tries alternate representations if a
+  source cannot supply its first image format, with data and UIKit-image
+  fallbacks; these paths pass simulator unit tests. Sharing from the system
+  screenshot preview on a signed device remains unverified.
   Other saved material is grouped
   under Study. Download controls remain in More → Settings → Library downloads.
   Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:
