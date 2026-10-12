@@ -3,6 +3,13 @@
 The Capture entry text box accepts pasted images as persistent draft photo
 attachments, alongside typed text. Standard text paste remains available.
 
+iPad Notes and Newspaper canvases have a 44-point favorites toolbar with Undo/Redo,
+all eight native inks, both erasers, selection, ruler and shape/text insertion.
+Favorites store color and width and can be added, edited, reordered or removed.
+Drag its handle to dock at any edge, or choose an edge in All tools; favorites and
+position are remembered locally. This replaces the notebook palette; the older
+standalone PencilKit workspace and Study annotation palette are unchanged.
+
 This describes the current development branch. There is no signed
 device release yet. Hosted builds verify compilation, persistence, device archive
 structure, and selected simulator behaviors; none of the user's physical devices

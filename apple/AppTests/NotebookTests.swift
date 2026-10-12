@@ -155,18 +155,16 @@ func solid(_ color: UIColor, _ size: CGSize) -> CGImage? {
 
 @MainActor
 final class NotebookEditorTests: XCTestCase {
-    func testInitialToolMatchesThePickerWithoutAToolChange() throws {
+    func testInitialToolMatchesTheFavoriteWithoutAToolChange() throws {
         let store = try store()
         let controller = NotebookCanvasController(model: NotebookEditorModel(store: store, notebook: try store.create()))
-        controller.picker.selectedToolItem = PKToolPickerInkingItem(type: .marker, color: .red, width: 12)
         controller.loadViewIfNeeded()
-        let chosen = try XCTUnwrap(controller.picker.selectedToolItem as? PKToolPickerInkingItem).inkingTool
+        let chosen = try XCTUnwrap(controller.drawingToolbar.preferences.favorites.first?.tool as? PKInkingTool)
         let active = try XCTUnwrap(controller.paper.drawingTool as? PKInkingTool)
         XCTAssertEqual(active.inkType, chosen.inkType)
         XCTAssertEqual(active.color, chosen.color)
         XCTAssertEqual(active.width, chosen.width)
-        XCTAssertEqual(controller.picker.colorUserInterfaceStyle, .light)
-        XCTAssertEqual(controller.picker.overrideUserInterfaceStyle, .light)
+        XCTAssertEqual(controller.overrideUserInterfaceStyle, .light)
     }
 
     private func store() throws -> NotebookStore {
@@ -456,7 +454,7 @@ final class NotebookEditorTests: XCTestCase {
         controller.view.addSubview(selectionEditor)
         selectionEditor.becomeFirstResponder()
         XCTAssertTrue(selectionEditor.isFirstResponder)
-        controller.toolPickerSelectedToolItemDidChange(controller.picker)
+        controller.drawingToolbar.select(DrawingFavorite(kind: "marker", red: 1, width: 12))
         XCTAssertTrue(controller.paper.isFirstResponder)
         XCTAssertFalse(selectionEditor.isFirstResponder)
         XCTAssertFalse(NotebookPage.isBlank(try XCTUnwrap(controller.paper.markup)))

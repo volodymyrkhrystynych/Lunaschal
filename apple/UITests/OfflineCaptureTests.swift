@@ -1805,6 +1805,63 @@ final class OfflineCaptureTests: XCTestCase {
 
     /// A notes page turns sideways on a swipe, and finishing that swipe on
     /// the last page makes a new one; backwards from the first does nothing.
+    func testDrawingFavoritesCanBeAddedMovedAndReopened() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        detachDraftNotes(app)
+        notes.tap()
+        let tools = app.buttons["drawing-all-tools"]
+        XCTAssertTrue(tools.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Undo"].exists)
+        XCTAssertTrue(app.buttons["Redo"].exists)
+        tools.tap()
+        app.buttons["Add Fountain pen favorite"].tap()
+        let save = app.buttons["Save favorite"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5))
+        save.tap()
+        XCTAssertTrue(app.buttons["Fountain pen"].firstMatch.waitForExistence(timeout: 5))
+        tools.tap()
+        let left = app.buttons["Left"]
+        let toolList = app.descendants(matching: .any).matching(identifier: "drawing-tools-list").firstMatch
+        XCTAssertTrue(toolList.waitForExistence(timeout: 5))
+        for _ in 0..<10 where !left.exists || !left.isHittable { toolList.swipeUp() }
+        XCTAssertTrue(left.isHittable)
+        left.tap()
+        let handle = app.buttons["drawing-toolbar-move"]
+        XCTAssertTrue(handle.waitForExistence(timeout: 5))
+        XCTAssertLessThan(handle.frame.midX, app.windows.firstMatch.frame.midX)
+        let before = handle.frame
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        notes.tap()
+        XCTAssertTrue(handle.waitForExistence(timeout: 10))
+        XCTAssertEqual(handle.frame.minX, before.minX, accuracy: 2)
+        XCTAssertTrue(app.buttons["Fountain pen"].firstMatch.exists)
+        // Drag the handle back to the bottom and verify the horizontal layout.
+        let pageBeforeDrag = app.buttons["notebook-page"].label
+        let end = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
+        handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.2, thenDragTo: end)
+        XCTAssertGreaterThan(handle.frame.minY, app.windows.firstMatch.frame.midY)
+        XCTAssertEqual(app.buttons["notebook-page"].label, pageBeforeDrag)
+        guard let newestFavorite = app.buttons.matching(NSPredicate(format: "label == %@", "Fountain pen")).allElementsBoundByIndex.last else {
+            XCTFail("The new favorite should be on the toolbar")
+            return
+        }
+        let favoriteID = newestFavorite.identifier
+        let favorite = app.buttons[favoriteID]
+        let oldX = favorite.frame.minX
+        favorite.press(forDuration: 1)
+        app.buttons["Move earlier"].tap()
+        XCTAssertLessThan(favorite.frame.minX, oldX)
+        favorite.press(forDuration: 1)
+        app.buttons["Remove favorite"].tap()
+        XCTAssertFalse(favorite.exists)
+    }
+
     func testNotesPagesTurnWithASwipe() {
         guard UIDevice.current.userInterfaceIdiom == .pad else { return }
         let app = XCUIApplication()

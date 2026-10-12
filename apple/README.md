@@ -28,9 +28,14 @@ what each device can currently do and which work remains device-only.
 
 - **iPad notebooks** (Capture → **Notes** or **Newspaper**, top right). A
   full-window PaperKit canvas with the tab bar hidden: Pencil ink,
-  pictures that can be moved and resized, text boxes and shapes from the tool
-  picker's **+**. The initial drawing tool is applied on open, and the picker
-  uses light-page ink colours even when the rest of the app uses dark mode.
+  pictures that can be moved and resized, text boxes and shapes from **All tools →
+  Insert shape or text**. A slim 44-point favorites bar replaces the native palette:
+  Undo/Redo, saved color/width presets, and All tools (all eight inks, object/pixel
+  erasers, selection, ruler and insertion). Use the star beside a tool to add a
+  favorite; hold a favorite to edit, reorder or remove it. Drag the handle to any
+  edge, or choose an edge in All tools. Favorites and position persist on this
+  device; long lists scroll inside the bar. The initial favorite is applied on
+  open, with light-page ink colors even when the app uses dark mode.
   **Notes** are A4 pages, one at a time, each fitted whole to the window so
   nothing scrolls. **Only a finger that lands at a side of the screen** (within
   44 pt) turns a page: in from the right edge for the next page, in from the
