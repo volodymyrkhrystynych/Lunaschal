@@ -42,6 +42,7 @@ public struct SyncChange: Codable, Equatable, Identifiable, Sendable {
             return label.isEmpty ? "Front page" : label
         }
         if collection == "food_entries" { return data?["dish"]?.string ?? "Meal" }
+        if collection == "spending_logs" { return SpendingEntryRecord(record: self)?.heading ?? "Purchase" }
         return data?["title"]?.string ?? data?["name"]?.string ?? data?["content"]?.string ?? collection
     }
 }

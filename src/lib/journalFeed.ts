@@ -8,11 +8,13 @@ import type {
   JournalNewspaper,
   JournalStudySource,
   JournalLocationDay,
+  SpendingEntry,
 } from '../hooks/api';
 
 // A journal feed item: a real entry, an interleaved STT transcription, a saved
 // chat day, an archived paper (drawings), a food-log entry, a task event, an
-// archived newspaper issue, a filed study source, or a day's location map.
+// archived newspaper issue, a filed study source, a day's location map, or a
+// purchase.
 // `entryIndex` preserves the
 // entry's position in the original entries array so keyboard navigation
 // (selIndex) keeps indexing entries only — the other kinds are not selectable.
@@ -25,7 +27,8 @@ export type FeedItem =
   | { kind: 'taskEvent'; taskEvent: TaskEvent }
   | { kind: 'newspaper'; newspaper: JournalNewspaper }
   | { kind: 'study'; study: JournalStudySource }
-  | { kind: 'location'; location: JournalLocationDay };
+  | { kind: 'location'; location: JournalLocationDay }
+  | { kind: 'spending'; spending: SpendingEntry };
 
 // `undefined` because JournalEntry.createdAt is optional — an optimistically
 // inserted row exists before the server has stamped one. Such a row sorts to
@@ -49,8 +52,8 @@ function source<T>(
 }
 
 // Merge entries, transcriptions, saved chats, archived papers, food-log
-// entries, task events, archived newspaper issues, filed study sources and
-// location maps into one feed sorted by time descending (conversations sort by updatedAt,
+// entries, task events, archived newspaper issues, filed study sources,
+// location maps and purchases into one feed sorted by time descending (conversations sort by updatedAt,
 // newspapers by the moment the issue was archived, papers and study sources by
 // the moment they were last worked on inside the day they were filed under —
 // see backend/journal_moment.py — location maps by their day's last second, the
@@ -72,7 +75,8 @@ export function buildFeed(
   taskEvents: TaskEvent[] = [],
   newspapers: JournalNewspaper[] = [],
   studySources: JournalStudySource[] = [],
-  locationDays: JournalLocationDay[] = []
+  locationDays: JournalLocationDay[] = [],
+  spending: SpendingEntry[] = []
 ): FeedItem[] {
   const sources = [
     source(
@@ -119,6 +123,11 @@ export function buildFeed(
       locationDays,
       l => ms(l.archivedAt),
       location => ({ kind: 'location', location })
+    ),
+    source(
+      spending,
+      p => ms(p.createdAt),
+      purchase => ({ kind: 'spending', spending: purchase })
     ),
   ];
   const cursors = sources.map(() => 0);

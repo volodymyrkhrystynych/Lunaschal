@@ -4,10 +4,29 @@ public enum CaptureMode: String, Codable, CaseIterable {
     case text, record, transcribe
 }
 
-/// Where a typed capture is filed: the journal, or the food log. Recordings
-/// made on their own (the Watch) are always journal entries.
+/// Where a typed capture is filed: the journal, the food log, or spending.
+/// Recordings made on their own (the Watch) are always journal entries.
 public enum CaptureKind: String, Codable {
-    case journal, food
+    case journal, food, spending
+
+    /// The food log and spending are the same shape — words, pictures and
+    /// clips, no links and no notebook pages — at different routes.
+    public var isMediaLog: Bool { self != .journal }
+
+    /// The route a media-log capture is created at; additions go to
+    /// `<route>/<id>/media` and clips to `<route>/recordings`.
+    public var route: String { self == .spending ? "api/spending" : "api/food" }
+
+    /// Whether a staged file can go with a capture of this kind. Spending keeps
+    /// receipts and voice: the server drops a video, and a dropped file is one
+    /// the upload would wait to be acknowledged forever.
+    public func accepts(_ file: CaptureFile) -> Bool {
+        switch self {
+        case .journal: return true
+        case .food: return file.isFoodMedia
+        case .spending: return file.isSpendingMedia
+        }
+    }
 }
 
 public enum CaptureState: String, Codable {
@@ -55,6 +74,10 @@ public struct CaptureFile: Codable, Equatable, Identifiable {
     /// The food log keeps pictures, videos and voice memos, nothing else.
     public var isFoodMedia: Bool {
         ["image/", "video/", "audio/"].contains { contentType?.hasPrefix($0) == true }
+    }
+    /// Spending keeps receipt photos and voice memos.
+    public var isSpendingMedia: Bool {
+        ["image/", "audio/"].contains { contentType?.hasPrefix($0) == true }
     }
 
     public init(name: String, contentType: String?, capturedAt: Date? = nil, now: Date = Date()) {
@@ -309,7 +332,7 @@ public enum ULID {
 }
 
 public enum CaptureError: LocalizedError {
-    case invalidID, emptyText, nothingToAdd, missingAudio, missingFile, notFoodMedia, stillRecording, invalidServer, differentServer, invalidResponse
+    case invalidID, emptyText, nothingToAdd, missingAudio, missingFile, notFoodMedia, notSpendingMedia, stillRecording, invalidServer, differentServer, invalidResponse
     case alreadySent
 
     public var errorDescription: String? {
@@ -320,6 +343,7 @@ public enum CaptureError: LocalizedError {
         case .missingAudio: return "The recording is missing or empty. Its saved entry has been kept."
         case .missingFile: return "The attached file is missing or empty."
         case .notFoodMedia: return "A food entry can hold photos, videos and recordings only. Remove other files first."
+        case .notSpendingMedia: return "A spending entry can hold photos and recordings only. Remove other files first."
         case .stillRecording: return "Stop the recording before saving."
         case .invalidServer: return "Enter an HTTPS server address without a path, credentials, or query."
         case .differentServer: return "This device's captures are bound to a different server."

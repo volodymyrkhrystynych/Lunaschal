@@ -86,10 +86,12 @@ public final class CaptureStore {
         guard ULID.isValid(capture.id), capture.attachmentID.map(ULID.isValid) ?? true else {
             throw CaptureError.invalidID
         }
-        if capture.kind == .food {
-            // The food log has no YouTube links and keeps media only.
+        if capture.kind.isMediaLog {
+            // The food log and spending have no YouTube links and keep media only.
             guard capture.mode == .text, capture.links.isEmpty else { throw CaptureError.invalidID }
-            guard capture.files.allSatisfy(\.isFoodMedia) else { throw CaptureError.notFoodMedia }
+            guard capture.files.allSatisfy(capture.kind.accepts) else {
+                throw capture.kind == .spending ? CaptureError.notSpendingMedia : CaptureError.notFoodMedia
+            }
         }
         for link in capture.links {
             guard capture.mode == .text, ULID.isValid(link.attachmentID),
@@ -326,7 +328,7 @@ public final class CaptureStore {
                             now: Date = Date()) throws -> Capture {
         let staged = try draft()
         // A meal takes no notebook: its pages, and the notebook, wait for the next entry.
-        let pages = try writeImages(kind == .food ? [] : images, now: now)
+        let pages = try writeImages(kind.isMediaLog ? [] : images, now: now)
         let capture: Capture
         do {
             // A meal is never a review card, as it never takes the notebook.
@@ -337,7 +339,7 @@ public final class CaptureStore {
             for file in pages { try? fm.removeItem(at: fileURL(file)) }
             throw error
         }
-        try updateDraft { $0 = CaptureDraft(); if kind == .food { $0.notebookID = staged.notebookID } }
+        try updateDraft { $0 = CaptureDraft(); if kind.isMediaLog { $0.notebookID = staged.notebookID } }
         return capture
     }
 
@@ -355,7 +357,7 @@ public final class CaptureStore {
     public func commitAdditions(to entryID: String, kind: CaptureKind, youtubeURLs: [String] = [],
                                 now: Date = Date()) throws -> Capture? {
         let staged = try draft(for: entryID)
-        let links = kind == .food ? [] : try youtubeURLs.map(YouTubeLink.canonical)
+        let links = kind.isMediaLog ? [] : try youtubeURLs.map(YouTubeLink.canonical)
         guard !(staged.isEmpty && links.isEmpty) else { return nil }
         let capture = Capture(kind: kind, now: now, youtubeURLs: links, files: staged.files,
                               clips: staged.clips, entryID: entryID)
@@ -442,10 +444,10 @@ public final class CaptureStore {
     private func commit(text: String, youtubeURLs: [String], kind: CaptureKind, files: [CaptureFile],
                         clips: [CaptureClip], replaces: [String] = [], forReview: Bool = false,
                         location: (latitude: Double, longitude: Double)?, now: Date) throws -> Capture {
-        let links = kind == .food ? [] : try youtubeURLs.map(YouTubeLink.canonical)
+        let links = kind.isMediaLog ? [] : try youtubeURLs.map(YouTubeLink.canonical)
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Links are attachments, just like files and clips, never substitute words.
-        let date = kind == .food ? files.first(where: { $0.isImage && $0.capturedAt != nil })?.capturedAt ?? now : now
+        let date = kind.isMediaLog ? files.first(where: { $0.isImage && $0.capturedAt != nil })?.capturedAt ?? now : now
         var capture = Capture(text: body, kind: kind, now: date,
                               youtubeURLs: links, files: files, clips: clips)
         capture.latitude = location?.latitude

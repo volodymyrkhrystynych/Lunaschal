@@ -32,6 +32,9 @@ COLLECTIONS = {
     # phone. `generated_notes` and the weather check time are server bookkeeping.
     'food_entries': 'id raw_content dish place notes rating tags latitude longitude weather created_at updated_at',
     'food_media': 'id entry_id kind mime position transcript transcript_status description description_status created_at',
+    # Purchases, typed or captured as a receipt, for the phone's Journal feed.
+    'spending_logs': 'id date category amount_cents merchant raw_content notes latitude longitude created_at updated_at',
+    'spending_media': 'id entry_id kind mime position transcript transcript_status description description_status created_at',
 }
 COLLECTIONS = {name: tuple(columns.split()) for name, columns in COLLECTIONS.items()}
 SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, 'book-metadata-v1'], sort_keys=True).encode()).hexdigest()

@@ -122,6 +122,13 @@ struct DailyView: View {
                     Text("\(preview.category) — \(money(preview.amountCents))")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                // Captured receipts the server has not read an amount out of
+                // yet: not in the total, and not listed until they have one.
+                if today.pendingSpending > 0 {
+                    Label(today.pendingSpending == 1 ? "1 receipt being read" : "\(today.pendingSpending) receipts being read",
+                          systemImage: "receipt")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             } header: {
                 HStack {
                     Text("Voluntary spending")

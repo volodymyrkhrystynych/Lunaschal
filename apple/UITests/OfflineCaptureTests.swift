@@ -1567,6 +1567,35 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(app.staticTexts[link].exists)
     }
 
+    func testSaveSpendingSitsBetweenFoodAndSaveAndFilesAPurchase() {
+        let app = XCUIApplication()
+        app.launch()
+        let food = app.buttons["Food"]
+        let spending = app.buttons["Save spending"]
+        let save = app.buttons["Save"]
+        XCTAssertTrue(spending.waitForExistence(timeout: 10))
+        // Discard · Food · Spent · Save, on one line.
+        XCTAssertLessThan(food.frame.maxX, spending.frame.minX, "Food sits left of Spent")
+        XCTAssertLessThan(spending.frame.maxX, save.frame.minX, "Spent sits left of Save")
+        XCTAssertEqual(spending.frame.midY, save.frame.midY, accuracy: 4)
+        XCTAssertLessThanOrEqual(save.frame.maxX, app.windows.firstMatch.frame.maxX, "All four fit on the phone")
+        XCTAssertFalse(spending.isEnabled, "Nothing to file yet")
+
+        let purchase = "Coffee with Sam 4.50 \(UUID().uuidString.prefix(8))"
+        let editor = app.textViews["Journal text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.tap()
+        editor.typeText(purchase)
+        XCTAssertTrue(spending.isEnabled)
+        spending.tap()
+        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
+
+        selectTab(app, "Journal")
+        XCTAssertTrue(app.staticTexts[purchase].waitForExistence(timeout: 10))
+        app.staticTexts[purchase].tap()
+        XCTAssertTrue(app.staticTexts["Spending entry"].waitForExistence(timeout: 5))
+    }
+
     func testCaptureActionsShareOneLineAndAPhotoAttachesToTheEntry() {
         let app = XCUIApplication()
         app.launch()

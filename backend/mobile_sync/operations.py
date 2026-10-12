@@ -1,4 +1,4 @@
-"""Revision-checked journal and food edits with transactional replay acknowledgements."""
+"""Revision-checked journal, food and spending edits with transactional replay acknowledgements."""
 import hashlib
 import json
 import time
@@ -25,6 +25,8 @@ def apply(body):
         raise ValueError('An epoch and positive baseRevision are required')
     if body['collection'] == 'food_entries':
         return apply_food(body)
+    if body['collection'] == 'spending_logs':
+        return apply_spending(body)
     if body['collection'] != 'journal_entries' or body['action'] not in ('update', 'delete'):
         raise ValueError('This operation supports journal update/delete only')
     data = body['data']
@@ -69,6 +71,46 @@ def food_mutation(db, body):
     updates['updated_at'] = int(time.time())
     setters = ','.join(f'"{name}"=?' for name in updates)
     db.execute(f'UPDATE food_entries SET {setters} WHERE id=?', [*updates.values(), body['recordId']])
+    return {'operationId': body['id'], 'change': change_dict(_latest(db, body))}, 200
+
+
+SPENDING_TEXT_FIELDS = ('merchant', 'category', 'notes')
+SPENDING_FIELDS = (*SPENDING_TEXT_FIELDS, 'amountCents')
+
+
+def apply_spending(body):
+    # A purchase's words and amount, corrected on the phone after the receipt
+    # was read. Media is added through /api/spending, which replays by id.
+    if body['action'] != 'update':
+        raise ValueError('Spending entries support update only')
+    data = body['data']
+    if not isinstance(data, dict) or not data or set(data) - set(SPENDING_FIELDS):
+        raise ValueError('Only merchant, category, notes and amountCents may be edited')
+    if not all(isinstance(data[f], str) for f in SPENDING_TEXT_FIELDS if f in data):
+        raise ValueError('Spending text fields must be text')
+    if 'amountCents' in data:
+        cents = data['amountCents']
+        if cents is not None and (type(cents) is not int or not 1 <= cents <= 100000000):
+            raise ValueError('amountCents must be a whole number between 1 and 100000000, or null')
+    return transact(body, spending_mutation)
+
+
+def spending_mutation(db, body):
+    current = _latest(db, body)
+    if _stale(current, body):
+        return _conflict(current)
+    updates = {}
+    for name, value in body['data'].items():
+        if name == 'amountCents':
+            updates['amount_cents'] = value
+        else:
+            updates[name] = value.strip()[:200 if name != 'notes' else 15000] or None
+    if 'notes' in updates:
+        # As PATCH /api/spending/<id>: a hand edit wins over the structuring pass.
+        updates['generated_notes'] = None
+    updates['updated_at'] = int(time.time())
+    setters = ','.join(f'"{name}"=?' for name in updates)
+    db.execute(f'UPDATE spending_logs SET {setters} WHERE id=?', [*updates.values(), body['recordId']])
     return {'operationId': body['id'], 'change': change_dict(_latest(db, body))}, 200
 
 

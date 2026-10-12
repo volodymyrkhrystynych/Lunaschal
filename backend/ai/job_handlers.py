@@ -93,6 +93,24 @@ def _food_describe_media(target_id, payload):
     describe_food_media(target_id)
 
 
+@jobs.handler('spending.structure')
+def _spending_structure(target_id, payload):
+    from backend.routes.spending import structure_spending_entry
+    structure_spending_entry(target_id)
+
+
+@jobs.handler('spending.transcribe_media')
+def _spending_transcribe_media(target_id, payload):
+    from backend.routes.spending import transcribe_spending_media
+    transcribe_spending_media(target_id)
+
+
+@jobs.handler('spending.describe_media')
+def _spending_describe_media(target_id, payload):
+    from backend.routes.spending import describe_spending_media
+    describe_spending_media(target_id)
+
+
 @jobs.handler('food.recipe_match')
 def _food_recipe_match(target_id, payload):
     from backend.food.recipe_match import check_homemade_recipe_match

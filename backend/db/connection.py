@@ -229,6 +229,7 @@ def init_db() -> None:
     _ensure_food_recipe_match_status(db)
     _ensure_food_media_transcript(db)
     _ensure_food_descriptions(db)
+    _migrate_spending_entries(db)
     _ensure_hf_token(db)
     _ensure_weather_settings(db)
     _ensure_weather_detail(db)
@@ -751,6 +752,45 @@ def _ensure_food_descriptions(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(food_entries)')}
     if 'generated_notes' not in cols:
         db.execute('ALTER TABLE food_entries ADD COLUMN generated_notes TEXT')
+    db.commit()
+
+
+def _migrate_spending_entries(db: sqlite3.Connection) -> None:
+    """Widen the typed-only spending log into an entry a receipt can open.
+
+    A receipt photo or a spoken clip arrives with no category and no amount —
+    those come later, from the structuring pass — so both lose their NOT NULL,
+    and the amount's CHECK has to admit NULL. SQLite cannot relax a constraint
+    in place, so the table is rebuilt once, latched on `raw_content`. Must run
+    before `_ensure_mobile_sync`, which re-creates the change triggers the DROP
+    takes with it.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(spending_logs)')}
+    if not cols or 'raw_content' in cols:
+        return
+    db.execute("""
+        CREATE TABLE spending_logs_new (
+            id TEXT PRIMARY KEY,
+            date TEXT NOT NULL,
+            category TEXT,
+            amount_cents INTEGER CHECK(amount_cents IS NULL OR (amount_cents > 0 AND amount_cents <= 100000000)),
+            merchant TEXT,
+            raw_content TEXT,
+            notes TEXT,
+            generated_notes TEXT,
+            latitude REAL,
+            longitude REAL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER
+        )
+    """)
+    db.execute("""
+        INSERT INTO spending_logs_new (id, date, category, amount_cents, created_at, updated_at)
+        SELECT id, date, category, amount_cents, created_at, created_at FROM spending_logs
+    """)
+    db.execute('DROP TABLE spending_logs')
+    db.execute('ALTER TABLE spending_logs_new RENAME TO spending_logs')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_spending_logs_date ON spending_logs(date)')
     db.commit()
 
 
