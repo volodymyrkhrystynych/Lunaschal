@@ -1871,6 +1871,38 @@ final class OfflineCaptureTests: XCTestCase {
 
     /// Nothing on a notes page moves sideways: a drag from either side, or
     /// anywhere else, neither turns nor adds a page. The toolbar does both.
+    func testDrawingToolSizesApplyImmediatelyAndSurviveReopening() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        notes.tap()
+        let tools = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'drawing-favorite-' AND label == 'Pen'"))
+        let pen = tools.firstMatch
+        XCTAssertTrue(pen.waitForExistence(timeout: 10))
+        if !pen.isSelected { pen.tap() }
+        pen.tap()
+        let small = app.buttons["drawing-size-0"]
+        let large = app.buttons["drawing-size-4"]
+        XCTAssertTrue(large.waitForExistence(timeout: 5))
+        small.tap()
+        let thinWidth = pen.value as? String
+        large.tap()
+        XCTAssertNotEqual(pen.value as? String, thinWidth, "Size is applied before closing the popover")
+        let savedWidth = pen.value as? String
+        XCTAssertTrue(app.sliders["drawing-size-slider"].exists)
+        attach(app, "Compact tool size controls")
+        app.buttons["drawing-attributes-done"].tap()
+        XCTAssertTrue(large.waitForNonExistence(timeout: 5))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        notes.tap()
+        XCTAssertTrue(pen.waitForExistence(timeout: 10))
+        XCTAssertEqual(pen.value as? String, savedWidth)
+    }
+
     func testNotesPagesDoNotTurnWithASwipe() {
         guard UIDevice.current.userInterfaceIdiom == .pad else { return }
         let app = XCUIApplication()

@@ -3,6 +3,7 @@ import PDFKit
 import PaperKit
 import PencilKit
 import UIKit
+import SwiftUI
 import LunaschalCore
 @testable import Lunaschal
 
@@ -138,6 +139,18 @@ private func drawApp(_ context: UIGraphicsImageRendererContext, _ rect: CGRect, 
     }
 }
 
+private struct NotebookColorHost: UIViewControllerRepresentable {
+    let controller: NotebookCanvasController
+    func makeUIViewController(context: Context) -> NotebookCanvasController { controller }
+    func updateUIViewController(_ controller: NotebookCanvasController, context: Context) {}
+}
+
+private func isDark(_ image: CGImage, at point: CGPoint) -> Bool {
+    let bytes = CFDataGetBytePtr(image.dataProvider!.data!)!
+    let offset = Int(point.y) * image.bytesPerRow + Int(point.x) * 4
+    return bytes[offset] < 80 && bytes[offset + 1] < 80 && bytes[offset + 2] < 80
+}
+
 func picture(_ size: CGSize, draw: (UIGraphicsImageRendererContext) -> Void) -> CGImage? {
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
@@ -155,6 +168,40 @@ func solid(_ color: UIColor, _ size: CGSize) -> CGImage? {
 
 @MainActor
 final class NotebookEditorTests: XCTestCase {
+    func testWhitePaperKeepsLightInkTraitsInsideDarkSwiftUI() async throws {
+        let store = try store()
+        let controller = NotebookCanvasController(model: NotebookEditorModel(store: store, notebook: try store.create()))
+        let host = UIHostingController(rootView: NotebookColorHost(controller: controller).environment(\.colorScheme, .dark))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 1366))
+        window.overrideUserInterfaceStyle = .dark
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        for scheme in [ColorScheme.dark, .light, .dark] {
+            host.rootView = NotebookColorHost(controller: controller).environment(\.colorScheme, scheme)
+            host.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(controller.paper.traitCollection.userInterfaceStyle, .light)
+            XCTAssertEqual(controller.paper.view.traitCollection.userInterfaceStyle, .light)
+            for white in [false, true] {
+                let component = white ? 1.0 : 0.0
+                controller.drawingToolbar.select(DrawingFavorite(kind: "pen", red: component, green: component, blue: component, width: 12))
+                let tool = try XCTUnwrap(controller.paper.drawingTool as? PKInkingTool)
+                let points = [20.0, 50.0, 80.0].enumerated().map { index, x in
+                    PKStrokePoint(location: CGPoint(x: x, y: 50), timeOffset: Double(index) * 0.1,
+                                  size: CGSize(width: 12, height: 12), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+                }
+                let drawing = PKDrawing(strokes: [PKStroke(ink: tool.ink, path: PKStrokePath(controlPoints: points, creationDate: Date()))])
+                var rendered: CGImage?
+                controller.paper.view.traitCollection.performAsCurrent {
+                    rendered = drawing.image(from: CGRect(x: 0, y: 0, width: 100, height: 100), scale: 1).cgImage
+                }
+                XCTAssertEqual(isDark(try XCTUnwrap(rendered), at: CGPoint(x: 50, y: 50)), !white,
+                               "The rendered stroke must match the selected black/white swatch in \(scheme)")
+            }
+        }
+    }
+
     func testInitialToolMatchesTheFavoriteWithoutAToolChange() throws {
         let store = try store()
         let controller = NotebookCanvasController(model: NotebookEditorModel(store: store, notebook: try store.create()))
@@ -165,6 +212,24 @@ final class NotebookEditorTests: XCTestCase {
         XCTAssertEqual(active.color, chosen.color)
         XCTAssertEqual(active.width, chosen.width)
         XCTAssertEqual(controller.overrideUserInterfaceStyle, .light)
+    }
+
+    func testCompactToolbarOwnsPencilInteractionAndAppliesSizeToCanvas() throws {
+        let store = try store()
+        let controller = NotebookCanvasController(model: NotebookEditorModel(store: store, notebook: try store.create()))
+        controller.loadViewIfNeeded()
+        let interaction = try XCTUnwrap(controller.view.interactions.compactMap { $0 as? UIPencilInteraction }.first)
+        XCTAssertTrue(interaction.delegate === controller.drawingToolbar)
+        XCTAssertTrue(interaction.isEnabled)
+        var pen = DrawingFavorite(kind: "pen", blue: 0.7)
+        controller.drawingToolbar.select(pen)
+        pen.width = pen.widthPresets[3]
+        controller.drawingToolbar.updateActiveTool(pen)
+        XCTAssertEqual((controller.paper.drawingTool as? PKInkingTool)?.width, CGFloat(pen.width))
+        controller.drawingToolbar.performPencilAction(.switchEraser)
+        XCTAssertNotNil(controller.paper.drawingTool as? PKEraserTool)
+        controller.drawingToolbar.performPencilAction(.switchEraser)
+        XCTAssertEqual(controller.paper.drawingTool as? PKInkingTool, pen.tool as? PKInkingTool)
     }
 
     private func store() throws -> NotebookStore {
@@ -726,9 +791,4 @@ final class NotebookColumnConversionTests: XCTestCase {
         return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
     }
 
-    private func isDark(_ image: CGImage, at point: CGPoint) -> Bool {
-        let bytes = CFDataGetBytePtr(image.dataProvider!.data!)!
-        let offset = Int(point.y) * image.bytesPerRow + Int(point.x) * 4
-        return bytes[offset] < 80 && bytes[offset + 1] < 80 && bytes[offset + 2] < 80
-    }
 }

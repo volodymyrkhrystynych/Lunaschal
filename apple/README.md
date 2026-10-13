@@ -32,10 +32,16 @@ what each device can currently do and which work remains device-only.
   Insert shape or text**. A slim 44-point favorites bar replaces the native palette:
   Undo/Redo, saved color/width presets, and All tools (all eight inks, object/pixel
   erasers, selection, ruler and insertion). Use the star beside a tool to add a
-  favorite; hold a favorite to edit, reorder or remove it. Drag the handle to any
+  favorite; hold a favorite to edit, reorder or remove it. Tap the selected tool
+  for five size presets, a size slider and ink color; changes apply immediately
+  and saved favorites retain them. The eraser offers Object/Pixel modes and pixel
+  size. Pencil double-tap and squeeze follow the system action preference,
+  including switching back to the exact previous tool. Drag the handle to any
   edge, or choose an edge in All tools. Favorites and position persist on this
   device; long lists scroll inside the bar. The initial favorite is applied on
-  open, with light-page ink colors even when the app uses dark mode.
+  open, with light-page ink colors even when the app uses dark mode. PaperKit's
+  child controller is pinned to light appearance so SwiftUI's dark environment
+  cannot swap black and white ink on the white page.
   **Notes** are A4 pages, one at a time, each fitted whole to the window so
   nothing scrolls. **Nothing on a notes page moves sideways**: pages turn and are
   added only from the top bar (arrows, the page menu, **Add page**). One finger
