@@ -12,6 +12,8 @@ struct CalendarPage: View {
     @State private var creating: CalendarDraft?
     @State private var opened: CalendarOccurrence?
     @State private var editingSleep = false
+    /// The reading rail's titles show until the rail is tapped.
+    @State private var readingLabels = true
     /// Each visit starts with drag editing off, even if an older build saved Length.
     @State private var dragMode = CalendarDragMode.off
     /// The event being dragged and where it would land, in offset minutes.
@@ -78,11 +80,19 @@ struct CalendarPage: View {
             }
             .presentationDetents([.medium, .large])
         }
-        .task(id: day) { await model.refreshSleep(day) }
+        .task(id: day) {
+            await model.refreshReading(day)
+            await model.refreshSleep(day)
+        }
         .onDisappear { dragMode = .off; dragging = nil }
     }
 
     private var bands: [SleepBand] { model.sleepDays[day].map { CalendarSleep.bands($0) } ?? [] }
+    private var reading: ReadingRail? {
+        guard let spans = model.readingDays[day], !spans.isEmpty else { return nil }
+        return CalendarReading.rail(day: day, sleep: model.sleepDays[day], spans: spans,
+                                    labelMinutes: Int((readingLabelHeight / scale).rounded(.up)))
+    }
 
     private var header: some View {
         HStack {
@@ -141,6 +151,10 @@ struct CalendarPage: View {
                     ForEach(plan.timed) { item in
                         eventLine(item)
                             .accessibilityAction { opened = item.occurrence }
+                    }
+                    if let reading {
+                        ReadingRailView(rail: reading, scale: scale, labels: readingLabels) { readingLabels.toggle() }
+                            .allowsHitTesting(dragging == nil)
                     }
                 }
                 .frame(height: CGFloat(CalendarTimeline.minutesPerDay) * scale, alignment: .top)
@@ -344,6 +358,68 @@ private struct EventLine: View {
                 ForEach(categories, id: \.self) { Rectangle().fill(Color(hex: CalendarCategory.colors[$0]!)) }
             }
         }
+    }
+}
+
+private let readingRailWidth: CGFloat = 22
+private let readingLabelWidth: CGFloat = 130
+/// One reading label's height: labels closer than this are pushed apart.
+private let readingLabelHeight: CGFloat = 30
+
+/// In-app reading, recorded by the reader rather than entered: a rail down the
+/// right edge from waking to sleep, filled where a chapter was being read.
+/// Titles hang to its left and show by default; tapping the rail (or a title)
+/// hides them, for when they cover an event.
+private struct ReadingRailView: View {
+    let rail: ReadingRail
+    let scale: CGFloat
+    let labels: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Button(action: toggle) {
+                ZStack(alignment: .top) {
+                    Capsule().fill(Color.primary.opacity(0.12)).frame(width: 4)
+                    ForEach(rail.spans) { span in
+                        Capsule().fill(Color.green)
+                            .frame(width: 8, height: max(2, CGFloat(span.endMinutes - span.startMinutes) * scale))
+                            .offset(y: CGFloat(span.startMinutes - rail.startMinutes) * scale)
+                    }
+                }
+                .frame(width: readingRailWidth, height: CGFloat(rail.endMinutes - rail.startMinutes) * scale, alignment: .top)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .offset(y: CGFloat(rail.startMinutes) * scale)
+            .accessibilityLabel("Leisure reading")
+            .accessibilityValue(labels ? "titles shown" : "titles hidden")
+            .accessibilityHint(labels ? "Hide titles" : "Show titles")
+            .accessibilityIdentifier("calendar-reading-rail")
+            if labels {
+                ForEach(rail.spans) { span in label(span) }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topTrailing)
+    }
+
+    private func label(_ span: PlacedReading) -> some View {
+        let clocks = "\(CalendarSleep.clock(span.span.startedAt))–\(CalendarSleep.clock(span.span.endedAt))"
+        return VStack(alignment: .trailing, spacing: 1) {
+            Text("\(span.span.title) · Ch. \(span.span.chapterNumber)")
+                .font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
+            Text("Reading · \(clocks)").font(.system(size: 10).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .frame(maxWidth: readingLabelWidth, alignment: .trailing)
+        .background(RoundedRectangle(cornerRadius: 5).fill(.regularMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.green.opacity(0.4)))
+        .fixedSize(horizontal: false, vertical: true)
+        .onTapGesture(perform: toggle)
+        .padding(.trailing, readingRailWidth + 2)
+        .offset(y: CGFloat(span.labelMinutes) * scale)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("calendar-reading-label")
     }
 }
 

@@ -77,7 +77,7 @@ beforeEach(() => {
   vi.mocked(api.calendar.reading).mockResolvedValue([]);
 });
 
-it('loads reading automatically alongside events and reveals chapter details on the rail', async () => {
+it('loads reading automatically alongside events, titles shown until the rail is clicked', async () => {
   vi.mocked(api.calendar.reading).mockResolvedValue([
     {
       id: 'span1',
@@ -92,11 +92,11 @@ it('loads reading automatically alongside events and reveals chapter details on 
   );
   await screen.findByTestId('reading-fill');
   expect(api.calendar.reading).toHaveBeenCalledWith(DATE);
-  expect(screen.queryByText(/Lighthouse/)).toBeNull();
+  expect(screen.getByText('Lighthouse · Ch. 4')).toBeTruthy();
   fireEvent.click(
     screen.getByRole('button', { name: 'Leisure reading timeline' })
   );
-  expect(screen.getByText('Lighthouse · Ch. 4')).toBeTruthy();
+  expect(screen.queryByText(/Lighthouse/)).toBeNull();
   expect(onOpenEvent).not.toHaveBeenCalled();
   expect(api.calendar.create).not.toHaveBeenCalled();
 });
@@ -148,9 +148,9 @@ describe('sleep bands', () => {
     // back on for its own footprint (see EventBlock's root className).
     const { container } = renderDay(sleepDay({ wakeAt: at(DATE, '07:20') }));
     await screen.findByTestId('sleep-band-morning');
-    // The layer wrapper specifically (left-12), not just anything transparent.
+    // The layer wrapper specifically (left-20), not just anything transparent.
     expect(
-      container.querySelector('.left-12.pointer-events-none')
+      container.querySelector('.left-20.pointer-events-none')
     ).not.toBeNull();
   });
 });

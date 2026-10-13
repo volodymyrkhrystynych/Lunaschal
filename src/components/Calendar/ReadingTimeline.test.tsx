@@ -16,7 +16,7 @@ const sleep: SleepDay = {
   nextWakeAt: null,
 };
 
-it('draws scaled fills and reveals titles and chapter numbers only on activation', () => {
+it('draws scaled fills and shows titles until the rail is clicked', () => {
   render(
     <ReadingTimeline
       date={date}
@@ -51,12 +51,39 @@ it('draws scaled fills and reveals titles and chapter numbers only on activation
     ['120px', '60px'],
     ['360px', '30px'],
   ]);
-  expect(screen.queryByText(/Lighthouse/)).toBeNull();
-  expect(rail.getAttribute('aria-expanded')).toBe('false');
-  fireEvent.click(rail);
   expect(screen.getByText('Lighthouse · Ch. 3')).toBeTruthy();
   expect(screen.getByText('Storm · Ch. 7')).toBeTruthy();
   expect(rail.getAttribute('aria-expanded')).toBe('true');
   fireEvent.click(rail);
   expect(screen.queryByText(/Lighthouse/)).toBeNull();
+  expect(rail.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(rail);
+  expect(screen.getByText('Lighthouse · Ch. 3')).toBeTruthy();
+  // A title hides them too, since it is what would be covering an event.
+  fireEvent.click(screen.getByText('Storm · Ch. 7'));
+  expect(screen.queryByText(/Storm/)).toBeNull();
+});
+
+it('sits on the right edge, with its titles hanging to its left', () => {
+  const { container } = render(
+    <ReadingTimeline
+      date={date}
+      sleep={sleep}
+      zoom={1}
+      spans={[
+        {
+          id: 'a',
+          title: 'Lighthouse',
+          chapterNumber: 3,
+          startedAt: at('09:00'),
+          endedAt: at('09:30'),
+        },
+      ]}
+    />
+  );
+  const lane = container.firstElementChild as HTMLElement;
+  expect(lane.className).toContain('right-0');
+  expect(lane.className).not.toContain('left-');
+  const title = screen.getByText('Lighthouse · Ch. 3').closest('button');
+  expect(title?.className).toContain('right-6');
 });
