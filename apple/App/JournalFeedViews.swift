@@ -246,7 +246,7 @@ private struct LocalCaptureCard: View {
                 ? (capture.files.first?.name ?? (capture.links.isEmpty ? "Recording" : "Journal entry")) : capture.text))
                 .lineLimit(2)
             if capture.kind == .food { Label("Food log", systemImage: "fork.knife").font(.caption) }
-            if capture.kind == .spending { Label("Spending", systemImage: "receipt").font(.caption) }
+            if capture.kind == .spending { Label("Spending", systemImage: "banknote").font(.caption) }
             let photos = capture.files.filter(\.isImage).compactMap { try? model.store.fileURL($0) }
             if !photos.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -501,7 +501,7 @@ private struct SpendingEntryCard: View {
             NavigationLink { SpendingRecordView(model: model, record: record) } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .firstTextBaseline) {
-                        Label(purchase?.heading ?? "Purchase", systemImage: "receipt").font(.headline).lineLimit(2)
+                        Label(purchase?.heading ?? "Purchase", systemImage: "banknote").font(.headline).lineLimit(2)
                         Spacer()
                         SpendingAmountText(cents: purchase?.amountCents).font(.headline)
                     }

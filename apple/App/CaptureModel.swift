@@ -911,15 +911,34 @@ final class CaptureModel: ObservableObject {
 
     @discardableResult
     private func sendCalendarEvents(using api: JournalAPI) async throws -> Bool {
-        guard !((try? calendarOutbox.list()) ?? []).isEmpty else { return false }
+        let pending = (try? calendarOutbox.list()) ?? []
+        guard !pending.isEmpty else { return false }
+        // What the day view shows for the queued sleep times, captured before they leave the outbox.
+        let shownSleep = CalendarSleep.overlay(sleepCache, pending: pending)
+        var failure: Error?
         do {
             let refused = try await calendarSyncer.run(using: api)
             if !refused.isEmpty { message = refused.joined(separator: "\n") }
         } catch {
-            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
-            if (error as? URLError) != nil { throw error }
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { failure = error }
+            else if (error as? URLError) != nil { failure = error }
         }
+        await keepSentSleep(pending, shown: shownSleep, refresh: failure == nil)
+        if let failure { throw failure }
         return true
+    }
+
+    /// A sent sleep time leaves the outbox, and with it the overlay that drew
+    /// it — the cache still holds the server's answer from before the change.
+    /// So the cache takes what was shown, neighbours included, and then the
+    /// server's own reading of the day replaces it.
+    private func keepSentSleep(_ sent: [CalendarOp], shown: [String: SleepDay], refresh: Bool) async {
+        let kept = CalendarSleep.keepSent(sleepCache, shown: shown, sent: sent,
+                                          stillQueued: (try? calendarOutbox.list()) ?? [])
+        guard !kept.landed.isEmpty else { return }
+        try? JSONEncoder().encode(kept.cache).write(to: sleepCacheURL, options: .atomic)
+        if refresh { for date in kept.landed { await refreshSleep(date) } }
+        await reloadCalendar()
     }
 
     func discard(_ item: ChatRecording) {

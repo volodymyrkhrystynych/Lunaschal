@@ -212,6 +212,8 @@ final class LearningModel: ObservableObject {
 
     /// A review card's page, kept for the screen's lifetime so scrolling back
     /// up doesn't fetch it again. Nil when it couldn't be fetched.
+    func cachedReviewPage(_ page: LearningReviewPages.Page) -> UIImage? { pages[page.id] }
+
     func reviewPage(_ page: LearningReviewPages.Page) async -> UIImage? {
         if let cached = pages[page.id] { return cached }
         guard let api = transport(), let data = try? await api.reviewPage(page),
