@@ -309,8 +309,11 @@ private struct LearningReadCard: View {
 
     var body: some View {
         let pages = card.review?.pages ?? []
+        // Not lazy: a review card is a few notebook pages whose images stay
+        // cached anyway, and a lazy row dropped mid-swipe came back as a short
+        // spinner and regrew, changing the scroll's height under the gesture.
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 16) {
                 LearningStatsLine(stats: learning.stats)
                 LearningProgress(label: "Card", position: session.position, total: session.total, tint: .accentColor)
                 Label(card.review?.title ?? "For review", systemImage: "book.pages")
@@ -350,6 +353,13 @@ private struct LearningReviewPage: View {
     @State private var image: UIImage?
     @State private var failed = false
 
+    init(learning: LearningModel, page: LearningReviewPages.Page) {
+        self.learning = learning
+        self.page = page
+        // A page already fetched is drawn at its own size from the first frame.
+        _image = State(initialValue: learning.cachedReviewPage(page))
+    }
+
     var body: some View {
         Group {
             if let image {
@@ -368,6 +378,7 @@ private struct LearningReviewPage: View {
         .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .task(id: page.id) {
+            guard image == nil else { return }
             image = await learning.reviewPage(page)
             failed = image == nil
         }
