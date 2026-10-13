@@ -958,6 +958,144 @@ final class OfflineCaptureTests: XCTestCase {
         }
     }
 
+    /// A book with more than one threadmark category lists each under its own
+    /// tab, and Next/Previous sit above the chapter as well as below it.
+    func testChapterCategoriesAreTabsAndNextIsAtTheTopToo() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+
+        // It opens partway into chapter 4, the continue point; its list
+        // opens on that chapter's tab.
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        let threadmarks = app.buttons["chapter-tab-Threadmarks"]
+        let sidestory = app.buttons["chapter-tab-Sidestory"]
+        XCTAssertTrue(threadmarks.waitForExistence(timeout: 10))
+        XCTAssertTrue(sidestory.exists)
+        XCTAssertTrue(app.staticTexts["Chapter 2"].exists)
+        XCTAssertFalse(app.staticTexts["Sidestory: Market Day"].exists)
+        attach(app, "threadmarks tab")
+
+        sidestory.tap()
+        let omake = app.staticTexts["Sidestory: Market Day"]
+        XCTAssertTrue(omake.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Chapter 2"].exists)
+        attach(app, "sidestory tab")
+        omake.tap()
+        XCTAssertTrue(app.navigationBars["Sidestory: Market Day"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["chapter-next-top"].exists, "a lone sidestory has nothing either side")
+        XCTAssertFalse(app.buttons["chapter-previous-top"].exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        threadmarks.tap()
+        let second = app.staticTexts["Chapter 2"]
+        for _ in 0..<6 where !(second.exists && second.isHittable) { app.swipeUp() }
+        XCTAssertTrue(second.isHittable)
+        second.tap()
+        // A chapter opens where it was last left; other tests read this one.
+        let topNext = app.buttons["chapter-next-top"]
+        XCTAssertTrue(app.navigationBars["Chapter 2"].waitForExistence(timeout: 10))
+        for _ in 0..<15 where !(topNext.exists && topNext.isHittable) { app.swipeDown() }
+        XCTAssertTrue(topNext.isHittable, "Next is at the top of the chapter")
+        XCTAssertTrue(app.buttons["chapter-previous-top"].isHittable)
+        attach(app, "top of chapter")
+        topNext.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 3"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        let fifth = app.staticTexts["Chapter 5"]
+        for _ in 0..<6 where !(fifth.exists && fifth.isHittable) { app.swipeUp() }
+        XCTAssertTrue(fifth.isHittable)
+        fifth.tap()
+        XCTAssertTrue(app.buttons["chapter-previous-top"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["chapter-next-top"].exists, "the last threadmark doesn't run on into the sidestory")
+    }
+
+    /// A chapter's picture shows (fetched from the stand-in server and kept),
+    /// and its coloured and monospaced lines read as text of their own.
+    func testChapterShowsItsPictureAndStyledText() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        let second = app.staticTexts["Chapter 2"]
+        for _ in 0..<6 where !(second.exists && second.isHittable) { app.swipeUp() }
+        second.tap()
+
+        // An earlier run may have left this chapter's reading position at its end.
+        let top = app.buttons["chapter-next-top"]
+        XCTAssertTrue(app.navigationBars["Chapter 2"].waitForExistence(timeout: 10))
+        for _ in 0..<15 where !(top.exists && top.isHittable) { app.swipeDown() }
+        XCTAssertTrue(top.isHittable)
+        // It loads a moment after its chapter: give it time before each swipe.
+        let picture = app.images["A map of the coast"]
+        for _ in 0..<4 where !picture.waitForExistence(timeout: 3) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(picture.exists, "the picture is drawn, not its alt text")
+        XCTAssertFalse(app.staticTexts["Picture not on this device"].exists)
+        for _ in 0..<3 where !picture.isHittable || picture.frame.maxY > app.frame.height * 0.6 { app.swipeUp(velocity: .slow) }
+        XCTAssertGreaterThan(picture.frame.height, 60)
+        let red = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "The bell rang out red")).firstMatch
+        let typed = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "SYSTEM: Quest accepted.")).firstMatch
+        XCTAssertTrue(red.exists)
+        XCTAssertTrue(typed.exists)
+        attach(app, "picture and styled text")
+    }
+
+    /// A forum fic can be asked for its latest chapters from inside it — the
+    /// reader's menu and the book page — not only from the library's long
+    /// press. With no server, asking says to sign in. An EPUB has no source.
+    func testLatestChaptersCanBeAskedForFromInsideTheFic() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+
+        let menu = app.buttons["reader-menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        menu.tap()
+        let fromReader = app.buttons["reader-check-updates"]
+        XCTAssertTrue(fromReader.waitForExistence(timeout: 5))
+        fromReader.tap()
+        let signIn = app.staticTexts["Sign in to update fics on the server."]
+        XCTAssertTrue(signIn.waitForExistence(timeout: 5))
+        app.alerts.buttons.firstMatch.tap()
+
+        app.buttons["Chapters"].tap()
+        let fromBook = app.buttons["fic-check-updates"]
+        XCTAssertTrue(fromBook.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["fic-reread-chapters"].exists)
+        attach(app, "book page")
+        fromBook.tap()
+        XCTAssertTrue(signIn.waitForExistence(timeout: 5))
+        app.alerts.buttons.firstMatch.tap()
+
+        app.terminate()
+        app.launch()
+        openMore(app, "Library")
+        let epub = app.staticTexts["The Lighthouse Keeper"]
+        for _ in 0..<6 where !epub.isHittable { app.swipeUp() }
+        epub.tap()
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        menu.tap()
+        XCTAssertTrue(app.buttons["Bookmark"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["reader-check-updates"].exists, "an EPUB has nowhere to update from")
+    }
+
     /// A chapter reads as formatted text, its size is kept on the device,
     /// and the end of the chapter clears the floating menu and the tab bar.
     func testChapterIsFormattedSizedAndClearsTheBottomControls() {
@@ -994,13 +1132,13 @@ final class OfflineCaptureTests: XCTestCase {
         for _ in 0..<12 where !sceneBreak.exists { app.swipeUp() }
         XCTAssertTrue(sceneBreak.exists)
 
-        let next = app.buttons["Next chapter"]
+        let next = app.buttons["chapter-next-bottom"]
         for _ in 0..<40 where !(next.exists && next.isHittable) { app.swipeUp() }
         app.swipeUp(); app.swipeUp()
         XCTAssertTrue(next.isHittable)
         let menu = app.buttons["reader-menu"]
         XCTAssertFalse(next.frame.intersects(menu.frame), "Next clears the menu button")
-        let previous = app.buttons["Previous"]
+        let previous = app.buttons["chapter-previous-bottom"]
         if previous.exists { XCTAssertFalse(previous.frame.intersects(menu.frame), "Previous clears the menu button") }
         if app.tabBars.firstMatch.exists {
             XCTAssertLessThanOrEqual(next.frame.maxY, app.tabBars.firstMatch.frame.minY, "Next clears the tab bar")

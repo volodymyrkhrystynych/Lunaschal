@@ -13,13 +13,18 @@ extension JournalAPI: LibraryTransport {}
 public actor LibraryDownload {
     private let replicaURL: URL
     private let mediaURL: URL
+    private let imagesURL: URL
     private var replica: ReplicaStore?
     private var media: MediaStore?
+    private var images: FicImageStore?
     var running = false
 
-    public init(replicaURL: URL, mediaURL: URL) {
+    /// `imagesURL` holds fic pictures (`FicImageStore`); by default a
+    /// `fic-images` folder beside the media one.
+    public init(replicaURL: URL, mediaURL: URL, imagesURL: URL? = nil) {
         self.replicaURL = replicaURL
         self.mediaURL = mediaURL
+        self.imagesURL = imagesURL ?? mediaURL.deletingLastPathComponent().appendingPathComponent("fic-images", isDirectory: true)
     }
 
     /// Records per page: a page of chapters is one write transaction, full
@@ -47,7 +52,26 @@ public actor LibraryDownload {
         return store
     }
 
-    public func usedBytes() throws -> Int64 { try mediaStore().usedBytes() }
+    func imageStore() throws -> FicImageStore {
+        if let images { return images }
+        let store = try FicImageStore(root: imagesURL)
+        images = store
+        return store
+    }
+
+    /// The pictures in these chapters, when the transport can fetch them.
+    func fetchImages(of chapters: [SyncChange], using transport: Any) async throws {
+        guard let fetcher = transport as? FicImageTransport else { return }
+        let html = chapters.filter { $0.collection == "fic_chapters" && !$0.deleted }
+            .compactMap { $0.data?["contentHtml"]?.string }
+        guard !html.isEmpty else { return }
+        try await imageStore().fetchMissing(in: html, using: fetcher)
+    }
+
+    public func usedBytes() throws -> Int64 { try mediaStore().usedBytes() + imageStore().usedBytes() }
+
+    /// "Remove downloaded media" takes the fic pictures with it.
+    public func removeImages() throws { try imageStore().removeAll() }
 
     /// The library's text: books, their chapters and everything else the
     /// library download replicates, as stored in the database.
@@ -132,6 +156,7 @@ public actor LibraryDownload {
                     throw ReplicaError.needsBootstrap
                 }
                 try store.apply(page, startingBootstrap: cursor == nil, expectedCursor: cursor)
+                try await fetchImages(of: page.changes, using: transport)
                 records += page.changes.count
                 await progress("Updating reading content: \(records) records saved")
                 if !page.hasMore { break }

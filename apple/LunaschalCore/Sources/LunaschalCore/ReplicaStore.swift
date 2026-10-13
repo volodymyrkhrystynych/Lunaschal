@@ -497,15 +497,17 @@ public final class ReplicaStore {
     /// included — at its scroll position, then the chapter this device last
     /// read, then the server's last-read chapter, then the first chapter. A
     /// chapter whose text isn't downloaded is skipped. Nil means no chapter text.
-    /// A book's chapters in reading order, without their text: id, title and
-    /// position. Enough for a chapter list, Next/Previous and the resume point,
+    /// A book's chapters in reading order, without their text: id, title,
+    /// position and threadmark category. Enough for a chapter list, its
+    /// category tabs, Next/Previous and the resume point,
     /// at a fraction of the cost of decoding every chapter's HTML and text.
     /// The reader loads the one chapter it shows with `record`.
     public func chapterOutline(bookID: String) throws -> [SyncChange] {
         let book = Self.extract("ficId")
         return try rows("""
             SELECT id,revision,json_object('id',id,'ficId',\(book),'title',json_extract(payload,'$.title'),
-                'position',json_extract(payload,'$.position'),'wordCount',json_extract(payload,'$.wordCount'))
+                'position',json_extract(payload,'$.position'),'wordCount',json_extract(payload,'$.wordCount'),
+                'category',json_extract(payload,'$.category'))
             FROM replica_records WHERE collection='fic_chapters' AND \(book)=? AND deleted=0
             ORDER BY COALESCE(json_extract(payload,'$.position'),0),id
             """, [bookID]).map {

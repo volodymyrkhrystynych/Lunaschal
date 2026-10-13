@@ -79,3 +79,25 @@ def test_html_to_text_and_word_count():
     assert 'Tuesday' in text
     assert '<' not in text
     assert count_words('one two  three\nfour') == 4
+
+
+def test_keeps_bbcode_colour_font_size_and_alignment():
+    clean = sanitize_chapter_html(
+        '<span style="color: #ff0000; font-family: \'Courier New\'; font-size: 22px">red</span>'
+        '<div style="text-align: center; font-weight: bold">mid</div>')
+    assert 'color:#ff0000' in clean
+    # Quoted families come back entity-escaped; the iOS reader decodes them.
+    assert 'font-family:&quot;Courier New&quot;' in clean
+    assert 'font-size:22px' in clean
+    assert 'text-align:center' in clean
+    assert 'font-weight:bold' in clean
+
+
+def test_drops_every_other_style_property():
+    clean = sanitize_chapter_html(
+        '<span style="color: red; position: fixed; display: none; background-image: url(https://x.test/t.gif)">'
+        'x</span><a style="color: red" href="https://x.test">l</a><img src="/a.png" style="width: 9px">')
+    assert 'color:red' in clean
+    for gone in ('position', 'display', 'background-image', 'url(', 'width'):
+        assert gone not in clean
+    assert '<a href=' in clean and '<a style' not in clean, 'only the listed elements keep a style'

@@ -362,7 +362,15 @@ what each device can currently do and which work remains device-only.
   download state (on the device, half on it, not on it, a PDF book, one the server can't
   send) and download from an in-app stand-in server slowly enough to watch, so the Library
   and its download states can be seen without a server. Each launch resets them,
-  and the reader moves between chapters with Previous/Next. The reader's bottom-left menu has Text and
+  and the reader moves between chapters with Previous/Next, shown above and below the
+  text and kept within the chapter's threadmark category. A book with more than one
+  category (Threadmarks, Sidestory, Informational…) lists each under its own tab, opening
+  on the continue point's tab, and a forum/FFN/AO3/Patreon fic can be asked for its
+  latest chapters from its book page and the reader's menu, not only by long-pressing it
+  in the library. A chapter shows its pictures — the server's copies, saved with the fic
+  (`fic-images/`, cleared by "Remove downloaded media") or fetched on first view — and
+  the post's colours, fonts, sizes and centring, with colours lightened as needed to stay
+  legible in dark mode (passed in simulator). The reader's bottom-left menu has Text and
   Transcribe commentary (a journal capture carrying `ficID`/`chapterID`: typed text
   is posted as `raw_content` and then linked, a recording links in its upload),
   and Continue and Bookmark. User scrolling is logged as reading spans
