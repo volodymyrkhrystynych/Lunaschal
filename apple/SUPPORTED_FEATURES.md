@@ -72,6 +72,10 @@ A notes notebook never moves sideways — pages turn and are added only from the
 newspaper notebook is one continuous scroll fitted to the width; both passed in simulator
 (`testNotesPagesDoNotTurnWithASwipe`, `testNewspaperScrollsAsOneColumn`, portrait and landscape), and neither
 has been verified on device — in particular how a finger and a Pencil share the page.
+Pinch-to-zoom on a notebook is off until Zoom is switched on in the editor's More menu
+(beside For review), so a stray palm cannot zoom the page; it resets to off each time a
+notebook opens, and switching it off returns to the fit. Passed in simulator
+(`testNotebookZoomIsOffUntilSwitchedOn`); not verified on device with a real palm.
 Ink not yet reported by PaperKit survives an added page, a page turn and Save (AppTests
 `…KeepsInkTheCanvasHadNotReported`); Notes reopening from the entry draft and saving with
 it passed in simulator (`testNotesComeBackFromTheEntryDraftAndSaveWithIt`). A newspaper
