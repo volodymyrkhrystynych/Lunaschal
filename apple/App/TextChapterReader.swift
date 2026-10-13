@@ -4,7 +4,8 @@ import LunaschalCore
 /// One chapter of a downloaded book, read the way the desktop reader reads it:
 /// scrolling is logged as reading spans, the chapter becomes the book's
 /// last-read chapter, and the menu at the bottom left takes commentary and
-/// bookmarks. Next/Previous move through the book without leaving.
+/// bookmarks. Next/Previous, above and below the text, move through the
+/// chapter's own threadmark category without leaving.
 struct TextChapterReader: View {
     @ObservedObject var owner: CaptureModel
     var initialFraction: Double?
@@ -39,7 +40,12 @@ struct TextChapterReader: View {
         _pendingFraction = State(initialValue: initialFraction)
     }
 
-    private var index: Int? { chapters.firstIndex { $0.id == current.id } }
+    private var neighbors: (previous: SyncChange?, next: SyncChange?) {
+        ChapterCategories.neighbors(of: current.id, in: chapters)
+    }
+    /// The scroll id of the Next/Previous row above the text. The start of a
+    /// chapter lands here rather than on its first paragraph, so the row shows.
+    private static let topRow = -1
 
     var body: some View { lifecycle(chrome) }
 
@@ -63,10 +69,11 @@ struct TextChapterReader: View {
     private var page: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: textSize * 0.85) {
+                chapterButtons(edge: "top").padding(.bottom, 8).id(Self.topRow)
                 ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                    ChapterBlockView(block: block, size: textSize).id(index)
+                    ChapterBlockView(owner: owner, block: block, size: textSize).id(index)
                 }
-                chapterButtons.padding(.top, 24)
+                chapterButtons(edge: "bottom").padding(.top, 24)
                     // Clear of the menu button, which floats over the bottom left.
                     .padding(.bottom, 80)
             }
@@ -134,8 +141,10 @@ struct TextChapterReader: View {
             let now = Int(Date().timeIntervalSince1970)
             if let due = spans.takeFlush(now: now, force: true) { owner.queueReading(.span(due)) }
         }
-        .onChange(of: position) { _, value in
-            guard let value, !version.isEmpty, blocks.indices.contains(value) else { return }
+        .onChange(of: position) { _, row in
+            // The top Next/Previous row is the start of the first paragraph.
+            guard let row, !version.isEmpty, blocks.indices.contains(max(0, row)) else { return }
+            let value = max(0, row)
             // At most once a second while scrolling, and on the way out: each
             // save is a disk-flushed write on the UI thread, and one per
             // paragraph made scrolling wait on any download writing meanwhile.
@@ -183,6 +192,12 @@ struct TextChapterReader: View {
             Button("Transcribe", systemImage: "mic") { sheet = .transcribe }
             Button("Continue", systemImage: "bookmark") { bookmark("continue") }
             Button("Bookmark", systemImage: "star") { bookmark("favorite") }
+            if let book, FicSources.isUpdatable(book.data?["sourceType"]?.string) {
+                Button("Get latest chapters", systemImage: "arrow.clockwise") {
+                    Task { await owner.checkFicForUpdates(book, deep: false) }
+                }
+                .accessibilityIdentifier("reader-check-updates")
+            }
         } label: {
             Image(systemName: "line.3.horizontal")
                 .font(.title3.weight(.semibold))
@@ -193,19 +208,24 @@ struct TextChapterReader: View {
         .accessibilityIdentifier("reader-menu")
     }
 
+    /// Shown at the top and the bottom of the text; `edge` keeps the two
+    /// copies apart for UI tests.
     @ViewBuilder
-    private var chapterButtons: some View {
-        if let index {
+    private func chapterButtons(edge: String) -> some View {
+        let (previous, next) = neighbors
+        if previous != nil || next != nil {
             HStack {
-                if index > 0 {
-                    Button("Previous", systemImage: "chevron.left") { move(to: chapters[index - 1]) }
+                if let previous {
+                    Button("Previous", systemImage: "chevron.left") { move(to: previous) }
+                        .accessibilityIdentifier("chapter-previous-\(edge)")
                 }
                 Spacer()
-                if index + 1 < chapters.count {
-                    Button { move(to: chapters[index + 1]) } label: {
+                if let next {
+                    Button { move(to: next) } label: {
                         Label("Next chapter", systemImage: "chevron.right").labelStyle(.titleAndIcon)
                     }
                     .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("chapter-next-\(edge)")
                 }
             }
         }
@@ -231,8 +251,9 @@ struct TextChapterReader: View {
             version = "\(try store.epoch ?? "unknown"):\(current.revision):b"
             let saved = try store.readingPosition(collection: "fic_chapters", id: current.id, version: version) ?? 0
             if let fraction = pendingFraction, fraction.isFinite {
-                position = Int((min(1, max(0, fraction)) * Double(max(0, blocks.count - 1))).rounded())
-            } else { position = blocks.indices.contains(saved) ? saved : 0 }
+                let row = Int((min(1, max(0, fraction)) * Double(max(0, blocks.count - 1))).rounded())
+                position = row > 0 ? row : Self.topRow
+            } else { position = blocks.indices.contains(saved) && saved > 0 ? saved : Self.topRow }
             pendingFraction = nil
         } catch { show("Could not restore reading position: \(error.localizedDescription)") }
     }
@@ -240,7 +261,7 @@ struct TextChapterReader: View {
     private func move(to chapter: SyncChange) {
         savePosition()
         closeSpan(sync: false)
-        position = 0
+        position = Self.topRow
         current = (try? store.record(collection: "fic_chapters", id: chapter.id)) ?? chapter
     }
 
@@ -295,8 +316,10 @@ enum ReaderTextSize {
 /// One formatted block of a chapter: its italics, bold and links kept, quotes
 /// indented with a bar, scene breaks centred.
 private struct ChapterBlockView: View {
+    let owner: CaptureModel
     let block: ChapterBlock
     let size: Double
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         content
@@ -309,6 +332,22 @@ private struct ChapterBlockView: View {
             }
     }
 
+    private var frameAlignment: Alignment {
+        switch block.alignment {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
+    }
+
+    private var textAlignment: TextAlignment {
+        switch block.alignment {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
         switch block.kind {
@@ -318,26 +357,33 @@ private struct ChapterBlockView: View {
             Text(block.text).font(.system(size: size, design: .serif)).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, size * 0.4)
         case .heading(let level):
-            text.font(.system(size: size * (level <= 2 ? 1.4 : 1.15), weight: .bold, design: .serif))
+            let base = size * (level <= 2 ? 1.4 : 1.15)
+            text(base: base).font(.system(size: base, weight: .bold, design: .serif))
                 .padding(.top, size * 0.5)
         case .listItem(let marker):
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(marker).font(.system(size: size, design: .serif)).foregroundStyle(.secondary)
-                text.font(.system(size: size, design: .serif)).lineSpacing(size * 0.3)
+                text(base: size).font(.system(size: size, design: .serif)).lineSpacing(size * 0.3)
             }
             .padding(.leading, 8)
         case .preformatted:
-            text.font(.system(size: size * 0.85, design: .monospaced))
+            text(base: size * 0.85).font(.system(size: size * 0.85, design: .monospaced))
         case .paragraph:
-            text.font(.system(size: size, design: .serif)).lineSpacing(size * 0.3)
+            text(base: size).font(.system(size: size, design: .serif)).lineSpacing(size * 0.3)
+        case .image(let src):
+            ChapterImageView(owner: owner, src: src, alt: block.text)
+                .frame(maxWidth: .infinity, alignment: frameAlignment)
+                .padding(.vertical, size * 0.3)
         }
     }
 
-    private var text: some View {
-        Text(attributed).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+    private func text(base: Double) -> some View {
+        Text(attributed(base: base)).textSelection(.enabled)
+            .multilineTextAlignment(textAlignment)
+            .frame(maxWidth: .infinity, alignment: frameAlignment)
     }
 
-    private var attributed: AttributedString {
+    private func attributed(base: Double) -> AttributedString {
         var out = AttributedString()
         for run in block.runs {
             var piece = AttributedString(run.text)
@@ -348,11 +394,97 @@ private struct ChapterBlockView: View {
             if run.style.contains(.code) { intent.insert(.code) }
             if !intent.isEmpty { piece.inlinePresentationIntent = intent }
             if run.style.contains(.underline) { piece.underlineStyle = .single }
-            if run.style.contains(.small) { piece.font = .system(size: size * 0.8, design: .serif) }
+            if let font = font(for: run, base: base) { piece.font = font }
+            if let background = run.look.background {
+                piece.backgroundColor = Color(background)
+                if let color = run.look.color { piece.foregroundColor = Color(color) }
+            } else if let color = run.look.color {
+                // Picked against the forum's white page: kept legible here.
+                piece.foregroundColor = Color(color.readable(onDark: scheme == .dark))
+            }
             if let link = run.link, let url = URL(string: link) { piece.link = url }
             out += piece
         }
         return out
+    }
+
+    /// Nil leaves the block's own font. A run with its own font names its
+    /// weight and slant itself, since its font replaces the block's.
+    private func font(for run: ChapterRun, base: Double) -> Font? {
+        let small = run.style.contains(.small)
+        guard run.look.font != nil || run.look.scale != nil || small else { return nil }
+        let points = base * (run.look.scale ?? 1) * (small ? 0.8 : 1)
+        var font: Font
+        if let family = run.look.font?.family, Self.installed(family) {
+            font = .custom(family, size: points)
+        } else {
+            let design: Font.Design
+            switch run.look.font?.design ?? .serif {
+            case .serif: design = .serif
+            case .sansSerif: design = .default
+            case .monospaced: design = .monospaced
+            case .rounded: design = .rounded
+            }
+            font = .system(size: points, design: design)
+        }
+        if run.style.contains(.bold) { font = font.bold() }
+        if run.style.contains(.italic) { font = font.italic() }
+        return font
+    }
+
+    private static let families = Set(UIFont.familyNames.map { $0.lowercased() })
+    private static func installed(_ family: String) -> Bool { families.contains(family.lowercased()) }
+}
+
+private extension Color {
+    init(_ color: ChapterColor) { self.init(red: color.red, green: color.green, blue: color.blue) }
+}
+
+/// A picture in a chapter. The server's copy comes from the device, fetched
+/// and kept the first time it's needed; one the server couldn't download is
+/// loaded from the web, as the desktop reader does, or offered as a link.
+private struct ChapterImageView: View {
+    let owner: CaptureModel
+    let src: String
+    let alt: String
+    @State private var image: UIImage?
+    @State private var missing = false
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFit()
+                    .frame(maxWidth: image.size.width)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .accessibilityLabel(alt.isEmpty ? "Picture" : alt)
+            } else if let reference = FicImages.reference(src) {
+                if missing {
+                    Label(alt.isEmpty ? "Picture not on this device" : alt, systemImage: "photo")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    ProgressView().frame(height: 80)
+                        .task(id: src) { await load(reference) }
+                }
+            } else if let url = URL(string: src) {
+                AsyncImage(url: url) { phase in
+                    if let picture = phase.image {
+                        picture.resizable().scaledToFit().accessibilityLabel(alt.isEmpty ? "Picture" : alt)
+                    } else if phase.error != nil {
+                        Link(destination: url) { Label(alt.isEmpty ? "Picture on the web" : alt, systemImage: "photo") }
+                            .font(.footnote)
+                    } else {
+                        ProgressView().frame(height: 80)
+                    }
+                }
+            }
+        }
+        .accessibilityIdentifier("chapter-image")
+    }
+
+    private func load(_ reference: FicImageReference) async {
+        guard let file = await owner.ficImage(reference) else { missing = true; return }
+        let loaded = await Task.detached(priority: .userInitiated) { UIImage(contentsOfFile: file.path) }.value
+        if let loaded { image = loaded } else { missing = true }
     }
 }
 

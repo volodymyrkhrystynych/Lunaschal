@@ -32,6 +32,9 @@ enum LibraryFixture {
         let onDevice: Int
         let daysSinceUpdate: Double
         let description: String
+        /// How many of its last chapters are threadmarked Sidestory rather
+        /// than Threadmarks, which gives its chapter list a tab for each.
+        var sidestories = 0
     }
 
     static let reading = "01K8BBBBBBBBBBBBBBBBBBBBF1"
@@ -48,7 +51,8 @@ enum LibraryFixture {
     static let books: [Book] = [
         Book(id: downloaded, title: "The Long Way Round", author: "Merrow", site: "forums.spacebattles.com",
              sourceType: "xenforo", tags: ["Worm", "Slice of Life"], folders: [reading], chapters: 6, onDevice: 6,
-             daysSinceUpdate: 0.2, description: "On the device: opens straight into the chapter it was left at."),
+             daysSinceUpdate: 0.2, description: "On the device: opens straight into the chapter it was left at.",
+             sidestories: 1),
         Book(id: notDownloaded, title: "Ashes of the Old Guard", author: "Tallow", site: "forums.sufficientvelocity.com",
              sourceType: "xenforo", tags: ["Quest", "Fantasy"], folders: [reading], chapters: 24, onDevice: 0,
              daysSinceUpdate: 1, description: "Not on the device: opening it downloads it, with progress and time left."),
@@ -111,10 +115,16 @@ enum LibraryFixture {
         _ = try? media.removeDownloadedCopy(collection: "fics", id: pdf)
     }
 
-    private static func change(_ collection: String, _ id: String, _ data: [String: Any]) -> [String: Any] {
+    /// The replica keeps a record it already holds at the same revision, so
+    /// a simulator that ran an older fixture would keep its old chapters:
+    /// bump this whenever a chapter's content changes.
+    static let chapterRevision = 2
+
+    private static func change(_ collection: String, _ id: String, _ data: [String: Any],
+                               revision: Int = 1) -> [String: Any] {
         var data = data
         data["id"] = id
-        return ["revision": 1, "collection": collection, "id": id, "deleted": false, "data": data]
+        return ["revision": revision, "collection": collection, "id": id, "deleted": false, "data": data]
     }
 
     private static func bookData(_ book: Book, now: Date, iso: ISO8601DateFormatter) -> [String: Any] {
@@ -140,15 +150,27 @@ enum LibraryFixture {
             let words = line.split(separator: " ", maxSplits: 2).map(String.init)
             let styled = words.count == 3 ? "\(words[0]) <i>\(words[1])</i> \(words[2])" : line
             html.append(number == 1 ? "<blockquote>\(styled)</blockquote>" : styled + "<br>\n<br>")
+            // Chapter 2 of the first book carries a picture the "server"
+            // stored, and the colour and font a forum post's BBCode leaves
+            // (as the server's sanitizer keeps them).
+            if book.id == downloaded, index == 1, number == 2 {
+                html.append("<img src=\"/api/fanfic/\(book.id)/images/\(pictureName)\" alt=\"\(pictureAlt)\">")
+                html.append("<span style=\"color:#c0392b\">\(styledLine)</span><br>\n<br>")
+                html.append("<span style=\"font-family:'Courier New'\">\(typedLine)</span><br>\n<br>")
+            }
         }
         // What the server's `get_text(' ')` makes of it: single line breaks.
         let text = lines.joined(separator: "\n")
-        return change("fic_chapters", chapterID(book, index), [
-            "ficId": book.id, "position": index, "title": "Chapter \(index + 1)",
+        let sidestory = index >= book.chapters - book.sidestories
+        var data: [String: Any] = [
+            "ficId": book.id, "position": index,
+            "title": sidestory ? "Sidestory: Market Day" : "Chapter \(index + 1)",
             "contentText": text, "contentHtml": "<div>" + html.joined(separator: "\n") + "</div>",
             "wordCount": text.split(separator: " ").count,
             "postedAt": Int(now.addingTimeInterval(-Double(book.chapters - index) * 86_400).timeIntervalSince1970),
-        ])
+        ]
+        if book.sourceType == "xenforo" { data["category"] = sidestory ? "Sidestory" : "Threadmarks" }
+        return change("fic_chapters", chapterID(book, index), data, revision: chapterRevision)
     }
 
     private static let sentences = [
@@ -169,11 +191,16 @@ enum LibraryFixture {
         }
     }
 
+    static let pictureName = "coast-map.png"
+    static let pictureAlt = "A map of the coast"
+    static let styledLine = "The bell rang out red across the water."
+    static let typedLine = "SYSTEM: Quest accepted."
+
     // MARK: The stand-in server
 
     /// Answers `ficDownloadPage` a few chapters at a time, waiting between
     /// pages, and serves the PDF book in slow chunks.
-    struct Transport: FicDownloadTransport {
+    struct Transport: FicDownloadTransport, FicImageTransport {
         static let chaptersPerPage = 3
         static let pageDelay: UInt64 = 900_000_000
 
@@ -203,6 +230,17 @@ enum LibraryFixture {
                                  "sha256": try MediaStore.sha256(file), "mime": "application/pdf"]
             }
             return try JSONDecoder().decode(FicDownloadPage.self, from: JSONSerialization.data(withJSONObject: page))
+        }
+
+        func ficImage(_ image: FicImageReference) async throws -> Data {
+            guard image.ficID == downloaded, image.name == pictureName else { throw FicDownloadError.notOnServer }
+            let size = CGSize(width: 480, height: 270)
+            return UIGraphicsImageRenderer(size: size).pngData { context in
+                UIColor.systemTeal.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+                UIColor.systemYellow.setFill()
+                context.cgContext.fillEllipse(in: CGRect(x: 180, y: 70, width: 120, height: 120))
+            }
         }
 
         func mediaChunk(_ item: MediaDescriptor, offset: Int64, count: Int64) async throws -> Data {

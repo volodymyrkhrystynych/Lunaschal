@@ -111,6 +111,8 @@ final class CaptureModel: ObservableObject {
     let uploads: RecordingUploadStore
     let transfers: TransferStore
     let media: MediaStore
+    /// Pictures inside fic chapters; the library worker fills it too.
+    let ficImages: FicImageStore
     let daily: DailyStore
     let healthState: HealthStateStore
     @Published private(set) var healthStatus = HealthStateStore.Status()
@@ -164,6 +166,7 @@ final class CaptureModel: ObservableObject {
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
         reader = ReplicaReader(url: store.root.appendingPathComponent("replica.sqlite"))
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
+        ficImages = try FicImageStore(root: store.root.appendingPathComponent("fic-images", isDirectory: true))
         daily = try DailyStore(root: store.root.appendingPathComponent("daily", isDirectory: true))
         dailySyncer = DailySync(store: daily)
         healthState = try HealthStateStore(root: store.root.appendingPathComponent("apple-health", isDirectory: true))
@@ -196,7 +199,7 @@ final class CaptureModel: ObservableObject {
         syncer = CaptureSync(store: store, uploads: uploads, transfers: transfers)
         replicaSyncer = ReplicaSync(url: store.root.appendingPathComponent("replica.sqlite"))
         libraryWorker = LibraryDownload(replicaURL: store.root.appendingPathComponent("replica.sqlite"),
-                                        mediaURL: media.root)
+                                        mediaURL: media.root, imagesURL: ficImages.root)
         try store.recoverInterruptedRecordings()
         server = try store.server
         if let server { token = try SessionToken.read(server: server) }
@@ -1497,6 +1500,16 @@ final class CaptureModel: ObservableObject {
         return { api }
     }
 
+    /// A chapter picture: the copy on the device, or fetched now and kept.
+    /// Nil offline, or when the server no longer has it.
+    func ficImage(_ image: FicImageReference) async -> URL? {
+        if let file = ficImages.file(image) { return file }
+        guard let transport = ficTransport() else { return nil }
+        guard let fetcher = try? transport() as? FicImageTransport,
+              let data = try? await fetcher.ficImage(image) else { return nil }
+        return try? ficImages.save(data, for: image)
+    }
+
     func pauseFicDownloads() {
         ficTask?.cancel()
         ficTask = nil
@@ -1555,6 +1568,7 @@ final class CaptureModel: ObservableObject {
         guard !downloadingLibrary else { return }
         do {
             try media.removeDownloadedCopies()
+            try ficImages.removeAll()
             libraryMessage = "Downloaded media removed. Captures and server originals are retained."
             refreshLibraryBytes()
         } catch { message = error.localizedDescription }

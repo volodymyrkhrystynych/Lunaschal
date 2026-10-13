@@ -27,7 +27,7 @@ Pillow>=10.0
 pillow-heif>=0.16
 fsrs>=6.0
 mcp>=1.28
-nh3>=0.2
+nh3>=0.2.15
 mammoth>=1.6
 # Tailored-resume rendering (backend/jobs/render.py). WeasyPrint turns the same
 # HTML the UI previews into a PDF, so preview and artifact can't drift; it binds

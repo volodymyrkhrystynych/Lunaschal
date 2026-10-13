@@ -15,12 +15,24 @@ _ALLOWED_TAGS = {
     'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'u', 'ul',
 }
 
+# Inline style is how XenForo writes [COLOR], [FONT], [SIZE] and [CENTER],
+# and stories lean on them (a red voice, a monospaced system message). Only
+# these properties survive, so nothing can position, hide or load anything;
+# the iOS reader (`apple/.../ChapterStyle.swift`) reads the same list.
+_STYLE_PROPERTIES = {
+    'color', 'background-color', 'font-family', 'font-size', 'font-weight',
+    'font-style', 'text-decoration', 'text-align',
+}
+_STYLED = ('span', 'div', 'p', 'td', 'th', 'li', 'blockquote',
+           'h1', 'h2', 'h3', 'h4', 'h5', 'h6')
+
 _ALLOWED_ATTRS = {
     'a': {'href', 'title'},
     'img': {'src', 'alt', 'title'},
-    'td': {'colspan', 'rowspan'},
-    'th': {'colspan', 'rowspan'},
+    'td': {'colspan', 'rowspan', 'style'},
+    'th': {'colspan', 'rowspan', 'style'},
     'ol': {'start'},
+    **{tag: {'style'} for tag in _STYLED if tag not in ('td', 'th')},
 }
 
 # Dropped along with their children. XenForo wraps every inline image in a
@@ -39,6 +51,7 @@ def sanitize_chapter_html(html: str) -> str:
         clean_content_tags=_CLEAN_CONTENT_TAGS,
         url_schemes={'http', 'https'},
         link_rel='noopener noreferrer',
+        filter_style_properties=_STYLE_PROPERTIES,
     )
 
 

@@ -2,7 +2,7 @@ import Foundation
 
 /// A chapter's sanitized HTML (`backend/fanfic/sanitize.py`'s allowlist) as
 /// blocks a native reader can lay out: paragraphs with their italics and bold
-/// kept, headings, quotes, list items and scene breaks.
+/// kept, headings, quotes, list items, scene breaks and pictures.
 ///
 /// The chapter's `contentText` can't be read as written: the server makes it
 /// with BeautifulSoup's `get_text(' ')`, which puts a space around every tag
@@ -18,12 +18,19 @@ public struct ChapterBlock: Equatable, Sendable {
         case sceneBreak
         /// `<hr>`.
         case rule
+        /// An `<img>` with its `src`: the server's own copy
+        /// (`/api/fanfic/<id>/images/<name>`, see `FicImages`) or, when the
+        /// server couldn't download it, the original web address. Its runs
+        /// are the alt text.
+        case image(String)
     }
 
     public var kind: Kind
     public var runs: [ChapterRun]
     /// How many `<blockquote>`s this block sits inside.
     public var quoteDepth: Int
+    /// `text-align`, from [CENTER] and [RIGHT].
+    public var alignment: ChapterAlignment = .leading
 
     public var text: String { runs.map(\.text).joined() }
 }
@@ -43,6 +50,8 @@ public struct ChapterRun: Equatable, Sendable {
     public var text: String
     public var style: Style
     public var link: String?
+    /// Colour, font and size from the post's inline styles (`ChapterStyle.swift`).
+    public var look = ChapterLook()
 }
 
 public enum ChapterText {
@@ -85,6 +94,8 @@ private struct HTMLBlocks {
     private var preDepth = 0
     private var breaks = 0
     private var cellsInRow = 0
+    /// The inline styles of the elements we're inside, innermost last.
+    private var css: [(tag: String, css: ChapterCSS)] = []
 
     init(_ html: String) { bytes = Array(html.utf8) }
 
@@ -132,11 +143,31 @@ private struct HTMLBlocks {
         "tfoot", "tr", "section", "article", "header", "footer", "center",
     ]
 
+    /// Elements whose `style` the sanitizer keeps.
+    private static let cssTags: Set<String> = [
+        "span", "div", "p", "td", "th", "li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6",
+    ]
+
     private mutating func handleTag(_ raw: String) {
         if raw.hasPrefix("!") { return }
         let closing = raw.hasPrefix("/")
         let body = closing ? String(raw.dropFirst()) : raw
         let name = String(body.prefix { !$0.isWhitespace && $0 != "/" && $0 != ">" }).lowercased()
+        // An element's style starts after it has broken the block before it,
+        // and ends after its own block has been flushed with it.
+        handleElement(name, closing: closing, body: body)
+        guard Self.cssTags.contains(name), !body.hasSuffix("/") else { return }
+        if closing {
+            if let open = css.lastIndex(where: { $0.tag == name }) { css.remove(at: open) }
+        } else {
+            css.append((name, attribute("style", in: body).map { ChapterCSS(Self.decode($0)) } ?? ChapterCSS()))
+        }
+    }
+
+    private var currentLook: ChapterLook { css.reduce(ChapterLook()) { $0.merged(with: $1.css.look) } }
+    private var currentAlignment: ChapterAlignment { css.last { $0.css.alignment != nil }?.css.alignment ?? .leading }
+
+    private mutating func handleElement(_ name: String, closing: Bool, body: String) {
         if Self.styleTags[name] != nil {
             styles[name] = max(0, styles[name, default: 0] + (closing ? -1 : 1))
             return
@@ -151,8 +182,14 @@ private struct HTMLBlocks {
             flush()
             blocks.append(ChapterBlock(kind: .rule, runs: [], quoteDepth: quoteDepth))
         case "img":
-            if let alt = attribute("alt", in: body), !alt.trimmingCharacters(in: .whitespaces).isEmpty {
-                append("[\(Self.decode(alt))]", extra: .italic)
+            let alt = attribute("alt", in: body).map(Self.decode)?.trimmingCharacters(in: .whitespaces) ?? ""
+            if let src = attribute("src", in: body).map(Self.decode), Self.isPicture(src) {
+                flush()
+                blocks.append(ChapterBlock(kind: .image(src), runs: alt.isEmpty ? [] : [ChapterRun(text: alt, style: [], link: nil)],
+                                           quoteDepth: quoteDepth, alignment: currentAlignment))
+            } else if !alt.isEmpty {
+                // A smilie inlined as `data:`, or no source at all: its words.
+                append("[\(alt)]", extra: .italic)
             }
         case "blockquote":
             flush()
@@ -239,12 +276,14 @@ private struct HTMLBlocks {
         guard !text.isEmpty else { return }
         var style = extra
         for (tag, depth) in styles where depth > 0 { style.insert(Self.styleTags[tag]!) }
+        for (_, element) in css { style.formUnion(element.style) }
         let link = links.last ?? nil
-        if var last = runs.last, last.style == style, last.link == link {
+        let look = currentLook
+        if var last = runs.last, last.style == style, last.link == link, last.look == look {
             last.text += text
             runs[runs.count - 1] = last
         } else {
-            runs.append(ChapterRun(text: text, style: style, link: link))
+            runs.append(ChapterRun(text: text, style: style, link: link, look: look))
         }
     }
 
@@ -271,9 +310,17 @@ private struct HTMLBlocks {
             if preDepth == 0 { kind = .paragraph }
         }
         guard runs.contains(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return }
-        var block = ChapterBlock(kind: kind, runs: runs, quoteDepth: quoteDepth)
+        var block = ChapterBlock(kind: kind, runs: runs, quoteDepth: quoteDepth, alignment: currentAlignment)
         if block.kind == .paragraph, ChapterText.isSceneBreak(block.text) { block.kind = .sceneBreak }
         blocks.append(block)
+    }
+
+    /// A picture worth a block of its own: one the server stored, or one
+    /// still on the web. Anything else (`data:` smilies) reads as its alt.
+    static func isPicture(_ src: String) -> Bool {
+        if FicImages.reference(src) != nil { return true }
+        let lower = src.lowercased()
+        return lower.hasPrefix("https://") || lower.hasPrefix("http://")
     }
 
     private func attribute(_ name: String, in tag: String) -> String? {

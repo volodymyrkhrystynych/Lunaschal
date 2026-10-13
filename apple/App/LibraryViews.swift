@@ -287,6 +287,11 @@ struct BookView: View {
     @State private var bookmarks: [SyncChange] = []
     @State private var bookmarkEdits: [PendingEdit] = []
     @State private var onDevice = true
+    /// The chapter-list tab picked; nil until the reader picks one, which
+    /// shows the category of the chapter they'd continue.
+    @State private var category: String?
+    /// While the server is being asked; the chapters themselves arrive by sync.
+    @State private var askingForUpdate = false
 
     var body: some View {
         List {
@@ -306,6 +311,18 @@ struct BookView: View {
                 NavigationLink("Continue: \(resume.chapter.title)") {
                     TextChapterReader(owner: model, chapter: resume.chapter, initialFraction: resume.fraction, book: book)
                 }
+            }
+            if FicSources.isUpdatable(book.data?["sourceType"]?.string) {
+                Section {
+                    Button("Get latest chapters", systemImage: "arrow.clockwise") { askForUpdate(deep: false) }
+                        .accessibilityIdentifier("fic-check-updates")
+                    Button("Re-read edited chapters", systemImage: "arrow.triangle.2.circlepath") { askForUpdate(deep: true) }
+                        .accessibilityIdentifier("fic-reread-chapters")
+                } footer: {
+                    if askingForUpdate { ProgressView() }
+                    else { Text("The server fetches them from the site; they arrive with the next sync.") }
+                }
+                .disabled(askingForUpdate)
             }
             if !bookmarks.isEmpty {
                 Section("Bookmarks") {
@@ -347,11 +364,7 @@ struct BookView: View {
                     }
                 }
             }
-            ForEach(chapters) { chapter in
-                NavigationLink {
-                    TextChapterReader(owner: model, chapter: chapter)
-                } label: { Text(chapter.title) }
-            }
+            chapterList
         }
         .navigationTitle(book.title)
         .task(id: model.downloadingLibrary) { await refreshChapters() }
@@ -364,6 +377,62 @@ struct BookView: View {
         .onChange(of: model.syncChanges) { _, changes in
             if changes.touches(["fics", "fic_chapters", "fic_bookmarks"]) { Task { await refreshChapters() } }
         }
+    }
+
+    private func askForUpdate(deep: Bool) {
+        askingForUpdate = true
+        Task {
+            await model.checkFicForUpdates(book, deep: deep)
+            askingForUpdate = false
+        }
+    }
+
+    /// One tab per threadmark category (Threadmarks, Sidestory, Informational…)
+    /// when the book has more than one; a plain list otherwise.
+    @ViewBuilder
+    private var chapterList: some View {
+        let groups = ChapterCategories.groups(chapters)
+        if groups.count > 1 {
+            let picked = category ?? resume.map { ChapterCategories.category(of: $0.chapter) }
+            let shown = groups.first { $0.category == picked } ?? groups[0]
+            Section {
+                ForEach(shown.chapters) { chapterLink($0) }
+            } header: {
+                categoryTabs(groups, shown: shown.category)
+            }
+        } else {
+            ForEach(chapters) { chapterLink($0) }
+        }
+    }
+
+    private func chapterLink(_ chapter: SyncChange) -> some View {
+        NavigationLink {
+            TextChapterReader(owner: model, chapter: chapter)
+        } label: { Text(chapter.title) }
+    }
+
+    private func categoryTabs(_ groups: [ChapterGroup], shown: String) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(groups) { group in
+                    let selected = group.category == shown
+                    Button { category = group.category } label: {
+                        Text("\(group.title) \(group.chapters.count)")
+                            .font(.subheadline.weight(selected ? .semibold : .regular))
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .foregroundStyle(selected ? Color.white : Color.primary)
+                            .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(group.title)
+                    .accessibilityValue("\(group.chapters.count) chapters")
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityIdentifier("chapter-tab-\(group.category)")
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .textCase(nil)
     }
 
     /// The chapter list, resume point and bookmarks, read off the main thread.
