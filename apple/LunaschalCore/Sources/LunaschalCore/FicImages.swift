@@ -107,10 +107,13 @@ public final class FicImageStore: @unchecked Sendable {
     }
 
     public func usedBytes() -> Int64 {
-        guard let files = fm.enumerator(at: root, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .isRegularFileKey]
+        guard let files = fm.enumerator(at: root, includingPropertiesForKeys: Array(keys)) else { return 0 }
         var total: Int64 = 0
         for case let url as URL in files {
-            total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            // Files only: Linux gives each fic's folder a size of its own.
+            guard let values = try? url.resourceValues(forKeys: keys), values.isRegularFile == true else { continue }
+            total += Int64(values.fileSize ?? 0)
         }
         return total
     }
