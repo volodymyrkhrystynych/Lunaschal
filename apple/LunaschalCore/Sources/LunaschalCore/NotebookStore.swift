@@ -79,12 +79,27 @@ public struct Notebook: Codable, Identifiable, Hashable {
     }
 }
 
+/// One file of a checkpoint: new bytes, or the same file of the checkpoint
+/// being replaced, at its index there. A kept file is hard-linked rather than
+/// written again, so saving a twenty-page notebook with one page touched
+/// writes one page. Every write here is `.atomic` (a new file renamed into
+/// place), so no write ever changes a file another checkpoint links to.
+public enum NotebookFile: Equatable {
+    case bytes(Data)
+    case kept(Int)
+}
+
 /// Same publish discipline as `DrawingStore`: a checkpoint becomes visible
 /// only after every page and the preview are written, and the previous one is
-/// kept so a failed write never replaces good ink. Call from the main actor.
-public final class NotebookStore {
+/// kept so a failed write never replaces good ink. Safe from any thread: the
+/// editor saves off the main thread while the main thread may rename the
+/// notebook or set its video, and each of those reads the manifest, changes
+/// it and writes it back, so they take turns rather than undo each other.
+public final class NotebookStore: @unchecked Sendable {
     public let root: URL
     private let fm = FileManager.default
+    /// Recursive because public methods call `notebook(_:)`.
+    private let lock = NSRecursiveLock()
     public static let maximumPDFBytes: Int64 = 512 * 1024 * 1024
 
     public init(root: URL) throws {
@@ -94,43 +109,51 @@ public final class NotebookStore {
     }
 
     public func notebooks() throws -> [Notebook] {
-        try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension == "json" }
-            .map { try JSONDecoder().decode(Notebook.self, from: Data(contentsOf: $0)) }
-            .sorted { $0.updatedAt > $1.updatedAt }
+        try exclusive {
+            try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "json" }
+                .map { try JSONDecoder().decode(Notebook.self, from: Data(contentsOf: $0)) }
+                .sorted { $0.updatedAt > $1.updatedAt }
+        }
     }
 
     public func notebook(_ id: String) throws -> Notebook {
-        let value = try JSONDecoder().decode(Notebook.self, from: Data(contentsOf: manifest(id)))
-        guard value.id == id else { throw CaptureError.invalidID }
-        return value
+        try exclusive {
+            let value = try JSONDecoder().decode(Notebook.self, from: Data(contentsOf: manifest(id)))
+            guard value.id == id else { throw CaptureError.invalidID }
+            return value
+        }
     }
 
     public func create(title: String = "Notes", now: Date = Date()) throws -> Notebook {
-        let notebook = Notebook(title: title, source: .blank, pageCount: 1, pdfPageCount: 0, now: now)
-        try write(notebook)
-        return notebook
+        try exclusive {
+            let notebook = Notebook(title: title, source: .blank, pageCount: 1, pdfPageCount: 0, now: now)
+            try write(notebook)
+            return notebook
+        }
     }
 
     /// A notebook over one issue. The PDF is moved in before any manifest
     /// exists, so a download that fails or isn't a PDF leaves nothing behind.
     public func createNewspaper(date: String, pdf: URL, pageCount: Int, now: Date = Date()) throws -> Notebook {
-        guard NewspaperIssue.isDate(date), pageCount > 0 else { throw NotebookError.invalidIssue }
-        try Self.validatePDF(pdf)
-        var notebook = Notebook(title: NewspaperIssue.title(date), source: .newspaper(date: date),
-                                pageCount: pageCount, pdfPageCount: pageCount, now: now)
-        notebook.layout = .column
-        let folder = try directory(notebook.id)
-        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        let destination = folder.appendingPathComponent("source.pdf")
-        do {
-            try fm.moveItem(at: pdf, to: destination)
-            try write(notebook)
-        } catch {
-            try? fm.removeItem(at: folder)
-            throw error
+        try exclusive {
+            guard NewspaperIssue.isDate(date), pageCount > 0 else { throw NotebookError.invalidIssue }
+            try Self.validatePDF(pdf)
+            var notebook = Notebook(title: NewspaperIssue.title(date), source: .newspaper(date: date),
+                                    pageCount: pageCount, pdfPageCount: pageCount, now: now)
+            notebook.layout = .column
+            let folder = try directory(notebook.id)
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            let destination = folder.appendingPathComponent("source.pdf")
+            do {
+                try fm.moveItem(at: pdf, to: destination)
+                try write(notebook)
+            } catch {
+                try? fm.removeItem(at: folder)
+                throw error
+            }
+            return notebook
         }
-        return notebook
     }
 
     /// The notebook to reopen for an issue: the newest one over it, filed or
@@ -149,17 +172,21 @@ public final class NotebookStore {
     /// Every page's markup in order — for a column, the one markup holding
     /// them all — or empty before the first checkpoint.
     public func pages(_ notebook: Notebook) throws -> [Data] {
-        guard let checkpoint = notebook.checkpoint else { return [] }
-        let folder = try checkpointDirectory(notebook.id, checkpoint)
-        return try (0..<notebook.markupCount).map { try Data(contentsOf: folder.appendingPathComponent("page-\($0).markup")) }
+        try exclusive {
+            guard let checkpoint = notebook.checkpoint else { return [] }
+            let folder = try checkpointDirectory(notebook.id, checkpoint)
+            return try (0..<notebook.markupCount).map { try Data(contentsOf: folder.appendingPathComponent("page-\($0).markup")) }
+        }
     }
 
     /// Each page's locked layer (pictures pinned under the ink), nil where a
     /// page has none. Same length as `pages`; empty before the first checkpoint.
     public func lockedLayers(_ notebook: Notebook) throws -> [Data?] {
-        guard let checkpoint = notebook.checkpoint else { return [] }
-        let folder = try checkpointDirectory(notebook.id, checkpoint)
-        return (0..<notebook.markupCount).map { try? Data(contentsOf: folder.appendingPathComponent("page-\($0).locked")) }
+        try exclusive {
+            guard let checkpoint = notebook.checkpoint else { return [] }
+            let folder = try checkpointDirectory(notebook.id, checkpoint)
+            return (0..<notebook.markupCount).map { try? Data(contentsOf: folder.appendingPathComponent("page-\($0).locked")) }
+        }
     }
 
     public func previewURL(_ notebook: Notebook) throws -> URL? {
@@ -174,106 +201,159 @@ public final class NotebookStore {
     @discardableResult
     public func checkpoint(_ id: String, pages: [Data], locked: [Data?] = [], marked: Set<Int>,
                            preview: Data, column slots: Int? = nil) throws -> Notebook {
-        var notebook = try notebook(id)
-        let pageCount = slots ?? pages.count
-        guard !pages.isEmpty, !preview.isEmpty, !pages.contains(where: \.isEmpty),
-              slots == nil || pages.count == 1,
-              // A column saved as pages would read back as one page of a stack.
-              slots != nil || !notebook.isColumn,
-              pageCount >= notebook.pdfPageCount, locked.count <= pages.count,
-              !locked.contains(where: { $0?.isEmpty == true }) else { throw DrawingError.incompleteCheckpoint }
-        let previous = notebook.checkpoint
-        let revision = ULID.make()
-        let folder = try checkpointDirectory(id, revision)
-        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        for (index, page) in pages.enumerated() {
-            try page.write(to: folder.appendingPathComponent("page-\(index).markup"), options: .atomic)
+        try checkpoint(id, files: pages.map(NotebookFile.bytes), locked: locked.map { $0.map(NotebookFile.bytes) },
+                       marked: marked, preview: preview, column: slots)
+    }
+
+    /// As above, with any file that hasn't changed kept from the current
+    /// checkpoint instead of written again. A nil `preview` keeps the current
+    /// one. Keeping anything when there is no current checkpoint, or keeping a
+    /// file it doesn't have, fails the checkpoint and leaves the current one.
+    @discardableResult
+    public func checkpoint(_ id: String, files pages: [NotebookFile], locked: [NotebookFile?] = [], marked: Set<Int>,
+                           preview: Data?, column slots: Int? = nil) throws -> Notebook {
+        try exclusive {
+            var notebook = try notebook(id)
+            let pageCount = slots ?? pages.count
+            guard !pages.isEmpty, preview?.isEmpty != true, !pages.contains(.bytes(Data())),
+                  slots == nil || pages.count == 1,
+                  // A column saved as pages would read back as one page of a stack.
+                  slots != nil || !notebook.isColumn,
+                  pageCount >= notebook.pdfPageCount, locked.count <= pages.count,
+                  !locked.contains(.bytes(Data())) else { throw DrawingError.incompleteCheckpoint }
+            let previous = notebook.checkpoint
+            let base = try previous.map { try checkpointDirectory(id, $0) }
+            let revision = ULID.make()
+            let folder = try checkpointDirectory(id, revision)
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            do {
+                func place(_ file: NotebookFile, as name: (Int) -> String, at index: Int) throws {
+                    switch file {
+                    case .bytes(let data):
+                        try data.write(to: folder.appendingPathComponent(name(index)), options: .atomic)
+                    case .kept(let from):
+                        try keep(name(from), from: base, as: name(index), in: folder)
+                    }
+                }
+                for (index, page) in pages.enumerated() {
+                    try place(page, as: { "page-\($0).markup" }, at: index)
+                }
+                for (index, layer) in locked.enumerated() {
+                    guard let layer else { continue }
+                    try place(layer, as: { "page-\($0).locked" }, at: index)
+                }
+                if let preview {
+                    try preview.write(to: folder.appendingPathComponent("preview.png"), options: .atomic)
+                } else {
+                    try keep("preview.png", from: base, as: "preview.png", in: folder)
+                }
+                notebook.checkpoint = revision
+                notebook.pageCount = pageCount
+                notebook.markedPages = marked.filter { $0 < pageCount }
+                if slots != nil { notebook.layout = .column }
+                notebook.updatedAt = Date()
+                try write(notebook)
+            } catch {
+                // Half a checkpoint must not be found by restorePrevious later.
+                try? fm.removeItem(at: folder)
+                throw error
+            }
+            // Current + previous only, as in DrawingStore.
+            for version in (try? fm.contentsOfDirectory(at: folder.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? []
+                where ULID.isValid(version.lastPathComponent)
+                && version.lastPathComponent != revision && version.lastPathComponent != previous {
+                try? fm.removeItem(at: version)
+            }
+            return notebook
         }
-        for (index, layer) in locked.enumerated() {
-            guard let layer else { continue }
-            try layer.write(to: folder.appendingPathComponent("page-\(index).locked"), options: .atomic)
-        }
-        try preview.write(to: folder.appendingPathComponent("preview.png"), options: .atomic)
-        notebook.checkpoint = revision
-        notebook.pageCount = pageCount
-        notebook.markedPages = marked.filter { $0 < pageCount }
-        if slots != nil { notebook.layout = .column }
-        notebook.updatedAt = Date()
-        try write(notebook)
-        // Current + previous only, as in DrawingStore.
-        for version in (try? fm.contentsOfDirectory(at: folder.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? []
-            where ULID.isValid(version.lastPathComponent)
-            && version.lastPathComponent != revision && version.lastPathComponent != previous {
-            try? fm.removeItem(at: version)
-        }
-        return notebook
+    }
+
+    /// A file of the current checkpoint, linked into the new one. A copy where
+    /// the volume can't link, which costs the write but loses nothing.
+    private func keep(_ name: String, from base: URL?, as newName: String, in folder: URL) throws {
+        guard let base else { throw DrawingError.incompleteCheckpoint }
+        let source = base.appendingPathComponent(name), target = folder.appendingPathComponent(newName)
+        guard fm.fileExists(atPath: source.path) else { throw DrawingError.incompleteCheckpoint }
+        do { try fm.linkItem(at: source, to: target) } catch { try fm.copyItem(at: source, to: target) }
     }
 
     public func restorePrevious(_ id: String) throws -> Notebook {
-        var notebook = try notebook(id)
-        let parent = try directory(id)
-        let candidates = try fm.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
-            .filter { ULID.isValid($0.lastPathComponent) && $0.lastPathComponent != notebook.checkpoint }
-            .sorted { $0.lastPathComponent > $1.lastPathComponent }
-        guard let previous = candidates.first(where: { folder in
-            guard let names = try? fm.contentsOfDirectory(atPath: folder.path) else { return false }
-            return names.contains("preview.png") && names.contains("page-0.markup")
-        }) else { throw DrawingError.noPreviousCheckpoint }
-        let count = try fm.contentsOfDirectory(atPath: previous.path).filter { $0.hasSuffix(".markup") }.count
-        notebook.checkpoint = previous.lastPathComponent
-        // A column's one markup holds every page, so its page count is not a
-        // file count — unless the previous checkpoint predates the column, in
-        // which case the notebook is paged again and converts on next open.
-        if notebook.isColumn && count == 1 {
-            notebook.pageCount = max(notebook.pageCount, notebook.pdfPageCount)
-        } else {
-            notebook.layout = nil
-            notebook.pageCount = max(count, notebook.pdfPageCount)
+        try exclusive {
+            var notebook = try notebook(id)
+            let parent = try directory(id)
+            let candidates = try fm.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
+                .filter { ULID.isValid($0.lastPathComponent) && $0.lastPathComponent != notebook.checkpoint }
+                .sorted { $0.lastPathComponent > $1.lastPathComponent }
+            guard let previous = candidates.first(where: { folder in
+                guard let names = try? fm.contentsOfDirectory(atPath: folder.path) else { return false }
+                return names.contains("preview.png") && names.contains("page-0.markup")
+            }) else { throw DrawingError.noPreviousCheckpoint }
+            let count = try fm.contentsOfDirectory(atPath: previous.path).filter { $0.hasSuffix(".markup") }.count
+            notebook.checkpoint = previous.lastPathComponent
+            // A column's one markup holds every page, so its page count is not a
+            // file count — unless the previous checkpoint predates the column, in
+            // which case the notebook is paged again and converts on next open.
+            if notebook.isColumn && count == 1 {
+                notebook.pageCount = max(notebook.pageCount, notebook.pdfPageCount)
+            } else {
+                notebook.layout = nil
+                notebook.pageCount = max(count, notebook.pdfPageCount)
+            }
+            notebook.updatedAt = Date()
+            try write(notebook)
+            return notebook
         }
-        notebook.updatedAt = Date()
-        try write(notebook)
-        return notebook
     }
 
     /// One video per notebook; setting another replaces it, nil removes it.
     @discardableResult
     public func setYouTube(_ id: String, url: String?) throws -> Notebook {
-        var notebook = try notebook(id)
-        let trimmed = url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        notebook.youtubeURL = trimmed.isEmpty ? nil : try YouTubeLink.canonical(trimmed)
-        notebook.updatedAt = Date()
-        try write(notebook)
-        return notebook
+        try exclusive {
+            var notebook = try notebook(id)
+            let trimmed = url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            notebook.youtubeURL = trimmed.isEmpty ? nil : try YouTubeLink.canonical(trimmed)
+            notebook.updatedAt = Date()
+            try write(notebook)
+            return notebook
+        }
     }
 
     public func setForReview(_ id: String, _ on: Bool) throws -> Notebook {
-        var notebook = try notebook(id)
-        notebook.forReview = on ? true : nil
-        notebook.updatedAt = Date()
-        try write(notebook)
-        return notebook
+        try exclusive {
+            var notebook = try notebook(id)
+            notebook.forReview = on ? true : nil
+            notebook.updatedAt = Date()
+            try write(notebook)
+            return notebook
+        }
     }
 
     public func rename(_ id: String, title: String) throws {
-        var notebook = try notebook(id)
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        notebook.title = trimmed.isEmpty ? "Notes" : trimmed
-        notebook.updatedAt = Date()
-        try write(notebook)
+        try exclusive {
+            var notebook = try notebook(id)
+            let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            notebook.title = trimmed.isEmpty ? "Notes" : trimmed
+            notebook.updatedAt = Date()
+            try write(notebook)
+        }
     }
 
     @discardableResult
     public func markSaved(_ id: String, captureID: String, now: Date = Date()) throws -> Notebook {
-        var notebook = try notebook(id)
-        notebook.savedCaptureIDs.append(captureID)
-        notebook.savedAt = now
-        try write(notebook)
-        return notebook
+        try exclusive {
+            var notebook = try notebook(id)
+            notebook.savedCaptureIDs.append(captureID)
+            notebook.savedAt = now
+            try write(notebook)
+            return notebook
+        }
     }
 
     public func delete(_ id: String) throws {
-        try fm.removeItem(at: manifest(id))
-        try? fm.removeItem(at: directory(id))
+        try exclusive {
+            try fm.removeItem(at: manifest(id))
+            try? fm.removeItem(at: directory(id))
+        }
     }
 
     // MARK: Screenshot inbox
@@ -315,6 +395,12 @@ public final class NotebookStore {
     }
 
     private var inbox: URL { root.appendingPathComponent("inbox", isDirectory: true) }
+
+    private func exclusive<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
+    }
 
     private func write(_ notebook: Notebook) throws {
         try JSONEncoder().encode(notebook).write(to: manifest(notebook.id), options: .atomic)

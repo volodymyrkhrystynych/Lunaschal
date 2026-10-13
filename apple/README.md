@@ -65,7 +65,12 @@ what each device can currently do and which work remains device-only.
   checkpoint, like drawings) and the notebook is listed under Draw → Notebooks to
   continue. Ink the canvas hasn't reported yet is taken into the notebook before
   any page turn, added page, lock or paste replaces the canvas, and before every
-  checkpoint and Save.
+  checkpoint and Save. While writing, ink is checkpointed at most every 5 seconds,
+  off the main thread; only touched pages are encoded and written, and untouched
+  ones are hard-linked from the previous checkpoint. The cover preview and a
+  newspaper's inked-page scan wait for Back, leaving the app, or Save, which save at
+  once, with background time requested so a suspension can't cut the write short.
+  Passed in simulator; the energy saving itself still needs checking on the iPad.
   **Notes belong to the entry draft**: Notes reopens the draft's notebook until the
   entry is saved, and the composer lists it under Attachments (tap to reopen,
   swipe to take it out of the entry; it stays in Draw). **Save** — in the

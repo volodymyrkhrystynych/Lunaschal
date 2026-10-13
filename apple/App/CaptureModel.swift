@@ -555,7 +555,8 @@ final class CaptureModel: ObservableObject {
     /// with everything else as one entry.
     func saveEntryWithNotes(_ text: String, youtubeURLs: [String], notebook: Notebook) async -> Bool {
         if recorder.activeID != nil { recorder.stop() }
-        let pages = NotebookEditorModel(store: notebooks, notebook: notebook)
+        // The editor left with Back may still be saving; it has the pages.
+        let pages = NotebookEditorModel.open(store: notebooks, notebook: notebook)
         guard pages.loaded else {
             message = pages.error ?? "Couldn't open the notes for this entry."
             return false

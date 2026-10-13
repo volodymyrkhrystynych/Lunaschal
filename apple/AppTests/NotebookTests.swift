@@ -305,6 +305,109 @@ final class NotebookEditorTests: XCTestCase {
         XCTAssertFalse(NotebookPage.isBlank(reopened.pages[1]))
     }
 
+    /// The file's identity on disk: a linked file shares it with its source.
+    private func inode(_ store: NotebookStore, _ notebook: Notebook, _ name: String) throws -> Int {
+        let url = try XCTUnwrap(store.previewURL(notebook)).deletingLastPathComponent().appendingPathComponent(name)
+        return try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.systemFileNumber] as? Int)
+    }
+
+    func testAnAutosaveWritesOnlyTheTouchedPageAndKeepsThePreview() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        model.addPage()
+        model.addPage()
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 600, height: 400))))
+        await model.checkpoint()
+        let first = try store.notebook(model.notebook.id)
+        let before = try ["page-0.markup", "page-1.markup", "page-2.markup", "preview.png"].map { try inode(store, first, $0) }
+
+        model.go(to: 1)
+        model.insertScreenshot(try XCTUnwrap(solid(.blue, CGSize(width: 600, height: 400))))
+        await model.checkpoint(final: false)
+        let second = try store.notebook(model.notebook.id)
+        XCTAssertNotEqual(second.checkpoint, first.checkpoint)
+        XCTAssertEqual(try inode(store, second, "page-0.markup"), before[0], "untouched pages are linked, not rewritten")
+        XCTAssertNotEqual(try inode(store, second, "page-1.markup"), before[1], "the touched page is written")
+        XCTAssertEqual(try inode(store, second, "page-2.markup"), before[2])
+        XCTAssertEqual(try inode(store, second, "preview.png"), before[3], "the cover wasn't touched")
+        XCTAssertEqual(second.markedPages, [1, 2])
+        let reopened = NotebookEditorModel(store: store, notebook: second)
+        XCTAssertEqual(reopened.pages.map(NotebookPage.isBlank), [true, false, false])
+    }
+
+    func testOnlyLeavingRedrawsATouchedCover() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        await model.checkpoint()
+        let blank = try Data(contentsOf: XCTUnwrap(store.previewURL(store.notebook(model.notebook.id))))
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 600, height: 400))))
+        await model.checkpoint(final: false)
+        let autosaved = try store.notebook(model.notebook.id)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.previewURL(autosaved))), blank)
+        XCTAssertFalse(NotebookPage.isBlank(NotebookEditorModel(store: store, notebook: autosaved).pages[0]),
+                       "the ink is saved even though the preview waits")
+        // Nothing new to write, but the preview is behind: Back catches it up.
+        await model.checkpoint()
+        let left = try store.notebook(model.notebook.id)
+        XCTAssertNotEqual(left.checkpoint, autosaved.checkpoint)
+        XCTAssertNotEqual(try Data(contentsOf: XCTUnwrap(store.previewURL(left))), blank)
+        // And with nothing behind at all, Back writes nothing.
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(model.notebook.id).checkpoint, left.checkpoint)
+    }
+
+    func testDeletingAPageKeepsEveryOtherPageItsOwnInk() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        model.addPage()
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 600, height: 400))))
+        model.addPage()
+        model.addPage()
+        model.insertScreenshot(try XCTUnwrap(solid(.blue, CGSize(width: 600, height: 300))))
+        await model.checkpoint()
+        let frames = model.pages.map(\.contentsRenderFrame)
+        // Page 3 goes; pages 1, 2 and 4 are linked from where they were.
+        model.go(to: 2)
+        model.deleteCurrentPage()
+        await model.checkpoint(final: false)
+        let reopened = NotebookEditorModel(store: store, notebook: try store.notebook(model.notebook.id))
+        XCTAssertEqual(reopened.pages.map(\.contentsRenderFrame), [frames[0], frames[1], frames[3]])
+    }
+
+    func testReopeningANotebookStillSavingPicksUpItsEditor() async throws {
+        let store = try store()
+        let notebook = try store.create()
+        let first = NotebookEditorModel.open(store: store, notebook: notebook)
+        first.addPage()
+        // Back: the save hasn't landed, and the notebook is opened again.
+        let reopened = NotebookEditorModel.open(store: store, notebook: notebook)
+        XCTAssertTrue(reopened === first)
+        XCTAssertEqual(reopened.pageCount, 2)
+        XCTAssertFalse(NotebookEditorModel.open(store: store, notebook: try store.create()) === first,
+                       "another notebook gets its own editor")
+        await reopened.checkpoint()
+        XCTAssertEqual(try store.notebook(notebook.id).pageCount, 2)
+    }
+
+    func testRestoreWaitsForASaveUnderWay() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        await model.checkpoint()
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 600, height: 400))))
+        await model.checkpoint()
+        let red = model.pages[0].contentsRenderFrame
+        model.insertScreenshot(try XCTUnwrap(solid(.blue, CGSize(width: 600, height: 400))))
+        let saving = Task { await model.checkpoint() }
+        await Task.yield()
+        // The save under way lands first; the restore then goes back from it.
+        await model.restorePrevious()
+        await saving.value
+        XCTAssertNil(model.error)
+        XCTAssertEqual(model.pages[0].contentsRenderFrame, red)
+        XCTAssertEqual(NotebookEditorModel(store: store, notebook: try store.notebook(model.notebook.id))
+            .pages[0].contentsRenderFrame, red)
+    }
+
     func testBackOnAnUntouchedNotebookStillLeavesOneToContinue() async throws {
         let store = try store()
         let notebook = try store.create()

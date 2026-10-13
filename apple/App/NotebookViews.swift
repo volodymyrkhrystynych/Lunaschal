@@ -71,7 +71,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     @Published var status = "Saved on this device"
     @Published var error: String?
     /// A passing word about the last paste. Not `status`, which the save that
-    /// follows every edit overwrites within a second.
+    /// follows every edit overwrites within seconds.
     @Published var notice: String?
     private var noticeTask: Task<Void, Never>?
     /// Bumped when the pages change from outside the canvas (a screenshot, a
@@ -92,12 +92,49 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     private(set) var slots: [CGRect] = []
     /// A converted issue's locked pictures, serialized on the next checkpoint.
     private var pendingLocked: PaperMarkup?
-    /// Each page's last serialized bytes; nil once it changes, so a checkpoint
-    /// of a sixty-page issue re-encodes only the pages that were touched.
-    private var encoded: [Data?] = []
+    /// Who each markup is, parallel to `pages`: a page gets a new identity
+    /// whenever its content changes, and keeps it through pages being added
+    /// or deleted around it. `onDisk` says which file of the current
+    /// checkpoint holds each identity unchanged, so a checkpoint encodes and
+    /// writes only the pages touched since the last one and links the rest.
+    private var pageIDs: [UUID] = []
+    private var onDisk: [UUID: Int] = [:]
+    /// The same for the locked layers, parallel to `locked`.
+    private var lockedIDs: [UUID] = []
+    private var lockedOnDisk: [UUID: Int] = [:]
+    /// Decoded locked layers, so drawing a page doesn't parse its pictures again.
+    private var decodedLocked: [UUID: PaperMarkup] = [:]
+    /// What the current preview was drawn from: the first page and its locked layer.
+    private var previewOf: [UUID]?
+    /// The cover's newsprint at preview size. The PDF page never changes, and
+    /// rendering a broadsheet front page was most of every save's cost.
+    private var coverNewsprint: (index: Int, size: CGSize, image: CGImage?)?
     private var dirty = false
-    private var debounce: Task<Void, Never>?
+    private var autosave: Task<Void, Never>?
     private var lastCheckpoint: Task<Void, Never>?
+    /// How long ink waits before it is saved: often enough that a crash loses
+    /// little, rarely enough that writing isn't spent re-encoding the page.
+    /// Leaving the notebook or the app saves at once, whatever the timer says.
+    static let autosaveInterval: Duration = .seconds(5)
+
+    /// Editors still alive, by notebook. A notebook left with Back finishes
+    /// its save in the background; reopening it straight away must pick up
+    /// that editor, not read a disk the save hasn't reached yet — whose next
+    /// save would then land on top of the one still under way.
+    private static var live: [String: WeakEditor] = [:]
+
+    /// The notebook's editor: the one still alive if there is one, else a new one.
+    static func open(store: NotebookStore, notebook: Notebook) -> NotebookEditorModel {
+        live = live.filter { $0.value.model != nil }
+        if let model = live[notebook.id]?.model, model.loaded, model.store === store {
+            model.zoomEnabled = false
+            model.notice = nil
+            return model
+        }
+        let model = NotebookEditorModel(store: store, notebook: notebook)
+        if model.loaded { live[notebook.id] = WeakEditor(model: model) }
+        return model
+    }
 
     init(store: NotebookStore, notebook: Notebook) {
         self.store = store
@@ -112,14 +149,13 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
                 pages = notebook.isColumn
                     ? [PaperMarkup(bounds: NotebookColumn.bounds(of: slots))]
                     : (0..<max(notebook.pageCount, 1)).map { PaperMarkup(bounds: pageBounds($0)) }
-                encoded = Array(repeating: nil, count: pages.count)
                 // Nothing on disk yet: the first Back must still leave a notebook to continue.
                 dirty = true
             } else {
                 pages = try data.map(PaperMarkup.init(dataRepresentation:))
-                encoded = data
             }
             locked = Self.padded((try? store.lockedLayers(notebook)) ?? [], to: pages.count)
+            adoptDisk(fresh: data.isEmpty)
             if notebook.newspaperDate != nil && !notebook.isColumn { convertToColumn() }
             loaded = true
             refreshPictureState()
@@ -163,8 +199,9 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             }
         }
         pages = [column]
-        encoded = [nil]
         locked = [nil]
+        pageIDs = [UUID()]
+        lockedIDs = [UUID()]
         pendingLocked = pictures
         notebook.layout = .column
         slotCount = count
@@ -192,8 +229,40 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 
     func lockedLayer(_ index: Int) -> PaperMarkup? {
         guard locked.indices.contains(index), let data = locked[index] else { return nil }
-        return try? PaperMarkup(dataRepresentation: data)
+        let id = lockedIDs[index]
+        if let decoded = decodedLocked[id] { return decoded }
+        let decoded = try? PaperMarkup(dataRepresentation: data)
+        decodedLocked[id] = decoded
+        return decoded
     }
+
+    /// The pages and layers as just read from the current checkpoint: each one
+    /// a new identity, and each found in its own file there — or, with nothing
+    /// on disk yet, in none.
+    private func adoptDisk(fresh: Bool) {
+        pageIDs = pages.map { _ in UUID() }
+        lockedIDs = locked.map { _ in UUID() }
+        decodedLocked = [:]
+        onDisk = fresh ? [:] : Dictionary(uniqueKeysWithValues: pageIDs.enumerated().map { ($1, $0) })
+        lockedOnDisk = fresh ? [:] : Dictionary(uniqueKeysWithValues: lockedIDs.enumerated()
+            .filter { locked[$0.offset] != nil }.map { ($1, $0) })
+        previewOf = fresh ? nil : coverIdentity
+    }
+
+    /// Page `index` changed: it is no longer what any saved file holds.
+    private func touch(_ index: Int) {
+        guard pageIDs.indices.contains(index) else { return }
+        pageIDs[index] = UUID()
+    }
+
+    private func touchLocked(_ index: Int) {
+        guard lockedIDs.indices.contains(index) else { return }
+        decodedLocked[lockedIDs[index]] = nil
+        lockedIDs[index] = UUID()
+    }
+
+    /// What the preview is drawn from.
+    private var coverIdentity: [UUID] { [pageIDs.first, lockedIDs.first].compactMap { $0 } }
 
     /// Everything on a page, locked pictures included, for placing a new one.
     private func contentFrame(_ index: Int) -> CGRect {
@@ -249,7 +318,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             slotCount += 1
             slots = columnSlots(count: slotCount)
             pages[0].bounds = NotebookColumn.bounds(of: slots)
-            encoded[0] = nil
+            touch(0)
             current = slotCount - 1
             revision += 1
             canvas?.scroll(toSlot: current)
@@ -257,8 +326,9 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             return
         }
         pages.append(PaperMarkup(bounds: NotebookPage.blank))
-        encoded.append(nil)
         locked.append(nil)
+        pageIDs.append(UUID())
+        lockedIDs.append(UUID())
         current = pages.count - 1
         refreshPictureState()
         revision += 1
@@ -270,8 +340,9 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         syncFromCanvas()
         let index = current
         pages.remove(at: index)
-        encoded.remove(at: index)
         locked.remove(at: index)
+        pageIDs.remove(at: index)
+        lockedIDs.remove(at: index)
         marked = Set(marked.compactMap { $0 == index ? nil : ($0 > index ? $0 - 1 : $0) })
         current = min(index, pages.count - 1)
         refreshPictureState()
@@ -291,10 +362,11 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     func canvasChanged(_ markup: PaperMarkup, page: Int) {
         guard loaded, pages.indices.contains(page), pages[page] != markup else { return }
         pages[page] = markup
-        encoded[page] = nil
+        touch(page)
         // A column's written-on pages are found from the ink at checkpoint.
-        if !isColumn { marked.insert(page) }
-        if page == markupIndex { refreshPictureState() }
+        if !isColumn && !marked.contains(page) { marked.insert(page) }
+        // Whether the page has pictures is checked at the next save, not per
+        // stroke: on a newspaper that meant copying the whole issue's ink.
         scheduleCheckpoint()
     }
 
@@ -318,7 +390,8 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             guard pages.indices.contains(index), pages[index] == source else { return }
             locked[index] = data
             pages[index] = rest
-            encoded[index] = nil
+            touch(index)
+            touchLocked(index)
             finishLayerChange()
             status = "Pictures on this page locked"
         } catch { self.error = "Couldn't lock the pictures. \(error.localizedDescription)" }
@@ -339,7 +412,8 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             guard pages.indices.contains(index), pages[index] == source else { return }
             locked[index] = nil
             pages[index] = merged
-            encoded[index] = nil
+            touch(index)
+            touchLocked(index)
             finishLayerChange()
             status = "Pictures on this page unlocked"
         } catch { self.error = "Couldn't unlock the pictures. \(error.localizedDescription)" }
@@ -349,8 +423,9 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         refreshPictureState()
         revision += 1
         dirty = true
-        debounce?.cancel()
-        debounce = Task { [weak self] in await self?.checkpoint() }
+        autosave?.cancel()
+        autosave = nil
+        Task { [weak self] in await self?.checkpoint() }
     }
 
     // MARK: Screenshots
@@ -377,7 +452,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         }
         let x = page.minX + (pdfPage(current) == nil ? (page.width - size.width) / 2 : page.width - margin - size.width)
         pages[index].insertNewImage(image, frame: CGRect(origin: CGPoint(x: x, y: y), size: size))
-        encoded[index] = nil
+        touch(index)
         marked.insert(current)
         refreshPictureState()
         revision += 1
@@ -486,60 +561,110 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 
     // MARK: Saving
 
+    /// Ink changed. Saving waits for the autosave tick rather than following
+    /// every stroke: a save re-encoded the page and drew a preview, and a
+    /// pause in handwriting made one every second or so.
     func scheduleCheckpoint() {
         dirty = true
-        status = "Saving on device…"
-        debounce?.cancel()
-        debounce = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(700)) } catch { return }
-            await self?.checkpoint()
+        // Only on a change, or every stroke re-renders the editor around the canvas.
+        if status != Self.saving { status = Self.saving }
+        guard autosave == nil else { return }
+        autosave = Task { [weak self] in
+            do { try await Task.sleep(for: Self.autosaveInterval) } catch { return }
+            self?.autosave = nil
+            await self?.checkpoint(final: false)
         }
     }
 
+    private static let saving = "Saving on device…"
+
     /// Saves now. Checkpoints run one after another, never interleaved.
-    func checkpoint() async {
+    /// `final` is for leaving — Back, the app going to the background, Save:
+    /// it also redraws the preview and works out which newspaper pages carry
+    /// ink, both of which an autosave leaves as they were.
+    func checkpoint(final: Bool = true) async {
         syncFromCanvas()
-        debounce?.cancel()
+        autosave?.cancel()
+        autosave = nil
         let previous = lastCheckpoint
         let task = Task { [weak self] in
             await previous?.value
-            await self?.performCheckpoint()
+            await self?.performCheckpoint(final: final)
         }
         lastCheckpoint = task
         await task.value
     }
 
-    private func performCheckpoint() async {
-        guard loaded, dirty else { return }
+    /// Leaving the app or the notebook. iOS suspends a backgrounded app within
+    /// seconds, which could freeze a save halfway; asking for background time
+    /// lets it finish. The checkpoint itself is no different from Back's.
+    func saveBeforeLeaving() {
+        let app = UIApplication.shared
+        let ticket = BackgroundTicket()
+        ticket.id = app.beginBackgroundTask(withName: "Save notebook") { ticket.end() }
+        // Strongly: Back lets go of the editor before this task even starts,
+        // and a weak capture would find nothing left to save.
+        Task {
+            await checkpoint()
+            ticket.end()
+        }
+    }
+
+    private func performCheckpoint(final: Bool) async {
+        guard loaded, dirty || (final && previewOf != coverIdentity) else { return }
         dirty = false
         if let pictures = pendingLocked {
             do {
                 locked = [try await pictures.dataRepresentation()]
+                touchLocked(0)
                 pendingLocked = nil
             } catch { dirty = true; self.error = error.localizedDescription; return }
         }
-        let snapshot = pages, layers = locked, column = isColumn, slots = slotCount
+        refreshPictureState()
+        let snapshot = pages, ids = pageIDs, layers = locked, layerIDs = lockedIDs
+        let column = isColumn, slots = slotCount, cover = coverIdentity
+        let hasCheckpoint = notebook.checkpoint != nil
         var keep = marked
         do {
-            var data: [Data] = []
+            // Only what changed since the last checkpoint is encoded; the rest is linked.
+            var files: [NotebookFile] = []
             for (index, page) in snapshot.enumerated() {
-                if index < encoded.count, let cached = encoded[index] { data.append(cached); continue }
-                data.append(try await page.dataRepresentation())
+                if let saved = onDisk[ids[index]] { files.append(.kept(saved)); continue }
+                files.append(.bytes(try await page.dataRepresentation()))
             }
-            if column, let ink = snapshot.first {
+            let lockedFiles: [NotebookFile?] = layers.enumerated().map { index, data in
+                guard let data else { return nil }
+                return lockedOnDisk[layerIDs[index]].map(NotebookFile.kept) ?? .bytes(data)
+            }
+            if final, column, let ink = snapshot.first {
                 keep = await inkedSlots(ink, slots: slots)
                 marked = keep
             }
-            guard let preview = await render(0, width: 400, markup: snapshot.first),
-                  let png = UIImage(cgImage: preview).pngData() else { throw DrawingError.incompleteCheckpoint }
-            notebook = try store.checkpoint(notebook.id, pages: data, locked: layers, marked: keep, preview: png,
-                                            column: column ? slots : nil)
-            // Only cache what is still the page; an edit during the await stays dirty.
-            if pages.count == snapshot.count {
-                for index in pages.indices where pages[index] == snapshot[index] { encoded[index] = data[index] }
+            var preview: Data?
+            if previewOf != cover || !hasCheckpoint {
+                if final || !hasCheckpoint {
+                    guard let image = await render(0, width: 400, markup: snapshot.first, cacheNewsprint: true),
+                          let png = await Self.png(image) else { throw DrawingError.incompleteCheckpoint }
+                    preview = png
+                }
             }
+            let id = notebook.id, store = store, marks = keep
+            let drawn = preview
+            // The writing itself, off the main thread; the store takes turns with
+            // the main thread's renames and settings.
+            let saved = try await Task.detached(priority: .utility) {
+                try store.checkpoint(id, files: files, locked: lockedFiles, marked: marks, preview: drawn,
+                                     column: column ? slots : nil)
+            }.value
+            notebook = saved
+            // The new checkpoint holds the snapshot, file for file. A page
+            // changed during the write already has a new identity, so it isn't here.
+            onDisk = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
+            lockedOnDisk = Dictionary(uniqueKeysWithValues: layerIDs.enumerated()
+                .filter { layers[$0.offset] != nil }.map { ($1, $0) })
+            if drawn != nil { previewOf = cover }
             error = nil
-            status = dirty ? "Saving on device…" : "Saved on this device"
+            status = dirty ? Self.saving : "Saved on this device"
         } catch {
             dirty = true
             self.error = error.localizedDescription
@@ -547,13 +672,17 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         }
     }
 
-    func restorePrevious() {
+    func restorePrevious() async {
+        // A save already under way would land on top of the restore.
+        autosave?.cancel()
+        autosave = nil
+        await lastCheckpoint?.value
         do {
             notebook = try store.restorePrevious(notebook.id)
             let data = try store.pages(notebook)
             pages = try data.map(PaperMarkup.init(dataRepresentation:))
-            encoded = data
             locked = Self.padded(try store.lockedLayers(notebook), to: pages.count)
+            adoptDisk(fresh: false)
             marked = notebook.markedPages
             slotCount = max(notebook.pageCount, 1)
             slots = columnSlots(count: slotCount)
@@ -562,7 +691,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             current = min(current, pageCount - 1)
             refreshPictureState()
             loaded = true
-            dirty = pendingLocked != nil || encoded.contains { $0 == nil }
+            dirty = pendingLocked != nil || pageIDs.contains { onDisk[$0] == nil }
             error = nil
             revision += 1
             status = "Previous saved version restored"
@@ -570,23 +699,52 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     }
 
     /// One page as a picture: the newspaper page if there is one, then the
-    /// markup over it.
-    func render(_ index: Int, width: CGFloat, markup: PaperMarkup? = nil) async -> CGImage? {
-        if isColumn { return await renderSlot(index, width: width, markup: markup ?? pages.first) }
-        guard pages.indices.contains(index) || markup != nil else { return nil }
-        let bounds = pageBounds(index)
-        let size = CGSize(width: width.rounded(), height: (bounds.height * width / bounds.width).rounded())
+    /// markup over it. Drawn off the main thread.
+    func render(_ index: Int, width: CGFloat, markup: PaperMarkup? = nil, cacheNewsprint: Bool = false) async -> CGImage? {
+        let region: CGRect
+        let layers: [PaperMarkup?]
+        if isColumn {
+            guard let ink = markup ?? pages.first, slots.indices.contains(index) else { return nil }
+            region = slots[index]
+            layers = [lockedLayer(0), ink]
+        } else {
+            guard pages.indices.contains(index) || markup != nil else { return nil }
+            region = pageBounds(index)
+            layers = [lockedLayer(index), markup ?? pages[index]]
+        }
+        let size = CGSize(width: width.rounded(), height: (region.height * width / region.width).rounded())
+        let background = await newsprint(index, size: size, cache: cacheNewsprint)
+        return await Self.picture(size: size, opaque: true, background: background, markups: layers, region: region)
+    }
+
+    /// The PDF page under page `index` at `size`, rendered off the main thread.
+    private func newsprint(_ index: Int, size: CGSize, cache: Bool) async -> CGImage? {
+        guard let page = pdfPage(index) else { return nil }
+        if cache, let hit = coverNewsprint, hit.index == index, hit.size == size { return hit.image }
+        let image = await Task.detached(priority: .utility) { page.thumbnail(of: size, for: .cropBox).cgImage }.value
+        if cache { coverNewsprint = (index, size, image) }
+        return image
+    }
+
+    /// A `size`-pixel picture of `region`: white (when opaque) with the
+    /// background under the markups. Nonisolated, so it draws off the main thread.
+    nonisolated static func picture(size: CGSize, opaque: Bool, background: CGImage?, markups: [PaperMarkup?],
+                                    region: CGRect) async -> CGImage? {
         guard let context = CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8,
                                       bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         let frame = CGRect(origin: .zero, size: size)
-        context.setFillColor(UIColor.white.cgColor)
-        context.fill(frame)
-        if let page = pdfPage(index), let background = page.thumbnail(of: size, for: .cropBox).cgImage {
-            context.draw(background, in: frame)
+        if opaque {
+            context.setFillColor(UIColor.white.cgColor)
+            context.fill(frame)
         }
-        await Self.draw([lockedLayer(index), markup ?? pages[index]], region: bounds, into: context, size: size)
+        if let background { context.draw(background, in: frame) }
+        await draw(markups, region: region, into: context, size: size)
         return context.makeImage()
+    }
+
+    nonisolated static func png(_ image: CGImage) async -> Data? {
+        await Task.detached(priority: .utility) { UIImage(cgImage: image).pngData() }.value
     }
 
     /// Draws `region` of the markups so it fills a `size`-pixel picture.
@@ -598,7 +756,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     /// filed at 2000 pixels had its writing shrunk to 62% towards the top-left
     /// corner, as if written on a smaller page. Nothing here asks PaperKit to
     /// honour a scale, so the two can't differ.
-    static func draw(_ markups: [PaperMarkup?], region: CGRect, into context: CGContext, size: CGSize) async {
+    nonisolated static func draw(_ markups: [PaperMarkup?], region: CGRect, into context: CGContext, size: CGSize) async {
         guard region.width > 0 else { return }
         let picture = CGRect(origin: .zero, size: size)
         let toPixels = pixelTransform(region: region, width: size.width)
@@ -617,28 +775,9 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     }
 
     /// Canvas units in `region` to pixels of a picture `width` wide.
-    static func pixelTransform(region: CGRect, width: CGFloat) -> CGAffineTransform {
+    nonisolated static func pixelTransform(region: CGRect, width: CGFloat) -> CGAffineTransform {
         let scale = width / region.width
         return CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: -region.minX * scale, ty: -region.minY * scale)
-    }
-
-    /// One page of the column as a picture of its own shape: the newspaper
-    /// page, then the ink over it.
-    private func renderSlot(_ index: Int, width: CGFloat, markup: PaperMarkup?) async -> CGImage? {
-        guard let markup, slots.indices.contains(index) else { return nil }
-        let slot = slots[index]
-        let size = CGSize(width: width.rounded(), height: (slot.height * width / slot.width).rounded())
-        guard let context = CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8,
-                                      bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        let frame = CGRect(origin: .zero, size: size)
-        context.setFillColor(UIColor.white.cgColor)
-        context.fill(frame)
-        if let page = pdfPage(index), let background = page.thumbnail(of: size, for: .cropBox).cgImage {
-            context.draw(background, in: frame)
-        }
-        await Self.draw([lockedLayer(0), markup], region: slot, into: context, size: size)
-        return context.makeImage()
     }
 
     /// Which pages of a column carry anything — ink, pictures, text — from one
@@ -647,44 +786,42 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     private func inkedSlots(_ markup: PaperMarkup, slots: Int) async -> Set<Int> {
         let width = 124
         let height = max(1, Int((markup.bounds.height * CGFloat(width) / markup.bounds.width).rounded()))
-        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return marked }
-        await Self.draw([lockedLayer(0), markup], region: markup.bounds, into: context,
-                        size: CGSize(width: width, height: height))
-        guard let bytes = context.data?.assumingMemoryBound(to: UInt8.self) else { return marked }
-        // The context's memory runs top row first.
-        let rows = (0..<height).map { row in
-            (0..<width).contains { bytes[row * width * 4 + $0 * 4 + 3] > 0 }
-        }
+        guard let rows = await Self.inkedRows([lockedLayer(0), markup], region: markup.bounds, width: width, height: height)
+        else { return marked }
         return NotebookColumn.slotsWithInk(rows: rows, unitsPerRow: markup.bounds.height / CGFloat(height),
                                            slots: Array(self.slots.prefix(slots)))
     }
 
-    /// The locked pictures alone, transparent, for the canvas to show under the ink.
-    func lockedImage(_ index: Int, width: CGFloat) async -> UIImage? {
-        if isColumn { return await lockedSlotImage(index, width: width) }
-        guard let layer = lockedLayer(index) else { return nil }
-        let bounds = pageBounds(index)
-        let size = CGSize(width: width.rounded(), height: (bounds.height * width / bounds.width).rounded())
-        guard let context = CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8,
-                                      bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+    /// Top row first: whether anything was drawn in each row.
+    nonisolated private static func inkedRows(_ markups: [PaperMarkup?], region: CGRect, width: Int, height: Int) async -> [Bool]? {
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        await Self.draw([layer], region: bounds, into: context, size: size)
-        return context.makeImage().map { UIImage(cgImage: $0) }
+        await draw(markups, region: region, into: context, size: CGSize(width: width, height: height))
+        guard let bytes = context.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        // The context's memory runs top row first.
+        return (0..<height).map { row in
+            (0..<width).contains { bytes[row * width * 4 + $0 * 4 + 3] > 0 }
+        }
     }
 
-    /// One frame's worth of a column's locked pictures.
-    private func lockedSlotImage(_ index: Int, width: CGFloat) async -> UIImage? {
-        guard let layer = lockedLayer(0) else { return nil }
-        guard slots.indices.contains(index) else { return nil }
-        let slot = slots[index]
-        let size = CGSize(width: width.rounded(), height: (slot.height * width / slot.width).rounded())
-        guard let context = CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8,
-                                      bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        await Self.draw([layer], region: slot, into: context, size: size)
-        return context.makeImage().map { UIImage(cgImage: $0) }
+    /// The locked pictures alone, transparent, for the canvas to show under the
+    /// ink: a page's own, or one frame's worth of a column's.
+    func lockedImage(_ index: Int, width: CGFloat) async -> UIImage? {
+        let region: CGRect
+        let layer: PaperMarkup?
+        if isColumn {
+            guard slots.indices.contains(index) else { return nil }
+            region = slots[index]
+            layer = lockedLayer(0)
+        } else {
+            region = pageBounds(index)
+            layer = lockedLayer(index)
+        }
+        guard let layer else { return nil }
+        let size = CGSize(width: width.rounded(), height: (region.height * width / region.width).rounded())
+        return await Self.picture(size: size, opaque: false, background: nil, markups: [layer], region: region)
+            .map { UIImage(cgImage: $0) }
     }
 
     /// The pages a Save files, as JPEGs. A blank notebook drops empty pages;
@@ -717,6 +854,22 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     func adopt(_ saved: Notebook) { notebook = saved }
 }
 
+private struct WeakEditor {
+    weak var model: NotebookEditorModel?
+}
+
+/// A background-time request, ended once: by the save finishing or by iOS
+/// running out of patience, whichever comes first.
+@MainActor
+private final class BackgroundTicket {
+    var id = UIBackgroundTaskIdentifier.invalid
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
+    }
+}
+
 // MARK: Canvas
 
 /// PaperKit's markup view. A paged notebook shows one page at a time, the
@@ -741,6 +894,15 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     private var slotLockedViews: [Int: UIImageView] = [:]
     private var loadedSlots: Set<Int> = []
     private let thumbnails = DispatchQueue(label: "notebook.newsprint", qos: .userInitiated)
+    /// Newsprint already rendered, so scrolling back to a page shows it again
+    /// instead of rendering a broadsheet over. Bounded, and emptied by the
+    /// system under memory pressure; the three pages on screen are held by
+    /// their image views regardless.
+    private let newsprint: NSCache<NSNumber, UIImage> = {
+        let cache = NSCache<NSNumber, UIImage>()
+        cache.totalCostLimit = 192 * 1024 * 1024
+        return cache
+    }()
     #if DEBUG
     /// What is shown, in canvas units, for UI tests to read: PaperKit's
     /// scroll view is not in the accessibility tree.
@@ -1001,15 +1163,23 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         let frame = model.pageRect(index)
         if let page = model.pdfPage(index) {
             let image = slotViews[index]
-            // Off the main thread: a broadsheet at twice reading resolution is
-            // a noticeable pause, and it would land mid-scroll.
-            thumbnails.async { [weak self] in
-                // Twice the page's size, so zooming in on small print stays sharp.
-                let picture = page.thumbnail(of: CGSize(width: frame.width * 2, height: frame.height * 2), for: .cropBox)
-                DispatchQueue.main.async {
-                    guard let self, self.loadedSlots.contains(index), self.slotViews.indices.contains(index),
-                          self.slotViews[index] === image else { return }
-                    image.image = picture
+            if let cached = newsprint.object(forKey: index as NSNumber) {
+                image.image = cached
+            } else {
+                // Off the main thread: a broadsheet at twice reading resolution is
+                // a noticeable pause, and it would land mid-scroll.
+                thumbnails.async { [weak self] in
+                    // Gone off screen again before its turn: not worth rendering.
+                    guard let self, DispatchQueue.main.sync(execute: { self.loadedSlots.contains(index) }) else { return }
+                    // Twice the page's size, so zooming in on small print stays sharp.
+                    let picture = page.thumbnail(of: CGSize(width: frame.width * 2, height: frame.height * 2), for: .cropBox)
+                    DispatchQueue.main.async {
+                        let pixels = picture.size.width * picture.scale * picture.size.height * picture.scale
+                        self.newsprint.setObject(picture, forKey: index as NSNumber, cost: Int(pixels) * 4)
+                        guard self.loadedSlots.contains(index), self.slotViews.indices.contains(index),
+                              self.slotViews[index] === image else { return }
+                        image.image = picture
+                    }
                 }
             }
         }
@@ -1130,7 +1300,7 @@ struct NotebookEditor: View {
 
     init(owner: CaptureModel, notebook: Notebook) {
         self.owner = owner
-        _model = StateObject(wrappedValue: NotebookEditorModel(store: owner.notebooks, notebook: notebook))
+        _model = StateObject(wrappedValue: NotebookEditorModel.open(store: owner.notebooks, notebook: notebook))
     }
 
     var body: some View {
@@ -1138,7 +1308,7 @@ struct NotebookEditor: View {
             if let error = model.error {
                 VStack(spacing: 6) {
                     Text(error).font(.footnote).foregroundStyle(.red)
-                    Button("Restore previous saved version") { model.restorePrevious() }.font(.footnote)
+                    Button("Restore previous saved version") { Task { await model.restorePrevious() } }.font(.footnote)
                 }
                 .padding(8)
             }
@@ -1231,9 +1401,10 @@ struct NotebookEditor: View {
         }
         .onDisappear {
             if NotebookSession.shared.editor === model { NotebookSession.shared.editor = nil }
-            Task { await model.checkpoint() }
+            model.saveBeforeLeaving()
         }
-        .onChange(of: phase) { _, value in if value != .active { Task { await model.checkpoint() } } }
+        // Switching apps or locking the screen saves now, not at the next tick.
+        .onChange(of: phase) { _, value in if value != .active { model.saveBeforeLeaving() } }
     }
 
     @ViewBuilder private var pageControls: some View {
