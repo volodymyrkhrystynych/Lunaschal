@@ -323,7 +323,9 @@ what each device can currently do and which work remains device-only.
   their colours, overlapping events side by side,
   optional drag editing (the bottom-left button cycles **Off → Move → Resize → Off**,
   starting Off each visit; taps still open events), and shaded
-  wake/sleep bands with an editor; changes are saved on the device and replayed in order on the next sync. More
+  wake/sleep bands with an editor, plus a reading rail on the right edge showing the
+  day's in-app reading (fetched from `/api/calendar/reading/<date>`, cached for offline;
+  titles show until the rail is tapped); changes are saved on the device and replayed in order on the next sync. More
   holds Library, Learning and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
   Library/Folders switch. Library mode has provider pills and sorts by the site's latest
   chapter date (`latest_activity`), not the download time. Folders mode lists folders and Unsorted,

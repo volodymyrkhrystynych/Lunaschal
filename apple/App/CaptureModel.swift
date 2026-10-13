@@ -40,6 +40,8 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var calendarExceptions: [CalendarException] = []
     /// Wake and sleep per day key: the server's last answer with queued hand-set times on top.
     @Published private(set) var sleepDays: [String: SleepDay] = [:]
+    /// Each day's in-app reading, for the day view's reading rail.
+    @Published private(set) var readingDays: [String: [CalendarReadingSpan]] = [:]
     private var journalLimit = 200
     private var journalQuery = ""
     @Published private(set) var pendingEdits: [PendingEdit] = []
@@ -447,6 +449,25 @@ final class CaptureModel: ObservableObject {
         for stale in cache.keys.sorted().dropLast(60) { cache[stale] = nil }
         try? JSONEncoder().encode(cache).write(to: sleepCacheURL, options: .atomic)
         await reloadCalendar()
+    }
+
+    private var readingCacheURL: URL { calendarOutbox.root.appendingPathComponent("reading.json") }
+
+    /// Asks the server for a day's reading; offline, the cached answer stands.
+    func refreshReading(_ day: String) async {
+        if readingDays.isEmpty {
+            readingDays = (try? JSONDecoder().decode([String: [CalendarReadingSpan]].self,
+                                                     from: Data(contentsOf: readingCacheURL))) ?? [:]
+        }
+        #if DEBUG
+        if let seeded = CalendarReadingFixture.spans(day: day) { readingDays[day] = seeded; return }
+        #endif
+        guard let api = chatAPI(), let fetched = try? await api.reading(day: day) else { return }
+        var cache = readingDays
+        cache[day] = fetched
+        for stale in cache.keys.sorted().dropLast(60) { cache[stale] = nil }
+        readingDays = cache
+        try? JSONEncoder().encode(cache).write(to: readingCacheURL, options: .atomic)
     }
 
     private func refreshLibraryBytes() {

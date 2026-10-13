@@ -346,7 +346,9 @@ export function DayView({
               zoom={zoom}
             />
           )}
-          <div className="absolute left-20 right-2 top-0 bottom-0 pointer-events-none">
+          <div
+            className={`absolute left-20 ${reading.length ? 'right-8' : 'right-2'} top-0 bottom-0 pointer-events-none`}
+          >
             <DayEventLayer
               events={laidOut}
               pxPerMinute={zoom}

@@ -13,7 +13,9 @@ export function ReadingTimeline({
   spans: CalendarReadingSpan[];
   zoom: number;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  // Titles show by default; clicking the rail (or a title) hides them for
+  // when they cover an event.
+  const [expanded, setExpanded] = useState(true);
   const layout = readingLayout(date, sleep, spans);
   // Short chapters can sit closer together than two lines of text. Stagger
   // labels and connect them to their real times instead of covering a title.
@@ -25,7 +27,7 @@ export function ReadingTimeline({
   });
   if (layout.end <= layout.start) return null;
   return (
-    <div className="absolute left-12 top-0 bottom-0 w-6 z-20 pointer-events-none">
+    <div className="absolute right-0 top-0 bottom-0 w-6 z-20 pointer-events-none">
       <button
         type="button"
         aria-label="Leisure reading timeline"
@@ -54,14 +56,17 @@ export function ReadingTimeline({
         labels.map(span => (
           <div key={span.id}>
             <span
-              className="absolute left-5 border-l border-t border-emerald-400/50 w-1"
+              className="absolute right-5 border-r border-t border-emerald-400/50 w-1"
               style={{
                 top: span.start * zoom,
                 height: span.top - span.start * zoom + 8,
               }}
             />
-            <div
-              className="absolute left-6 w-48 max-w-[55vw] rounded bg-[var(--color-surface)] border border-emerald-400/40 px-2 py-1 text-xs shadow-lg pointer-events-auto"
+            <button
+              type="button"
+              aria-label={`Hide reading titles (${span.title} · Ch. ${span.chapterNumber})`}
+              onClick={() => setExpanded(false)}
+              className="absolute right-6 w-48 max-w-[55vw] text-right rounded bg-[var(--color-surface)] border border-emerald-400/40 px-2 py-1 text-xs shadow-lg pointer-events-auto"
               style={{ top: span.top }}
             >
               <div
@@ -74,7 +79,7 @@ export function ReadingTimeline({
                 Leisure · {formatClock(span.startedAt)}–
                 {formatClock(span.endedAt)}
               </div>
-            </div>
+            </button>
           </div>
         ))}
     </div>

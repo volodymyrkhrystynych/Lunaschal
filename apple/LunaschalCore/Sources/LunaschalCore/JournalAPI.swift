@@ -387,6 +387,14 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return try JSONDecoder().decode(SleepDay.self, from: data)
     }
 
+    /// A day's in-app reading, drawn on the day view's reading rail. Recorded
+    /// by the reader on whichever device, so it's fetched rather than replicated.
+    public func reading(day: String) async throws -> [CalendarReadingSpan] {
+        let (data, response) = try await session.data(for: request("api/calendar/reading/\(try Self.calendarPath(day))"))
+        try check(data, response)
+        return try JSONDecoder().decode([CalendarReadingSpan].self, from: data)
+    }
+
     public func mediaCollections() async throws -> [String] {
         let (data, response) = try await session.data(for: request("api/mobile/capabilities"))
         try check(data, response)

@@ -162,9 +162,12 @@ existing chapter bodies or changing their IDs and reading state.
 
 A chapter open **and being scrolled** is recorded as reading time. Calendar's day
 view projects these spans directly through `GET /api/calendar/reading/<date>`
-onto a leisure line beside the hour labels, bounded by the existing wake/sleep
-times (unknown ends use the 4am day edges). Clicking or keyboard-activating the
-line reveals titles and chapter positions; labels start hidden. No event rows
+onto a leisure rail down the right edge, bounded by the existing wake/sleep
+times (unknown ends use the 4am day edges). Titles and chapter positions hang to
+its left and show by default; clicking the rail (or a title) hides them, for when
+they cover an event. The iOS day view draws the same rail natively
+(`apple/LunaschalCore/.../CalendarReading.swift`, a port of
+`src/lib/calendarReading.ts`), caching each day's answer for offline. No event rows
 or approval steps are needed, and existing spans appear retrospectively. The
 briefing keeps `reading:` sources as chronology anchors but cannot stage events
 citing them, or proposals based solely on chapter commentary. Older pending

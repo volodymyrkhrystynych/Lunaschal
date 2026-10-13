@@ -567,6 +567,36 @@ final class OfflineCaptureTests: XCTestCase {
             .matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch.exists)
     }
 
+    func testCalendarReadingRailShowsTitlesUntilTapped() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-calendarReadingFixture"]
+        app.launch()
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        pages.buttons["Calendar"].tap()
+        let rail = app.buttons["calendar-reading-rail"]
+        XCTAssertTrue(rail.waitForExistence(timeout: 5))
+        // On the right edge, not in the event lanes by the hour labels.
+        XCTAssertGreaterThan(rail.frame.midX, app.windows.firstMatch.frame.width * 0.8)
+        let labels = app.descendants(matching: .any).matching(identifier: "calendar-reading-label")
+        XCTAssertTrue(labels.firstMatch.waitForExistence(timeout: 5), "titles show by default")
+        XCTAssertEqual(labels.count, 2)
+        XCTAssertTrue(labels.firstMatch.label.contains("Worm · Ch. 12"))
+        XCTAssertEqual(rail.value as? String, "titles shown")
+        // The rail runs the whole waking day, so its middle may be scrolled
+        // away; tap it level with the first chapter, which is on screen.
+        let level = labels.firstMatch.frame.minY + 6
+        func tapRail() {
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: rail.frame.midX, dy: level)).tap()
+        }
+        tapRail()
+        XCTAssertTrue(labels.firstMatch.waitForNonExistence(timeout: 5), "tapping the rail hides them")
+        XCTAssertEqual(rail.value as? String, "titles hidden")
+        tapRail()
+        XCTAssertTrue(labels.firstMatch.waitForExistence(timeout: 5))
+    }
+
     func testCalendarEventsOverlapTakeCategoriesAndDragWithoutAServer() {
         let tag = String(UUID().uuidString.prefix(6))
         let app = XCUIApplication()
