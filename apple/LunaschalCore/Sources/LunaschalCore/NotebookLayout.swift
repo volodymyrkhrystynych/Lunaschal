@@ -72,4 +72,18 @@ public enum NotebookFit {
         guard view.width > 0, view.height > 0 else { return page }
         return CGRect(x: page.minX, y: page.minY, width: page.width, height: page.width * view.height / view.width)
     }
+
+    /// How far the canvas may zoom, from the fit up to `maximum` times it.
+    /// With zoom off the range is the fit alone, so a palm that lands as a
+    /// pinch has nowhere to take the page.
+    public static func zoomRange(fitted: CGFloat, maximum: CGFloat, enabled: Bool) -> ClosedRange<CGFloat> {
+        enabled ? fitted...(fitted * max(maximum, 1)) : fitted...fitted
+    }
+
+    /// Back to the fit's scale from a zoomed-in `visible` frame: the fit's
+    /// width and sideways position, centred down the page on wherever the
+    /// reader was looking, never above the top.
+    public static func unzoomed(_ visible: CGRect, fit: CGRect) -> CGRect {
+        CGRect(x: fit.minX, y: max(visible.midY - fit.height / 2, 0), width: fit.width, height: fit.height)
+    }
 }

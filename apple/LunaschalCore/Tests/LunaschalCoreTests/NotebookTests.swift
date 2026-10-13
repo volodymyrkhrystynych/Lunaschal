@@ -341,4 +341,20 @@ final class NotebookFitTests: XCTestCase {
             XCTAssertEqual(shown.height / shown.width, view.height / view.width, accuracy: 0.001)
         }
     }
+
+    func testZoomOffPinsTheRangeToTheFit() {
+        XCTAssertEqual(NotebookFit.zoomRange(fitted: 0.8, maximum: 6, enabled: false), 0.8...0.8)
+        let on = NotebookFit.zoomRange(fitted: 0.8, maximum: 6, enabled: true)
+        XCTAssertEqual(on.lowerBound, 0.8)
+        XCTAssertEqual(on.upperBound, 4.8, accuracy: 0.0001)
+    }
+
+    func testUnzoomingKeepsTheReaderWhereTheyWereLooking() {
+        let fit = CGRect(x: 0, y: 0, width: 1240, height: 1560)
+        // Zoomed in on a spot two pages down: back to full width, centred there.
+        let back = NotebookFit.unzoomed(CGRect(x: 600, y: 3000, width: 200, height: 250), fit: fit)
+        XCTAssertEqual(back, CGRect(x: 0, y: 3125 - 780, width: 1240, height: 1560))
+        // Zoomed in near the top: never above the first page.
+        XCTAssertEqual(NotebookFit.unzoomed(CGRect(x: 100, y: 10, width: 200, height: 250), fit: fit).minY, 0)
+    }
 }

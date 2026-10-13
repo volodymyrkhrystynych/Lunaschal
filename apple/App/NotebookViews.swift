@@ -77,6 +77,10 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     /// Bumped when the pages change from outside the canvas (a screenshot, a
     /// page added or removed, a restore), so the surface reloads its markup.
     @Published private(set) var revision = 0
+    /// Whether a pinch zooms the page. Off each time a notebook opens: a palm
+    /// the Pencil's palm rejection misses lands as a pinch and zooms the page
+    /// out from under the nib, and zooming is rarely wanted.
+    @Published var zoomEnabled = false
     let store: NotebookStore
     let pdf: PDFDocument?
     weak var canvas: NotebookCanvasController?
@@ -757,6 +761,8 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     }
     /// PaperKit's scroll views, once found and told one finger doesn't scroll.
     private let heldScrolls = NSHashTable<UIScrollView>.weakObjects()
+    /// The zoom switch as last applied to the canvas.
+    private var zoomApplied = false
 
     init(model: NotebookEditorModel) {
         self.model = model
@@ -820,6 +826,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         holdPageStill()
+        applyZoomGestures()
         // Nothing on a notes page moves sideways — the toolbar turns and adds
         // pages — and the system's swipe back from the left edge would take
         // the whole notebook away under a stray palm. The Back button stays.
@@ -910,13 +917,44 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     /// page is off screen and nothing scrolls sideways.
     private func show(_ frame: CGRect, animated: Bool = false) {
         let fitted = view.bounds.width / max(frame.width, 1)
-        paper.zoomRange = fitted...(fitted * Self.maximumZoom)
+        paper.zoomRange = NotebookFit.zoomRange(fitted: fitted, maximum: Self.maximumZoom, enabled: model.zoomEnabled)
         paper.setContentVisibleFrame(frame, animated: animated)
         reportVisibleFrame()
     }
 
     /// How far past the fit a page can be zoomed: small print on a broadsheet.
     private static let maximumZoom: CGFloat = 6
+
+    /// The menu's zoom switch. Turning it off goes back to the fit: a notes
+    /// page whole again, the newspaper at full width where it was being read.
+    func setZoom(_ enabled: Bool) {
+        guard isViewLoaded, enabled != zoomApplied else { return }
+        zoomApplied = enabled
+        applyZoomGestures()
+        guard view.bounds.width > 0 else { return }
+        if model.isColumn {
+            let fit = NotebookColumn.visibleFrame(slot: model.pageRect(model.current), view: view.bounds.size)
+            show(enabled ? paper.contentVisibleFrame : NotebookFit.unzoomed(paper.contentVisibleFrame, fit: fit))
+        } else if model.pages.indices.contains(shownPage) {
+            let fit = NotebookFit.whole(model.pageBounds(shownPage), in: view.bounds.size)
+            // On: the range opens from the fit without moving the page.
+            show(enabled ? paper.contentVisibleFrame : fit)
+        }
+    }
+
+    /// The zoom range alone still lets a pinch tug at the page before it
+    /// bounces back; with zoom off, PaperKit's scroll views stop listening.
+    private func applyZoomGestures() {
+        guard isViewLoaded else { return }
+        var pending: [UIView] = [paper.view]
+        while let next = pending.popLast() {
+            if let scroll = next as? UIScrollView {
+                scroll.pinchGestureRecognizer?.isEnabled = zoomApplied
+                scroll.bouncesZoom = zoomApplied
+            }
+            pending.append(contentsOf: next.subviews)
+        }
+    }
 
     func scroll(toSlot index: Int) {
         guard model.isColumn else { return }
@@ -1069,6 +1107,7 @@ private struct NotebookCanvas: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: NotebookCanvasController, context: Context) {
         controller.show(page: model.current, revision: model.revision)
+        controller.setZoom(model.zoomEnabled)
     }
 }
 
@@ -1140,8 +1179,12 @@ struct NotebookEditor: View {
                         Label("For review", systemImage: "graduationcap")
                     }
                     .accessibilityIdentifier("notebook-for-review")
+                    Toggle(isOn: $model.zoomEnabled) {
+                        Label("Zoom", systemImage: "plus.magnifyingglass")
+                    }
+                    .accessibilityIdentifier("notebook-zoom")
                 } label: {
-                    Label("More", systemImage: model.notebook.youtubeURL != nil || model.notebook.isForReview
+                    Label("More", systemImage: model.notebook.youtubeURL != nil || model.notebook.isForReview || model.zoomEnabled
                           ? "line.3.horizontal.circle.fill" : "line.3.horizontal")
                 }
                 .accessibilityIdentifier("notebook-more")

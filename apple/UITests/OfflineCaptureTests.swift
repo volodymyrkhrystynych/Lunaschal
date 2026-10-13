@@ -2134,6 +2134,46 @@ final class OfflineCaptureTests: XCTestCase {
     /// Notes reopen the entry draft's notebook until the entry is saved, so a
     /// test that wants a fresh one first takes any left over by an earlier
     /// test (or an earlier try of this one) out of the draft. They stay in Draw.
+    /// A pinch does nothing to a notes page until Zoom is switched on in the
+    /// menu: a palm the Pencil misses lands as one. Off again, the page fits.
+    func testNotebookZoomIsOffUntilSwitchedOn() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        detachDraftNotes(app)
+        notes.tap()
+        let shown = app.otherElements["notebook-visible-frame"]
+        XCTAssertTrue(shown.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForValue(shown) { $0[2] >= 1239.5 }, "starts fitted: \(shown.value ?? "nil")")
+        let fitted = shown.value as? String
+        let window = app.windows.firstMatch
+
+        window.pinch(withScale: 3, velocity: 1)
+        sleep(1)
+        XCTAssertEqual(shown.value as? String, fitted, "a pinch with zoom off leaves the page fitted")
+
+        let more = app.buttons["notebook-more"]
+        more.tap()
+        let zoom = app.buttons["notebook-zoom"]
+        XCTAssertTrue(zoom.waitForExistence(timeout: 5))
+        XCTAssertFalse(zoom.isSelected, "Zoom starts off")
+        zoom.tap()
+        window.pinch(withScale: 3, velocity: 1)
+        XCTAssertTrue(waitForValue(shown) { $0[2] < 1200 }, "zoomed in: \(shown.value ?? "nil")")
+        attach(app, "notebook zoomed")
+
+        more.tap()
+        XCTAssertTrue(zoom.waitForExistence(timeout: 5))
+        XCTAssertTrue(zoom.isSelected)
+        zoom.tap()
+        XCTAssertTrue(waitForValue(shown) { $0[2] >= 1239.5 }, "back to the fit: \(shown.value ?? "nil")")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        detachDraftNotes(app)
+    }
+
     private func detachDraftNotes(_ app: XCUIApplication) {
         let row = app.buttons["capture-draft-notes"]
         guard row.waitForExistence(timeout: 3) else { return }
