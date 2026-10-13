@@ -600,7 +600,11 @@ The Notes/Newspaper PaperKit surface now uses a compact favorites toolbar with
 Undo/Redo, all native ink types, both erasers, selection, ruler and insertion.
 Color/width presets, ordering and edge docking are saved per device. A handle
 drags the bar between edges; All tools also offers accessible positioning buttons.
-Toolbar touches are excluded from notebook page-turn gestures. Physical Pencil
+Tapping the selected tool opens immediate size/color controls (five presets and
+a slider); the eraser exposes Object/Pixel modes and pixel width. The canvas
+registers `UIPencilInteraction` with the toolbar, which follows system double-tap
+and squeeze preferences and preserves exact tools across eraser/previous swaps.
+Physical Pencil
 and palm-rejection behavior still need device verification.
 Passed on the iPad Pro 13-inch (M5) simulator: 4 toolbar tests and 18 notebook
 editor tests, plus UI tests for adding/reordering/removing favorites, relaunching,
@@ -608,6 +612,20 @@ moving the toolbar without turning a page, and notebook page swipes. Coverage
 includes undo/redo actions, all eight ink types, persisted preferences and bounds
 after resizing. These checks used unsigned `xcodebuild ... test`; this is not
 physical-device verification.
+
+The compact-control regression run passed on the iPad Pro 13-inch (M5)
+simulator: 7 toolbar unit tests, 19 notebook editor tests and the size-control
+UI test, using unsigned `xcodebuild ... test`. It covers immediate preset
+application, persisted widths after relaunch, native ink/eraser sizes, the
+installed Pencil interaction and exact-tool restoration. Hardware double-taps
+and squeezes are not synthesized by these tests.
+
+The black/white ink regression reproduced in a dark SwiftUI host: its environment
+overrode the outer controller's light appearance and PaperKit inherited dark
+ink rendering over a white page. Pinning the PaperKit child to light fixes it.
+The follow-up unsigned iPad simulator run passed 8 toolbar tests, 20 notebook
+editor tests and 6 conversion/rendering tests, including rendered black/white
+stroke pixels across dark/light/dark appearance changes.
 
 Prototype this early, alongside M0–M2, because drawing quality is a primary
 motivation. Final integration depends on the M3 conflict/storage contract.

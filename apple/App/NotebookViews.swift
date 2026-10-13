@@ -770,6 +770,10 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         view.clipsToBounds = true
         overrideUserInterfaceStyle = .light
         // The page and its ink colors stay light even when the app is dark.
+        // SwiftUI can override the representable controller's traits after
+        // viewDidLoad. Pin the PaperKit child itself or black ink is rendered
+        // white (and white black) over our permanently white page.
+        paper.overrideUserInterfaceStyle = .light
         addChild(paper)
         paper.view.frame = view.bounds
         paper.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -783,6 +787,9 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         // would suggest otherwise.
         if #available(iOS 26.1, *) { paper.showsHorizontalScrollIndicator = false }
         drawingToolbar.undoManagerProvider = { [weak self] in self?.paper.undoManager }
+        // The system picker used to own these gestures. Our compact toolbar
+        // must receive them on the canvas, even when the Pencil is away from it.
+        view.addInteraction(UIPencilInteraction(delegate: drawingToolbar))
         drawingToolbar.onSelect = { [weak self] favorite in
             guard let self else { return }
             paper.becomeFirstResponder()

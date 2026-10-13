@@ -6,6 +6,13 @@ attachments, alongside typed text. Standard text paste remains available.
 iPad Notes and Newspaper canvases have a 44-point favorites toolbar with Undo/Redo,
 all eight native inks, both erasers, selection, ruler and shape/text insertion.
 Favorites store color and width and can be added, edited, reordered or removed.
+Tap the selected tool to change size/color immediately, with five size buttons
+and a slider; the eraser also offers Object/Pixel modes and pixel size.
+Pencil double-tap and squeeze use the system preference for eraser/previous-tool
+switching or opening tool controls. Physical Pencil gesture delivery remains
+unverified on device.
+The white drawing page keeps literal black/white ink in dark mode, including
+after a system appearance change.
 Drag its handle to dock at any edge, or choose an edge in All tools; favorites and
 position are remembered locally. This replaces the notebook palette; the older
 standalone PencilKit workspace and Study annotation palette are unchanged.

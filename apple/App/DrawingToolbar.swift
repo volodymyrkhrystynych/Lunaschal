@@ -18,6 +18,22 @@ struct DrawingFavorite: Codable, Identifiable, Equatable {
     static let defaults: [Self] = [Self(kind: "pen"), Self(kind: "pen", blue: 0.9),
         Self(kind: "marker", red: 1, green: 0.8, width: 20), Self(kind: "eraser")]
     var ink: PKInkingTool.InkType? { Self.inkKinds.firstIndex(of: kind).map { Self.inks[$0] } }
+    var isEraser: Bool { kind == "eraser" || kind == "pixelEraser" }
+    var widthRange: ClosedRange<Double>? {
+        let range = ink?.validWidthRange ?? (kind == "pixelEraser" ? PKEraserTool.EraserType.fixedWidthBitmap.validWidthRange : nil)
+        return range.map { Double($0.lowerBound)...Double($0.upperBound) }
+    }
+    var effectiveWidth: Double {
+        guard let range = widthRange else { return width }
+        return min(max(width, range.lowerBound), range.upperBound)
+    }
+    var widthPresets: [Double] {
+        guard let range = widthRange else { return [] }
+        // Geometric spacing leaves useful choices at the thin end of wide ink ranges.
+        return (0..<5).map { index in
+            range.lowerBound * pow(range.upperBound / range.lowerBound, Double(index) / 4)
+        }
+    }
     var color: UIColor { UIColor(red: red, green: green, blue: blue, alpha: 1) }
     var title: String {
         switch kind {
@@ -42,10 +58,12 @@ struct DrawingFavorite: Codable, Identifiable, Equatable {
         }
     }
     var tool: (any PKTool)? {
-        if let ink { return PKInkingTool(ink, color: color, width: min(max(width, ink.validWidthRange.lowerBound), ink.validWidthRange.upperBound)) }
+        if let ink { return PKInkingTool(ink, color: color, width: effectiveWidth) }
         switch kind {
         case "eraser": return PKEraserTool(.vector)
-        case "pixelEraser": return PKEraserTool(.bitmap)
+        // The variable bitmap eraser has no configurable width; the fixed
+        // variant is the native pixel eraser that honors a chosen size.
+        case "pixelEraser": return PKEraserTool(.fixedWidthBitmap, width: effectiveWidth)
         case "lasso": return PKLassoTool()
         default: return nil
         }
@@ -89,7 +107,7 @@ struct DrawingToolbarPreferences: Codable, Equatable {
 
 /// Only this 44-point strip intercepts touches; the surrounding page remains native.
 @MainActor
-final class DrawingToolbar: UIView {
+final class DrawingToolbar: UIView, UIPencilInteractionDelegate {
     private(set) var preferences: DrawingToolbarPreferences
     private let defaults: UserDefaults
     private let stack = UIStackView()
@@ -100,7 +118,14 @@ final class DrawingToolbar: UIView {
     private weak var presenter: UIViewController?
     var onSelect: ((DrawingFavorite) -> Void)?
     var undoManagerProvider: (() -> UndoManager?)?
-    private var selected: UUID?
+    private(set) var activeTool: DrawingFavorite?
+    private var previousTool: DrawingFavorite?
+    private var lastNonEraser: DrawingFavorite?
+    private weak var attributesController: UIViewController?
+    private var displayedTools: [DrawingFavorite] {
+        guard let activeTool, !preferences.favorites.contains(where: { $0.id == activeTool.id }) else { return preferences.favorites }
+        return preferences.favorites + [activeTool]
+    }
     private var observers: [NSObjectProtocol] = []
     private var dragOrigin = CGPoint.zero
     private var undoButton: UIButton!
@@ -154,9 +179,57 @@ final class DrawingToolbar: UIView {
         redoButton.isEnabled = undoManagerProvider?()?.canRedo == true
     }
     func select(_ favorite: DrawingFavorite) {
-        if favorite.tool != nil { selected = favorite.id }
+        if favorite.tool != nil {
+            if activeTool?.id != favorite.id { previousTool = activeTool }
+            activeTool = favorite
+            if !favorite.isEraser { lastNonEraser = favorite }
+        }
         onSelect?(favorite)
         rebuild()
+    }
+    func updateActiveTool(_ tool: DrawingFavorite) {
+        guard tool.id == activeTool?.id else { return }
+        if let index = preferences.favorites.firstIndex(where: { $0.id == tool.id }) {
+            preferences.favorites[index] = tool
+            preferences.save(to: defaults)
+        }
+        select(tool)
+    }
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
+        performPencilAction(UIPencilInteraction.preferredTapAction)
+    }
+    func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
+        if squeeze.phase == .ended { performPencilAction(UIPencilInteraction.preferredSqueezeAction) }
+    }
+    func performPencilAction(_ action: UIPencilPreferredAction) {
+        switch action {
+        case .switchEraser:
+            dismissAttributes()
+            if activeTool?.isEraser == true {
+                select(lastNonEraser ?? preferences.favorites.first(where: { $0.ink != nil }) ?? DrawingFavorite(kind: "pen"))
+            } else {
+                select(preferences.favorites.first(where: { $0.isEraser }) ?? DrawingFavorite(kind: "eraser"))
+            }
+        case .switchPrevious:
+            dismissAttributes()
+            if let previousTool { select(previousTool) }
+        case .showColorPalette, .showInkAttributes:
+            if attributesController != nil { dismissAttributes() } else { showAttributes() }
+        case .showContextualPalette:
+            showTools()
+        case .ignore, .runSystemShortcut: break
+        @unknown default: break
+        }
+    }
+    private func dismissAttributes() {
+        attributesController?.dismiss(animated: true)
+        attributesController = nil
+    }
+    private func showAttributes() {
+        guard let activeTool, activeTool.ink != nil || activeTool.isEraser else { return }
+        let controller = UIHostingController(rootView: DrawingToolAttributes(tool: activeTool) { [weak self] in self?.updateActiveTool($0) })
+        attributesController = controller
+        present(controller, size: CGSize(width: 320, height: 340), source: favoriteButtons[activeTool.id])
     }
     private func button(_ title: String, symbol: String, action: @escaping () -> Void) -> UIButton {
         let button = UIButton(type: .system)
@@ -168,15 +241,15 @@ final class DrawingToolbar: UIView {
         return button
     }
     private func rebuild() {
-        let ids = Set(preferences.favorites.map(\.id))
+        let ids = Set(displayedTools.map(\.id))
         for id in Array(favoriteButtons.keys) where !ids.contains(id) {
             favoriteButtons.removeValue(forKey: id)?.removeFromSuperview()
         }
-        for (index, favorite) in preferences.favorites.enumerated() {
+        for (index, favorite) in displayedTools.enumerated() {
             // Keep button instances through a reorder or selection.
             let control = favoriteButtons[favorite.id] ?? button(favorite.title, symbol: favorite.symbol) { [weak self] in
-                guard let current = self?.preferences.favorites.first(where: { $0.id == favorite.id }) else { return }
-                self?.select(current)
+                guard let self, let current = displayedTools.first(where: { $0.id == favorite.id }) else { return }
+                if activeTool?.id == current.id { showAttributes() } else { select(current) }
             }
             if favoriteButtons[favorite.id] == nil {
                 control.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(favoriteMenu(_:))))
@@ -186,12 +259,12 @@ final class DrawingToolbar: UIView {
             control.accessibilityLabel = favorite.title
             control.accessibilityIdentifier = "drawing-favorite-\(favorite.id)"
             control.tintColor = favorite.ink == nil ? .systemBlue : favorite.color
-            control.backgroundColor = favorite.id == selected ? .systemBlue.withAlphaComponent(0.15) : .clear
+            control.backgroundColor = favorite.id == activeTool?.id ? .systemBlue.withAlphaComponent(0.15) : .clear
             control.layer.cornerRadius = 10
-            control.accessibilityValue = favorite.ink == nil ? nil : String(format: "Width %.1f", favorite.width)
-            if favorite.id == selected { control.accessibilityTraits.insert(.selected) }
+            control.accessibilityValue = favorite.widthRange == nil ? nil : String(format: "Width %.1f", favorite.effectiveWidth)
+            if favorite.id == activeTool?.id { control.accessibilityTraits.insert(.selected) }
             else { control.accessibilityTraits.remove(.selected) }
-            control.accessibilityHint = "Hold to edit, move or remove this favorite."
+            control.accessibilityHint = "Tap the selected tool for size and color. Hold to edit, move or remove this favorite."
             if favoritesStack.arrangedSubviews.count <= index || favoritesStack.arrangedSubviews[index] !== control {
                 favoritesStack.insertArrangedSubview(control, at: index)
             }
@@ -211,7 +284,10 @@ final class DrawingToolbar: UIView {
         menu.addAction(UIAlertAction(title: "Move earlier", style: .default) { [weak self] _ in self?.move(favorite, by: -1) })
         menu.addAction(UIAlertAction(title: "Move later", style: .default) { [weak self] _ in self?.move(favorite, by: 1) })
         menu.addAction(UIAlertAction(title: "Remove favorite", style: .destructive) { [weak self] _ in
-            self?.preferences.favorites.removeAll { $0.id == id }; self?.persist()
+            guard let self else { return }
+            preferences.favorites.removeAll { $0.id == id }
+            if activeTool?.id == id { activateInitialTool() }
+            persist()
         })
         menu.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         menu.popoverPresentationController?.sourceView = source
@@ -229,7 +305,7 @@ final class DrawingToolbar: UIView {
         guard let parent = superview else { return }
         let bounds = parent.bounds.inset(by: parent.safeAreaInsets).insetBy(dx: 8, dy: 8)
         guard bounds.width >= 44, bounds.height >= 44 else { return }
-        frame = preferences.dock.frame(in: bounds, length: CGFloat(4 + preferences.favorites.count) * 44, offset: preferences.offset)
+        frame = preferences.dock.frame(in: bounds, length: CGFloat(4 + displayedTools.count) * 44, offset: preferences.offset)
         setNeedsLayout()
     }
     override func layoutSubviews() {
@@ -240,7 +316,7 @@ final class DrawingToolbar: UIView {
         if (stack.axis == .vertical) != vertical { scroll.contentOffset = .zero }
         stack.axis = vertical ? .vertical : .horizontal
         favoritesStack.axis = stack.axis
-        let length = CGFloat(preferences.favorites.count) * 44
+        let length = CGFloat(displayedTools.count) * 44
         favoritesStack.frame = CGRect(origin: .zero, size: CGSize(width: vertical ? 44 : length, height: vertical ? length : 44))
         scroll.contentSize = favoritesStack.bounds.size
         // The scroll view fills the space between the fixed undo/redo/menu buttons.
@@ -255,7 +331,7 @@ final class DrawingToolbar: UIView {
             let bounds = parent.bounds.inset(by: parent.safeAreaInsets).insetBy(dx: 8, dy: 8)
             preferences.dock = .nearest(to: recognizer.location(in: parent), in: bounds)
             let vertical = preferences.dock.vertical
-            let length = min(CGFloat(4 + preferences.favorites.count) * 44, vertical ? bounds.height : bounds.width)
+            let length = min(CGFloat(4 + displayedTools.count) * 44, vertical ? bounds.height : bounds.width)
             let available = (vertical ? bounds.height : bounds.width) - length
             preferences.offset = available > 0 ? min(max(((vertical ? center.y - bounds.minY : center.x - bounds.minX) - length / 2) / available, 0), 1) : 0.5
             persist()
@@ -278,16 +354,70 @@ final class DrawingToolbar: UIView {
         })
         present(controller)
     }
-    private func present(_ controller: UIViewController) {
+    private func present(_ controller: UIViewController, size: CGSize = CGSize(width: 360, height: 520), source: UIView? = nil) {
         guard let presenter else { return }
         let show = {
             controller.modalPresentationStyle = .popover
-            controller.preferredContentSize = CGSize(width: 360, height: 520)
-            controller.popoverPresentationController?.sourceView = self
-            controller.popoverPresentationController?.sourceRect = self.bounds
+            controller.preferredContentSize = size
+            controller.popoverPresentationController?.sourceView = source ?? self
+            controller.popoverPresentationController?.sourceRect = (source ?? self).bounds
             presenter.present(controller, animated: true)
         }
         if presenter.presentedViewController != nil { presenter.dismiss(animated: true, completion: show) } else { show() }
+    }
+}
+
+/// Like the system palette: tap the selected tool, adjust, then keep drawing.
+/// Favorites management remains separate from these immediate drawing controls.
+private struct DrawingToolAttributes: View {
+    @State var tool: DrawingFavorite
+    let change: (DrawingFavorite) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if tool.isEraser {
+                        Picker("Eraser mode", selection: $tool.kind) {
+                            Text("Object").tag("eraser")
+                            Text("Pixel").tag("pixelEraser")
+                        }.pickerStyle(.segmented)
+                            .onChange(of: tool.kind) { _, kind in
+                                if kind == "pixelEraser" { tool.width = PKEraserTool.EraserType.fixedWidthBitmap.defaultWidth }
+                            }
+                    }
+                    if let range = tool.widthRange {
+                        Text("Size").font(.headline)
+                        HStack(spacing: 8) {
+                            ForEach(Array(tool.widthPresets.enumerated()), id: \.offset) { index, width in
+                                Button { tool.width = width } label: {
+                                    Circle().fill(tool.ink == nil ? Color.primary : Color(uiColor: tool.color))
+                                        .frame(width: CGFloat(4 + index * 4), height: CGFloat(4 + index * 4))
+                                        .frame(width: 44, height: 44)
+                                        .background(abs(tool.effectiveWidth - width) < 0.01 ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                                }.buttonStyle(.plain)
+                                    .accessibilityLabel("Size \(index + 1)")
+                                    .accessibilityValue(String(format: "%.1f", width))
+                                    .accessibilityIdentifier("drawing-size-\(index)")
+                            }
+                        }
+                        Slider(value: Binding(get: { tool.effectiveWidth }, set: { tool.width = $0 }), in: range) { Text("Tool size") }
+                            .accessibilityIdentifier("drawing-size-slider")
+                        Text("Width \(tool.effectiveWidth, specifier: "%.1f")").monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    if tool.ink != nil {
+                        ColorPicker("Ink color", selection: Binding(get: { Color(uiColor: tool.color) }, set: { color in
+                            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                            UIColor(color).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)).getRed(&r, green: &g, blue: &b, alpha: &a)
+                            tool.red = r; tool.green = g; tool.blue = b
+                        }), supportsOpacity: false)
+                    }
+                    if tool.kind == "eraser" { Text("Erases whole strokes and objects.").foregroundStyle(.secondary) }
+                }.padding()
+            }.navigationTitle(tool.title).navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.accessibilityIdentifier("drawing-attributes-done") } }
+        }.onChange(of: tool) { _, value in change(value) }
     }
 }
 
