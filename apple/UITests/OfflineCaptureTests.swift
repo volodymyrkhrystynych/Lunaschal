@@ -932,6 +932,23 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["Re-read edited chapters"].exists)
     }
 
+    /// The book list pages itself as it is scrolled: the 70th book, past the
+    /// first page of 50, is reached by scrolling alone, with no button to press.
+    func testLibraryLoadsTheNextPageWhenScrolledToTheEnd() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-libraryFixture", "-libraryManyBooks"]
+        app.launch()
+        openMore(app, "Library")
+        XCTAssertTrue(app.staticTexts["The Long Way Round"].waitForExistence(timeout: 10))
+
+        // Oldest of all, so last in the default sort.
+        let last = app.staticTexts["Filler Book 62"]
+        for _ in 0..<30 where !(last.exists && last.isHittable) { app.swipeUp() }
+        XCTAssertTrue(last.waitForExistence(timeout: 5), "Scrolling reached the second page")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Load more")).firstMatch.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["load-more"].exists, "Nothing left to load")
+    }
+
     /// Settings → Library downloads imports a fic by its link: a page that
     /// isn't one is turned away on the phone, and a fic link needs a server.
     func testSettingsImportsAFicByLink() {

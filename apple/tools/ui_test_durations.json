@@ -21,6 +21,7 @@
   "OfflineCaptureTests/testLearningReviewsTheFixtureDeck": 61.243,
   "OfflineCaptureTests/testLearningSpeechModeIsASettingAndOffersReplay": 55.062,
   "OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate": 28.052,
+  "OfflineCaptureTests/testLibraryLoadsTheNextPageWhenScrolledToTheEnd": 46.67,
   "OfflineCaptureTests/testLibraryOffersServerUpdatesButNoTagFilter": 32.264,
   "OfflineCaptureTests/testLibrarySwitchesToFoldersAndBackOutOfAFolder": 37.134,
   "OfflineCaptureTests/testNewspaperScrollsAsOneColumn": 0.09,

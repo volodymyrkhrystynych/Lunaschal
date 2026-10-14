@@ -76,6 +76,20 @@ enum LibraryFixture {
              daysSinceUpdate: 120, description: "An imported EPUB, on the device."),
     ]
 
+    /// With `-libraryManyBooks` as well, enough more books that the list
+    /// pages past its first 50 rows — oldest of all, in no folder, so the
+    /// rest of the fixture reads as it always did.
+    static let manyArgument = "-libraryManyBooks"
+    static let fillerCount = 62
+    static var filler: [Book] {
+        guard ProcessInfo.processInfo.arguments.contains(manyArgument) else { return [] }
+        return (1...fillerCount).map { index in
+            Book(id: "01K8BBBBBBBBBBBBBBBBBBBM" + String(format: "%02d", index), title: "Filler Book \(index)",
+                 author: "Paginator", site: nil, sourceType: "epub", tags: [], folders: [], chapters: 1,
+                 onDevice: 0, daysSinceUpdate: 200 + Double(index), description: "Pads the list past one page.")
+        }
+    }
+
     static func chapterID(_ book: Book, _ index: Int) -> String {
         // The shared prefix, the book's own last two characters, then the chapter number.
         String(book.id.dropLast(4)) + book.id.suffix(2) + String(format: "%02d", index)
@@ -92,7 +106,7 @@ enum LibraryFixture {
             change("fic_folders", finished, ["name": "Finished", "position": 1]),
             change("fic_folders", toRead, ["name": "To read", "position": 2]),
         ]
-        for book in books {
+        for book in books + filler {
             changes.append(change("fics", book.id, bookData(book, now: now, iso: iso)))
             for index in 0..<book.onDevice { changes.append(chapter(book, index, now: now)) }
         }
