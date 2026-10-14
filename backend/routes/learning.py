@@ -658,8 +658,15 @@ def _superseded(id) -> bool:
 
 @bp.post('/cards/<id>/retire')
 def retire_card(id):
-    """Take a card out of the deck from the review screen. Its FSRS state is
-    kept, so unretiring resumes the schedule rather than starting over."""
+    """Take a card out of review while keeping it and its history. Its FSRS
+    state is kept, so unretiring resumes the schedule rather than starting over.
+
+    The same state a revision leaves its old version in, so every list that
+    already skips retired cards (due, stats, tags, browse) skips this one.
+    Retiring a retired card succeeds: both the web and the iOS offline queues
+    replay it. Any open attempt goes with it, clip included, or a resumed
+    session would offer to rate it afterwards.
+    """
     row = _get_card(id)
     if not row or row['state'] == 'pending':
         return jsonify({'error': 'Not found'}), 404
@@ -667,8 +674,7 @@ def retire_card(id):
     if row['state'] == 'active':
         db.execute("UPDATE learning_cards SET state='retired', updated_at=? WHERE id=?",
                    (int(time.time()), id))
-    # Its open attempt would otherwise keep the card in a resumed session.
-    db.execute('DELETE FROM learning_attempts WHERE card_id=?', (id,))
+    _close_attempts(db, id)
     db.commit()
     return jsonify({'success': True})
 
@@ -745,27 +751,6 @@ def update_card(id):
         db = get_db()
         build_update(db, 'learning_cards', updates, 'id=?', (id,))
         db.commit()
-    return jsonify({'success': True})
-
-
-@bp.post('/cards/<id>/retire')
-def retire_card(id):
-    """Take a card out of review for good while keeping it and its history.
-
-    The same state a revision leaves its old version in, so every list that
-    already skips retired cards (due, stats, tags, browse) skips this one. Any
-    open attempt goes with it: a session must not offer to rate it afterwards.
-    """
-    row = _get_card(id)
-    if not row:
-        return jsonify({'error': 'Not found'}), 404
-    if row['state'] != 'active':
-        return jsonify({'error': 'Only an active card can be retired'}), 400
-    db = get_db()
-    db.execute("UPDATE learning_cards SET state='retired', updated_at=? WHERE id=?",
-               (int(time.time()), id))
-    _close_attempts(db, id)
-    db.commit()
     return jsonify({'success': True})
 
 
