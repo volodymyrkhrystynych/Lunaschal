@@ -496,8 +496,46 @@ export interface LearningCard {
   kind: 'qa' | 'review';
   /** A review card's journal entry and its pages, in order. */
   review?: LearningReviewPages;
+  /** On `state=retired` listings only: a revision replaced this card, so it
+   *  cannot be unretired. */
+  superseded?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+/** One lesson from a coding agent's learnings file, on its way to cards. */
+export interface LearningLesson {
+  id: string;
+  source: 'upload' | 'inbox';
+  sourceName: string | null;
+  title: string;
+  body: string;
+  folderId: string | null;
+  status: 'pending' | 'carded' | 'covered' | 'error';
+  /** The existing card the judge said already teaches this lesson. */
+  coveredBy: string | null;
+  coveredQuestion: string | null;
+  reason: string | null;
+  cardCount: number;
+  error: string | null;
+  createdAt: string;
+}
+
+export interface LearningLessonsConfig {
+  inboxPath: string;
+  folderId: string | null;
+  inboxState: 'unset' | 'missing' | 'ok';
+}
+
+export interface LessonImportResult {
+  added: number;
+  alreadyImported: number;
+}
+
+export interface LessonScanResult extends LessonImportResult {
+  state: LearningLessonsConfig['inboxState'];
+  files: number;
+  skipped: string[];
 }
 
 export interface LearningReviewPages {
@@ -3947,6 +3985,27 @@ export const api = {
     ) => patch<{ success: boolean }>(`/api/learning/cards/${id}`, data),
     deleteCard: (id: string) =>
       del<{ success: boolean }>(`/api/learning/cards/${id}`),
+    retireCard: (id: string) =>
+      post<{ success: boolean }>(`/api/learning/cards/${id}/retire`, {}),
+    unretireCard: (id: string) =>
+      post<{ success: boolean }>(`/api/learning/cards/${id}/unretire`, {}),
+
+    listLessons: () =>
+      get<{ lessons: LearningLesson[]; config: LearningLessonsConfig }>(
+        '/api/learning/lessons'
+      ),
+    importLessons: (data: {
+      text: string;
+      sourceName?: string;
+      folderId?: string | null;
+    }) => post<LessonImportResult>('/api/learning/lessons/import', data),
+    scanLessons: () => post<LessonScanResult>('/api/learning/lessons/scan', {}),
+    updateLessonsConfig: (data: {
+      inboxPath?: string;
+      folderId?: string | null;
+    }) => put<LearningLessonsConfig>('/api/learning/lessons/config', data),
+    forceLesson: (id: string) =>
+      post<{ success: boolean }>(`/api/learning/lessons/${id}/force`, {}),
     getDue: (params?: { tag?: string; folderId?: string }) => {
       const qp = new URLSearchParams();
       if (params?.tag) qp.set('tag', params.tag);

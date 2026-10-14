@@ -462,6 +462,34 @@ CREATE TABLE IF NOT EXISTS learning_revisions (
 
 CREATE INDEX IF NOT EXISTS idx_learning_revisions_new ON learning_revisions(new_card_id);
 
+-- One lesson a coding agent wrote into a daily learnings file (or one pasted
+-- by hand), on its way to becoming cards. backend/learning/lessons.py.
+--
+-- Deduplicated on the lesson's own text, not the file: a daily file is
+-- appended to all day, so re-importing it must add only the new sections.
+-- A lesson never becomes a card directly — the model first asks whether an
+-- existing card already covers it ('covered', with the card and the reason),
+-- and only otherwise generates pending cards into the approval queue.
+CREATE TABLE IF NOT EXISTS learning_lessons (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL CHECK(source IN ('upload','inbox')),
+    source_name TEXT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    content_hash TEXT NOT NULL UNIQUE,
+    folder_id TEXT REFERENCES learning_folders(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','carded','covered','error')),
+    covered_by TEXT REFERENCES learning_cards(id) ON DELETE SET NULL,
+    reason TEXT,
+    card_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    processed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_lessons_created ON learning_lessons(created_at);
+
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     title TEXT,

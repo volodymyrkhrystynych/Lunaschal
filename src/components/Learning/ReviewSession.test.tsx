@@ -104,6 +104,7 @@ const { CARD1, CARD2, REVIEW_CARD, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks
     generate: vi.fn(),
     chat: vi.fn(),
     listMcpServers: vi.fn(),
+    retireCard: vi.fn(),
   };
   return { CARD1, CARD2, REVIEW_CARD, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks };
 });
@@ -167,6 +168,7 @@ beforeEach(() => {
   mocks.listAttempts.mockResolvedValue([]);
   mocks.saveAttempt.mockResolvedValue({ success: true, id: 'a1' });
   mocks.review.mockResolvedValue({ due: 'later', state: 'active' });
+  mocks.retireCard.mockResolvedValue({ success: true });
   mocks.listMcpServers.mockResolvedValue([
     {
       id: 'srv1',
@@ -297,6 +299,45 @@ describe('ReviewSession', () => {
 
     // Session over and nothing due anymore.
     expect(await screen.findByText('All caught up!')).toBeTruthy();
+  });
+
+  describe('retiring from the rating slide', () => {
+    it('retires the card instead of rating it and moves on', async () => {
+      mocks.getDue.mockResolvedValue([CARD1, CARD2]);
+      renderSession();
+      await screen.findByText('What is a closure?');
+      fireEvent.click(screen.getByText('Flip'));
+      await screen.findByText('What is hoisting?');
+      fireEvent.click(screen.getByText('Flip'));
+
+      expect(await screen.findByText('Result 1 of 2')).toBeTruthy();
+      fireEvent.click(screen.getByText('Retire card'));
+      await waitFor(() => expect(mocks.retireCard.mock.calls[0][0]).toBe('c1'));
+      expect(await screen.findByText('Result 2 of 2')).toBeTruthy();
+      expect(mocks.review).not.toHaveBeenCalled();
+    });
+
+    it('stays on the card when the retire fails', async () => {
+      mocks.retireCard.mockRejectedValue(new Error('offline'));
+      renderSession();
+      await screen.findByText('What is a closure?');
+      fireEvent.click(screen.getByText('Flip'));
+      fireEvent.click(await screen.findByText('Retire card'));
+      expect(
+        await screen.findByText('Could not retire the card.')
+      ).toBeTruthy();
+      expect(screen.getByText('Result 1 of 1')).toBeTruthy();
+    });
+
+    it("is offered under a review card's pages too", async () => {
+      mocks.getDue.mockResolvedValue([REVIEW_CARD, CARD1]);
+      renderSession();
+      await screen.findByText('Fern life cycle');
+      fireEvent.click(screen.getByText('Retire card'));
+      await waitFor(() => expect(mocks.retireCard.mock.calls[0][0]).toBe('r1'));
+      expect(await screen.findByText('What is a closure?')).toBeTruthy();
+      expect(mocks.review).not.toHaveBeenCalled();
+    });
   });
 
   it('shows the typed answer on the result while grading is pending', async () => {

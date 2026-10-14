@@ -474,6 +474,47 @@ def seed_learning(db):
          '- el puento\n+ el puente', 0, None, 'Typo in the original answer.', ts(2)),
     )
     seed_review_card(db)
+    seed_learning_lessons(db)
+
+
+def seed_learning_lessons(db):
+    """Two lessons from a coding agent's daily learnings file: one carded into
+    a pending scenario card, one the judge found already covered."""
+    from backend.learning.lessons import CARD_TAG, SOURCE_TYPE, lesson_hash
+
+    carded_id, covered_id = new_id(), new_id()
+    lessons = [
+        (carded_id, 'Recursive functions need a depth limit',
+         '- **Failure it prevents:** a cycle in the data recurses until the stack overflows.\n'
+         '- **When it does not apply:** the input is a tree the code built itself.',
+         'carded', None, None, 1),
+        (covered_id, 'Retries need a cap and backoff',
+         '- **Failure it prevents:** a dead dependency gets hammered forever.',
+         'covered', None, 'An existing card already asks about unbounded retries.', 0),
+    ]
+    retry_card = new_id()
+    db.execute(
+        'INSERT INTO learning_cards (id, question, answer, state, due, created_at, updated_at)'
+        " VALUES (?, ?, ?, 'active', ?, ?, ?)",
+        (retry_card, 'A client retries a failed request in a loop. What two limits does it need?',
+         'A maximum number of attempts and a growing delay between them.', ts(1), ts(5), ts(5)),
+    )
+    for lesson_id, title, body, status, _, reason, count in lessons:
+        db.execute(
+            'INSERT INTO learning_lessons (id, source, source_name, title, body, content_hash,'
+            ' status, covered_by, reason, card_count, created_at, processed_at)'
+            " VALUES (?, 'inbox', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (lesson_id, f'{today_key(1)}.md', title, body, lesson_hash(title, body), status,
+             retry_card if status == 'covered' else None, reason, count, ts(1), ts(1)),
+        )
+    db.execute(
+        'INSERT INTO learning_cards (id, question, answer, state, tags, source_type, source_id,'
+        " created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
+        (new_id(),
+         'A function follows user-defined links between documents to build a summary. What can go wrong?',
+         'Two documents linking to each other recurse forever. Add a depth limit or a visited set.',
+         tags_json([CARD_TAG]), SOURCE_TYPE, carded_id, ts(1), ts(1)),
+    )
 
 
 def seed_review_card(db):
