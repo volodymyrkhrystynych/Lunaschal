@@ -198,8 +198,10 @@ def test_retiring_takes_the_card_out_of_review_and_closes_its_attempt(client, mo
     assert client.get(f'/api/learning/cards/{cid}').json['state'] == 'retired'
 
 
-def test_only_an_active_card_can_be_retired(client):
+def test_a_replayed_retire_succeeds_and_an_unknown_card_is_404(client):
     cid = _card(client)
     client.post(f'/api/learning/cards/{cid}/retire')
-    assert client.post(f'/api/learning/cards/{cid}/retire').status_code == 400
+    # The offline queue replays it; a second retire must not read as a failure.
+    assert client.post(f'/api/learning/cards/{cid}/retire').status_code == 200
+    assert client.get(f'/api/learning/cards/{cid}').json['state'] == 'retired'
     assert client.post('/api/learning/cards/nope/retire').status_code == 404
