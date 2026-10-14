@@ -69,6 +69,57 @@ final class NotebookTests: XCTestCase {
         XCTAssertEqual(try store.pages(restored), [Data([1]), Data([2])])
     }
 
+    func testUnchangedFilesAreKeptFromTheCurrentCheckpoint() throws {
+        let root = try directory(), store = try NotebookStore(root: root)
+        let notebook = try store.create()
+        let first = try store.checkpoint(notebook.id, pages: [Data([1]), Data([2]), Data([3])],
+                                         locked: [nil, Data([7])], marked: [1], preview: Data([9]))
+        // Page 1 deleted: what was page 2 is kept from its old place.
+        let second = try store.checkpoint(notebook.id, files: [.kept(0), .kept(2), .bytes(Data([4]))],
+                                          locked: [nil, nil, .kept(1)], marked: [2], preview: nil)
+        XCTAssertEqual(try NotebookStore(root: root).pages(second), [Data([1]), Data([3]), Data([4])])
+        XCTAssertEqual(try store.lockedLayers(second), [nil, nil, Data([7])])
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.previewURL(second))), Data([9]))
+        // The checkpoint a kept file came from can go; the kept copy stays.
+        let third = try store.checkpoint(notebook.id, files: [.kept(0), .kept(1), .kept(2)], marked: [], preview: nil)
+        let revisions = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(notebook.id).path)
+        XCTAssertFalse(revisions.contains(first.checkpoint!))
+        XCTAssertEqual(try store.pages(third), [Data([1]), Data([3]), Data([4])])
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.previewURL(third))), Data([9]))
+        XCTAssertEqual(try store.pages(store.restorePrevious(notebook.id)), [Data([1]), Data([3]), Data([4])])
+    }
+
+    func testKeepingWhatIsNotThereFailsAndLeavesNoHalfCheckpoint() throws {
+        let root = try directory(), store = try NotebookStore(root: root)
+        let notebook = try store.create()
+        XCTAssertThrowsError(try store.checkpoint(notebook.id, files: [.kept(0)], marked: [], preview: Data([9])),
+                             "nothing to keep before the first checkpoint")
+        XCTAssertThrowsError(try store.checkpoint(notebook.id, files: [.bytes(Data([1]))], marked: [], preview: nil),
+                             "no preview to keep either")
+        let saved = try store.checkpoint(notebook.id, pages: [Data([1])], marked: [], preview: Data([9]))
+        XCTAssertThrowsError(try store.checkpoint(notebook.id, files: [.bytes(Data([2])), .kept(5)], marked: [], preview: nil))
+        XCTAssertThrowsError(try store.checkpoint(notebook.id, files: [.kept(0)], locked: [.kept(0)], marked: [], preview: nil))
+        XCTAssertEqual(try store.notebook(notebook.id), saved)
+        let revisions = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(notebook.id).path)
+        XCTAssertEqual(revisions, [saved.checkpoint!])
+        XCTAssertThrowsError(try store.restorePrevious(notebook.id), "no failed checkpoint to restore into")
+    }
+
+    func testASaveOffTheMainThreadDoesNotUndoAManifestEdit() throws {
+        let store = try NotebookStore(root: directory())
+        let notebook = try store.create()
+        try store.checkpoint(notebook.id, pages: [Data([1])], marked: [], preview: Data([9]))
+        DispatchQueue.concurrentPerform(iterations: 40) { index in
+            if index % 2 == 0 {
+                _ = try? store.checkpoint(notebook.id, files: [.bytes(Data([UInt8(index)]))], marked: [], preview: nil)
+            } else {
+                _ = try? store.setForReview(notebook.id, true)
+            }
+        }
+        XCTAssertTrue(try store.notebook(notebook.id).isForReview)
+        XCTAssertEqual(try store.pages(store.notebook(notebook.id)).count, 1)
+    }
+
     func testOneYouTubeLinkReplacedOrRemoved() throws {
         let store = try NotebookStore(root: directory())
         let notebook = try store.create()
