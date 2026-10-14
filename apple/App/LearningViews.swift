@@ -151,16 +151,14 @@ private struct LearningProgress: View {
     }
 }
 
-/// The answering pass: type an answer (the keyboard's mic dictates) or flip
-/// past the card. Grading happens in the background; results come after the
-/// last card.
+/// The answering pass: type an answer, speak one (Stop sends it and moves
+/// on), or flip past the card. Grading happens in the background; results
+/// come after the last card.
 private struct LearningAnswerCard: View {
     @ObservedObject var learning: LearningModel
     let session: LearningSession
     let card: LearningCard
     @State private var answer = ""
-    /// Any of the answer came through the mic, so it's saved as spoken.
-    @State private var usedVoice = false
     @StateObject private var dictation: LearningDictation
     @FocusState private var focused: Bool
 
@@ -194,7 +192,7 @@ private struct LearningAnswerCard: View {
                 }
                 HStack {
                     Button {
-                        Task { if await learning.submit(answer, voice: usedVoice) { answer = ""; usedVoice = false } }
+                        Task { if await learning.submit(answer) { answer = "" } }
                     } label: {
                         Text("Check Answer").frame(maxWidth: .infinity)
                     }
@@ -204,9 +202,8 @@ private struct LearningAnswerCard: View {
                     LearningMicButton(status: dictation.status) {
                         focused = false
                         Task {
-                            await dictation.toggle { text in
-                                answer = answer.isEmpty ? text : "\(answer) \(text)"
-                                usedVoice = true
+                            await dictation.toggle { clip in
+                                learning.submitRecording(clip, typed: answer)
                             }
                         }
                     }
@@ -216,8 +213,9 @@ private struct LearningAnswerCard: View {
                         .accessibilityIdentifier("learning-flip")
                 }
                 .controlSize(.large)
-                Text("Answers are checked in the background — results after the last card. Flip skips a card; its answer is shown at the end.")
+                Text("Answers are checked in the background — results after the last card. Stopping a recording sends it and moves on. Flip skips a card; its answer is shown at the end.")
                     .font(.footnote).foregroundStyle(.secondary)
+                LearningRetireButton(learning: learning, card: card)
             }
             .padding()
         }
@@ -243,12 +241,13 @@ private struct LearningResultCard: View {
                     .font(.title3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 LearningBox(title: "Answer") { MarkdownText(text: result.card.answer) }
-                if let text = result.text {
+                if let text = learning.text(of: result) {
                     LearningBox(title: "Your answer") { Text(text).textSelection(.enabled) }
                 }
                 switch grade {
                 case .pending:
-                    Label("Checking your answer…", systemImage: "hourglass")
+                    Label(sendingClip ? "Sending your recording…" : result.voice && learning.text(of: result) == nil
+                          ? "Transcribing your answer…" : "Checking your answer…", systemImage: "hourglass")
                         .font(.subheadline).foregroundStyle(.secondary)
                 case .error:
                     Label("Automatic grading failed — rate yourself.", systemImage: "exclamationmark.triangle")
@@ -281,9 +280,10 @@ private struct LearningResultCard: View {
                         LearningRatingButton(rating: rating, suggested: suggestion(grade) == rating) {
                             Task { await learning.rate(rating) }
                         }
-                        .disabled(learning.sending)
+                        .disabled(learning.sending || sendingClip)
                     }
                 }
+                LearningRetireButton(learning: learning, card: result.card)
             }
             .padding()
         }
@@ -292,6 +292,9 @@ private struct LearningResultCard: View {
         // Moving on stops whatever was still being read.
         .onDisappear { learning.stopSpeaking() }
     }
+
+    /// Its clip hasn't reached the server: a rating now would be undone by it.
+    private var sendingClip: Bool { learning.uploading[result.id] != nil }
 
     private func suggestion(_ grade: LearningGrade?) -> LearningRating? {
         if case let .done(_, suggested, _) = grade { return suggested }
@@ -339,6 +342,7 @@ private struct LearningReadCard: View {
                         .disabled(learning.sending)
                     }
                 }
+                LearningRetireButton(learning: learning, card: card)
             }
             .padding()
         }
@@ -386,7 +390,7 @@ private struct LearningReviewPage: View {
 }
 
 /// The desktop's 🎤: red with Stop while recording, a spinner while the
-/// server transcribes.
+/// microphone is being set up.
 private struct LearningMicButton: View {
     let status: LearningDictation.Status
     let action: () -> Void
@@ -395,16 +399,40 @@ private struct LearningMicButton: View {
         Button(action: action) {
             switch status {
             case .recording: Label("Stop", systemImage: "stop.fill")
-            case .starting, .transcribing: ProgressView()
+            case .starting: ProgressView()
             case .idle: Label("Dictate", systemImage: "mic")
             }
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.bordered)
         .tint(status == .recording ? .red : nil)
-        .disabled(status == .starting || status == .transcribing)
-        .accessibilityLabel(status == .recording ? "Stop" : status == .transcribing ? "Transcribing" : "Dictate")
+        .disabled(status == .starting)
+        .accessibilityLabel(status == .recording ? "Stop" : "Dictate")
         .accessibilityIdentifier("learning-mic")
+    }
+}
+
+/// Takes the card out of review for good. It is kept, with its history, but
+/// never comes due again.
+private struct LearningRetireButton: View {
+    @ObservedObject var learning: LearningModel
+    let card: LearningCard
+    @State private var confirming = false
+
+    var body: some View {
+        Button(role: .destructive) { confirming = true } label: {
+            Label("Retire card", systemImage: "archivebox")
+        }
+        .font(.footnote)
+        .buttonStyle(.borderless)
+        .disabled(learning.sending)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("learning-retire")
+        .confirmationDialog("Retire this card?", isPresented: $confirming, titleVisibility: .visible) {
+            Button("Retire", role: .destructive) { Task { await learning.retire(card) } }
+        } message: {
+            Text("It won't come up for review again. Its history is kept.")
+        }
     }
 }
 

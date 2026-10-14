@@ -33,8 +33,30 @@ def _finish(attempt_id: str, **cols) -> None:
     db.commit()
 
 
+def _hear_clip(attempt) -> str:
+    """Transcribe a spoken answer's waiting clip into the attempt's answer.
+
+    Committed before grading starts, and the clip deleted only then: a grade
+    that is interrupted re-runs on the saved words instead of the audio, and a
+    transcription that fails keeps the clip (rating the card removes it).
+    Returns the answer as it now stands.
+    """
+    from backend.learning import storage
+    from backend.routes import stt as stt_routes
+    answer = (attempt['answer'] or '').strip()
+    clip = storage.find_clip(attempt['id'])
+    if clip is None:
+        return answer
+    text = stt_routes.transcribe_file(clip)
+    answer = f'{answer} {text}' if answer else text
+    _finish(attempt['id'], answer=answer)
+    storage.delete_attempt_dir(attempt['id'])
+    return answer
+
+
 def grade_attempt(attempt_id: str) -> None:
-    """Voice-normalize → embedding gate → cached claims → coverage."""
+    """Transcribe a spoken clip → voice-normalize → embedding gate → cached
+    claims → coverage."""
     from backend.ai import learning_grading
     from backend.learning.dedup import cosine, embed_answer
     db = get_db()
@@ -44,11 +66,16 @@ def grade_attempt(attempt_id: str) -> None:
         ).fetchone()
         if not attempt or attempt['mode'] != 'answered':
             return
-        answer = (attempt['answer'] or '').strip()
+        answer = _hear_clip(attempt)
         card = db.execute(
             'SELECT * FROM learning_cards WHERE id=?', (attempt['card_id'],)
         ).fetchone()
-        if not answer or not card:
+        if not card:
+            return
+        if not answer:
+            # A spoken answer whose clip is gone and never became words: there
+            # is nothing to grade, and pending would be polled forever.
+            _finish(attempt_id, grade_status='error')
             return
 
         if attempt['answer_mode'] == 'voice':

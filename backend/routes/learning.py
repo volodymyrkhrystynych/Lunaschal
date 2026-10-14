@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request
 from ulid import ULID
 
 from backend.db.connection import build_update, get_db, row_to_dict
+from backend.learning import storage as learning_storage
 from backend.learning.dedup import embed_answer
 from backend.learning.review_cards import SOURCE_TYPE as REVIEW_SOURCE, review_payloads
 from backend.tags import tags_json
@@ -703,6 +704,27 @@ def update_card(id):
     return jsonify({'success': True})
 
 
+@bp.post('/cards/<id>/retire')
+def retire_card(id):
+    """Take a card out of review for good while keeping it and its history.
+
+    The same state a revision leaves its old version in, so every list that
+    already skips retired cards (due, stats, tags, browse) skips this one. Any
+    open attempt goes with it: a session must not offer to rate it afterwards.
+    """
+    row = _get_card(id)
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if row['state'] != 'active':
+        return jsonify({'error': 'Only an active card can be retired'}), 400
+    db = get_db()
+    db.execute("UPDATE learning_cards SET state='retired', updated_at=? WHERE id=?",
+               (int(time.time()), id))
+    _close_attempts(db, id)
+    db.commit()
+    return jsonify({'success': True})
+
+
 @bp.delete('/cards/<id>')
 def delete_card(id):
     # Hard delete; FK actions null children's derived_from/revised_from and
@@ -876,6 +898,50 @@ def _queue_grade(attempt_id: str, *, now: bool = False) -> None:
         _grading_queued.discard(attempt_id)
 
 
+def _upsert_attempt(id, card_id, *, mode, answer, answer_mode, grade_status,
+                    speech_requested):
+    """Write a card's one open attempt and queue its grade; returns the stored row."""
+    now = int(time.time())
+    db = get_db()
+    replaced = db.execute(
+        'SELECT id FROM learning_attempts WHERE card_id=? AND id != ?', (card_id, id)
+    ).fetchone()
+    # One open attempt per card: re-answering the same card replaces it, and a
+    # replayed (offline-queued) save with the same id is a no-op.
+    db.execute(
+        'INSERT INTO learning_attempts'
+        ' (id, card_id, mode, answer, answer_mode, grade_status, speech_requested, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,?,?,?)'
+        ' ON CONFLICT(card_id) DO UPDATE SET'
+        '  id=excluded.id, mode=excluded.mode, answer=excluded.answer,'
+        '  answer_mode=excluded.answer_mode, grade_status=excluded.grade_status,'
+        '  speech_requested=excluded.speech_requested,'
+        '  coverage=NULL, suggested_rating=NULL, normalized_answer=NULL,'
+        '  updated_at=excluded.updated_at'
+        ' WHERE learning_attempts.id != excluded.id',
+        (id, card_id, mode, answer, answer_mode, grade_status, speech_requested, now, now),
+    )
+    db.commit()
+    if replaced:
+        # A spoken answer re-answered before it was heard: its clip goes with it.
+        learning_storage.delete_attempt_dir(replaced['id'])
+    stored = db.execute(
+        'SELECT * FROM learning_attempts WHERE card_id=?', (card_id,)
+    ).fetchone()
+    if (stored['id'] == id and stored['grade_status'] == 'pending'
+            and id not in _grading_queued):
+        _queue_grade(id)
+    return stored
+
+
+def _close_attempts(db, card_id: str) -> None:
+    """Delete a card's open attempt, and any clip still waiting with it.
+    Commits are the caller's: the rating closes it in the same transaction."""
+    for row in db.execute('SELECT id FROM learning_attempts WHERE card_id=?', (card_id,)).fetchall():
+        learning_storage.delete_attempt_dir(row['id'])
+    db.execute('DELETE FROM learning_attempts WHERE card_id=?', (card_id,))
+
+
 @bp.post('/attempts')
 def save_attempt():
     """Record an answered (or flipped-past) card so the session can be resumed.
@@ -907,30 +973,60 @@ def save_attempt():
     speech_requested = 1 if body.get('speechMode') else 0
 
     id = body.get('id') or str(ULID())
-    now = int(time.time())
+    stored = _upsert_attempt(id, card_id, mode=mode, answer=answer, answer_mode=answer_mode,
+                             grade_status=grade_status, speech_requested=speech_requested)
+    return jsonify({'success': True, 'id': stored['id']})
+
+
+# A spoken answer. The phone stops recording and is on the next card at once,
+# so the clip itself is the answer: it is stored here and the grading job
+# transcribes it before grading (backend/learning/attempts.py). The attempt id
+# is the client's, and a replay is a no-op checked before the file is read —
+# the rule every recording route in the app keeps.
+
+MAX_AUDIO_BYTES = 50 * 1024 * 1024
+
+
+@bp.post('/attempts/recording')
+def save_recorded_attempt():
+    audio = request.files.get('audio')
+    if audio is None or not audio.filename:
+        return jsonify({'error': 'Missing audio file'}), 400
+    id = (request.form.get('id') or '').strip()
+    card_id = (request.form.get('cardId') or '').strip()
+    if not id or not card_id:
+        return jsonify({'error': 'id and cardId are required'}), 400
+
     db = get_db()
-    # One open attempt per card: re-answering the same card replaces it, and a
-    # replayed (offline-queued) save with the same id is a no-op.
-    db.execute(
-        'INSERT INTO learning_attempts'
-        ' (id, card_id, mode, answer, answer_mode, grade_status, speech_requested, created_at, updated_at)'
-        ' VALUES (?,?,?,?,?,?,?,?,?)'
-        ' ON CONFLICT(card_id) DO UPDATE SET'
-        '  id=excluded.id, mode=excluded.mode, answer=excluded.answer,'
-        '  answer_mode=excluded.answer_mode, grade_status=excluded.grade_status,'
-        '  speech_requested=excluded.speech_requested,'
-        '  coverage=NULL, suggested_rating=NULL, normalized_answer=NULL,'
-        '  updated_at=excluded.updated_at'
-        ' WHERE learning_attempts.id != excluded.id',
-        (id, card_id, mode, answer, answer_mode, grade_status, speech_requested, now, now),
-    )
-    db.commit()
-    stored = db.execute(
-        'SELECT * FROM learning_attempts WHERE card_id=?', (card_id,)
-    ).fetchone()
-    if (stored['id'] == id and stored['grade_status'] == 'pending'
-            and id not in _grading_queued):
-        _queue_grade(id)
+    if db.execute('SELECT 1 FROM learning_attempts WHERE id=?', (id,)).fetchone():
+        return jsonify({'success': True, 'id': id})
+    row = _get_card(card_id)
+    if not row or row['state'] != 'active':
+        return jsonify({'error': 'Not found'}), 404
+    if refused := _no_back_side(row):
+        return refused
+
+    ext = learning_storage.resolve_audio_ext(audio.mimetype, audio.filename)
+    path = learning_storage.clip_path(id, ext) if ext else None
+    if path is None:
+        return jsonify({'error': 'Unsupported file type — audio only'}), 400
+    # The file before the row: a row that exists is one the grader may pick up
+    # (listing self-heals pending grades), and it must find its clip there.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    audio.save(path)
+    size = path.stat().st_size
+    if size == 0 or size > MAX_AUDIO_BYTES:
+        learning_storage.delete_attempt_dir(id)
+        return jsonify({
+            'error': 'That recording was empty' if size == 0 else 'That recording is too large'
+        }), 400 if size == 0 else 413
+
+    # Anything typed before the mic was tapped comes first; the transcript is
+    # appended to it.
+    typed = (request.form.get('answer') or '').strip() or None
+    stored = _upsert_attempt(id, card_id, mode='answered', answer=typed, answer_mode='voice',
+                             grade_status='pending',
+                             speech_requested=1 if request.form.get('speechMode') == 'true' else 0)
     return jsonify({'success': True, 'id': stored['id']})
 
 
@@ -978,7 +1074,7 @@ def review_card(id):
     if review_id and db.execute(
         'SELECT 1 FROM learning_reviews WHERE id=?', (review_id,)
     ).fetchone():
-        db.execute('DELETE FROM learning_attempts WHERE card_id=?', (id,))
+        _close_attempts(db, id)
         db.commit()
         cur_due = row['due']
         return jsonify({
@@ -1004,7 +1100,7 @@ def review_card(id):
     )
     # The rating closes the attempt: same transaction, so a session can never
     # be left showing a card that has already been scheduled.
-    db.execute('DELETE FROM learning_attempts WHERE card_id=?', (id,))
+    _close_attempts(db, id)
     db.commit()
     return jsonify({
         'due': datetime.fromtimestamp(due, tz=timezone.utc).isoformat(),

@@ -260,6 +260,49 @@ public struct LearningSession: Equatable {
         return answer
     }
 
+    /// Records the current card as answered by a recording, whose words the
+    /// server has yet to hear. `typed` is whatever was typed before the mic
+    /// was tapped; the transcript is appended to it there.
+    public mutating func answerSpoken(typed: String = "", speech: Bool = false,
+                                      id: String = ULID.make()) -> Answer? {
+        guard let card, !card.isReview else { return nil }
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        let answer = Answer(id: id, card: card, skipped: false, text: trimmed.isEmpty ? nil : trimmed,
+                            voice: true, speech: speech)
+        answers.append(answer)
+        return answer
+    }
+
+    /// Puts back an answer this deck was rebuilt without: a recording still
+    /// on its way, which the server's attempts can't list yet.
+    public mutating func adopt(_ answer: Answer) {
+        guard !inResults, cards.contains(where: { $0.id == answer.card.id }),
+              !answers.contains(where: { $0.card.id == answer.card.id }) else { return }
+        answers.append(answer)
+    }
+
+    /// Takes a retired card out of the sitting, wherever it is in it. The
+    /// result being rated stays the same one unless it was this card.
+    public mutating func remove(_ cardID: String) {
+        if let index = answers.firstIndex(where: { $0.card.id == cardID }) {
+            answers.remove(at: index)
+            if index < resultIndex { resultIndex -= 1 }
+        }
+        cards.removeAll { $0.id == cardID }
+        reviewed.remove(cardID)
+    }
+
+    /// Takes back an answer that never reached the server, so its card is
+    /// asked again rather than shown with nothing to grade.
+    public mutating func unanswer(_ answerID: String) {
+        guard let index = answers.firstIndex(where: { $0.id == answerID }) else { return }
+        answers.remove(at: index)
+        if index < resultIndex { resultIndex -= 1 }
+    }
+
+    /// Nothing left to answer or rate: the deck should be fetched again.
+    public var isSpent: Bool { card == nil && result == nil }
+
     /// Takes the current review card off the deck once it has been rated.
     @discardableResult
     public mutating func markReviewed() -> LearningCard? {
@@ -295,6 +338,13 @@ public struct LearningSession: Equatable {
                          gradedAs: row.normalizedAnswer ?? row.answer ?? "")
         default: return .pending
         }
+    }
+
+    /// What was answered, as the server now has it: a spoken answer's words
+    /// arrive on its attempt row once the clip has been transcribed.
+    public static func text(of answer: Answer, in attempts: [LearningAttempt]) -> String? {
+        guard answer.voice else { return answer.text }
+        return attempts.first(where: { $0.cardId == answer.card.id && $0.id == answer.id })?.answer ?? answer.text
     }
 
     /// Whether any answer is still waiting on the grader, so worth polling.

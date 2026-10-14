@@ -226,6 +226,38 @@ final class OfflineCaptureTests: XCTestCase {
         snapshot(app, "5-browse")
     }
 
+    /// Retiring takes a card out of the sitting on both passes: the deck
+    /// shrinks while answering, and a result being rated moves to the next.
+    func testLearningCardsCanBeRetiredDuringReview() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-learningFixture")
+        app.launch()
+        openMore(app, "Learning")
+
+        XCTAssertTrue(app.textFields["learning-answer"].waitForExistence(timeout: settle), "No card to answer")
+        XCTAssertTrue(app.staticTexts["Card 1 of 6"].exists)
+        let retire = app.buttons["learning-retire"]
+        for _ in 0..<4 where !reachable(retire) { app.swipeUp() }
+        retire.tap()
+        let confirm = app.buttons["Retire"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "No confirmation")
+        snapshot(app, "retire-confirm")
+        confirm.tap()
+        XCTAssertTrue(app.staticTexts["Card 1 of 5"].waitForExistence(timeout: 5), "The retired card is still in the deck")
+
+        for _ in 0..<5 { app.buttons["learning-flip"].tap(); RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+        XCTAssertTrue(app.staticTexts["Result 1 of 5"].waitForExistence(timeout: 5))
+        for _ in 0..<4 where !reachable(retire) { app.swipeUp() }
+        retire.tap()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+        XCTAssertTrue(app.staticTexts["Result 1 of 4"].waitForExistence(timeout: 5), "The result didn't move on")
+
+        // Retired cards leave the deck's count and the browser.
+        app.segmentedControls["learning-page"].buttons["Browse"].tap()
+        XCTAssertTrue(app.staticTexts["Due"].firstMatch.waitForExistence(timeout: 5))
+    }
+
     /// A notebook saved For review comes up as a card with no back side: its
     /// pages one under another, then the ratings at the end of the scroll.
     func testLearningReviewCardIsReadThenRated() {
