@@ -7,7 +7,22 @@ import LunaschalCore
 final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     @Published private(set) var startup: Result<CaptureModel, Error>?
     private var background: BackgroundSync?
+    private var screenshotUploads: ScreenshotBackgroundReceiver?
     static let syncIdentifier = "com.lunaschal.mobile.sync"
+
+    /// The share extension's background screenshot uploads finished: collect
+    /// the session's events, then sync so the outbox reconciles and the
+    /// journal shows the new run.
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        guard identifier == ScreenshotBackgroundUpload.identifier else { return completionHandler() }
+        if screenshotUploads == nil {
+            screenshotUploads = ScreenshotBackgroundReceiver { [weak self] in
+                if case .success(let model) = self?.startup { model.requestSync() }
+            }
+        }
+        screenshotUploads?.attach(completion: completionHandler)
+    }
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {

@@ -781,6 +781,40 @@ def _accept_calendar(db, data: dict, ctx: dict) -> dict:
     return {'id': id}
 
 
+def _accept_todo(db, data: dict, ctx: dict) -> dict:
+    """A carried-over to-do card from the morning briefing: yesterday's
+    unfinished bar item, kept into *today's* bar. Idempotent on title, since the
+    plan or a chat turn may have added the same thing in the meantime."""
+    from backend.routes.tasks import _parse_due
+    from backend.todo_recurrence import parse_priority
+    title = (data.get('title') or '').strip()
+    if not title:
+        raise _AcceptRejected('title required')
+    if len(title) > 500:
+        raise _AcceptRejected('title is too long')
+    priority, err = parse_priority(data.get('priority'))
+    if err:
+        raise _AcceptRejected(err)
+    due, err = _parse_due(data.get('due'))
+    if err:
+        raise _AcceptRejected(err)
+    notes = data.get('notes')
+    notes = (notes.strip() or None) if isinstance(notes, str) else None
+
+    today = day_key_for()
+    for row in db.execute('SELECT id, title FROM chat_todos WHERE day_key=?', (today,)):
+        if (row['title'] or '').strip().lower() == title.lower():
+            return {'id': row['id']}
+    now = int(time.time())
+    id = str(ULID())
+    db.execute(
+        'INSERT INTO chat_todos(id, day_key, title, notes, due, priority, done, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,0,?,?)',
+        (id, today, title, notes, due, priority, now, now),
+    )
+    return {'id': id}
+
+
 def _accept_calorie(db, data: dict, ctx: dict) -> dict:
     description = (data.get('description') or '').strip()
     if not description:
@@ -1066,6 +1100,7 @@ _ACCEPT_HANDLERS = {
     'recipe': _accept_recipe,
     'recipe_link': _accept_recipe_link,
     'flashcards': _accept_flashcards,
+    'todo': _accept_todo,
 }
 
 

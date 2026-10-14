@@ -774,11 +774,20 @@ export interface ProposedTodo {
 // place `status` ever changes, so a card survives a reload until it actually is.
 export interface DelegateProposalRecord {
   reconstructionDay?: string;
+  // Set on a briefing's carried-over to-do: the day key it was left
+  // unfinished on (backend/briefing_job.py's stage_carryover_todos).
+  carriedFrom?: string;
   evidence?: string;
   sources?: { id: string; label: string; recordedAt: string }[];
   id: string;
   kind:
-    'calendar' | 'calorie' | 'food' | 'recipe' | 'recipe_link' | 'flashcards';
+    | 'calendar'
+    | 'calorie'
+    | 'food'
+    | 'recipe'
+    | 'recipe_link'
+    | 'flashcards'
+    | 'todo';
   data: Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
   resolvedAt?: number;
@@ -1599,10 +1608,10 @@ export interface TodoPayload {
 
 // A day-scoped, ephemeral to-do shown in the Chat tab's bar above the input
 // box. Written instantly by the chat delegate's add_todos tool or the morning
-// briefing — there is no accept step. Yesterday's items remain available for
-// one day of review and promotion, using the same 4am day boundary.
+// briefing — there is no accept step. Resets at the next day boundary: the
+// list endpoint only ever returns today's rows. Yesterday's unfinished items
+// come back as suggestion cards on the morning briefing, never in the bar.
 export interface ChatTodoItem {
-  previousDay?: boolean;
   id: string;
   dayKey: string;
   title: string;

@@ -48,25 +48,6 @@ function renderBar() {
 }
 
 describe('collapsed by default', () => {
-  it('offers yesterday’s items for promotion without toggling permanent mode', async () => {
-    vi.mocked(api.chatTodos.list).mockResolvedValue([
-      todo({ previousDay: true }),
-    ]);
-    vi.mocked(api.chatTodos.promote).mockResolvedValue({ id: 'permanent' });
-    renderBar();
-    fireEvent.click(
-      await screen.findByText('0 to-dos today · 1 from yesterday to review')
-    );
-    expect(screen.getByText('Yesterday — keep or dismiss')).toBeTruthy();
-    fireEvent.click(screen.getByText('Call the dentist'));
-    fireEvent.click(screen.getByText('Save and send to permanent'));
-    await waitFor(() =>
-      expect(api.chatTodos.promote).toHaveBeenCalledWith(
-        't1',
-        expect.objectContaining({ title: 'Call the dentist' })
-      )
-    );
-  });
   it('starts collapsed and shows a count, not the list', async () => {
     vi.mocked(api.chatTodos.list).mockResolvedValue([
       todo(),

@@ -41,7 +41,7 @@ function ChatTodoRow({
 }: RowProps) {
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
-  const [sendMode, setSendMode] = useState(todo.previousDay ?? false);
+  const [sendMode, setSendMode] = useState(false);
   const [open, setOpen] = useState(false);
 
   const [title, setTitle] = useState(todo.title);
@@ -305,8 +305,7 @@ export function ChatTodoBar() {
     },
   });
 
-  const pending = todos.filter(t => !t.done && !t.previousDay).length;
-  const previous = todos.filter(t => t.previousDay);
+  const pending = todos.filter(t => !t.done).length;
 
   return (
     <div className="border-t border-white/10">
@@ -318,8 +317,6 @@ export function ChatTodoBar() {
           {todos.length === 0
             ? "Today's to-dos"
             : `${pending} to-do${pending === 1 ? '' : 's'} today`}
-          {previous.length > 0 &&
-            ` · ${previous.length} from yesterday to review`}
         </span>
         <span
           className={`transition-transform ${expanded ? 'rotate-180' : ''}`}
@@ -334,37 +331,23 @@ export function ChatTodoBar() {
               Nothing added yet today.
             </div>
           ) : (
-            [todos.filter(t => !t.previousDay), previous].map(
-              (group, index) => (
-                <div key={index} className="space-y-2">
-                  {index === 1 && group.length > 0 && (
-                    <div className="text-xs text-[var(--color-text-muted)]">
-                      Yesterday — keep or dismiss
-                    </div>
-                  )}
-                  {group.map(todo => (
-                    <ChatTodoRow
-                      key={todo.id}
-                      todo={todo}
-                      promoting={
-                        promote.isPending && promote.variables?.id === todo.id
-                      }
-                      onToggleDone={() =>
-                        update.mutate({
-                          id: todo.id,
-                          data: { done: !todo.done },
-                        })
-                      }
-                      onUpdateTitle={title =>
-                        update.mutate({ id: todo.id, data: { title } })
-                      }
-                      onDismiss={() => remove.mutate(todo.id)}
-                      onPromote={data => promote.mutate({ id: todo.id, data })}
-                    />
-                  ))}
-                </div>
-              )
-            )
+            todos.map(todo => (
+              <ChatTodoRow
+                key={todo.id}
+                todo={todo}
+                promoting={
+                  promote.isPending && promote.variables?.id === todo.id
+                }
+                onToggleDone={() =>
+                  update.mutate({ id: todo.id, data: { done: !todo.done } })
+                }
+                onUpdateTitle={title =>
+                  update.mutate({ id: todo.id, data: { title } })
+                }
+                onDismiss={() => remove.mutate(todo.id)}
+                onPromote={data => promote.mutate({ id: todo.id, data })}
+              />
+            ))
           )}
         </div>
       )}
