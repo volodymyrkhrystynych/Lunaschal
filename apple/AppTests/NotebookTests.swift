@@ -747,6 +747,26 @@ final class NotebookColumnConversionTests: XCTestCase {
         XCTAssertEqual(saved.markedPages, [1], "page 2's mark came across with it")
     }
 
+    func testBackAfterAnAutosaveStillFindsTheWrittenPages() async throws {
+        let store = try store()
+        let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
+        try NewspaperFixture.makeIssue(at: pdfURL)
+        // Never saved: the autosave is its first checkpoint and draws the
+        // preview, so the preview is no reason for Back to save again.
+        let paper = try store.createNewspaper(date: "2026-10-06", pdf: pdfURL, pageCount: NewspaperFixture.shapes.count)
+        let model = NotebookEditorModel(store: store, notebook: paper)
+        var written = model.pages[0]
+        written.insertNewShape(configuration: ShapeConfiguration(type: .ellipse),
+                               frame: model.pageRect(2).insetBy(dx: 400, dy: 200))
+        model.canvasChanged(written, page: 0)
+        // The autosave writes the ink but leaves the marks; Back, with
+        // nothing new to write, must still look for them.
+        await model.checkpoint(final: false)
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(model.notebook.id).markedPages, [2])
+        XCTAssertEqual(model.marked, [2])
+    }
+
     func testWritingOnAPageFilesItAndRubbingItOutStopsFilingIt() async throws {
         let store = try store()
         let model = NotebookEditorModel(store: store, notebook: try await pagedIssue(store))

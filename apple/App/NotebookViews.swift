@@ -106,6 +106,10 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     private var decodedLocked: [UUID: PaperMarkup] = [:]
     /// What the current preview was drawn from: the first page and its locked layer.
     private var previewOf: [UUID]?
+    /// A column's ink was saved by an autosave, which leaves which pages are
+    /// written on as it was: the next final checkpoint must look again even
+    /// with nothing new to write.
+    private var marksBehind = false
     /// The cover's newsprint at preview size. The PDF page never changes, and
     /// rendering a broadsheet front page was most of every save's cost.
     private var coverNewsprint: (index: Int, size: CGSize, image: CGImage?)?
@@ -611,7 +615,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     }
 
     private func performCheckpoint(final: Bool) async {
-        guard loaded, dirty || (final && previewOf != coverIdentity) else { return }
+        guard loaded, dirty || (final && (previewOf != coverIdentity || marksBehind)) else { return }
         dirty = false
         if let pictures = pendingLocked {
             do {
@@ -636,7 +640,8 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
                 guard let data else { return nil }
                 return lockedOnDisk[layerIDs[index]].map(NotebookFile.kept) ?? .bytes(data)
             }
-            if final, column, let ink = snapshot.first {
+            let scanned = final && column
+            if scanned, let ink = snapshot.first {
                 keep = await inkedSlots(ink, slots: slots)
                 marked = keep
             }
@@ -663,6 +668,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             lockedOnDisk = Dictionary(uniqueKeysWithValues: layerIDs.enumerated()
                 .filter { layers[$0.offset] != nil }.map { ($1, $0) })
             if drawn != nil { previewOf = cover }
+            if column { marksBehind = !scanned }
             error = nil
             status = dirty ? Self.saving : "Saved on this device"
         } catch {
