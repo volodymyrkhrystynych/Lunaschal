@@ -1,0 +1,56 @@
+name: Backend
+# Pull requests and pushes to main. Unlike the Apple workflow, the push matters
+# here: a PR's checks run on the PR merged with main as it was *then*, so two
+# PRs that each pass alone can still break main together. #193 and #194 each
+# added the same Flask route, git merged both copies without a conflict, and
+# production crash-looped on startup — any run of this suite on main would have
+# failed at the first `create_app()`.
+on:
+  pull_request:
+    paths-ignore: ['apple/**', 'docs/**', '**/*.md']
+  push:
+    branches: [main]
+    paths-ignore: ['apple/**', 'docs/**', '**/*.md']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  # Seconds, not minutes: the same check the deploy watcher runs before it
+  # restarts production, so a red mark here means the watcher will refuse it.
+  boot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: System libraries (WeasyPrint)
+        run: sudo apt-get update -q && sudo apt-get install -yq libpango-1.0-0 libpangoft2-1.0-0
+      # openai-whisper pulls torch, and PyPI's default torch wheel is the
+      # multi-gigabyte CUDA build. Nothing here needs a GPU.
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-dev.txt
+      - name: Boot create_app()
+        run: python backend/ops/smoke.py --db "$RUNNER_TEMP/fresh.db"
+
+  pytest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: System libraries
+        run: sudo apt-get update -q && sudo apt-get install -yq libpango-1.0-0 libpangoft2-1.0-0 ffmpeg ripgrep libsndfile1
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q backend/tests

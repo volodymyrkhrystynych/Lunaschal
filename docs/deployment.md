@@ -71,15 +71,49 @@ systemctl --user enable --now lunaschal-deploy.timer
 ```
 
 Check it's working: `journalctl --user -u lunaschal-deploy -f`. Each tick logs
-its decision (`deploy`, `skip-branch`, `skip-dirty`, `up-to-date`, or `ahead`)
-— a `skip-*` result while you're mid-feature-branch is expected and correct,
-not an error.
+its decision (`deploy`, `finish`, `skip-branch`, `skip-dirty`, `skip-failed`,
+`up-to-date`, or `ahead`) — a `skip-branch`/`skip-dirty` result while you're
+mid-feature-branch is expected and correct, not an error.
 
 `ahead` means `origin/main` is already an ancestor of `HEAD`: a local commit on
 `main` you haven't pushed. It's reported separately from `up-to-date` because
 the two shas _do_ differ, and treating that as a deploy would pull nothing and
-then still run the unconditional rebuild and restart at the end of this
-script — tearing down the production window every 5 minutes until you push.
+then still rebuild and restart — tearing down production every 5 minutes until
+you push.
+
+### What a deploy does, and what happens when one is broken
+
+A restart is not proof of anything: `systemctl restart` returns as soon as the
+process is exec'd, so a merge that crashed on startup (two PRs that each added
+the same Flask route, merged by git without a conflict) used to log `deployed`
+and leave `lunaschal.service` in a restart loop. Each deploy now:
+
+1. **Boots the new commit before pulling it.** `backend/ops/smoke.py` — the
+   live checkout's copy, so a commit that broke it is still checked — runs
+   `create_app()` from a throwaway `git worktree` of the target against a
+   SQLite backup of the live DB, so the `_ensure_*` migrations meet real data
+   on the copy first. A commit that can't start is never pulled and production
+   stays where it was.
+2. **Pulls, installs changed deps, and builds into `dist.next/`**, swapping it
+   for `dist/` only once the build succeeds — Vite empties its output directory
+   first, so building in place served a missing page for the length of every
+   build, and an empty one for good if the build failed.
+3. **Restarts and polls `/api/health`** for 90 seconds. If it never answers,
+   it resets the checkout to the last sha that did, rebuilds, and restarts
+   that.
+
+The watcher keeps two files under `.git/lunaschal-deploy/`: `deployed`, the last
+sha seen healthy, and `failed`, a sha that failed step 1 or 3. `finish` means
+HEAD is already at origin but was never seen healthy — a deploy that died
+partway, which used to look `up-to-date` forever after because the pull had
+already moved HEAD. `skip-failed` means origin is still at a commit that
+failed; the unit exits non-zero every tick until a new commit lands on `main`,
+so a broken `main` shows up as a failed unit rather than a green timer.
+
+To force a retry of a failed sha (say, it failed for a reason outside the
+repo): `rm .git/lunaschal-deploy/failed`. Until the first successful deploy
+after installing this version there is no `deployed` file, so a rollback goes
+back to whatever was checked out when the deploy started.
 
 `deploy-check.sh` also refuses to pull (and exits non-zero) if `origin` isn't
 the exact repo URL it was built for — it auto-executes whatever it pulls
