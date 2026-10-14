@@ -329,6 +329,8 @@ final class ChatModel: NSObject, ObservableObject, AVAudioRecorderDelegate {
         do {
             try await api.resolveProposal(messageID: messageID, proposalID: proposal.id, accept: accept, data: data)
             await refresh()
+            // A kept carry-over lands in today's bar.
+            if accept, proposal.kind == "todo" { await refreshTodos() }
             return nil
         } catch { return error.localizedDescription }
     }

@@ -349,7 +349,12 @@ what each device can currently do and which work remains device-only.
   tests only; the hand-off needs a signed build (an unsigned one has no App
   Group, and the extension says so). Sharing up to 20 images on iPhone or iPad
   sends them as journal screenshots. Original files first enter a durable App Group
-  outbox, then upload immediately or retry on the app's next sync. The existing
+  outbox, then upload immediately. An unreachable server (a VPN or MagicDNS
+  name not answering yet as the phone wakes) is retried for a few seconds, then
+  the images go to a background `URLSession` in the App Group
+  (`Shared/ScreenshotBackgroundUpload.swift`) that sends them once the server is
+  reachable, without the app being opened; the app's next sync still reconciles
+  the outbox, and the server de-duplicates by attachment id. The existing
   desktop screenshot endpoint groups consecutive uploads into one entry until
   other journal activity intervenes; screenshots do not become entry text.
   Grouping follows server arrival order, including offline retries. Timestamps
@@ -357,7 +362,8 @@ what each device can currently do and which work remains device-only.
   retries and grouping. Image intake tries alternate representations if a
   source cannot supply its first image format, with data and UIKit-image
   fallbacks; these paths pass simulator unit tests. Sharing from the system
-  screenshot preview on a signed device remains unverified.
+  screenshot preview on a signed device, and the background handoff, remain
+  unverified on device (retry and request shape pass core tests).
   Other saved material is grouped
   under Study. Download controls remain in More → Settings → Library downloads.
   Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:

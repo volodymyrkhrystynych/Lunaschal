@@ -96,7 +96,9 @@ out of reach waits and goes with the next sync. Sharing a YouTube link instead
 adds it to the Capture composer's draft, without the server. Sharing images on
 iPhone or iPad now queues original screenshots and uploads them to the desktop's
 grouped screenshot journal endpoint. Consecutive server arrivals share one entry;
-other journal activity separates them. Offline images retry on the app's next sync.
+other journal activity separates them. An unreachable server is retried briefly,
+then the images go to a background upload that sends them once the server answers;
+the app's next sync reconciles whatever is left.
 This image path has core/backend test coverage; native share-sheet verification is pending.
 The earlier link share extension passed its
 build and archive checks only: it needs a signed build to reach the shared

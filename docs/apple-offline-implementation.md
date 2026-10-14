@@ -743,7 +743,8 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
       Real Health data remains device-unverified.
 - [ ] Complete share-extension support: fic/YouTube links and journal screenshots
       are implemented; audio and documents remain outstanding. Image shares (up to 20) preserve original bytes in `ScreenshotOutbox`, upload through
-      `POST /api/journal/screenshots`, and retry during app sync. The existing server
+      `POST /api/journal/screenshots`, retry briefly in the extension, then hand off
+      to a background `URLSession` (App Group) and reconcile during app sync. The existing server
       session groups consecutive arrivals until other journal activity, matching
       desktop behavior; timestamps use share time with its original local offset.
 - [x] Use a shared app container/outbox with safe handoff from the share extension.
