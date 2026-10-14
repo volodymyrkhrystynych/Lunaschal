@@ -25,6 +25,10 @@ final class LearningModel: ObservableObject {
     @Published private(set) var attempts: [LearningAttempt] = []
     /// A save or rating on its way, so the buttons don't send it twice.
     @Published private(set) var sending = false
+    /// Spoken answers whose clip is still on its way to the server, by answer
+    /// id. The session has already moved past them; they can't be rated until
+    /// the server has the attempt, or the clip would land after the rating.
+    @Published private(set) var uploading: [String: LearningSession.Answer] = [:]
     /// Why nothing could be loaded: no server, signed out, or unreachable.
     @Published private(set) var problem: String?
     /// What went wrong with the last thing tapped.
@@ -108,7 +112,10 @@ final class LearningModel: ObservableObject {
             async let open = api.learningAttempts(filter)
             let (cards, attempts) = try await (due, open)
             self.attempts = attempts
-            session = LearningSession(due: cards, attempts: attempts)
+            var rebuilt = LearningSession(due: cards, attempts: attempts)
+            // A recording still uploading isn't on the server's list yet.
+            for answer in uploading.values.sorted(by: { $0.id < $1.id }) { rebuilt.adopt(answer) }
+            session = rebuilt
             problem = nil
             pollGrades()
         } catch { unreachable(error) }
@@ -152,6 +159,53 @@ final class LearningModel: ObservableObject {
         return await save(answer, into: next)
     }
 
+    /// A recording stopped: the clip is the answer. The next card is up at
+    /// once; the clip goes to the server behind it, which transcribes and
+    /// grades it. `typed` is anything typed before the mic was tapped.
+    func submitRecording(_ clip: URL, typed: String) {
+        let speech = UserDefaults.standard.bool(forKey: Self.speechModeKey)
+        guard var next = session, let answer = next.answerSpoken(typed: typed, speech: speech) else {
+            try? FileManager.default.removeItem(at: clip)
+            return
+        }
+        session = next
+        uploading[answer.id] = answer
+        Task { await upload(answer, clip) }
+    }
+
+    /// Tries a few times, since the phone may be between networks; the attempt
+    /// id makes a resend a no-op. A clip that can't be sent is dropped and its
+    /// card asked again, rather than shown later with nothing to grade.
+    private func upload(_ answer: LearningSession.Answer, _ clip: URL) async {
+        defer {
+            try? FileManager.default.removeItem(at: clip)
+            uploading[answer.id] = nil
+        }
+        var lastError: Error?
+        for retry in 0..<3 {
+            if retry > 0 { try? await Task.sleep(for: .seconds(2 * retry)) }
+            guard let api = transport() else { break }
+            do {
+                try await api.saveRecordedAttempt(answer, clip: clip)
+                attempts.removeAll { $0.cardId == answer.card.id }
+                attempts.append(LearningAttempt(id: answer.id, cardId: answer.card.id, mode: "answered",
+                                                answer: answer.text, answerMode: answer.answerMode))
+                pollGrades()
+                return
+            } catch { lastError = error }
+        }
+        // Retired (or the deck rebuilt) meanwhile: nothing is waiting on it.
+        guard session?.answers.contains(where: { $0.id == answer.id }) ?? false else { return }
+        session?.unanswer(answer.id)
+        error = "Your recording couldn't be sent, so that card is up again. "
+            + (lastError?.localizedDescription ?? "Not connected to your server.")
+    }
+
+    /// The answer's words: a spoken one's arrive from the server once heard.
+    func text(of answer: LearningSession.Answer) -> String? {
+        LearningSession.text(of: answer, in: attempts)
+    }
+
     func skip() async {
         guard var next = session, let answer = next.skip() else { return }
         _ = await save(answer, into: next)
@@ -177,7 +231,8 @@ final class LearningModel: ObservableObject {
     /// Rates the answer on screen and moves on; at the end of the results the
     /// deck is fetched again, so whatever has come due since starts a new one.
     func rate(_ rating: LearningRating) async {
-        guard !sending, var next = session, let answer = next.result, let api = api() else { return }
+        guard !sending, var next = session, let answer = next.result, uploading[answer.id] == nil,
+              let api = api() else { return }
         sending = true
         defer { sending = false }
         do {
@@ -220,6 +275,25 @@ final class LearningModel: ObservableObject {
               let image = UIImage(data: data) else { return nil }
         pages[page.id] = image
         return image
+    }
+
+    /// Takes a card out of review for good, from wherever it is in the
+    /// sitting. It keeps its history and stays retired, as a revised card's
+    /// old version does.
+    func retire(_ card: LearningCard) async {
+        guard !sending, let api = api() else { return }
+        sending = true
+        defer { sending = false }
+        do {
+            try await api.retireCard(card.id)
+            attempts.removeAll { $0.cardId == card.id }
+            stopSpeaking()
+            if var next = session {
+                next.remove(card.id)
+                if next.isSpent { await loadSession() } else { session = next }
+            }
+            await refresh()
+        } catch { failed(error) }
     }
 
     // MARK: Speech mode
