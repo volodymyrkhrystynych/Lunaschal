@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type GradeResult, type LearningCard } from '../../hooks/api';
 import { ulid } from '../../lib/ulid';
 import {
@@ -322,6 +322,46 @@ export function ReviewSession({ folderId, tag }: Props) {
     advanceResult();
   };
 
+  // Retire = stop reviewing this card, straight from the rating slide. It
+  // waits for the server before moving on (unlike a rating): finishing the
+  // session refetches /due, and a retire still in flight would hand the card
+  // straight back. Undone from Browse → Retired.
+  const retire = useMutation({
+    mutationFn: (id: string) => api.learning.retireCard(id),
+  });
+  const retireAndAdvance = async (id: string, advance: () => void) => {
+    try {
+      await retire.mutateAsync(id);
+    } catch {
+      return; // Shown under the button; the card stays put.
+    }
+    queryClient.invalidateQueries({ queryKey: ['learning', 'stats'] });
+    queryClient.invalidateQueries({ queryKey: ['learning', 'cards'] });
+    advance();
+  };
+  const retireReviewCard = () => {
+    if (!card || card.kind !== 'review') return;
+    void retireAndAdvance(card.id, () => {
+      setRatingOverride(null);
+      setReviewedCount(c => c + 1);
+      setIndex(i => i + 1);
+    });
+  };
+  const retireResult = () => {
+    if (!current) return;
+    void retireAndAdvance(current.card.id, advanceResult);
+  };
+  const retireButton = (onClick: () => void) => (
+    <button
+      onClick={onClick}
+      disabled={retire.isPending}
+      title="Stop reviewing this card. Undo from Browse → Retired."
+      className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline disabled:opacity-50"
+    >
+      {retire.isPending ? 'Retiring…' : 'Retire card'}
+    </button>
+  );
+
   // A review card is rated as soon as its pages have been read. Its own ULID
   // is the review's idempotency key, as an attempt's would be.
   const rateReviewCard = (rating: number) => {
@@ -423,6 +463,12 @@ export function ReviewSession({ folderId, tag }: Props) {
                 </button>
               ))}
             </div>
+            <div className="text-center">{retireButton(retireReviewCard)}</div>
+            {retire.isError && (
+              <p className="text-center text-xs text-red-400">
+                Could not retire the card.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -644,7 +690,13 @@ export function ReviewSession({ folderId, tag }: Props) {
                   I was right — the card is wrong
                 </button>
               )}
+              {retireButton(retireResult)}
             </div>
+            {retire.isError && (
+              <p className="text-center text-xs text-red-400">
+                Could not retire the card.
+              </p>
+            )}
 
             {showChat && (
               <CardChat

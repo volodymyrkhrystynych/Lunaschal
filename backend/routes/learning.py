@@ -640,7 +640,51 @@ def list_cards():
         ' ORDER BY created_at DESC LIMIT ? OFFSET ?',
         [*params, limit, offset],
     ).fetchall()
-    return jsonify(_cards_to_dicts(rows))
+    cards = _cards_to_dicts(rows)
+    if state == 'retired':
+        # Two kinds of retired card: one the user took out of the deck, and
+        # an old version a revision replaced. Only the first can come back.
+        for card in cards:
+            card['superseded'] = _superseded(card['id'])
+    return jsonify(cards)
+
+
+def _superseded(id) -> bool:
+    return get_db().execute(
+        'SELECT 1 FROM learning_cards WHERE revised_from=?', (id,)
+    ).fetchone() is not None
+
+
+@bp.post('/cards/<id>/retire')
+def retire_card(id):
+    """Take a card out of the deck from the review screen. Its FSRS state is
+    kept, so unretiring resumes the schedule rather than starting over."""
+    row = _get_card(id)
+    if not row or row['state'] == 'pending':
+        return jsonify({'error': 'Not found'}), 404
+    db = get_db()
+    if row['state'] == 'active':
+        db.execute("UPDATE learning_cards SET state='retired', updated_at=? WHERE id=?",
+                   (int(time.time()), id))
+    # Its open attempt would otherwise keep the card in a resumed session.
+    db.execute('DELETE FROM learning_attempts WHERE card_id=?', (id,))
+    db.commit()
+    return jsonify({'success': True})
+
+
+@bp.post('/cards/<id>/unretire')
+def unretire_card(id):
+    row = _get_card(id)
+    if not row or row['state'] != 'retired':
+        return jsonify({'error': 'Not found'}), 404
+    if _superseded(id):
+        return jsonify({'error': 'A revision replaced this card; it cannot come back'}), 409
+    now = int(time.time())
+    db = get_db()
+    db.execute("UPDATE learning_cards SET state='active', due=COALESCE(due, ?),"
+               ' updated_at=? WHERE id=?', (now, now, id))
+    db.commit()
+    return jsonify({'success': True})
 
 
 @bp.get('/cards/<id>')
@@ -1010,6 +1054,99 @@ def review_card(id):
         'due': datetime.fromtimestamp(due, tz=timezone.utc).isoformat(),
         'state': 'active',
     })
+
+
+# ---------------------------------------------------------------- lessons
+# A coding agent's learnings files → lessons → cards. backend/learning/lessons.py.
+
+def _lessons_config(db) -> dict:
+    from backend.learning.lessons import inbox_state, settings
+    cfg = settings(db)
+    return {**cfg, 'inboxState': inbox_state(cfg['inboxPath'])}
+
+
+@bp.get('/lessons')
+def list_lessons():
+    db = get_db()
+    limit = min(int(request.args.get('limit', 100)), 500)
+    rows = db.execute(
+        'SELECT l.*, c.question AS covered_question FROM learning_lessons l'
+        ' LEFT JOIN learning_cards c ON c.id = l.covered_by'
+        ' ORDER BY l.created_at DESC, l.id DESC LIMIT ?', (limit,),
+    ).fetchall()
+    lessons = []
+    for row in rows:
+        d = row_to_dict(row)
+        d.pop('contentHash', None)
+        lessons.append(d)
+    return jsonify({'lessons': lessons, 'config': _lessons_config(db)})
+
+
+@bp.post('/lessons/import')
+def import_lessons():
+    from backend.learning.lessons import MAX_FILE_BYTES, import_text, settings
+    body = request.json or {}
+    text = body.get('text') or ''
+    if not text.strip():
+        return jsonify({'error': 'text required'}), 400
+    if len(text.encode('utf-8')) > MAX_FILE_BYTES:
+        return jsonify({'error': 'File too large for a learnings file'}), 413
+    db = get_db()
+    folder_id = body['folderId'] if 'folderId' in body else settings(db)['folderId']
+    if folder_id and not db.execute(
+        'SELECT 1 FROM learning_folders WHERE id=?', (folder_id,)
+    ).fetchone():
+        return jsonify({'error': 'Unknown folder'}), 400
+    result = import_text(db, text, source='upload',
+                         source_name=(body.get('sourceName') or '').strip() or None,
+                         folder_id=folder_id or None)
+    if result['added'] == 0 and result['alreadyImported'] == 0:
+        return jsonify({'error': 'No lessons found in that text'}), 400
+    return jsonify(result)
+
+
+@bp.post('/lessons/scan')
+def scan_lessons():
+    from backend.learning.lessons import scan_inbox
+    return jsonify(scan_inbox(get_db()))
+
+
+@bp.put('/lessons/config')
+def update_lessons_config():
+    body = request.json or {}
+    db = get_db()
+    updates = {}
+    if 'inboxPath' in body:
+        updates['learnings_inbox_path'] = (body.get('inboxPath') or '').strip() or None
+    if 'folderId' in body:
+        folder_id = body.get('folderId') or None
+        if folder_id and not db.execute(
+            'SELECT 1 FROM learning_folders WHERE id=?', (folder_id,)
+        ).fetchone():
+            return jsonify({'error': 'Unknown folder'}), 400
+        updates['learnings_folder_id'] = folder_id
+    if updates:
+        build_update(db, 'settings', updates, 'id=1', ())
+        db.commit()
+    return jsonify(_lessons_config(db))
+
+
+@bp.post('/lessons/<id>/force')
+def force_lesson(id):
+    """Card a lesson the coverage judge said was already covered (or one that
+    failed). Skips the judge: the user has read its verdict."""
+    from backend.ai import jobs
+    from backend.learning.lessons import JOB_KIND
+    db = get_db()
+    row = db.execute('SELECT status FROM learning_lessons WHERE id=?', (id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if row['status'] == 'pending':
+        return jsonify({'error': 'Already being processed'}), 409
+    db.execute("UPDATE learning_lessons SET status='pending', error=NULL WHERE id=?", (id,))
+    db.commit()
+    jobs.enqueue(JOB_KIND, id, {'force': True})
+    return jsonify({'success': True})
 
 
 @bp.get('/tags')

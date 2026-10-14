@@ -129,6 +129,12 @@ def _learning_grade_attempt(target_id, payload):
     _queue_grade(target_id, now=True)
 
 
+@jobs.handler('learning.process_lesson')
+def _learning_process_lesson(target_id, payload):
+    from backend.learning.lessons import process_lesson
+    process_lesson(target_id, force=bool(payload.get('force')))
+
+
 @jobs.handler('calendar.classify')
 def _calendar_classify(target_id, payload):
     from backend.ai.calendar import classify_event_categories

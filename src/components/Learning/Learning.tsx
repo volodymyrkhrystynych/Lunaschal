@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import {
   useShortcuts,
@@ -10,15 +10,18 @@ import { Queue } from './Queue';
 import { Browse } from './Browse';
 import { BrainDump } from './BrainDump';
 import { Folders } from './Folders';
+import { Lessons } from './Lessons';
 import { TagPill } from '../TagPill';
 
-export type LearningMode = 'review' | 'queue' | 'browse' | 'create' | 'folders';
+export type LearningMode =
+  'review' | 'queue' | 'browse' | 'create' | 'import' | 'folders';
 
 const MODES: LearningMode[] = [
   'review',
   'queue',
   'browse',
   'create',
+  'import',
   'folders',
 ];
 
@@ -35,6 +38,19 @@ export function Learning() {
   const [folderId, setFolderId] = useState<string | null>(null);
   const [tag, setTag] = useState<string | null>(null);
   const { level } = useShortcuts();
+  const queryClient = useQueryClient();
+
+  // Pick up whatever a coding agent wrote to the learnings inbox since the
+  // last visit. A POST, not a side effect of a GET; a no-op with no inbox set.
+  useEffect(() => {
+    api.learning
+      .scanLessons()
+      .then(r => {
+        if (r.added > 0)
+          void queryClient.invalidateQueries({ queryKey: ['learning'] });
+      })
+      .catch(() => {});
+  }, [queryClient]);
 
   const filters = { folderId: folderId ?? undefined, tag: tag ?? undefined };
   const { data: stats } = useQuery({
@@ -115,6 +131,12 @@ export function Learning() {
             className={modeClass(mode === 'create', level === 1)}
           >
             + Create
+          </button>
+          <button
+            onClick={() => setMode('import')}
+            className={modeClass(mode === 'import', level === 1)}
+          >
+            Import
           </button>
           <button
             onClick={() => setMode('folders')}
@@ -203,6 +225,7 @@ export function Learning() {
         {mode === 'create' && (
           <BrainDump folderId={folderId} onGenerated={() => setMode('queue')} />
         )}
+        {mode === 'import' && <Lessons />}
         {mode === 'folders' && <Folders />}
       </div>
     </div>

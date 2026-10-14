@@ -198,6 +198,7 @@ def init_db() -> None:
     _ensure_backup_settings(db)
     _ensure_files_settings(db)
     _ensure_knowledge_settings(db)
+    _ensure_learnings_inbox_settings(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
     # they used to own, reading their values first.
@@ -1488,6 +1489,19 @@ def _ensure_knowledge_settings(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'knowledge_root' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN knowledge_root TEXT')
+    db.commit()
+
+
+def _ensure_learnings_inbox_settings(db: sqlite3.Connection) -> None:
+    """Where coding agents write their daily learnings files, and the folder
+    the cards made from them land in (backend/learning/lessons.py). Both are
+    optional: with no path, import is upload-only; with no folder, the cards
+    are unfiled."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'learnings_inbox_path' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN learnings_inbox_path TEXT')
+    if 'learnings_folder_id' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN learnings_folder_id TEXT')
     db.commit()
 
 
