@@ -688,12 +688,58 @@ CREATE TABLE IF NOT EXISTS writing_context_docs (
     title TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
     doc_type TEXT NOT NULL DEFAULT 'note',
+    -- Read into every turn of the project's discussions (backend/writing/discuss.py).
+    -- Replaced a checkbox set the browser held, which a second client could not see.
+    pinned INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_writing_chapters_project ON writing_chapters(project_id, position);
 CREATE INDEX IF NOT EXISTS idx_writing_context_docs_project ON writing_context_docs(project_id);
+
+-- Copy-on-write history for a writing note, the user_memory_revisions pattern:
+-- `content`/`title` are the note as it stood BEFORE the change, which is what
+-- Restore puts back. `source` is 'edit' (the editor, coalesced per minute),
+-- 'accept' (a discussion's proposed update the author confirmed, with the
+-- message it came from) or 'restore'.
+CREATE TABLE IF NOT EXISTS writing_context_doc_revisions (
+    id TEXT PRIMARY KEY,
+    doc_id TEXT NOT NULL REFERENCES writing_context_docs(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL,
+    message_id TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_writing_doc_revisions_doc ON writing_context_doc_revisions(doc_id, created_at DESC);
+
+-- A canon source: one Fandom (MediaWiki) wiki imported from its XML dump into a
+-- docpack-format SQLite file under CANON_ROOT (backend/writing/canon_import.py).
+-- Deliberately not a knowledge_docpacks row — those are searched by every chat,
+-- and a fandom wiki belongs only to the projects it is linked to.
+CREATE TABLE IF NOT EXISTS writing_canon_sources (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    wiki_host TEXT,
+    source_url TEXT,
+    filename TEXT,
+    status TEXT NOT NULL DEFAULT 'importing' CHECK(status IN ('importing', 'ready', 'error')),
+    pages INTEGER NOT NULL DEFAULT 0,
+    chunks INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    licence TEXT NOT NULL DEFAULT 'CC BY-SA 3.0',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS writing_project_canon (
+    project_id TEXT NOT NULL REFERENCES writing_projects(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES writing_canon_sources(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, source_id)
+);
 
 CREATE TABLE IF NOT EXISTS daily_tasks (
     id TEXT PRIMARY KEY,
