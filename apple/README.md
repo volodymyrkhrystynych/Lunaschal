@@ -274,6 +274,20 @@ what each device can currently do and which work remains device-only.
   the screen. The last feed loaded is kept, so it still reads offline.
   Passed in simulator offline; not yet run against a server or verified on
   device.
+- More → Writing (its own tab on iPad) is the desktop Writing tab's notes and
+  discussions, over `/api/writing` and the Chat tab's routes. A book's notes
+  can be read, edited (debounced save), retyped, pinned (a pinned note is read
+  into every discussion turn, on any device) and restored from their history.
+  A discussion is an ordinary chat conversation the server knows belongs to
+  the book, so typed turns stream through `/api/chat/stream`, a spoken turn
+  queues in the Chat tab's recording outbox and is answered by the server, and
+  the notes the agent proposes arrive as the same editable confirm cards.
+  Fetched, not replicated: everything but a queued voice message needs the
+  server. New books can be started from the + on the book list (title and
+  description). Chapters and canon imports stay on the desktop.
+  Screens and the card passed in simulator against a fixture
+  (`testWritingShowsPinnedNotesAndANoteCard`); not yet run against a server
+  or verified on device.
 - Learning (More → Learning) is the desktop Learning tab's Review, Queue and
   Browse over the same `/api/learning` routes, filtered by folder and tag.
   Review runs the desktop's two passes: answer each due card (typed, or

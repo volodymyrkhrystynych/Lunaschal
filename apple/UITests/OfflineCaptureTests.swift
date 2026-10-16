@@ -847,6 +847,45 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["The rest (2)"].exists)
     }
 
+    // The fixture's one project: a pinned character note, and a discussion
+    // whose reply staged an addition to that note. With no server nothing is
+    // fetched; this checks the screens and the card render from a reply.
+    func testWritingShowsPinnedNotesAndANoteCard() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        openMore(app, "Writing")
+        let project = app.buttons["writing-project"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        project.tap()
+        XCTAssertTrue(app.staticTexts["Mara Vell"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.images["Pinned"].exists)
+
+        app.buttons["Discussions"].tap()
+        let discussion = app.buttons["writing-discussion"].firstMatch
+        XCTAssertTrue(discussion.waitForExistence(timeout: 5))
+        discussion.tap()
+        XCTAssertTrue(app.staticTexts["Update this note?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Update Note"].exists)
+    }
+
+    func testWritingStartsANewBookAndOpensIt() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        openMore(app, "Writing")
+        let add = app.buttons["writing-new-project"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        add.tap()
+        let title = app.textFields["writing-new-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.tap()
+        title.typeText("Tide Charts")
+        app.buttons["writing-new-create"].tap()
+        XCTAssertTrue(app.navigationBars["Tide Charts"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["No notes yet"].exists)
+    }
+
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
         let app = XCUIApplication()
         app.launch()

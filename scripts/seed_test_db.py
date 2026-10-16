@@ -1234,18 +1234,44 @@ def seed_writing(db):
         'VALUES (?, ?, ?, ?, 0, ?, ?)',
         (new_id(), project_id, 'Opening', 'The keeper climbs the same stairs every night, and every night they are different.', ts(12), ts(12)),
     )
-    # Context docs are what the scoped writing chat is allowed to see.
-    for title, doc_type, content in [
+    # Context docs are what the scoped writing chat is allowed to see. The
+    # character is pinned, so the discussion's prompt carries it on every turn.
+    note_ids = {}
+    for title, doc_type, content, pinned in [
         ('Lyra Ashworth', 'character',
-         'Forty years a keeper. Speaks little, writes everything down in a ledger she never shows anyone.'),
+         'Forty years a keeper. Speaks little, writes everything down in a ledger she never shows anyone.', 1),
         ('Outline', 'outline',
-         '1. The storm.\n2. What the light found.\n3. The ledger is opened.'),
+         '1. The storm.\n2. What the light found.\n3. The ledger is opened.', 0),
     ]:
+        note_ids[title] = new_id()
         db.execute(
-            'INSERT INTO writing_context_docs (id, project_id, title, content, doc_type, created_at, updated_at) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (new_id(), project_id, title, content, doc_type, ts(12), ts(12)),
+            'INSERT INTO writing_context_docs (id, project_id, title, content, doc_type, pinned, created_at, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (note_ids[title], project_id, title, content, doc_type, pinned, ts(12), ts(12)),
         )
+    # The outline as it stood before an accepted discussion proposal added
+    # its third beat — what the note's history panel offers to restore.
+    db.execute(
+        'INSERT INTO writing_context_doc_revisions (id, doc_id, title, content, source, message_id, created_at) '
+        "VALUES (?, ?, 'Outline', ?, 'accept', NULL, ?)",
+        (new_id(), note_ids['Outline'], '1. The storm.\n2. What the light found.', ts(12)),
+    )
+    # A canon source row with no file behind it: dumps are tens of MB and come
+    # from Fandom, so the demo describes the link rather than shipping a wiki.
+    # Its status is 'error' (never 'importing', an in-flight state), which is
+    # also what keeps the discussion from offering canon tools it cannot run.
+    source_id = new_id()
+    db.execute(
+        'INSERT INTO writing_canon_sources (id, name, wiki_host, source_url, filename, status, pages, chunks, '
+        'error, licence, created_at, updated_at) '
+        "VALUES (?, 'Lighthouse Wiki', 'lighthouses.fandom.com', NULL, NULL, 'error', 0, 0, "
+        "'Demo row: import a Fandom XML dump to make canon searchable', 'CC BY-SA 3.0', ?, ?)",
+        (source_id, ts(12), ts(12)),
+    )
+    db.execute(
+        'INSERT INTO writing_project_canon (project_id, source_id, created_at) VALUES (?, ?, ?)',
+        (project_id, source_id, ts(12)),
+    )
 
     return project_id
 

@@ -3,11 +3,21 @@ import LunaschalCore
 
 // MARK: Confirm cards
 
+/// Whatever screen a card's reply belongs to: the Chat tab, or a Writing
+/// discussion. Both resolve through the same route; each refreshes its own
+/// transcript afterwards. Returns why it failed, or nil.
+@MainActor
+protocol ProposalResolver: AnyObject {
+    func resolve(messageID: String, proposal: ChatProposal, accept: Bool, data: [String: JSONValue]) async -> String?
+}
+
+extension ChatModel: ProposalResolver {}
+
 /// The delegate's confirm cards for one reply (DelegateProposals.tsx). Each is
 /// editable, because its values are a model's reading of a sentence; the
 /// server checks whatever is accepted the same way either way.
 struct ProposalCards: View {
-    @ObservedObject var chat: ChatModel
+    let resolver: ProposalResolver
     let messageID: String
     let proposals: [ChatProposal]
 
@@ -18,7 +28,7 @@ struct ProposalCards: View {
             }
             ForEach(proposals) { proposal in
                 if proposal.isPending {
-                    PendingCard(chat: chat, messageID: messageID, proposal: proposal)
+                    PendingCard(resolver: resolver, messageID: messageID, proposal: proposal)
                 } else {
                     Text(proposal.resolvedLabel).font(.subheadline).foregroundStyle(.secondary)
                         .padding(.horizontal, 10).padding(.vertical, 6)
@@ -31,7 +41,7 @@ struct ProposalCards: View {
 }
 
 private struct PendingCard: View {
-    @ObservedObject var chat: ChatModel
+    let resolver: ProposalResolver
     let messageID: String
     let proposal: ChatProposal
     // Seeded once from what was staged; nothing is sent until accept.
@@ -69,7 +79,7 @@ private struct PendingCard: View {
         busy = true
         Task {
             // A card that failed validation stays open with the edits intact.
-            error = await chat.resolve(messageID: messageID, proposal: proposal, accept: accept, data: data)
+            error = await resolver.resolve(messageID: messageID, proposal: proposal, accept: accept, data: data)
             busy = false
         }
     }
@@ -105,6 +115,26 @@ private struct ProposalForm: View {
             field("Topic", "topic")
             Text("I'll generate atomic cards and queue them for your approval in the Learning tab.")
                 .font(.caption).foregroundStyle(.secondary)
+        case "writing_note":
+            field("Title", "title")
+            Picker("Type", selection: Binding(get: { data["docType"]?.string ?? "note" },
+                                              set: { data["docType"] = .string($0) })) {
+                ForEach(WritingDocType.all, id: \.id) { Text($0.label).tag($0.id) }
+            }
+            .pickerStyle(.segmented)
+            TextField("Content", text: text("content"), axis: .vertical).lineLimit(3...12).textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Content")
+        case "writing_note_update":
+            let replace = data["mode"]?.string == "replace"
+            let reason = data["reason"]?.text ?? ""
+            Text("\(replace ? "Replaces the whole of" : "Adds to the end of") “\(data["title"]?.text ?? "")”"
+                 + (reason.isEmpty ? "" : " — \(reason)"))
+                .font(.caption).foregroundStyle(.secondary)
+            TextField("Content", text: text("content"), axis: .vertical).lineLimit(3...12).textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Content")
+            Toggle("Replace the note instead of adding to it", isOn: Binding(
+                get: { replace }, set: { data["mode"] = .string($0 ? "replace" : "append") }))
+                .font(.caption)
         default:
             EmptyView()
         }

@@ -158,6 +158,7 @@ def init_db() -> None:
     _ensure_newspaper_downloads(db)
     _ensure_newspaper_last_read_at(db)
     _ensure_writing_project_id(db)
+    _ensure_writing_note_pinned(db)
     _ensure_conversation_day_key(db)
     _ensure_conversation_mode(db)
     _ensure_websearch_settings(db)
@@ -275,6 +276,7 @@ def init_db() -> None:
     _reset_stale_fic_downloads(db)
     _reset_stale_knowledge_downloads(db)
     _reset_stale_study_imports(db)
+    _reset_stale_canon_imports(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
     _reset_stale_journal_youtube_imports(db)
@@ -2304,6 +2306,24 @@ def _ensure_writing_project_id(db: sqlite3.Connection) -> None:
     if 'writing_project_id' not in cols:
         db.execute('ALTER TABLE conversations ADD COLUMN writing_project_id TEXT REFERENCES writing_projects(id)')
         db.commit()
+
+
+def _ensure_writing_note_pinned(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(writing_context_docs)')}
+    if 'pinned' not in cols:
+        db.execute('ALTER TABLE writing_context_docs ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
+        db.commit()
+
+
+def _reset_stale_canon_imports(db: sqlite3.Connection) -> None:
+    """An import runs on a daemon thread and dies with the process; a row left
+    'importing' would show a progress bar for work nobody is doing."""
+    db.execute(
+        "UPDATE writing_canon_sources SET status='error',"
+        " error='Import was interrupted by a restart; import the dump again'"
+        " WHERE status='importing'"
+    )
+    db.commit()
 
 
 def _ensure_journal_screenshot_event_threshold(db: sqlite3.Connection) -> None:

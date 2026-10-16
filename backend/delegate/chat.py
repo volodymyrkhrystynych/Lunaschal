@@ -41,6 +41,8 @@ from backend.lifewiki import tools as life_tools
 from backend.lifewiki.tools import LifeTools
 from backend.research import agent as tool_loop
 from backend.research import wiki as wiki_tools
+from backend.writing import canon_tools
+from backend.writing import proposals as writing_proposals
 from backend.writing import tools as writing_tools
 
 logger = logging.getLogger(__name__)
@@ -127,6 +129,30 @@ full, and writing_search finds a name or a phrase across all of them.
 Anything the author attached to this conversation is already above. Use these \
 for what they did not attach — before asking them to paste something in, and \
 before inventing a detail the story has already settled."""
+
+# The server-driven Writing discussion's decision turn (toolset 'writing').
+# The research turn's rule, the project recall note, and the one thing the
+# inline 'research' path could never have: staging notes onto confirm cards.
+WRITING_NOTEBOOK_NOTE = """When the author settles something in this message — \
+a decision about a character, a rule of the world, a change to the plan — use \
+propose_note to record it as a new note, or propose_note_update to add it to \
+the note that already covers it (check writing_list if unsure which exists). \
+The author confirms each card; nothing is saved until they do. Do not propose \
+for ideas still being floated, and do not propose the same thing twice."""
+
+WRITING_CANON_NOTE = """This story is set in an existing work. canon_search \
+and canon_read reach the original's wiki: use them when a detail of the source \
+material matters and you are not certain of it, before the general library or \
+the web."""
+
+
+def _writing_decision_note(has_canon: bool) -> str:
+    note = (f'{RESEARCH_TURN_NOTE}\n\n{WRITING_RECALL_NOTE}\n\n'
+            f'{WRITING_NOTEBOOK_NOTE}')
+    if has_canon:
+        note += f'\n\n{WRITING_CANON_NOTE}'
+    return note
+
 
 ANSWER_INSTRUCTION = (
     'Reply to the user now, in your own voice. If the knowledge tools or web delegate found '
@@ -242,6 +268,10 @@ def _toolbox(toolset: str, *, conversation_id, checkpoint, deadline,
                    confirm cards exist on that screen to accept a proposal on,
                    and the life wiki is about the user rather than the piece
                    they are writing.
+    - 'writing'  — a Writing discussion on the durable path: research,
+                   recall over its project, note proposals, and its canon
+                   when one is linked. Only ever chosen by the server, from
+                   the conversation row (backend/writing/discuss.py).
     - 'none'     — the voice listener, task nudges, the morning check-in: they
                    speak their replies aloud, so a gathering turn is latency
                    before the first word with no UI to show a step in.
@@ -252,6 +282,25 @@ def _toolbox(toolset: str, *, conversation_id, checkpoint, deadline,
     LifeTools built unconditionally would leave a Writing run one dispatch-map
     typo away from the user's journal, and the same holds in reverse.
     """
+    if toolset == 'writing':
+        # Server-derived scope only (backend/writing/discuss.run_config): this
+        # toolset is never chosen from a request body, so a project id here is
+        # one the conversation row asserted, not one a client claimed.
+        if not writing_project_id:
+            return None
+        tools, dispatch, _state = research_tools.build(
+            checkpoint=checkpoint, deadline=deadline)
+        recall = writing_tools.WritingTools(writing_project_id)
+        proposals = writing_proposals.WritingProposals(writing_project_id)
+        tools = tools + writing_tools.TOOLS + writing_proposals.TOOLS
+        dispatch.update({n: recall for n in writing_tools.TOOL_NAMES})
+        dispatch.update({n: proposals for n in writing_proposals.TOOL_NAMES})
+        canon = canon_tools.CanonTools(writing_project_id)
+        has_canon = canon.available
+        if has_canon:
+            tools = tools + canon_tools.TOOLS
+            dispatch.update({n: canon for n in canon_tools.TOOL_NAMES})
+        return tools, dispatch, _writing_decision_note(has_canon)
     if toolset == 'research':
         tools, dispatch, _state = research_tools.build(
             checkpoint=checkpoint, deadline=deadline)

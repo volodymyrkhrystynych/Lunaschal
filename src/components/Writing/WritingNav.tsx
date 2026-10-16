@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
+import { CanonPanel } from './CanonPanel';
 import {
   useShortcuts,
   useShortcutScope,
@@ -316,6 +317,8 @@ export function WritingNav({ projectId, selection, onSelect }: Props) {
           No discussions yet
         </div>
       )}
+
+      <CanonPanel projectId={projectId} />
     </div>
   );
 }

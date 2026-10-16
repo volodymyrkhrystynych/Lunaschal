@@ -778,7 +778,15 @@ export interface DelegateProposalRecord {
   sources?: { id: string; label: string; recordedAt: string }[];
   id: string;
   kind:
-    'calendar' | 'calorie' | 'food' | 'recipe' | 'recipe_link' | 'flashcards';
+    | 'calendar'
+    | 'calorie'
+    | 'food'
+    | 'recipe'
+    | 'recipe_link'
+    | 'flashcards'
+    // A Writing discussion's note cards (backend/writing/proposals.py).
+    | 'writing_note'
+    | 'writing_note_update';
   data: Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
   resolvedAt?: number;
@@ -790,6 +798,7 @@ export interface DelegateProposalRecord {
     count?: number;
     photos?: number;
     calorieLogId?: string;
+    revisionId?: string | null;
   };
 }
 
@@ -1532,12 +1541,43 @@ export interface WritingNoteSummary {
   projectId: string;
   title: string;
   docType: 'character' | 'outline' | 'worldbuilding' | 'note';
+  // 0/1 from SQLite. A pinned note rides in every turn of the project's
+  // discussions (backend/writing/discuss.py).
+  pinned?: number | boolean;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface WritingNote extends WritingNoteSummary {
   content: string;
+}
+
+// A note as it stood before a change: 'edit' (autosave, one a minute),
+// 'accept' (a discussion proposal the author confirmed) or 'restore'.
+export interface WritingNoteRevision {
+  id: string;
+  docId: string;
+  title: string;
+  content: string;
+  source: 'edit' | 'accept' | 'restore';
+  messageId: string | null;
+  createdAt: string;
+}
+
+// A Fandom wiki imported from its XML dump (backend/writing/canon_import.py).
+export interface CanonSource {
+  id: string;
+  name: string;
+  wikiHost: string | null;
+  sourceUrl: string | null;
+  status: 'importing' | 'ready' | 'error';
+  pages: number;
+  chunks: number;
+  error: string | null;
+  licence: string;
+  progress?: { stage?: string; pages?: number; chunks?: number };
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface DailyTask {
@@ -4793,8 +4833,19 @@ export const api = {
       get<WritingNote>(`/api/writing/notes/${noteId}`),
     updateNote: (
       noteId: string,
-      data: { title?: string; content?: string; docType?: string }
+      data: {
+        title?: string;
+        content?: string;
+        docType?: string;
+        pinned?: boolean;
+      }
     ) => patch<{ success: boolean }>(`/api/writing/notes/${noteId}`, data),
+    noteRevisions: (noteId: string) =>
+      get<WritingNoteRevision[]>(`/api/writing/notes/${noteId}/revisions`),
+    restoreNoteRevision: (noteId: string, revisionId: string) =>
+      post<WritingNote>(
+        `/api/writing/notes/${noteId}/revisions/${revisionId}/restore`
+      ),
     deleteNote: (noteId: string) =>
       del<{ success: boolean }>(`/api/writing/notes/${noteId}`),
 
@@ -4807,6 +4858,33 @@ export const api = {
       ),
     summarizeDiscussion: (discussionId: string) =>
       post<WritingNote>(`/api/writing/conversations/${discussionId}/summarize`),
+
+    listCanon: () => get<CanonSource[]>('/api/writing/canon'),
+    uploadCanon: async (file: File, name?: string) => {
+      const form = new FormData();
+      form.append('file', file);
+      if (name) form.append('name', name);
+      const res = await fetch('/api/writing/canon', {
+        method: 'POST',
+        body: form,
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Upload failed (${res.status})`);
+      }
+      return (await res.json()) as { id: string };
+    },
+    fetchCanon: (url: string, name?: string) =>
+      post<{ id: string }>('/api/writing/canon/fetch', { url, name }),
+    deleteCanon: (id: string) =>
+      del<{ success: boolean }>(`/api/writing/canon/${id}`),
+    projectCanon: (projectId: string) =>
+      get<{ sourceIds: string[] }>(`/api/writing/projects/${projectId}/canon`),
+    setProjectCanon: (projectId: string, sourceIds: string[]) =>
+      put<{ sourceIds: string[] }>(`/api/writing/projects/${projectId}/canon`, {
+        sourceIds,
+      }),
   },
 
   curatedTags: {

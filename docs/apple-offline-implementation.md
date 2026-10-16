@@ -29,7 +29,7 @@ Last updated: 2026-10-04. Working branch: `fix/apple-library-navigation`.
 
 Books-library follow-up:
 
-- iPad navigation now exposes Library, Jobs, Learning and Settings as separate
+- iPad navigation now exposes Library, Jobs, Writing, Learning and Settings as separate
   tabs, leaving narrow-window overflow to iPadOS. iPhone keeps its app More
   menu. Three iPad navigation/jobs/library UI tests and two iPhone menu/jobs
   regression tests passed in simulator. Actual Split View on device remains
@@ -194,27 +194,28 @@ and any remaining limits. Do not promote “source written” to “device verif
 
 ## Agreed requirements and constraints
 
-| Area              | Decision                                                                                                                                       |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| iPhone            | iPhone 16, user-reported iOS 26.6.2                                                                                                            |
-| iPad              | 2021 12.9-inch M1 iPad Pro, Pencil 2, user-reported iPadOS 26.6.2                                                                              |
-| Watch             | Apple Watch Series 7, user-reported watchOS 26.6                                                                                               |
-| Existing computer | Early-2015 Intel MacBook on Monterey 12.7.6; do not require buying a new Mac                                                                   |
-| Development       | Linux workspace; hosted macOS builds and tests; real devices for hardware behavior                                                             |
-| Developer account | User has an Apple developer membership; team/signing setup remains outstanding                                                                 |
-| Server            | Retain Linux Flask/SQLite server and existing local AI services                                                                                |
-| Connectivity      | Keep Tailscale; use HTTPS within the tailnet; public exposure is not required                                                                  |
-| Cellular          | Text/audio sync enabled over cellular by default, with a per-device option                                                                     |
-| Bulk downloads    | Wi-Fi only; also account for a Wi-Fi hotspot being an expensive connection                                                                     |
-| Device storage    | Both iPhone and iPad have 256 GB, typically more than 50 GB free; use measured free space and budgets, not an assumed entitlement to all of it |
-| Offline scope     | Aim for the full active library and personal data needed by the mobile app, with archive media excluded by default                             |
-| Knowledge         | Optional on each device; Wikipedia is a candidate collection, not a mandatory download                                                         |
-| Mobile exclusions | Practice and Notebook do not need native mobile tabs                                                                                           |
-| Drawing           | Native-quality Pencil drawing is a central reason for the Apple app                                                                            |
-| Chat              | Server-backed native tab (passed in simulator); voice messages queue offline. Local chat is optional and requires evaluation                   |
-| Todo              | Native tab (passed in simulator offline): daily tasks and to-dos, changes queued in an outbox, and a due-today/overdue badge                   |
-| Jobs              | More → Jobs (passed in simulator offline): the triage feed, last copy kept offline, Queue/Dismiss queued in an outbox                          |
-| Watch controls    | Transcribe and Record; both preserve the original audio and create journal entries                                                             |
+| Area              | Decision                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| iPhone            | iPhone 16, user-reported iOS 26.6.2                                                                                                                          |
+| iPad              | 2021 12.9-inch M1 iPad Pro, Pencil 2, user-reported iPadOS 26.6.2                                                                                            |
+| Watch             | Apple Watch Series 7, user-reported watchOS 26.6                                                                                                             |
+| Existing computer | Early-2015 Intel MacBook on Monterey 12.7.6; do not require buying a new Mac                                                                                 |
+| Development       | Linux workspace; hosted macOS builds and tests; real devices for hardware behavior                                                                           |
+| Developer account | User has an Apple developer membership; team/signing setup remains outstanding                                                                               |
+| Server            | Retain Linux Flask/SQLite server and existing local AI services                                                                                              |
+| Connectivity      | Keep Tailscale; use HTTPS within the tailnet; public exposure is not required                                                                                |
+| Cellular          | Text/audio sync enabled over cellular by default, with a per-device option                                                                                   |
+| Bulk downloads    | Wi-Fi only; also account for a Wi-Fi hotspot being an expensive connection                                                                                   |
+| Device storage    | Both iPhone and iPad have 256 GB, typically more than 50 GB free; use measured free space and budgets, not an assumed entitlement to all of it               |
+| Offline scope     | Aim for the full active library and personal data needed by the mobile app, with archive media excluded by default                                           |
+| Knowledge         | Optional on each device; Wikipedia is a candidate collection, not a mandatory download                                                                       |
+| Mobile exclusions | Practice and Notebook do not need native mobile tabs                                                                                                         |
+| Drawing           | Native-quality Pencil drawing is a central reason for the Apple app                                                                                          |
+| Chat              | Server-backed native tab (passed in simulator); voice messages queue offline. Local chat is optional and requires evaluation                                 |
+| Todo              | Native tab (passed in simulator offline): daily tasks and to-dos, changes queued in an outbox, and a due-today/overdue badge                                 |
+| Jobs              | More → Jobs (passed in simulator offline): the triage feed, last copy kept offline, Queue/Dismiss queued in an outbox                                        |
+| Writing           | More → Writing / iPad tab (passed in simulator against a fixture): notes with pin and history, discussions with proposed-note cards; fetched, not replicated |
+| Watch controls    | Transcribe and Record; both preserve the original audio and create journal entries                                                                           |
 
 “Transcribe” means record and retain audio, create a journal entry, and request
 transcription into its text. “Record” means create the entry with its recording

@@ -197,7 +197,7 @@ private struct MessageRow: View {
                     }
                 }
                 if !meta.proposals.isEmpty {
-                    ProposalCards(chat: chat, messageID: message.id, proposals: meta.proposals)
+                    ProposalCards(resolver: chat, messageID: message.id, proposals: meta.proposals)
                 }
                 let time = ChatTime.format(message.stampedAt)
                 if meta.savedAsJournal || time != nil {
@@ -264,7 +264,7 @@ struct ThinkingLabel: View {
 }
 
 /// The tool trace, collapsed even while it grows, with the reasoning inside it.
-private struct StepsDisclosure: View {
+struct StepsDisclosure: View {
     let steps: [AgentStep]
     let thinking: String
     let live: Bool
