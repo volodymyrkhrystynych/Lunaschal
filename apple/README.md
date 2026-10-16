@@ -477,7 +477,7 @@ what each device can currently do and which work remains device-only.
   script-disabled WebKit view with remote resources blocked. Knowledge article
   text is opt-in. Archive videos and ZIM packages are not bulk-downloaded.
 - Downloaded Knowledge articles are browsable and searchable in Library, with
-  Load more support and a selectable plain-text reader. Turning off future
+  infinite scrolling and a selectable plain-text reader. Turning off future
   Knowledge downloads keeps existing articles readable. Markdown source is
   shown as text; remote images and embedded pages are not loaded. This reads
   replicated Knowledge articles, not Wikipedia ZIM packages.
@@ -570,8 +570,9 @@ publicly to make CI work: simulator capture tests never contact it.
   termination, the manifest is marked interrupted; the audio is retained for
   playback/export and explicit recovery. An AAC container killed before
   finalization may not be playable. We do not claim crash-proof in-flight audio.
-- Journal initially shows 200 records; each Library category starts with 50, with Load more
-  controls to reveal further records already stored on the device. Library search
+- Journal initially shows 200 records, with a Load more control; each Library list
+  (books and every category) starts with 50 and loads 50 more of the records already
+  stored on the device each time it is scrolled to the end. Library search
   filters the selected category and can expand beyond 50 matches. Counts and
   results share the same filter and stable revision/ID ordering. Loading more
   does not contact the server. Attachment imports remain outstanding.

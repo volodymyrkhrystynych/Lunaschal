@@ -88,7 +88,7 @@ struct LibraryCategoryView: View {
                 }
             }
             if records.count < count {
-                Button("Load more (\(records.count) of \(count))") { limit += 50; Task { await refresh() } }
+                LoadMoreRow(shown: records.count, total: count) { limit += 50; await refresh() }
             }
             if category == .newspapers {
                 Text("Front-page images only. Complete newspaper PDFs and annotations are not available here yet.")
