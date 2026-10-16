@@ -2327,6 +2327,52 @@ def seed_infra(db):
         (new_id(), 'calendar.classify', new_id(), '{}', 'pending', ts(0)),
     )
 
+    # Server oddities: one recurring problem with a note, one new traceback
+    # still waiting for its note, and one that has gone quiet — the three
+    # shapes the briefing's section renders differently. The scan row is
+    # recent, so a briefing run from the demo reports them rather than saying
+    # the check didn't run.
+    fp_audio, fp_tb, fp_old = '0a1b2c3d4e5f6a7b', '1b2c3d4e5f6a7b8c', '2c3d4e5f6a7b8c9d'
+    for fp, kind, template, sample, frame, status, count, note, first, last in [
+        (fp_audio, 'error',
+         'cpu call describe_audio failed after Ns: InternalServerError: proxy error: '
+         'Could not establish connection',
+         'cpu call describe_audio failed after 0.4s: InternalServerError: proxy error: '
+         'Could not establish connection',
+         None, 'recurring', 15,
+         'The CPU omni model looks unreachable behind the router, so audio '
+         'descriptions are being skipped; worth checking the llama service.',
+         ts(3), ts(0, 2)),
+        (fp_tb, 'traceback',
+         'sqlite3.InterfaceError in backend/fanfic/pacing.py:state: bad parameter or other API misuse',
+         '[demo] ERROR in app: Exception on /api/fanfic/browser/poll [POST]\n'
+         'Traceback (most recent call last):\n'
+         'sqlite3.InterfaceError: bad parameter or other API misuse',
+         '{"file": "backend/fanfic/pacing.py", "line": 23, "function": "state"}',
+         'new', 1, None, ts(0, 5), ts(0, 5)),
+        (fp_old, 'warning',
+         'UserWarning: resource_tracker: There appear to be N leaked semaphore objects',
+         'UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects',
+         None, 'quiet', 0, None, ts(20), ts(12)),
+    ]:
+        db.execute(
+            'INSERT INTO server_oddities (fingerprint, unit, kind, template, sample, frame, '
+            'status, total_count, last_scan_count, note, note_written_at, first_seen, last_seen) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (fp, 'lunaschal', kind, template, sample, frame, status, max(count, 3), count,
+             note, ts(1) if note else None, first, last),
+        )
+    for fp, days_ago, count in [(fp_audio, 2, 6), (fp_audio, 0, 15), (fp_tb, 0, 1), (fp_old, 12, 1)]:
+        db.execute(
+            'INSERT INTO server_oddity_days (fingerprint, day_key, count) VALUES (?,?,?)',
+            (fp, today_key(days_ago), count),
+        )
+    db.execute(
+        'INSERT INTO server_oddity_scans (id, since_ts, until_ts, journal_available, '
+        'event_count, created_at) VALUES (?,?,?,?,?,?)',
+        (new_id(), ts(1), ts(0), 1, 16, ts(0)),
+    )
+
     db.execute(
         'INSERT INTO mcp_servers (id, name, transport, command, args, env, created_at, updated_at) '
         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',

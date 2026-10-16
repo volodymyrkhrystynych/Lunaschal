@@ -283,7 +283,8 @@ def test_run_briefing_writes_message_and_seeds_chat_todos(client, monkeypatch):
 
     msgs = _briefing_msgs(conv_id)
     assert len(msgs) == 1
-    assert msgs[0]['content'] == _FAKE['briefing']
+    # The check-in, then the server-oddities section (here: no scan has run).
+    assert msgs[0]['content'].startswith(_FAKE['briefing'] + '\n\n**Server oddities:**')
     meta = json.loads(msgs[0]['metadata'])
     assert meta['briefing'] is True
     assert 'proposedTodos' not in meta
@@ -515,3 +516,66 @@ def test_run_briefing_route_reports_empty_completion(client, monkeypatch):
     r = client.post('/api/chat/briefing/run')
     assert r.status_code == 502
     assert 'no usable briefing' in r.get_json()['error']
+
+
+# --- the server-oddities section ---
+
+def _seed_oddity(status='new', count=4, note='Probably the CPU model is down.'):
+    db = connection.get_db()
+    db.execute(
+        'INSERT INTO server_oddities (fingerprint, unit, kind, template, sample, status,'
+        ' total_count, last_scan_count, note, first_seen, last_seen)'
+        ' VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        ('fp_audio', 'lunaschal', 'error', 'cpu call describe_audio failed', 's', status,
+         count, count, note, NOW - 3600, NOW - 60),
+    )
+    db.execute('INSERT INTO server_oddity_scans VALUES (?,?,?,?,?,?)',
+               ('scan1', NOW - 86400, NOW - 30, 1, count, NOW - 30))
+    db.commit()
+
+
+def _content(result):
+    return connection.get_db().execute(
+        'SELECT content, metadata FROM messages WHERE id=?', (result['messageId'],)
+    ).fetchone()
+
+
+def test_briefing_ends_with_the_server_oddities(client, monkeypatch):
+    _seed_oddity()
+    result = _run(monkeypatch)
+    row = _content(result)
+    assert row['content'].startswith(_FAKE['briefing'] + '\n\n**Server oddities (past day)**')
+    assert '**New** · lunaschal · 4× — `cpu call describe_audio failed`' in row['content']
+    assert 'Probably the CPU model is down.' in row['content']
+    assert json.loads(row['metadata'])['oddities'] == ['fp_audio']
+    # The route's answer is still the model's prose alone.
+    assert result['briefing'] == _FAKE['briefing'] and result['oddities'] == 1
+
+
+def test_a_quiet_day_still_says_so(client, monkeypatch):
+    connection.get_db().execute('INSERT INTO server_oddity_scans VALUES (?,?,?,?,?,?)',
+                                ('scan1', NOW - 86400, NOW - 30, 1, 0, NOW - 30))
+    connection.get_db().commit()
+    row = _content(_run(monkeypatch))
+    assert row['content'].endswith('**Server oddities:** none in the past day.')
+    assert 'oddities' not in json.loads(row['metadata'])
+
+
+def test_a_server_problem_keeps_a_degraded_briefing_that_would_otherwise_be_dropped(
+        client, monkeypatch):
+    """Nothing pending and no prose used to mean no message at all. A server
+    problem is still worth waking to."""
+    _seed_oddity()
+    monkeypatch.setattr(briefing_job, 'generate_briefing', _raise_empty)
+    result = briefing_job.run_briefing(now=NOW)
+    assert result is not None and result['degraded'] is True
+    assert '**Server oddities (past day)**' in _content(result)['content']
+
+
+def test_a_broken_oddities_report_does_not_cost_the_briefing(client, monkeypatch):
+    def boom(now):
+        raise RuntimeError('no such table')
+    monkeypatch.setattr(briefing_job, 'briefing_report', boom)
+    row = _content(_run(monkeypatch))
+    assert row['content'].startswith(_FAKE['briefing'])
+    assert "didn't run" in row['content']
