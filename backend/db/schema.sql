@@ -2523,6 +2523,58 @@ CREATE INDEX IF NOT EXISTS idx_llm_jobs_pending
 CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_jobs_unique_pending
     ON llm_jobs(kind, target_id) WHERE status = 'pending';
 
+-- Server oddities: the recurring errors the nightly pass finds in the server's
+-- own journal and in failed llm_jobs rows (backend/oddities_job.py), reported
+-- at the end of the morning briefing. One row per *kind* of problem, keyed by
+-- the fingerprint backend/ops/oddities.py derives from it, so "the same error
+-- as yesterday" is a primary-key lookup rather than a model's judgement.
+--
+-- `status` moves on its own (new -> recurring -> quiet -> regressed); there is
+-- no UI to dismiss one. `note` is the model's one-line reading, written once
+-- and cleared only when the problem regresses -- a note revised nightly would
+-- drift, the same reason the life wiki renders from facts.
+CREATE TABLE IF NOT EXISTS server_oddities (
+    fingerprint TEXT PRIMARY KEY,
+    unit TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('traceback','error','warning')),
+    template TEXT NOT NULL,
+    sample TEXT NOT NULL,
+    -- JSON {file, line, function} of the last frame in our own code, or NULL.
+    frame TEXT,
+    status TEXT NOT NULL DEFAULT 'new'
+        CHECK(status IN ('new','recurring','quiet','regressed')),
+    total_count INTEGER NOT NULL DEFAULT 0,
+    -- How many times the most recent scan saw it; 0 when that scan did not.
+    last_scan_count INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    note_written_at INTEGER,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL
+);
+
+-- Per-day counts, for "seen on 3 of the last 7 days". Pruned after 30 days.
+CREATE TABLE IF NOT EXISTS server_oddity_days (
+    fingerprint TEXT NOT NULL REFERENCES server_oddities(fingerprint) ON DELETE CASCADE,
+    day_key TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (fingerprint, day_key)
+);
+
+-- One row per scan. The next scan starts where this one ended, and the
+-- briefing reads the newest row to say whether the check ran at all and
+-- whether the journal could be read -- a scan that silently read nothing must
+-- not look like a clean day.
+CREATE TABLE IF NOT EXISTS server_oddity_scans (
+    id TEXT PRIMARY KEY,
+    since_ts INTEGER NOT NULL,
+    until_ts INTEGER NOT NULL,
+    journal_available INTEGER NOT NULL DEFAULT 0,
+    event_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_server_oddity_scans_until
+    ON server_oddity_scans(until_ts DESC);
+
 -- What the offline knowledge library contains (backend/offline_knowledge/).
 --
 -- The ZIM files themselves stay the source of truth and are never written to;
