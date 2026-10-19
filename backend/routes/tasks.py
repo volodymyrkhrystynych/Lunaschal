@@ -1,6 +1,6 @@
 import re
 import time
-from datetime import date, timedelta
+from datetime import date
 
 from flask import Blueprint, jsonify, request
 from ulid import ULID
@@ -528,17 +528,13 @@ def _today_taken_titles(db, today: str) -> set[str]:
 @bp.get('/chat-todos')
 def list_chat_todos():
     db = get_db()
-    today = _today()
-    yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
     rows = db.execute(
-        f'SELECT {_CHAT_TODO_COLS} FROM chat_todos WHERE day_key IN (?, ?) '
-        'ORDER BY day_key DESC, done, created_at, id',
-        (today, yesterday),
+        f'SELECT {_CHAT_TODO_COLS} FROM chat_todos WHERE day_key=? ORDER BY done, created_at',
+        (_today(),),
     ).fetchall()
     todos = [row_to_dict(r) for r in rows]
     for t in todos:
         t['done'] = bool(t['done'])
-        t['previousDay'] = t['dayKey'] == yesterday
     return jsonify(todos)
 
 

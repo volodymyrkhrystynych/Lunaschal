@@ -2,10 +2,8 @@
 day-scoped, ephemeral to-dos written instantly by the chat delegate's
 add_todos tool and the morning briefing — this file exercises the CRUD/
 promote surface directly, not those two writers."""
-import time
 
 from backend.db import connection
-from backend.day_boundary import day_key_for
 
 
 def test_add_writes_rows_instantly_with_no_confirm_step(client):
@@ -47,37 +45,21 @@ def test_add_skips_a_title_already_in_todays_bar(client):
     assert len(client.get('/api/tasks/chat-todos').get_json()) == 1
 
 
-def test_yesterdays_items_remain_available_for_promotion(client):
-    yesterday = day_key_for(int(time.time()) - 86400)
-    db = connection.get_db()
-    db.execute(
-        'INSERT INTO chat_todos(id, day_key, title, priority, done, created_at, updated_at)'
-        " VALUES ('old', ?, 'Stale item', 3, 0, 0, 0)",
-        (yesterday,),
-    )
-    db.commit()
-
-    listed = client.get('/api/tasks/chat-todos').get_json()
-    assert [(t['id'], t['previousDay']) for t in listed] == [('old', True)]
-    response = client.post('/api/tasks/chat-todos/old/promote', json={'title': 'Stale item'})
-    assert response.status_code == 201
-    assert client.get('/api/tasks/chat-todos').get_json() == []
-
-
-def test_review_window_uses_day_keys_and_includes_completed_items(client, monkeypatch):
+def test_list_is_today_only_so_yesterdays_items_never_mix_into_the_bar(client, monkeypatch):
+    # Yesterday's unfinished items come back as briefing suggestion cards
+    # (backend/briefing_job.py's stage_carryover_todos), not as bar rows.
     from backend.routes import tasks
     monkeypatch.setattr(tasks, '_today', lambda: '2026-03-09')
     db = connection.get_db()
-    for key, done in [('2026-03-07', 0), ('2026-03-08', 1), ('2026-03-09', 0), ('2026-03-10', 0)]:
+    for key in ('2026-03-08', '2026-03-09', '2026-03-10'):
         db.execute(
             'INSERT INTO chat_todos(id, day_key, title, done, created_at, updated_at) '
-            'VALUES (?, ?, ?, ?, 0, 0)', (key, key, key, done),
+            'VALUES (?, ?, ?, 0, 0, 0)', (key, key, key),
         )
     db.commit()
     listed = client.get('/api/tasks/chat-todos').get_json()
-    assert [(t['dayKey'], t['previousDay'], t['done']) for t in listed] == [
-        ('2026-03-09', False, False), ('2026-03-08', True, True),
-    ]
+    assert [t['dayKey'] for t in listed] == ['2026-03-09']
+    assert 'previousDay' not in listed[0]
 
 
 def test_update_title(client):

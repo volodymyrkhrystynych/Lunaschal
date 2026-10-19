@@ -26,6 +26,9 @@ struct ProposalCards: View {
             if proposals.contains(where: { $0.reconstructionDay != nil }) {
                 Text("Suggested events from yesterday").font(.subheadline.bold())
             }
+            if proposals.contains(where: { $0.carriedFrom != nil }) {
+                Text("Carried over from yesterday — keep or dismiss").font(.subheadline.bold())
+            }
             ForEach(proposals) { proposal in
                 if proposal.isPending {
                     PendingCard(resolver: resolver, messageID: messageID, proposal: proposal)
@@ -111,6 +114,12 @@ private struct ProposalForm: View {
             TextField("Tags (comma, separated)", text: tags).textFieldStyle(.roundedBorder).font(.caption)
         case "recipe_link":
             Text("\(data["dish"]?.text ?? "") → \(data["recipeTitle"]?.text ?? "")").font(.subheadline.weight(.medium))
+        case "todo":
+            // Yesterday's unfinished bar item, carried over by the morning briefing.
+            field("Title", "title")
+            if let notes = data["notes"]?.string, !notes.isEmpty {
+                Text(notes).font(.caption).foregroundStyle(.secondary)
+            }
         case "flashcards":
             field("Topic", "topic")
             Text("I'll generate atomic cards and queue them for your approval in the Learning tab.")

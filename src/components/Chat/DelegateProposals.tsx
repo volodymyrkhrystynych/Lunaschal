@@ -29,6 +29,8 @@ function resolvedLabel(p: DelegateProposalRecord): string {
       return 'Saved to your recipes';
     case 'recipe_link':
       return 'Linked to your recipe';
+    case 'todo':
+      return `Added to today: ${str(p.data, 'title')}`;
     case 'flashcards':
       return `Queued ${p.result?.count ?? 0} card${p.result?.count === 1 ? '' : 's'} for review in Learning`;
     case 'writing_note':
@@ -47,6 +49,7 @@ const HEADLINE: Record<string, string> = {
   recipe: 'Save this recipe?',
   recipe_link: 'Link this meal to that recipe?',
   flashcards: 'Generate flashcards?',
+  todo: 'Keep this for today?',
   writing_note: 'Add to the notes?',
   writing_note_update: 'Update this note?',
 };
@@ -58,6 +61,7 @@ const ACCEPT_LABEL: Record<string, string> = {
   recipe: 'Save',
   recipe_link: 'Link',
   flashcards: 'Queue Cards',
+  todo: 'Add to today',
   writing_note: 'Add Note',
   writing_note_update: 'Update Note',
 };
@@ -69,6 +73,7 @@ const ACCEPT_PENDING_LABEL: Record<string, string> = {
   recipe: 'Saving...',
   recipe_link: 'Linking...',
   flashcards: 'Generating...',
+  todo: 'Adding...',
   writing_note: 'Saving...',
   writing_note_update: 'Saving...',
 };
@@ -234,6 +239,24 @@ function ProposalForm({
         </div>
       );
     }
+
+    // Yesterday's unfinished bar item, carried over by the morning briefing.
+    case 'todo':
+      return (
+        <div className="space-y-1.5">
+          <input
+            aria-label="Title"
+            value={str(data, 'title')}
+            onChange={e => set({ title: e.target.value })}
+            className={`${fieldClass} w-full`}
+          />
+          {str(data, 'notes') && (
+            <p className="text-xs text-[var(--color-text-muted)]">
+              {str(data, 'notes')}
+            </p>
+          )}
+        </div>
+      );
 
     case 'calorie':
       return (
@@ -560,6 +583,7 @@ export function DelegateProposals({ messageId, proposals }: Props) {
       queryClient.invalidateQueries({ queryKey: ['cookbook'] });
       queryClient.invalidateQueries({ queryKey: ['todos'] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['chatTodos'] });
       queryClient.invalidateQueries({ queryKey: ['learning'] });
       // A Writing discussion's cards: the transcript it renders from, and the
       // project's notes the accept just wrote into.
@@ -577,6 +601,11 @@ export function DelegateProposals({ messageId, proposals }: Props) {
     <div className="mt-2 space-y-2">
       {proposals.some(p => p.reconstructionDay) && (
         <p className="text-sm font-medium">Suggested events from yesterday</p>
+      )}
+      {proposals.some(p => p.carriedFrom) && (
+        <p className="text-sm font-medium">
+          Carried over from yesterday — keep or dismiss
+        </p>
       )}
       {proposals.map(p => {
         if (p.status !== 'pending') {

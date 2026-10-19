@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 #if canImport(Darwin)
 import Darwin
 #else
@@ -59,6 +62,35 @@ public final class ScreenshotOutbox {
         root.appendingPathComponent(shot.id).appendingPathComponent("image")
     }
 
+    /// Request bodies handed to a background `URLSession`. They outlive the
+    /// share extension, so they live beside the shots in the App Group rather
+    /// than in a temporary directory the extension takes with it. Dot-named, so
+    /// `list()` never reads it as a shot.
+    public var bodies: URL { root.appendingPathComponent(".bodies", isDirectory: true) }
+
+    public func body(for shot: SharedScreenshot) -> URL {
+        bodies.appendingPathComponent(shot.id).appendingPathExtension("multipart")
+    }
+
+    /// A shot already handed to the background session is not handed twice.
+    public func isHandedOff(_ shot: SharedScreenshot) -> Bool {
+        FileManager.default.fileExists(atPath: body(for: shot).path)
+    }
+
+    /// Bodies whose shot has been delivered (its folder is gone) once they are
+    /// old enough that no background upload can still be reading them.
+    public func pruneBodies(olderThan age: TimeInterval = 24 * 60 * 60, now: Date = Date()) {
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: bodies, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        for file in files {
+            let id = file.deletingPathExtension().lastPathComponent
+            guard !FileManager.default.fileExists(atPath: root.appendingPathComponent(id).path) else { continue }
+            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, now.timeIntervalSince(modified) < age { continue }
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
     /// Nonblocking process lock: the app and extension must not upload separate
     /// portions of the same queue concurrently. OS releases it after termination.
     public func run(using transport: ScreenshotTransport) async throws {
@@ -72,17 +104,43 @@ public final class ScreenshotOutbox {
             try await transport.sendScreenshot(shot, file: file(for: shot))
             try FileManager.default.removeItem(at: root.appendingPathComponent(shot.id))
         }
+        pruneBodies()
+    }
+
+    /// `run`, retried a few times while the server is unreachable. A share
+    /// happens the moment the phone wakes, which is exactly when a VPN tunnel
+    /// (Tailscale's MagicDNS name included) may not be answering yet; a few
+    /// seconds is often all it takes. Any other failure is returned at once.
+    public func runRetrying(using transport: ScreenshotTransport,
+                            delays: [TimeInterval] = [1, 2, 3],
+                            sleep: (TimeInterval) async throws -> Void = { try await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) }) async throws {
+        var remaining = delays[...]
+        while true {
+            do { return try await run(using: transport) }
+            catch let error as URLError where error.isUnreachable {
+                guard let delay = remaining.popFirst() else { throw error }
+                try await sleep(delay)
+            }
+        }
     }
 }
 
 extension JournalAPI: ScreenshotTransport {
-    public func sendScreenshot(_ shot: SharedScreenshot, file: URL) async throws {
+    /// The upload request and its multipart body file. Shared by the
+    /// foreground send and the share extension's background handoff, so both
+    /// post exactly the same thing; the caller owns (and removes) the body.
+    public func screenshotUploadRequest(_ shot: SharedScreenshot, file: URL) throws -> (request: URLRequest, body: URL) {
         let (body, boundary) = try writeMultipart(
             fields: [("attachmentId", shot.id), ("capturedAt", shot.capturedAt)],
             files: [MultipartFile(field: "file", filename: shot.filename, contentType: shot.contentType, source: file)])
-        defer { try? FileManager.default.removeItem(at: body) }
-        var req = request("/api/journal/screenshots", method: "POST")
+        var req = request("api/journal/screenshots", method: "POST")
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        return (req, body)
+    }
+
+    public func sendScreenshot(_ shot: SharedScreenshot, file: URL) async throws {
+        let (req, body) = try screenshotUploadRequest(shot, file: file)
+        defer { try? FileManager.default.removeItem(at: body) }
         let (data, response) = try await session.upload(for: req, fromFile: body)
         try check(data, response)
         try Self.validateScreenshotReceipt(data, attachmentID: shot.id)
