@@ -66,7 +66,8 @@ Physical-device microphone and background-upload behavior remain unverified.
 
 Capture → Daily includes a seven-night sleep graph with selectable nights,
 recorded interruptions and sleep efficiency, using cached readings offline.
-Health sync automatically logs workouts and backfills bodyweight in kg;
+Health sync automatically logs workouts, rated from their heart rate (or
+energy when there is none) and marked "from Health" until rated by hand, and backfills bodyweight in kg;
 manual weight corrections take priority. Real Health recording and background
 delivery still require device verification.
 

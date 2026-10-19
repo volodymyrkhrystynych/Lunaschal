@@ -1626,6 +1626,17 @@ def seed_apple_health(db):
             (hk_id(), activity, name, start, start + minutes * 60, minutes * 60, kcal, meters,
              'Apple Watch', 'com.apple.health.demo', '{"HKIndoorWorkout":false}', received),
         )
+        if name == 'running':
+            # Heart rate through the run, so its stars come from heart rate
+            # (~83% of the 186 peak: four) and the walk shows the energy fallback.
+            for minute, bpm in ((2, 138), (8, 152), (14, 158), (20, 161), (26, 186), (30, 150)):
+                moment = start + minute * 60
+                db.execute(
+                    'INSERT INTO health_samples (id, type, kind, start_ts, end_ts, value, unit, source_name,'
+                    ' source_bundle, device, metadata, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (hk_id(), 'HKQuantityTypeIdentifierHeartRate', 'quantity', moment, moment, bpm,
+                     'count/min', 'Apple Watch', 'com.apple.health.demo', 'Watch7,9', None, received),
+                )
 
     from backend.apple_health.lifestyle import reconcile
     reconcile(db)

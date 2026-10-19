@@ -136,7 +136,15 @@ final class WorkoutTests: XCTestCase {
         XCTAssertEqual(session.notes, "Apple Health · Walking")
         XCTAssertEqual(session.captureKind, "health")
         XCTAssertNil(session.intensityRating)
+        XCTAssertFalse(session.intensityIsEstimated)
         XCTAssertTrue(session.exercises.isEmpty)
+    }
+
+    func testAHealthDerivedRatingIsMarkedAsEstimated() throws {
+        let json = #"[{"id":"H","date":"2026-10-05","locationType":"outside","captureKind":"health","durationMinutes":31,"intensityRating":4,"intensitySource":"health","exercises":[]},{"id":"M","date":"2026-10-05","locationType":"gym","intensityRating":4,"intensitySource":"user","exercises":[]}]"#
+        let sessions = try JSONDecoder().decode([WorkoutSession].self, from: Data(json.utf8))
+        XCTAssertTrue(sessions[0].intensityIsEstimated)
+        XCTAssertFalse(sessions[1].intensityIsEstimated)
     }
 }
 

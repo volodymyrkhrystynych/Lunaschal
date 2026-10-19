@@ -101,7 +101,8 @@ def _ensure_fanfic_request_interval(db):
 
 def _ensure_workout_quick_entry(db):
     for table, columns in {
-        'workout_sessions': {'capture_kind': 'TEXT', 'started_at': 'INTEGER', 'ended_at': 'INTEGER'},
+        'workout_sessions': {'capture_kind': 'TEXT', 'started_at': 'INTEGER', 'ended_at': 'INTEGER',
+                             'intensity_source': 'TEXT'},
         'workout_exercises': {'logged_at': 'INTEGER', 'logged_order': 'INTEGER'},
     }.items():
         existing = {r[1] for r in db.execute(f'PRAGMA table_info({table})')}
