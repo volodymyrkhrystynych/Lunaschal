@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
     raw_content TEXT,
+    context_prompt_day TEXT,
+    context_prompt_status TEXT NOT NULL DEFAULT 'pending',
     title TEXT,
     tags TEXT,
     -- Where the entry was written, asked for explicitly by the composer's

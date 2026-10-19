@@ -273,6 +273,24 @@ def seed_journal(db):
              captured_at),
         )
 
+    # Yesterday's bare screenshot exercises Chat's context suggestion modal.
+    context_id, context_photo = new_id(), new_id()
+    from datetime import date, timedelta
+    yesterday = (date.fromisoformat(today_key()) - timedelta(days=1)).isoformat()
+    context_at = day_bounds(yesterday)[0] + 12 * 3600
+    context_path = attachment_path(context_photo, 'jpg')
+    placeholder_image(context_path, 'A game worth remembering', size=(720, 405))
+    db.execute(
+        'INSERT INTO journal_entries (id, content, title, context_prompt_day, context_prompt_status, created_at, updated_at)'
+        " VALUES (?, '', 'Game night', ?, 'pending', ?, ?)",
+        (context_id, today_key(), context_at, context_at),
+    )
+    db.execute(
+        'INSERT INTO journal_attachments (id, entry_id, kind, name, path, mime, created_at)'
+        " VALUES (?, ?, 'image', 'Game night screenshot', ?, 'image/jpeg', ?)",
+        (context_photo, context_id, str(context_path), context_at),
+    )
+
     # A YouTube video watched and commented on: the entry is the commentary,
     # the attachment is what was watched. `import_status='ready'`, never
     # 'importing' — the startup orphan sweep rewrites that one

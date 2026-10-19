@@ -3332,6 +3332,17 @@ export const api = {
   },
 
   journal: {
+    contextPrompts: () =>
+      post<JournalEntry[]>('/api/journal/context-prompts/prepare', {}),
+    resolveContextPrompt: (
+      id: string,
+      action: 'save' | 'dismiss',
+      content?: string
+    ) =>
+      post<{ success: boolean }>(`/api/journal/${id}/context-prompt`, {
+        action,
+        content,
+      }),
     list: (params?: {
       limit?: number;
       offset?: number;

@@ -1671,6 +1671,19 @@ final class CaptureModel: ObservableObject {
         } catch { message = error.localizedDescription; reload(); return false }
     }
 
+    /// Chat's context sheet uses the same durable entry additions, without
+    /// needing a replicated journal row or changing its original date.
+    func commitJournalContextClips(_ entryID: String) -> Bool {
+        if let active = recorder.activeID,
+           entryDrafts[entryID]?.clips.contains(where: { $0.attachmentID == active }) == true {
+            recorder.stop()
+        }
+        do {
+            try store.commitAdditions(to: entryID, kind: .journal)
+            reload(); requestSync(); return true
+        } catch { message = error.localizedDescription; reload(); return false }
+    }
+
     /// Cancel on an edited entry: drops what was staged for it.
     func discardEdit(_ entryID: String) {
         if recorder.activeID != nil { recorder.stop() }
