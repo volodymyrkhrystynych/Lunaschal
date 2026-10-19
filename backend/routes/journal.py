@@ -20,7 +20,7 @@ from backend.ai.journal import (
 )
 from backend.ai import jobs
 from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
-from backend.journal import archive, playable, storage, voice_drafts, youtube_import
+from backend.journal import archive, context_prompts, playable, storage, voice_drafts, youtube_import
 from backend.learning.review_cards import carry_review_card, ensure_review_card
 from backend.study import youtube
 from backend.tags import tags_json
@@ -209,6 +209,53 @@ def get_entry(id):
     return jsonify(_enrich_with_attachments(
         db, _enrich_with_idea_refs(db, [row_to_dict(row)])
     )[0])
+
+
+@bp.post('/context-prompts/prepare')
+def prepare_context_prompts():
+    db = get_db()
+    entries = [row_to_dict(row) for row in context_prompts.prepare(db)]
+    return jsonify(_enrich_with_attachments(db, entries))
+
+
+@bp.post('/<id>/context-prompt')
+def resolve_context_prompt(id):
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Expected an object'}), 400
+    action = body.get('action')
+    content = body.get('content', '')
+    if action not in ('save', 'dismiss'):
+        return jsonify({'error': 'action must be save or dismiss'}), 400
+    if action == 'save' and (not isinstance(content, str) or not content.strip()):
+        return jsonify({'error': 'Context is required'}), 400
+    db = get_db()
+    with context_prompts.lock:
+        row = db.execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone()
+        if row is None:
+            return jsonify({'error': 'Not found'}), 404
+        if row['context_prompt_status'] != 'pending':
+            if action == 'save' and row['context_prompt_status'] == 'dismissed':
+                return jsonify({'error': 'This prompt was dismissed. Open the entry in Journal to add context.'}), 409
+            if action == 'save':
+                existing = (row['raw_content'] or row['content'] or '').strip()
+                if existing != content.strip() and not existing.startswith(content.strip() + '\n\n'):
+                    return jsonify({'error': 'This entry already has different context. Open it in Journal to edit it.'}), 409
+            # Lost responses/replayed clicks cannot append the context twice.
+            return jsonify({'success': True})
+        if action == 'save':
+            if (row['content'] or '').strip() or (row['raw_content'] or '').strip():
+                return jsonify({'error': 'This entry already has context. Open it in Journal to edit it.'}), 409
+            _append_entry_text(db, id, content.strip())
+        db.execute(
+            'UPDATE journal_entries SET context_prompt_status=? WHERE id=?',
+            ('answered' if action == 'save' else 'dismissed', id),
+        )
+        db.commit()
+    _notify_subscribers(id)
+    if action == 'save':
+        _generate_metadata_bg(id, content.strip())
+    return jsonify({'success': True})
 
 
 def create_journal_entry(

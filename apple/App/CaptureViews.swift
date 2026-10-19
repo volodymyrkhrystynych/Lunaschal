@@ -10,6 +10,7 @@ struct CaptureRoot: View {
     @StateObject private var chat: ChatModel
     @StateObject private var todo: TodoModel
     @StateObject private var learning: LearningModel
+    @StateObject private var context: JournalContextModel
     @Environment(\.scenePhase) private var scenePhase
 
     init(model: CaptureModel) {
@@ -17,13 +18,14 @@ struct CaptureRoot: View {
         _chat = StateObject(wrappedValue: ChatModel(capture: model))
         _todo = StateObject(wrappedValue: TodoModel(capture: model))
         _learning = StateObject(wrappedValue: LearningModel(capture: model))
+        _context = StateObject(wrappedValue: JournalContextModel(capture: model))
     }
 
     var body: some View {
         TabView {
             NavigationStack { CaptureTab(model: model) }
                 .tabItem { Label("Capture", systemImage: "square.and.pencil") }
-            NavigationStack { JournalTab(model: model) }
+            NavigationStack { JournalTab(model: model, context: context, chat: chat) }
                 .tabItem { Label("Journal", systemImage: "book.closed") }
             NavigationStack { ChatView(chat: chat, capture: model) }
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
@@ -394,9 +396,16 @@ struct AttachmentButtons: View {
     var body: some View {
         Group {
             if recorder.activeID != nil {
-                Button(role: .destructive) { recorder.stop() } label: {
-                    Label("Stop recording", systemImage: "stop.circle.fill")
+                // Where Record and Transcribe were: the thumb that started the
+                // clip doesn't have to cross the row to stop it.
+                HStack {
+                    Spacer()
+                    Button(role: .destructive) { recorder.stop() } label: {
+                        Label("Stop recording", systemImage: "stop.circle.fill")
+                    }
                 }
+                // A plain button in a list row claims the whole row.
+                .buttonStyle(.borderless)
             } else {
                 // Most-used last: the right end of the row is under the thumb.
                 HStack {
@@ -694,15 +703,19 @@ struct CameraPicker: UIViewControllerRepresentable {
     }
 }
 
-/// The Journal tab: Sync on the left on both pages, and a switch on the right
-/// between the journal and the calendar.
+/// The Journal tab: Sync on the left on every page, and a switch on the right
+/// between the journal, the calendar, and the entries waiting for context.
 private struct JournalTab: View {
     enum Page: String, CaseIterable, Identifiable {
-        case journal = "Journal", calendar = "Calendar"
+        case journal = "Journal", calendar = "Calendar", context = "Context"
         var id: Self { self }
     }
 
     @ObservedObject var model: CaptureModel
+    @ObservedObject var context: JournalContextModel
+    // Not observed: Chat publishes on every refresh tick, and each one would
+    // redraw the whole feed. Only the Context page watches it.
+    let chat: ChatModel
     @SceneStorage("journalTabPage") private var page = Page.journal
 
     var body: some View {
@@ -710,9 +723,11 @@ private struct JournalTab: View {
             switch page {
             case .journal: JournalFeedView(model: model)
             case .calendar: CalendarPage(model: model)
+            case .context: JournalContextPage(context: context, capture: model, chat: chat)
             }
         }
         .onChange(of: page) { _, page in if page == .calendar { model.requestSync() } }
+        .task { await context.refresh() }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 if model.syncing { ProgressView() }
@@ -720,12 +735,28 @@ private struct JournalTab: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Picker("Journal page", selection: $page) {
-                    ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                    // Icons: three words don't fit beside Sync on a phone, and the
+                    // bar would fold the whole switch into its overflow menu.
+                    ForEach(Page.allCases) { page in
+                        Image(systemName: symbol(page)).tag(page)
+                            .accessibilityLabel(page == .context && !context.prompts.isEmpty
+                                                ? "\(page.rawValue) \(context.prompts.count)" : page.rawValue)
+                    }
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()
                 .accessibilityIdentifier("journal-page")
             }
+        }
+    }
+
+    /// Context's bubble fills while anything is waiting, so the backlog is
+    /// noticed from the other pages.
+    private func symbol(_ page: Page) -> String {
+        switch page {
+        case .journal: return "book"
+        case .calendar: return "calendar"
+        case .context: return context.prompts.isEmpty ? "text.bubble" : "text.bubble.fill"
         }
     }
 }

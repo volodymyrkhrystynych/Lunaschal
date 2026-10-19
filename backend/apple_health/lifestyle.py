@@ -6,8 +6,10 @@ on replay/restart. Weight uses the latest sample per 4am day unless corrected.
 import json
 import math
 import re
+import time
 
 from ulid import ULID
+from backend.apple_health import intensity
 from backend.day_boundary import day_key_for
 
 BODY_MASS = 'HKQuantityTypeIdentifierBodyMass'
@@ -55,6 +57,8 @@ def reconcile(db):
         )
         db.execute('INSERT INTO health_workout_links(health_id, session_id) VALUES (?,?)', (row['id'], sid))
 
+    rate_workouts(db)
+
     latest = {}
     for row in db.execute('SELECT * FROM health_samples WHERE type=? ORDER BY start_ts, id', (BODY_MASS,)):
         weight = health_weight_kg(row['value'], row['unit'])
@@ -72,6 +76,38 @@ def reconcile(db):
             ' WHERE body_weight_logs.health_sample_id IS NOT NULL AND'
             ' (body_weight_logs.health_sample_id != excluded.health_sample_id OR body_weight_logs.weight != excluded.weight)',
             (str(ULID()), day, weight, row['id'], int(row['start_ts']), row['received_at']),
+        )
+
+
+# Heart-rate samples can reach the server a sync or two after their workout,
+# so a derived rating is re-derived for this long before it is left alone.
+RERATE_WINDOW_S = 7 * 86400
+
+
+def rate_workouts(db, *, now=None):
+    """Derive stars for imported workouts nobody has rated by hand.
+
+    A rating set by hand is `intensity_source='user'` and never touched; one
+    from before the column existed has a value and no source, and is left
+    alone too. Only unrated sessions and our own recent ratings are read, so
+    the 180-day peak query does not run over the whole history every sync.
+    """
+    now = time.time() if now is None else now
+    rows = db.execute(
+        'SELECT w.*, s.id AS session_id, s.intensity_rating, s.intensity_source'
+        ' FROM health_workouts w JOIN health_workout_links l ON l.health_id=w.id'
+        ' JOIN workout_sessions s ON s.id=l.session_id'
+        " WHERE (s.intensity_rating IS NULL AND s.intensity_source IS NULL)"
+        " OR (s.intensity_source='health' AND w.end_ts>=?)",
+        (now - RERATE_WINDOW_S,),
+    ).fetchall()
+    for row in rows:
+        stars = intensity.rate(db, row)
+        if stars is None or stars == row['intensity_rating']:
+            continue
+        db.execute(
+            "UPDATE workout_sessions SET intensity_rating=?, intensity_source='health' WHERE id=?",
+            (stars, row['session_id']),
         )
 
 

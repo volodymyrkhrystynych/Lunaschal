@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
     raw_content TEXT,
+    context_prompt_day TEXT,
+    context_prompt_status TEXT NOT NULL DEFAULT 'pending',
     title TEXT,
     tags TEXT,
     -- Where the entry was written, asked for explicitly by the composer's
@@ -1342,6 +1344,10 @@ CREATE TABLE IF NOT EXISTS workout_sessions (
                                           -- whatsoever" … 5 "I am going ham").
                                           -- Was a 1-10 RPE; old rows were folded
                                           -- once by _migrate_workout_intensity_to_stars.
+    intensity_source TEXT,                -- 'health': derived from heart rate or
+                                          -- energy, re-derived while samples arrive;
+                                          -- 'user': set by hand, never overwritten.
+                                          -- NULL: unrated, or rated before this column.
     raw_text TEXT,
     notes TEXT,
     parse_status TEXT NOT NULL DEFAULT 'pending',  -- pending|done|error|skipped

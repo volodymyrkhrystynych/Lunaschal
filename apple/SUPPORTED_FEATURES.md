@@ -55,9 +55,19 @@ has been validated. Exact commits and CI results are recorded in the
 | Food, Lifestyle                  | Use the existing web app; native Food is Food, plus meals in the Journal feed whose dish/place/notes can be edited and media added offline; native Lifestyle is Capture → Daily only                                                                                                                                                                                                                                             | Not exposed                                                                                                                       | Existing web app requirements apply                                                                   |
 | Practice and Notebook            | Intentionally omitted from native navigation                                                                                                                                                                                                                                                                                                                                                                                     | Not exposed                                                                                                                       | Existing Linux/web app remains available                                                              |
 
+Journal → Context (right of Calendar) shows the journal-context suggestions. They share the web's server-selected daily batch
+and permanent dismissals. iPhone and iPad can preview the original photos/audio,
+type context, or attach a recording that the server transcribes into the original
+entry without changing its date. Loading, typed saves and dismissal need the
+server; staged recordings survive relaunch and queue offline on Save or Close.
+Three iPhone simulator tests cover the context sheet, failure recovery and
+recording persistence across relaunch, all passed in simulator.
+Physical-device microphone and background-upload behavior remain unverified.
+
 Capture → Daily includes a seven-night sleep graph with selectable nights,
 recorded interruptions and sleep efficiency, using cached readings offline.
-Health sync automatically logs workouts and backfills bodyweight in kg;
+Health sync automatically logs workouts, rated from their heart rate (or
+energy when there is none) and marked "from Health" until rated by hand, and backfills bodyweight in kg;
 manual weight corrections take priority. Real Health recording and background
 delivery still require device verification.
 

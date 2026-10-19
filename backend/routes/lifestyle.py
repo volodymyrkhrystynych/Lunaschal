@@ -99,7 +99,7 @@ def _parse_float(value, name, low, high):
 
 _SESSION_COLS = (
     'capture_kind, started_at, ended_at, '
-    'id, date, location_type, duration_minutes, intensity_rating, raw_text, '
+    'id, date, location_type, duration_minutes, intensity_rating, intensity_source, raw_text, '
     'notes, parse_status, created_at, updated_at'
 )
 
@@ -422,6 +422,8 @@ def update_workout(session_id):
         if err:
             return jsonify({'error': err}), 400
         updates['intensity_rating'] = intensity
+        # A hand rating outranks one derived from Health, cleared or not.
+        updates['intensity_source'] = 'user'
     if 'notes' in body:
         updates['notes'] = (body['notes'] or '').strip() or None
 

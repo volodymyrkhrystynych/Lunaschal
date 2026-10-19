@@ -146,7 +146,12 @@ public struct WorkoutSession: Codable, Equatable, Identifiable {
     public let notes: String?
     public let durationMinutes: Int?
     public let intensityRating: Int?
+    /// "health" when the stars were read from the Watch's heart rate or
+    /// energy rather than given by hand; "user" or nil otherwise.
+    public let intensitySource: String?
     public let exercises: [Exercise]
+
+    public var intensityIsEstimated: Bool { intensityRating != nil && intensitySource == "health" }
 }
 
 public struct RecentExercise: Codable, Equatable, Identifiable {

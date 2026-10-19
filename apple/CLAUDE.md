@@ -35,6 +35,7 @@ xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testNewspaperScrollsAsOneColumn
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesPagesDoNotTurnWithASwipe
+#        -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingToolbarStaysThroughPageChanges
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testNotebookZoomIsOffUntilSwitchedOn
 
 xcodebuild -project apple/Lunaschal.xcodeproj -scheme LunaschalWatch \

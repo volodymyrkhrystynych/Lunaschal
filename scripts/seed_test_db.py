@@ -273,6 +273,24 @@ def seed_journal(db):
              captured_at),
         )
 
+    # Yesterday's bare screenshot exercises Chat's context suggestion modal.
+    context_id, context_photo = new_id(), new_id()
+    from datetime import date, timedelta
+    yesterday = (date.fromisoformat(today_key()) - timedelta(days=1)).isoformat()
+    context_at = day_bounds(yesterday)[0] + 12 * 3600
+    context_path = attachment_path(context_photo, 'jpg')
+    placeholder_image(context_path, 'A game worth remembering', size=(720, 405))
+    db.execute(
+        'INSERT INTO journal_entries (id, content, title, context_prompt_day, context_prompt_status, created_at, updated_at)'
+        " VALUES (?, '', 'Game night', ?, 'pending', ?, ?)",
+        (context_id, today_key(), context_at, context_at),
+    )
+    db.execute(
+        'INSERT INTO journal_attachments (id, entry_id, kind, name, path, mime, created_at)'
+        " VALUES (?, ?, 'image', 'Game night screenshot', ?, 'image/jpeg', ?)",
+        (context_photo, context_id, str(context_path), context_at),
+    )
+
     # A YouTube video watched and commented on: the entry is the commentary,
     # the attachment is what was watched. `import_status='ready'`, never
     # 'importing' — the startup orphan sweep rewrites that one
@@ -1608,6 +1626,17 @@ def seed_apple_health(db):
             (hk_id(), activity, name, start, start + minutes * 60, minutes * 60, kcal, meters,
              'Apple Watch', 'com.apple.health.demo', '{"HKIndoorWorkout":false}', received),
         )
+        if name == 'running':
+            # Heart rate through the run, so its stars come from heart rate
+            # (~83% of the 186 peak: four) and the walk shows the energy fallback.
+            for minute, bpm in ((2, 138), (8, 152), (14, 158), (20, 161), (26, 186), (30, 150)):
+                moment = start + minute * 60
+                db.execute(
+                    'INSERT INTO health_samples (id, type, kind, start_ts, end_ts, value, unit, source_name,'
+                    ' source_bundle, device, metadata, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (hk_id(), 'HKQuantityTypeIdentifierHeartRate', 'quantity', moment, moment, bpm,
+                     'count/min', 'Apple Watch', 'com.apple.health.demo', 'Watch7,9', None, received),
+                )
 
     from backend.apple_health.lifestyle import reconcile
     reconcile(db)

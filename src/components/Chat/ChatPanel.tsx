@@ -6,6 +6,7 @@ import { useRecorder } from '../../hooks/useRecorder';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { AgentSteps } from './AgentSteps';
 import { DelegateProposals } from './DelegateProposals';
+import { JournalContextPrompts } from './JournalContextPrompts';
 import { ChatTodoBar } from './ChatTodoBar';
 import { ChatClips, clipAttachments, photoAttachments } from './ChatClips';
 import { ThinkingLabel } from './ThinkingLabel';
@@ -984,6 +985,7 @@ export function ChatPanel() {
               </div>
             </div>
           )}
+        <JournalContextPrompts />
         <div ref={messagesEndRef} />
         {/* Room for a fresh segment to pin to the top of the viewport after a
             "New chat" break. Rendered only while the break is still the last

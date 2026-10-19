@@ -633,7 +633,7 @@ struct SpendingRecordView: View {
 
 /// A strip of fixed-height pictures, each width following its photo, blown
 /// up full screen on a tap: the web's journal photo strip.
-private struct PhotoStrip: View {
+struct PhotoStrip: View {
     @ObservedObject var model: CaptureModel
     let photos: [JournalAttachmentItem]
     @State private var shown: JournalAttachmentItem?
@@ -743,7 +743,7 @@ private struct PhotoViewer: View {
 
 /// A clip played in place, with its transcript and what was heard in it
 /// folded underneath.
-private struct AudioRow: View {
+struct AudioRow: View {
     @ObservedObject var model: CaptureModel
     let item: JournalAttachmentItem
     @State private var player: AVPlayer?

@@ -249,6 +249,17 @@ what each device can currently do and which work remains device-only.
   transcribes and answers it when it lands. A reply that outlives its stream is
   picked up by polling, as on the desktop. Passed in simulator, offline and
   against a local test server with a stand-in model; not yet verified on device.
+- Journal → Context (the speech-bubble page right of Calendar; the bubble
+  fills while any are waiting) offers journal-context cards for yesterday's image/audio-only
+  entries, filled to three from older entries when needed. The server owns
+  the daily batch and permanent dismissals, shared with the web. Each sheet
+  previews photos and plays audio, accepts typed context, and stages transcribed
+  recordings on the original entry. Typed saves and dismissals need a connection;
+  recording clips persist locally and queue for upload on Save or Close.
+  Failed saves retain the words and clips. Original entry dates are preserved.
+  Three iPhone simulator tests cover save/dismiss, failed-save recovery, and
+  recording/relaunch/offline queuing; physical-device behavior is unverified.
+  The web shows the same cards in Chat.
 - Todo is the desktop Lifestyle tab's tasks card: up to four daily tasks (tick
   for today, add, rename, reorder and delete under Edit) above the To-Do and
   Archive lists, ordered and filtered as on the desktop (soonest due first,

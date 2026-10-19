@@ -1,5 +1,18 @@
 # Apple apps and offline experience — implementation tracker
 
+Journal-context prompts (2026-10-15, `feat/journal-context-prompts`): the native
+Journal tab's Context page (right of Calendar; the web keeps them in Chat) uses the same daily selection and permanent-dismissal endpoints as the web.
+Sheets reuse journal photo/audio viewers and stage transcribed clips through
+the existing per-entry capture outbox. Typed saves precede clip uploads;
+failures retain the draft, and the original entry date is unchanged.
+The Swift core suite passes 538 tests, including server-payload decoding,
+resolution payloads and recording recovery/targeting. Three iPhone simulator
+tests pass: media preview/save/permanent dismissal, failed saves preserving
+typed words, and recording/relaunch/offline queuing. Fourteen backend context
+tests pass, including a second device's stale save receiving a conflict rather
+than silently discarding its draft. Physical-device microphone
+and background delivery have not been verified.
+
 Capture follow-up (2026-10-11, `fix/capture-photo-tools`):
 
 - Capture actions are Food and Save; YouTube Paste validates and adds the link.
