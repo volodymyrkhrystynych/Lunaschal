@@ -74,7 +74,7 @@ struct BookListView: View {
                     }
             }
             if books.count < count {
-                Button("Load more (\(books.count) of \(count))") { limit += 50; Task { await refresh() } }
+                LoadMoreRow(shown: books.count, total: count) { limit += 50; await refresh() }
             }
         }
         .overlay {
@@ -172,6 +172,26 @@ struct BookListView: View {
             books = result.records; count = result.count
             onDevice = model.ficsOnDevice(books, chapterCounts: counts)
         } catch { model.message = error.localizedDescription }
+    }
+}
+
+/// The bottom of a paged list: scrolling it into view loads the next page.
+/// Keyed on `shown`, so a page too short to push it off screen loads the
+/// next one too instead of stopping until the list is scrolled again.
+struct LoadMoreRow: View {
+    let shown: Int
+    let total: Int
+    let load: () async -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+            Text("Loading \(shown) of \(total)…").font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .listRowSeparator(.hidden)
+        .accessibilityIdentifier("load-more")
+        .task(id: shown) { await load() }
     }
 }
 

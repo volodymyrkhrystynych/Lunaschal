@@ -41,6 +41,8 @@ struct CaptureRoot: View {
                     .tabItem { Label("Library", systemImage: "books.vertical") }
                 NavigationStack { JobsFeedView(capture: model) }
                     .tabItem { Label("Jobs", systemImage: "briefcase") }
+                NavigationStack { WritingRootView(capture: model) }
+                    .tabItem { Label("Writing", systemImage: "text.book.closed") }
                 NavigationStack { LearningView(learning: learning) }
                     .tabItem { Label("Learning", systemImage: "graduationcap") }
                     .badge(learning.stats.due)
@@ -876,6 +878,9 @@ private struct MoreMenu: View {
             NavigationLink { JobsFeedView(capture: model) } label: {
                 Label("Jobs", systemImage: "briefcase")
             }.accessibilityIdentifier("more-Jobs")
+            NavigationLink { WritingRootView(capture: model) } label: {
+                Label("Writing", systemImage: "text.book.closed")
+            }.accessibilityIdentifier("more-Writing")
             NavigationLink { LearningView(learning: learning) } label: {
                 Label("Learning", systemImage: "graduationcap")
             }

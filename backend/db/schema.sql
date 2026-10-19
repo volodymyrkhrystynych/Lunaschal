@@ -688,12 +688,58 @@ CREATE TABLE IF NOT EXISTS writing_context_docs (
     title TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
     doc_type TEXT NOT NULL DEFAULT 'note',
+    -- Read into every turn of the project's discussions (backend/writing/discuss.py).
+    -- Replaced a checkbox set the browser held, which a second client could not see.
+    pinned INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_writing_chapters_project ON writing_chapters(project_id, position);
 CREATE INDEX IF NOT EXISTS idx_writing_context_docs_project ON writing_context_docs(project_id);
+
+-- Copy-on-write history for a writing note, the user_memory_revisions pattern:
+-- `content`/`title` are the note as it stood BEFORE the change, which is what
+-- Restore puts back. `source` is 'edit' (the editor, coalesced per minute),
+-- 'accept' (a discussion's proposed update the author confirmed, with the
+-- message it came from) or 'restore'.
+CREATE TABLE IF NOT EXISTS writing_context_doc_revisions (
+    id TEXT PRIMARY KEY,
+    doc_id TEXT NOT NULL REFERENCES writing_context_docs(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL,
+    message_id TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_writing_doc_revisions_doc ON writing_context_doc_revisions(doc_id, created_at DESC);
+
+-- A canon source: one Fandom (MediaWiki) wiki imported from its XML dump into a
+-- docpack-format SQLite file under CANON_ROOT (backend/writing/canon_import.py).
+-- Deliberately not a knowledge_docpacks row — those are searched by every chat,
+-- and a fandom wiki belongs only to the projects it is linked to.
+CREATE TABLE IF NOT EXISTS writing_canon_sources (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    wiki_host TEXT,
+    source_url TEXT,
+    filename TEXT,
+    status TEXT NOT NULL DEFAULT 'importing' CHECK(status IN ('importing', 'ready', 'error')),
+    pages INTEGER NOT NULL DEFAULT 0,
+    chunks INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    licence TEXT NOT NULL DEFAULT 'CC BY-SA 3.0',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS writing_project_canon (
+    project_id TEXT NOT NULL REFERENCES writing_projects(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES writing_canon_sources(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, source_id)
+);
 
 CREATE TABLE IF NOT EXISTS daily_tasks (
     id TEXT PRIMARY KEY,
@@ -2476,6 +2522,58 @@ CREATE INDEX IF NOT EXISTS idx_llm_jobs_pending
 -- same shape is fine, which is why this is partial rather than a plain UNIQUE.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_jobs_unique_pending
     ON llm_jobs(kind, target_id) WHERE status = 'pending';
+
+-- Server oddities: the recurring errors the nightly pass finds in the server's
+-- own journal and in failed llm_jobs rows (backend/oddities_job.py), reported
+-- at the end of the morning briefing. One row per *kind* of problem, keyed by
+-- the fingerprint backend/ops/oddities.py derives from it, so "the same error
+-- as yesterday" is a primary-key lookup rather than a model's judgement.
+--
+-- `status` moves on its own (new -> recurring -> quiet -> regressed); there is
+-- no UI to dismiss one. `note` is the model's one-line reading, written once
+-- and cleared only when the problem regresses -- a note revised nightly would
+-- drift, the same reason the life wiki renders from facts.
+CREATE TABLE IF NOT EXISTS server_oddities (
+    fingerprint TEXT PRIMARY KEY,
+    unit TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('traceback','error','warning')),
+    template TEXT NOT NULL,
+    sample TEXT NOT NULL,
+    -- JSON {file, line, function} of the last frame in our own code, or NULL.
+    frame TEXT,
+    status TEXT NOT NULL DEFAULT 'new'
+        CHECK(status IN ('new','recurring','quiet','regressed')),
+    total_count INTEGER NOT NULL DEFAULT 0,
+    -- How many times the most recent scan saw it; 0 when that scan did not.
+    last_scan_count INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    note_written_at INTEGER,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL
+);
+
+-- Per-day counts, for "seen on 3 of the last 7 days". Pruned after 30 days.
+CREATE TABLE IF NOT EXISTS server_oddity_days (
+    fingerprint TEXT NOT NULL REFERENCES server_oddities(fingerprint) ON DELETE CASCADE,
+    day_key TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (fingerprint, day_key)
+);
+
+-- One row per scan. The next scan starts where this one ended, and the
+-- briefing reads the newest row to say whether the check ran at all and
+-- whether the journal could be read -- a scan that silently read nothing must
+-- not look like a clean day.
+CREATE TABLE IF NOT EXISTS server_oddity_scans (
+    id TEXT PRIMARY KEY,
+    since_ts INTEGER NOT NULL,
+    until_ts INTEGER NOT NULL,
+    journal_available INTEGER NOT NULL DEFAULT 0,
+    event_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_server_oddity_scans_until
+    ON server_oddity_scans(until_ts DESC);
 
 -- What the offline knowledge library contains (backend/offline_knowledge/).
 --

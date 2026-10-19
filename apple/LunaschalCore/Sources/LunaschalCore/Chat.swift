@@ -162,6 +162,14 @@ public struct AgentStep: Equatable {
             return succeeded ? found("the project", target) : failed("Couldn't search the project", dash: true)
         case "writing_read":
             return succeeded ? "Read \(kind == "chapter" ? "chapter" : "note"): \(target)" : failed("Couldn't open \"\(target)\"", dash: true)
+        case "propose_note", "propose_note_update":
+            return succeeded ? "Staged \(target)" : failed("Couldn't stage that note", dash: true)
+        case "canon_search":
+            guard succeeded else { return failed("Couldn't search the canon wiki", dash: true) }
+            return (count ?? 0) > 0 ? "Searched the canon wiki for \"\(target)\" (\(count!))"
+                                    : "Nothing in the canon wiki for \"\(target)\""
+        case "canon_read":
+            return succeeded ? "Read canon: \(target)" : failed("Couldn't open that canon page", dash: true)
         case "idea_list":
             return succeeded ? "Checked the other ideas for this repo (\(count ?? 0))" : failed("Couldn't read the backlog", dash: true)
         case "idea_search":
@@ -237,13 +245,15 @@ public struct ChatProposal: Equatable, Identifiable {
         if let reconstructionDay { return "Suggested event · \(reconstructionDay)" }
         return ["calendar": "Save as calendar event?", "calorie": "Log calories?", "food": "Add to your food log?",
                 "recipe": "Save this recipe?", "recipe_link": "Link this meal to that recipe?",
-                "flashcards": "Generate flashcards?", "todo": "Keep this for today?"][kind] ?? "Save this?"
+                "flashcards": "Generate flashcards?", "todo": "Keep this for today?", "writing_note": "Add to the notes?",
+                "writing_note_update": "Update this note?"][kind] ?? "Save this?"
     }
 
     public var acceptLabel: String {
         if reconstructionDay != nil { return "Approve event" }
         return ["calendar": "Save", "calorie": "Log", "food": "Log Meal", "recipe": "Save", "recipe_link": "Link",
-                "flashcards": "Queue Cards", "todo": "Add to today"][kind] ?? "Save"
+                "flashcards": "Queue Cards", "todo": "Add to today", "writing_note": "Add Note",
+                "writing_note_update": "Update Note"][kind] ?? "Save"
     }
 
     public var resolvedLabel: String {
@@ -259,6 +269,9 @@ public struct ChatProposal: Equatable, Identifiable {
         case "flashcards":
             let count = result["count"]?.int ?? 0
             return "Queued \(count) card\(count == 1 ? "" : "s") for review in Learning"
+        case "writing_note": return "Added note “\(data["title"]?.string ?? "")”"
+        case "writing_note_update":
+            return "Updated note “\(data["title"]?.string ?? "")” — the earlier version is in its history"
         default: return "Resolved"
         }
     }

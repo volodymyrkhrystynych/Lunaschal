@@ -201,6 +201,21 @@ export function stepLabel(step: AgentStep): string {
         ? `Read ${step.kind === 'chapter' ? 'chapter' : 'note'}: ${target}`
         : `Couldn't open "${target}"${step.error ? ` — ${step.error}` : ''}`;
     // The rest of one repository's idea backlog, on the Ideas discussion.
+    case 'propose_note':
+    case 'propose_note_update':
+      return step.ok
+        ? `Staged ${target}`
+        : `Couldn't stage that note${step.error ? ` — ${step.error}` : ''}`;
+    case 'canon_search':
+      if (!step.ok)
+        return `Couldn't search the canon wiki${step.error ? ` — ${step.error}` : ''}`;
+      return step.count
+        ? `Searched the canon wiki for "${target}" (${step.count})`
+        : `Nothing in the canon wiki for "${target}"`;
+    case 'canon_read':
+      return step.ok
+        ? `Read canon: ${target}`
+        : `Couldn't open that canon page${step.error ? ` — ${step.error}` : ''}`;
     case 'idea_list':
       return step.ok
         ? `Checked the other ideas for this repo (${step.count ?? 0})`

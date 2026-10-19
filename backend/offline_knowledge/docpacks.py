@@ -369,10 +369,21 @@ def search_pack(pack: dict, query: str, count: int) -> list[tuple[str, str, str]
     every ZIM hit already has. Title and section are weighted over the body,
     as neuledge's own search does.
     """
+    return search_file(path_for(pack), query, count)
+
+
+def search_file(path: Path, query: str, count: int) -> list[tuple[str, str, str]]:
+    """`search_pack` against a package file that is not in the registry.
+
+    A Writing project's canon (backend/writing/canon_tools.py) is this file
+    format but deliberately not an installed docpack: every installed package
+    is searched by every chat, and a fandom wiki belongs to the projects it is
+    linked to and nowhere else.
+    """
     expr = fts_match_query(query)
     if not expr or count <= 0:
         return []
-    conn = _connect(path_for(pack))
+    conn = _connect(path)
     try:
         found = conn.execute(
             'SELECT c.id, c.doc_title, c.section_title,'
@@ -403,11 +414,23 @@ def read(identifier: str, chunk_path: str) -> dict:
     pack = row(identifier)
     if not pack:
         raise LookupError(identifier)
+    found = read_file(path_for(pack), chunk_path)
+    return {
+        'archiveId': public_id(pack['id']),
+        'archiveTitle': label(pack),
+        'archiveDate': '',
+        **found,
+    }
+
+
+def read_file(path: Path, chunk_path: str) -> dict:
+    """`read` against a package file that is not in the registry: `{path,
+    docPath, title, text}` with no archive fields. See `search_file`."""
     try:
         chunk_id = int(str(chunk_path).strip('/'))
     except ValueError as exc:
         raise LookupError(chunk_path) from exc
-    conn = _connect(path_for(pack))
+    conn = _connect(path)
     try:
         target = conn.execute(
             'SELECT id, doc_path, doc_title, section_title, content FROM chunks WHERE id=?',
@@ -441,9 +464,6 @@ def read(identifier: str, chunk_path: str) -> dict:
                 grow_before = False
     text = '\n\n'.join(s['content'].strip() for s in siblings[lo:hi + 1])
     return {
-        'archiveId': public_id(pack['id']),
-        'archiveTitle': label(pack),
-        'archiveDate': '',
         'path': str(chunk_id),
         'docPath': target['doc_path'],
         'title': _hit_title(target['doc_title'], target['section_title']),

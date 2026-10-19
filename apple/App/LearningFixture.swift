@@ -25,6 +25,8 @@ actor LearningDemoServer: LearningTransport {
         var attempt: LearningAttempt
         var gradeAt: Date
         var speech = false
+        /// A spoken answer's words, heard when it is graded.
+        var heard: String?
     }
 
     private var folders: [LearningFolder] = [
@@ -109,7 +111,13 @@ actor LearningDemoServer: LearningTransport {
     func learningAttempts(_ filter: LearningFilter) -> [LearningAttempt] {
         let now = Date()
         for (id, item) in open where item.attempt.gradeStatus == "pending" && item.gradeAt <= now {
-            open[id]?.attempt = grade(item.attempt, speech: item.speech)
+            var attempt = item.attempt
+            if let heard = item.heard {
+                attempt = LearningAttempt(id: attempt.id, cardId: attempt.cardId, mode: attempt.mode,
+                                          answer: attempt.answer.map { "\($0) \(heard)" } ?? heard,
+                                          answerMode: attempt.answerMode)
+            }
+            open[id]?.attempt = grade(attempt, speech: item.speech)
         }
         return open.values.map(\.attempt)
             .filter { attempt in cards.contains { $0.id == attempt.cardId && matches($0, filter) } }
@@ -149,6 +157,19 @@ actor LearningDemoServer: LearningTransport {
                                      answer: answer.text, answerMode: answer.answerMode,
                                      gradeStatus: answer.skipped ? "skipped" : "pending"),
             gradeAt: Date().addingTimeInterval(1.2), speech: answer.speech)
+    }
+
+    /// Slow enough that the next card is visibly up before it lands.
+    func saveRecordedAttempt(_ answer: LearningSession.Answer, clip: URL) async throws {
+        try await Task.sleep(for: .milliseconds(600))
+        guard cards.contains(where: { $0.id == answer.card.id && $0.state == "active" }) else {
+            throw URLError(.fileDoesNotExist)
+        }
+        open[answer.card.id] = Open(
+            attempt: LearningAttempt(id: answer.id, cardId: answer.card.id, mode: "answered",
+                                     answer: answer.text, answerMode: "voice"),
+            gradeAt: Date().addingTimeInterval(1.2), speech: answer.speech,
+            heard: "a spoken answer from the fixture")
     }
 
     /// A claim per sentence of the card's answer, covered when most of its
@@ -260,6 +281,12 @@ actor LearningDemoServer: LearningTransport {
         return revised.id
     }
 
+    func retireCard(_ id: String) {
+        guard let index = cards.firstIndex(where: { $0.id == id }) else { return }
+        cards[index].state = "retired"
+        open[id] = nil
+    }
+
     func deleteCard(_ id: String) {
         cards.removeAll { $0.id == id }
         open[id] = nil
@@ -279,11 +306,6 @@ actor LearningDemoServer: LearningTransport {
         wav += le(UInt32(16)) + le(UInt16(1)) + le(UInt16(1)) + le(UInt32(rate)) + le(UInt32(rate * 2))
         wav += le(UInt16(2)) + le(UInt16(16)) + Data("data".utf8) + le(UInt32(pcm.count)) + pcm
         return wav
-    }
-
-    func transcribe(audio: URL) async throws -> String {
-        try await Task.sleep(for: .milliseconds(600))
-        return "a spoken answer from the fixture"
     }
 }
 #endif

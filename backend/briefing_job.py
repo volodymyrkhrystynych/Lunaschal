@@ -21,6 +21,10 @@ more row mixed in with the day's own plan. Accepting one
 The plan is the part the user actually needs, so it never comes back empty while
 they have something pending: a model that returns no items (or no usable
 completion at all) falls back to `fallback_plan`, built from their own lists.
+
+The message ends with the server-oddities section (backend/oddities_job.py),
+appended to the stored content rather than asked of the model, so it is there
+whatever the model wrote and the day's chat can be asked about it.
 """
 import json
 import time
@@ -41,6 +45,7 @@ from backend.ai.briefing import (
 )
 from backend.ai.llm import EmptyCompletion
 from backend.briefing_events import stage_events
+from backend.oddities_job import briefing_report, render_markdown as render_oddities
 from backend.routes.tasks import (
     _parse_priority, _parse_due, _today_chat_todo_titles,
 )
@@ -163,6 +168,16 @@ def stage_carryover_todos(db, conv_id: str, today: str) -> list[dict]:
     return proposals
 
 
+def _oddities_report(now: int) -> dict:
+    """The server-oddities section never costs the briefing: a broken read of
+    its tables reports the check as not having run, which is what it amounts to."""
+    try:
+        return briefing_report(now)
+    except Exception as e:
+        print(f'Server oddities report failed: {e}')
+        return {'ran': False, 'journalAvailable': False, 'items': [], 'more': 0}
+
+
 _briefing_lock = threading.Lock()
 
 
@@ -215,12 +230,18 @@ def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
     # After the seed, so a title the plan already put back in the bar isn't
     # also offered as a card.
     carried = stage_carryover_todos(db, conv_id, context['today'])
-    if degraded and not inserted and not carried:
-        # No prose *and* nothing added: there's no briefing to leave.
+    oddities = _oddities_report(now)
+    if degraded and not inserted and not carried and not oddities['items']:
+        # No prose, nothing added, nothing carried over and nothing wrong with
+        # the server: there's no briefing to leave. A server problem alone is
+        # still worth waking to.
         db.commit()
         return None
 
+    content = f"{briefing}\n\n{render_oddities(oddities)}"
     metadata = {'briefing': True}
+    if oddities['items']:
+        metadata['oddities'] = [i['fingerprint'] for i in oddities['items']]
     events = stage_events(db, result.get('events', []), context.get('yesterday'))
     proposals = events + carried
     if proposals:
@@ -231,7 +252,7 @@ def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
     db.execute(
         'INSERT INTO messages(id, conversation_id, role, content, metadata, created_at)'
         ' VALUES (?,?,?,?,?,?)',
-        (message_id, conv_id, 'assistant', briefing, json.dumps(metadata), now),
+        (message_id, conv_id, 'assistant', content, json.dumps(metadata), now),
     )
     db.execute('UPDATE conversations SET updated_at=? WHERE id=?', (now, conv_id))
     db.commit()
@@ -242,5 +263,6 @@ def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         'todosAdded': inserted,
         'eventsSuggested': len(events),
         'todosCarried': len(carried),
+        'oddities': len(oddities['items']),
         'degraded': degraded,
     }

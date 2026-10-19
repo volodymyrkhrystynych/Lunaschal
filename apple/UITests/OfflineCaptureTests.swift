@@ -226,6 +226,38 @@ final class OfflineCaptureTests: XCTestCase {
         snapshot(app, "5-browse")
     }
 
+    /// Retiring takes a card out of the sitting on both passes: the deck
+    /// shrinks while answering, and a result being rated moves to the next.
+    func testLearningCardsCanBeRetiredDuringReview() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-learningFixture")
+        app.launch()
+        openMore(app, "Learning")
+
+        XCTAssertTrue(app.textFields["learning-answer"].waitForExistence(timeout: settle), "No card to answer")
+        XCTAssertTrue(app.staticTexts["Card 1 of 6"].exists)
+        let retire = app.buttons["learning-retire"]
+        for _ in 0..<4 where !reachable(retire) { app.swipeUp() }
+        retire.tap()
+        let confirm = app.buttons["Retire"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "No confirmation")
+        snapshot(app, "retire-confirm")
+        confirm.tap()
+        XCTAssertTrue(app.staticTexts["Card 1 of 5"].waitForExistence(timeout: 5), "The retired card is still in the deck")
+
+        for _ in 0..<5 { app.buttons["learning-flip"].tap(); RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+        XCTAssertTrue(app.staticTexts["Result 1 of 5"].waitForExistence(timeout: 5))
+        for _ in 0..<4 where !reachable(retire) { app.swipeUp() }
+        retire.tap()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+        XCTAssertTrue(app.staticTexts["Result 1 of 4"].waitForExistence(timeout: 5), "The result didn't move on")
+
+        // Retired cards leave the deck's count and the browser.
+        app.segmentedControls["learning-page"].buttons["Browse"].tap()
+        XCTAssertTrue(app.staticTexts["Due"].firstMatch.waitForExistence(timeout: 5))
+    }
+
     /// A notebook saved For review comes up as a card with no back side: its
     /// pages one under another, then the ratings at the end of the scroll.
     func testLearningReviewCardIsReadThenRated() {
@@ -597,53 +629,75 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(labels.firstMatch.waitForExistence(timeout: 5))
     }
 
-    func testCalendarEventsOverlapTakeCategoriesAndDragWithoutAServer() {
-        let tag = String(UUID().uuidString.prefix(6))
-        let app = XCUIApplication()
-        app.launch()
+    // The overlap, drag and sleep checks were one test, and on a slow runner
+    // it outgrew the five-minute allowance; split, each has room to spare.
+
+    /// Opens tomorrow's day view, so "+" puts new events at 8am rather than near the clock.
+    private func openTomorrowsCalendar(_ app: XCUIApplication) {
         selectTab(app, "Journal")
         let pages = app.segmentedControls["journal-page"]
         XCTAssertTrue(pages.waitForExistence(timeout: 5))
         pages.buttons["Calendar"].tap()
-        // Tomorrow, so "+" puts both at 8am rather than near the clock.
         let next = app.buttons["Next day"]
         XCTAssertTrue(next.waitForExistence(timeout: 5))
         next.tap()
+    }
 
-        func create(_ name: String, category: String?) {
-            app.buttons["calendar-new-event"].tap()
-            let title = app.textFields["calendar-event-title"]
-            XCTAssertTrue(title.waitForExistence(timeout: 5))
-            focus(title)
-            title.typeText(name)
-            if let category {
-                let box = app.buttons["calendar-category-\(category)"]
-                for _ in 0..<6 where !box.isHittable { app.swipeUp() }
-                box.tap()
-                XCTAssertTrue(box.isSelected)
-            }
-            saveForm(app, "New event")
+    private func createCalendarEvent(_ app: XCUIApplication, _ name: String, category: String? = nil) {
+        app.buttons["calendar-new-event"].tap()
+        let title = app.textFields["calendar-event-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        focus(title)
+        title.typeText(name)
+        if let category {
+            let box = app.buttons["calendar-category-\(category)"]
+            for _ in 0..<6 where !box.isHittable { app.swipeUp() }
+            box.tap()
+            XCTAssertTrue(box.isSelected)
         }
-        func event(_ name: String) -> XCUIElement {
-            app.buttons.matching(identifier: "calendar-event").matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        saveForm(app, "New event")
+    }
+
+    private func calendarEvent(_ app: XCUIApplication, _ name: String) -> XCUIElement {
+        app.buttons.matching(identifier: "calendar-event").matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+    }
+
+    /// The line itself, near its foot: an event's frame also takes in its
+    /// label, which can sit over a neighbouring event.
+    private func eventLine(_ element: XCUIElement) -> XCUICoordinate {
+        element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 14, dy: element.frame.height - 16))
+    }
+
+    /// Leave the day as it was found: the simulator keeps what runs queue.
+    /// Off-mode swipes scroll the timeline. Restore its 8am position before
+    /// using coordinates: an offscreen event's frame can lie over the tabs.
+    private func deleteCalendarEvents(_ app: XCUIApplication, _ names: [String]) {
+        app.buttons["Previous day"].tap()
+        app.buttons["Next day"].tap()
+        for name in names {
+            eventLine(calendarEvent(app, name)).tap()
+            XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: settle))
+            deleteFromEdit(app, title: name)
         }
-        // The line itself, near its foot: an event's frame also takes in its
-        // label, which can sit over a neighbouring event.
-        func line(_ element: XCUIElement) -> XCUICoordinate {
-            element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 14, dy: element.frame.height - 16))
-        }
+    }
+
+    func testCalendarEventsOverlapAndTakeCategoriesWithoutAServer() {
+        let tag = String(UUID().uuidString.prefix(6))
+        let app = XCUIApplication()
+        app.launch()
+        openTomorrowsCalendar(app)
         let long = "Long " + tag, short = "Short " + tag
-        create(long, category: "work")
-        create(short, category: nil)
-        XCTAssertTrue(event(long).waitForExistence(timeout: 5))
-        XCTAssertTrue(event(short).waitForExistence(timeout: 5))
+        createCalendarEvent(app, long, category: "work")
+        createCalendarEvent(app, short)
+        XCTAssertTrue(calendarEvent(app, long).waitForExistence(timeout: 5))
+        XCTAssertTrue(calendarEvent(app, short).waitForExistence(timeout: 5))
         // Same hours, side by side: the lines end on the same row, in different lanes.
-        XCTAssertEqual(event(long).frame.maxY, event(short).frame.maxY, accuracy: 1)
-        XCTAssertNotEqual(event(long).frame.minX, event(short).frame.minX)
+        XCTAssertEqual(calendarEvent(app, long).frame.maxY, calendarEvent(app, short).frame.maxY, accuracy: 1)
+        XCTAssertNotEqual(calendarEvent(app, long).frame.minX, calendarEvent(app, short).frame.minX)
 
         // The category ticked in the New form is on the event, and the
         // event's own page ticks more without opening Edit.
-        line(event(long)).tap()
+        eventLine(calendarEvent(app, long)).tap()
         let work = app.buttons["calendar-category-work"]
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         XCTAssertTrue(work.isSelected)
@@ -662,25 +716,39 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(outside.isSelected)
         app.navigationBars[long].buttons.firstMatch.tap()
 
+        deleteCalendarEvents(app, [long, short])
+    }
+
+    func testCalendarDragModesStartOffAndCycleWithoutAServer() {
+        let tag = String(UUID().uuidString.prefix(6))
+        let app = XCUIApplication()
+        app.launch()
+        openTomorrowsCalendar(app)
+        let long = "Long " + tag, short = "Short " + tag
+        createCalendarEvent(app, long)
+        createCalendarEvent(app, short)
+        XCTAssertTrue(calendarEvent(app, long).waitForExistence(timeout: 5))
+        XCTAssertTrue(calendarEvent(app, short).waitForExistence(timeout: 5))
+
         // Drag editing starts off; touching and scrolling across an event
         // must not change its time or open it as if the swipe were a tap.
         let mode = app.buttons["calendar-drag-mode"]
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
         XCTAssertEqual(mode.value as? String, "off")
-        let original = event(long).label
-        line(event(long)).press(forDuration: 0.3, thenDragTo: line(event(long)).withOffset(CGVector(dx: 0, dy: 120)))
+        let original = calendarEvent(app, long).label
+        eventLine(calendarEvent(app, long)).press(forDuration: 0.3, thenDragTo: eventLine(calendarEvent(app, long)).withOffset(CGVector(dx: 0, dy: 120)))
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
-        XCTAssertEqual(event(long).label, original, "Off leaves the event's start and end unchanged")
+        XCTAssertEqual(calendarEvent(app, long).label, original, "Off leaves the event's start and end unchanged")
 
         // One tap enables Move; the next enables Resize.
         mode.tap()
         XCTAssertEqual(mode.value as? String, "moves it")
         mode.tap()
         XCTAssertEqual(mode.value as? String, "changes its length")
-        let target = event(long)
+        let target = calendarEvent(app, long)
         let before = target.frame
-        line(target).press(forDuration: 0.3, thenDragTo: line(target).withOffset(CGVector(dx: 0, dy: 120)))
-        let longer = event(long)
+        eventLine(target).press(forDuration: 0.3, thenDragTo: eventLine(target).withOffset(CGVector(dx: 0, dy: 120)))
+        let longer = calendarEvent(app, long)
         XCTAssertTrue(longer.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(longer.frame.maxY, before.maxY + 100, "a length drag moves the end")
         XCTAssertTrue(longer.label.contains("08:00 – 09:"), longer.label)
@@ -688,19 +756,39 @@ final class OfflineCaptureTests: XCTestCase {
         // Resize cycles back to Off, then another tap enables Move.
         mode.tap()
         XCTAssertEqual(mode.value as? String, "off")
-        let shortBefore = event(short).label
-        line(event(short)).press(forDuration: 0.3, thenDragTo: line(event(short)).withOffset(CGVector(dx: 0, dy: 60)))
-        XCTAssertEqual(event(short).label, shortBefore)
+        let shortBefore = calendarEvent(app, short).label
+        eventLine(calendarEvent(app, short)).press(forDuration: 0.3, thenDragTo: eventLine(calendarEvent(app, short)).withOffset(CGVector(dx: 0, dy: 60)))
+        XCTAssertEqual(calendarEvent(app, short).label, shortBefore)
         mode.tap()
         XCTAssertEqual(mode.value as? String, "moves it")
-        let moving = event(short)
+        let moving = calendarEvent(app, short)
         let beforeMoving = moving.frame
-        line(moving).press(forDuration: 0.3, thenDragTo: line(moving).withOffset(CGVector(dx: 0, dy: 120)))
+        eventLine(moving).press(forDuration: 0.3, thenDragTo: eventLine(moving).withOffset(CGVector(dx: 0, dy: 120)))
         let moved = app.buttons.matching(identifier: "calendar-event")
             .matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", short, "09:")).firstMatch
-        XCTAssertTrue(moved.waitForExistence(timeout: 5), event(short).label)
+        XCTAssertTrue(moved.waitForExistence(timeout: 5), calendarEvent(app, short).label)
         XCTAssertGreaterThan(moved.frame.maxY, beforeMoving.maxY + 100)
 
+        deleteCalendarEvents(app, [long, short])
+
+        // Enabling a mode is temporary, never a preference restored on launch.
+        XCTAssertEqual(mode.value as? String, "off")
+        mode.tap()
+        XCTAssertEqual(mode.value as? String, "moves it")
+        app.terminate()
+        app.launch()
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        if !app.buttons["calendar-new-event"].exists { pages.buttons["Calendar"].tap() }
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertEqual(mode.value as? String, "off")
+    }
+
+    func testCalendarWakeTimeShadesTheMorningWithoutAServer() {
+        let app = XCUIApplication()
+        app.launch()
+        openTomorrowsCalendar(app)
         // Wake time set by hand, offline: the morning is shaded at once.
         // There is no Save — tapping above the sheet to close it keeps the change.
         app.buttons["calendar-sleep"].tap()
@@ -712,33 +800,12 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Sleep"].waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["sleep-band-morning"].waitForExistence(timeout: 5))
 
-        // Leave the day as it was found: the simulator keeps what runs queue.
-        // Off-mode swipes scroll the timeline. Restore its 8am position before
-        // using coordinates: an offscreen event's frame can lie over the tabs.
-        app.buttons["Previous day"].tap()
-        app.buttons["Next day"].tap()
-        for name in [long, short] {
-            line(event(name)).tap()
-            XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: settle))
-            deleteFromEdit(app, title: name)
-        }
+        // Leave the day as it was found.
         app.buttons["calendar-sleep"].tap()
         XCTAssertTrue(wake.waitForExistence(timeout: 5))
         if (wake.value as? String) == "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
         app.navigationBars["Sleep"].buttons["Done"].tap()
         XCTAssertTrue(app.navigationBars["Sleep"].waitForNonExistence(timeout: 5))
-
-        // Enabling a mode is temporary, never a preference restored on launch.
-        XCTAssertEqual(mode.value as? String, "off")
-        mode.tap()
-        XCTAssertEqual(mode.value as? String, "moves it")
-        app.terminate()
-        app.launch()
-        selectTab(app, "Journal")
-        XCTAssertTrue(pages.waitForExistence(timeout: 5))
-        if !app.buttons["calendar-new-event"].exists { pages.buttons["Calendar"].tap() }
-        XCTAssertTrue(mode.waitForExistence(timeout: 5))
-        XCTAssertEqual(mode.value as? String, "off")
     }
 
     func testWorkoutLogsSetsLikeTheDesktopWithoutAServer() {
@@ -813,6 +880,45 @@ final class OfflineCaptureTests: XCTestCase {
         for _ in 0..<4 where !waiting.exists { app.swipeUp() }
         XCTAssertTrue(waiting.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["The rest (2)"].exists)
+    }
+
+    // The fixture's one project: a pinned character note, and a discussion
+    // whose reply staged an addition to that note. With no server nothing is
+    // fetched; this checks the screens and the card render from a reply.
+    func testWritingShowsPinnedNotesAndANoteCard() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        openMore(app, "Writing")
+        let project = app.buttons["writing-project"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        project.tap()
+        XCTAssertTrue(app.staticTexts["Mara Vell"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.images["Pinned"].exists)
+
+        app.buttons["Discussions"].tap()
+        let discussion = app.buttons["writing-discussion"].firstMatch
+        XCTAssertTrue(discussion.waitForExistence(timeout: 5))
+        discussion.tap()
+        XCTAssertTrue(app.staticTexts["Update this note?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Update Note"].exists)
+    }
+
+    func testWritingStartsANewBookAndOpensIt() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        openMore(app, "Writing")
+        let add = app.buttons["writing-new-project"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        add.tap()
+        let title = app.textFields["writing-new-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.tap()
+        title.typeText("Tide Charts")
+        app.buttons["writing-new-create"].tap()
+        XCTAssertTrue(app.navigationBars["Tide Charts"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["No notes yet"].exists)
     }
 
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
@@ -898,6 +1004,23 @@ final class OfflineCaptureTests: XCTestCase {
         forumFic.press(forDuration: 1.2)
         XCTAssertTrue(app.buttons["Check for updates"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Re-read edited chapters"].exists)
+    }
+
+    /// The book list pages itself as it is scrolled: the 70th book, past the
+    /// first page of 50, is reached by scrolling alone, with no button to press.
+    func testLibraryLoadsTheNextPageWhenScrolledToTheEnd() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-libraryFixture", "-libraryManyBooks"]
+        app.launch()
+        openMore(app, "Library")
+        XCTAssertTrue(app.staticTexts["The Long Way Round"].waitForExistence(timeout: 10))
+
+        // Oldest of all, so last in the default sort.
+        let last = app.staticTexts["Filler Book 62"]
+        for _ in 0..<30 where !(last.exists && last.isHittable) { app.swipeUp() }
+        XCTAssertTrue(last.waitForExistence(timeout: 5), "Scrolling reached the second page")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Load more")).firstMatch.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["load-more"].exists, "Nothing left to load")
     }
 
     /// Settings → Library downloads imports a fic by its link: a page that

@@ -1234,18 +1234,44 @@ def seed_writing(db):
         'VALUES (?, ?, ?, ?, 0, ?, ?)',
         (new_id(), project_id, 'Opening', 'The keeper climbs the same stairs every night, and every night they are different.', ts(12), ts(12)),
     )
-    # Context docs are what the scoped writing chat is allowed to see.
-    for title, doc_type, content in [
+    # Context docs are what the scoped writing chat is allowed to see. The
+    # character is pinned, so the discussion's prompt carries it on every turn.
+    note_ids = {}
+    for title, doc_type, content, pinned in [
         ('Lyra Ashworth', 'character',
-         'Forty years a keeper. Speaks little, writes everything down in a ledger she never shows anyone.'),
+         'Forty years a keeper. Speaks little, writes everything down in a ledger she never shows anyone.', 1),
         ('Outline', 'outline',
-         '1. The storm.\n2. What the light found.\n3. The ledger is opened.'),
+         '1. The storm.\n2. What the light found.\n3. The ledger is opened.', 0),
     ]:
+        note_ids[title] = new_id()
         db.execute(
-            'INSERT INTO writing_context_docs (id, project_id, title, content, doc_type, created_at, updated_at) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (new_id(), project_id, title, content, doc_type, ts(12), ts(12)),
+            'INSERT INTO writing_context_docs (id, project_id, title, content, doc_type, pinned, created_at, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (note_ids[title], project_id, title, content, doc_type, pinned, ts(12), ts(12)),
         )
+    # The outline as it stood before an accepted discussion proposal added
+    # its third beat — what the note's history panel offers to restore.
+    db.execute(
+        'INSERT INTO writing_context_doc_revisions (id, doc_id, title, content, source, message_id, created_at) '
+        "VALUES (?, ?, 'Outline', ?, 'accept', NULL, ?)",
+        (new_id(), note_ids['Outline'], '1. The storm.\n2. What the light found.', ts(12)),
+    )
+    # A canon source row with no file behind it: dumps are tens of MB and come
+    # from Fandom, so the demo describes the link rather than shipping a wiki.
+    # Its status is 'error' (never 'importing', an in-flight state), which is
+    # also what keeps the discussion from offering canon tools it cannot run.
+    source_id = new_id()
+    db.execute(
+        'INSERT INTO writing_canon_sources (id, name, wiki_host, source_url, filename, status, pages, chunks, '
+        'error, licence, created_at, updated_at) '
+        "VALUES (?, 'Lighthouse Wiki', 'lighthouses.fandom.com', NULL, NULL, 'error', 0, 0, "
+        "'Demo row: import a Fandom XML dump to make canon searchable', 'CC BY-SA 3.0', ?, ?)",
+        (source_id, ts(12), ts(12)),
+    )
+    db.execute(
+        'INSERT INTO writing_project_canon (project_id, source_id, created_at) VALUES (?, ?, ?)',
+        (project_id, source_id, ts(12)),
+    )
 
     return project_id
 
@@ -2299,6 +2325,52 @@ def seed_infra(db):
         'INSERT INTO llm_jobs (id, kind, target_id, payload, status, created_at) '
         'VALUES (?, ?, ?, ?, ?, ?)',
         (new_id(), 'calendar.classify', new_id(), '{}', 'pending', ts(0)),
+    )
+
+    # Server oddities: one recurring problem with a note, one new traceback
+    # still waiting for its note, and one that has gone quiet — the three
+    # shapes the briefing's section renders differently. The scan row is
+    # recent, so a briefing run from the demo reports them rather than saying
+    # the check didn't run.
+    fp_audio, fp_tb, fp_old = '0a1b2c3d4e5f6a7b', '1b2c3d4e5f6a7b8c', '2c3d4e5f6a7b8c9d'
+    for fp, kind, template, sample, frame, status, count, note, first, last in [
+        (fp_audio, 'error',
+         'cpu call describe_audio failed after Ns: InternalServerError: proxy error: '
+         'Could not establish connection',
+         'cpu call describe_audio failed after 0.4s: InternalServerError: proxy error: '
+         'Could not establish connection',
+         None, 'recurring', 15,
+         'The CPU omni model looks unreachable behind the router, so audio '
+         'descriptions are being skipped; worth checking the llama service.',
+         ts(3), ts(0, 2)),
+        (fp_tb, 'traceback',
+         'sqlite3.InterfaceError in backend/fanfic/pacing.py:state: bad parameter or other API misuse',
+         '[demo] ERROR in app: Exception on /api/fanfic/browser/poll [POST]\n'
+         'Traceback (most recent call last):\n'
+         'sqlite3.InterfaceError: bad parameter or other API misuse',
+         '{"file": "backend/fanfic/pacing.py", "line": 23, "function": "state"}',
+         'new', 1, None, ts(0, 5), ts(0, 5)),
+        (fp_old, 'warning',
+         'UserWarning: resource_tracker: There appear to be N leaked semaphore objects',
+         'UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects',
+         None, 'quiet', 0, None, ts(20), ts(12)),
+    ]:
+        db.execute(
+            'INSERT INTO server_oddities (fingerprint, unit, kind, template, sample, frame, '
+            'status, total_count, last_scan_count, note, note_written_at, first_seen, last_seen) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (fp, 'lunaschal', kind, template, sample, frame, status, max(count, 3), count,
+             note, ts(1) if note else None, first, last),
+        )
+    for fp, days_ago, count in [(fp_audio, 2, 6), (fp_audio, 0, 15), (fp_tb, 0, 1), (fp_old, 12, 1)]:
+        db.execute(
+            'INSERT INTO server_oddity_days (fingerprint, day_key, count) VALUES (?,?,?)',
+            (fp, today_key(days_ago), count),
+        )
+    db.execute(
+        'INSERT INTO server_oddity_scans (id, since_ts, until_ts, journal_available, '
+        'event_count, created_at) VALUES (?,?,?,?,?,?)',
+        (new_id(), ts(1), ts(0), 1, 16, ts(0)),
     )
 
     db.execute(

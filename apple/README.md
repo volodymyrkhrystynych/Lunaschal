@@ -274,6 +274,20 @@ what each device can currently do and which work remains device-only.
   the screen. The last feed loaded is kept, so it still reads offline.
   Passed in simulator offline; not yet run against a server or verified on
   device.
+- More → Writing (its own tab on iPad) is the desktop Writing tab's notes and
+  discussions, over `/api/writing` and the Chat tab's routes. A book's notes
+  can be read, edited (debounced save), retyped, pinned (a pinned note is read
+  into every discussion turn, on any device) and restored from their history.
+  A discussion is an ordinary chat conversation the server knows belongs to
+  the book, so typed turns stream through `/api/chat/stream`, a spoken turn
+  queues in the Chat tab's recording outbox and is answered by the server, and
+  the notes the agent proposes arrive as the same editable confirm cards.
+  Fetched, not replicated: everything but a queued voice message needs the
+  server. New books can be started from the + on the book list (title and
+  description). Chapters and canon imports stay on the desktop.
+  Screens and the card passed in simulator against a fixture
+  (`testWritingShowsPinnedNotesAndANoteCard`); not yet run against a server
+  or verified on device.
 - Learning (More → Learning) is the desktop Learning tab's Review, Queue and
   Browse over the same `/api/learning` routes, filtered by folder and tag.
   Review runs the desktop's two passes: answer each due card (typed, or
@@ -469,7 +483,7 @@ what each device can currently do and which work remains device-only.
   script-disabled WebKit view with remote resources blocked. Knowledge article
   text is opt-in. Archive videos and ZIM packages are not bulk-downloaded.
 - Downloaded Knowledge articles are browsable and searchable in Library, with
-  Load more support and a selectable plain-text reader. Turning off future
+  infinite scrolling and a selectable plain-text reader. Turning off future
   Knowledge downloads keeps existing articles readable. Markdown source is
   shown as text; remote images and embedded pages are not loaded. This reads
   replicated Knowledge articles, not Wikipedia ZIM packages.
@@ -562,8 +576,9 @@ publicly to make CI work: simulator capture tests never contact it.
   termination, the manifest is marked interrupted; the audio is retained for
   playback/export and explicit recovery. An AAC container killed before
   finalization may not be playable. We do not claim crash-proof in-flight audio.
-- Journal initially shows 200 records; each Library category starts with 50, with Load more
-  controls to reveal further records already stored on the device. Library search
+- Journal initially shows 200 records, with a Load more control; each Library list
+  (books and every category) starts with 50 and loads 50 more of the records already
+  stored on the device each time it is scrolled to the end. Library search
   filters the selected category and can expand beyond 50 matches. Counts and
   results share the same filter and stable revision/ID ordering. Loading more
   does not contact the server. Attachment imports remain outstanding.

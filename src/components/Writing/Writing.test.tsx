@@ -41,6 +41,8 @@ vi.mock('../../hooks/api', () => ({
       updateNote: vi.fn().mockResolvedValue({}),
       deleteNote: vi.fn(),
       listDiscussions: vi.fn().mockResolvedValue([]),
+      listCanon: vi.fn().mockResolvedValue([]),
+      projectCanon: vi.fn().mockResolvedValue({ sourceIds: [] }),
       createDiscussion: vi.fn(),
       summarizeDiscussion: vi.fn(),
     },

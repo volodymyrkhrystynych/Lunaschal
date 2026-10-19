@@ -33,6 +33,10 @@ function resolvedLabel(p: DelegateProposalRecord): string {
       return `Added to today: ${str(p.data, 'title')}`;
     case 'flashcards':
       return `Queued ${p.result?.count ?? 0} card${p.result?.count === 1 ? '' : 's'} for review in Learning`;
+    case 'writing_note':
+      return `Added note “${str(p.data, 'title')}”`;
+    case 'writing_note_update':
+      return `Updated note “${str(p.data, 'title')}” — the earlier version is in its history`;
     default:
       return 'Resolved';
   }
@@ -46,6 +50,8 @@ const HEADLINE: Record<string, string> = {
   recipe_link: 'Link this meal to that recipe?',
   flashcards: 'Generate flashcards?',
   todo: 'Keep this for today?',
+  writing_note: 'Add to the notes?',
+  writing_note_update: 'Update this note?',
 };
 
 const ACCEPT_LABEL: Record<string, string> = {
@@ -56,6 +62,8 @@ const ACCEPT_LABEL: Record<string, string> = {
   recipe_link: 'Link',
   flashcards: 'Queue Cards',
   todo: 'Add to today',
+  writing_note: 'Add Note',
+  writing_note_update: 'Update Note',
 };
 
 const ACCEPT_PENDING_LABEL: Record<string, string> = {
@@ -66,6 +74,8 @@ const ACCEPT_PENDING_LABEL: Record<string, string> = {
   recipe_link: 'Linking...',
   flashcards: 'Generating...',
   todo: 'Adding...',
+  writing_note: 'Saving...',
+  writing_note_update: 'Saving...',
 };
 
 // Matches TodoForm.tsx — the card is the same kind of small entry form, and a
@@ -403,6 +413,69 @@ function ProposalForm({
         </div>
       );
 
+    case 'writing_note':
+      return (
+        <div className="space-y-1.5">
+          <div className="flex gap-2">
+            <input
+              aria-label="Title"
+              value={str(data, 'title')}
+              onChange={e => set({ title: e.target.value })}
+              className={`${fieldClass} flex-1`}
+            />
+            <select
+              aria-label="Type"
+              value={str(data, 'docType') || 'note'}
+              onChange={e => set({ docType: e.target.value })}
+              className={fieldClass}
+            >
+              <option value="character">Character</option>
+              <option value="outline">Outline</option>
+              <option value="worldbuilding">World</option>
+              <option value="note">Note</option>
+            </select>
+          </div>
+          <textarea
+            aria-label="Content"
+            value={str(data, 'content')}
+            onChange={e => set({ content: e.target.value })}
+            rows={Math.min(12, str(data, 'content').split('\n').length + 2)}
+            className={`${fieldClass} w-full resize-y`}
+          />
+        </div>
+      );
+
+    case 'writing_note_update': {
+      const replace = data.mode === 'replace';
+      return (
+        <div className="space-y-1.5">
+          <div className="text-xs text-[var(--color-text-muted)]">
+            {replace ? 'Replaces the whole of' : 'Adds to the end of'} “
+            {str(data, 'title')}”
+            {str(data, 'reason') && ` — ${str(data, 'reason')}`}
+          </div>
+          <textarea
+            aria-label="Content"
+            value={str(data, 'content')}
+            onChange={e => set({ content: e.target.value })}
+            rows={Math.min(12, str(data, 'content').split('\n').length + 2)}
+            className={`${fieldClass} w-full resize-y`}
+          />
+          <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
+            <input
+              type="checkbox"
+              checked={replace}
+              onChange={e =>
+                set({ mode: e.target.checked ? 'replace' : 'append' })
+              }
+              className="accent-[var(--color-primary)]"
+            />
+            Replace the note instead of adding to it
+          </label>
+        </div>
+      );
+    }
+
     default:
       return null;
   }
@@ -512,6 +585,10 @@ export function DelegateProposals({ messageId, proposals }: Props) {
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['chatTodos'] });
       queryClient.invalidateQueries({ queryKey: ['learning'] });
+      // A Writing discussion's cards: the transcript it renders from, and the
+      // project's notes the accept just wrote into.
+      queryClient.invalidateQueries({ queryKey: ['chat', 'conversation'] });
+      queryClient.invalidateQueries({ queryKey: ['writing'] });
     },
   });
 
