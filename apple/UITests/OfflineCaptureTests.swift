@@ -2,6 +2,113 @@ import XCTest
 import UIKit
 
 final class OfflineCaptureTests: XCTestCase {
+    func testJournalContextRecordingSurvivesRelaunchAndQueuesOffline() {
+        let app = XCUIApplication()
+        let entryID = "01K" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(23)
+        app.launchEnvironment["JOURNAL_CONTEXT_RECORDING_ID"] = entryID
+        addUIInterruptionMonitor(withDescription: "Microphone") { alert in
+            guard alert.buttons["Allow"].exists else { return false }
+            alert.buttons["Allow"].tap(); return true
+        }
+        app.launchArguments.append("-journalContextFixture")
+        app.launch()
+        openContextPage(app)
+        let open = app.buttons["journal-context-open-\(entryID)"]
+        XCTAssertTrue(open.waitForExistence(timeout: settle))
+        open.tap()
+        let record = app.buttons["journal-context-record"]
+        record.tap()
+        let stopped = NSPredicate(format: "label == 'Stop'")
+        if XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: stopped, object: record)], timeout: 3) != .completed {
+            app.tap()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: stopped, object: record)], timeout: settle), .completed)
+        Thread.sleep(forTimeInterval: 1.5)
+        record.tap()
+        XCTAssertTrue(app.staticTexts["Transcription"].waitForExistence(timeout: settle))
+        app.terminate(); app.launch()
+        openContextPage(app)
+        XCTAssertTrue(open.waitForExistence(timeout: settle))
+        open.tap()
+        XCTAssertTrue(app.staticTexts["Transcription"].waitForExistence(timeout: settle))
+        app.swipeUp()
+        app.buttons["journal-context-save"].tap()
+        XCTAssertTrue(waitForSheetToClose(app))
+        XCTAssertFalse(open.exists)
+        app.terminate(); app.launch()
+        openContextPage(app)
+        XCTAssertTrue(app.buttons["journal-context-open-01K00000000000000000000001"].waitForExistence(timeout: settle))
+        XCTAssertFalse(open.exists, "the queued audio suppresses this prompt across restart")
+    }
+
+    func testJournalContextSuggestionsSaveAndDismissInJournal() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-journalContextFixture")
+        app.launch()
+        openContextPage(app)
+        let photoID = "01K00000000000000000000001"
+        let audioID = "01K00000000000000000000002"
+        let openPhoto = app.buttons["journal-context-open-\(photoID)"]
+        XCTAssertTrue(openPhoto.waitForExistence(timeout: settle))
+        attach(app, "journal context page")
+        openPhoto.tap()
+        XCTAssertTrue(app.buttons["journal-photo"].waitForExistence(timeout: settle))
+        XCTAssertTrue(app.buttons["journal-context-record"].exists)
+        let text = app.textViews["journal-context-text"]
+        text.tap()
+        text.typeText("Won with friends")
+        app.swipeUp()
+        app.buttons["journal-context-save"].tap()
+        XCTAssertTrue(waitForSheetToClose(app))
+        XCTAssertFalse(openPhoto.exists)
+        app.buttons["journal-context-open-\(audioID)"].tap()
+        XCTAssertTrue(app.buttons["journal-audio-play"].waitForExistence(timeout: settle))
+        app.navigationBars["Add journal context"].buttons["Close"].tap()
+        app.buttons["journal-context-dismiss-\(audioID)"].tap()
+        let gone = NSPredicate(format: "exists == false")
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: gone,
+            object: app.buttons["journal-context-open-\(audioID)"])], timeout: settle), .completed)
+        app.segmentedControls["journal-page"].buttons["Journal"].tap()
+        openContextPage(app)
+        XCTAssertFalse(openPhoto.exists)
+        XCTAssertFalse(app.buttons["journal-context-open-\(audioID)"].exists)
+    }
+
+    func testJournalContextSaveFailureKeepsTypedWords() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-journalContextFixture")
+        app.launch()
+        openContextPage(app)
+        let open = app.buttons["journal-context-open-01K00000000000000000000001"]
+        XCTAssertTrue(open.waitForExistence(timeout: settle))
+        open.tap()
+        let text = app.textViews["journal-context-text"]
+        text.tap(); text.typeText("fail")
+        app.swipeUp()
+        app.buttons["journal-context-save"].tap()
+        XCTAssertTrue(app.staticTexts["journal-context-error"].waitForExistence(timeout: settle))
+        XCTAssertEqual(text.value as? String, "fail")
+        app.navigationBars["Add journal context"].buttons["Close"].tap()
+        XCTAssertTrue(open.waitForExistence(timeout: settle))
+    }
+
+    /// Journal → Context, the page to the right of Calendar. Its segment
+    /// carries a count while anything is waiting, so it is found by prefix.
+    private func openContextPage(_ app: XCUIApplication) {
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: settle))
+        let segment = pages.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Context'")).firstMatch
+        XCTAssertTrue(segment.waitForExistence(timeout: settle))
+        segment.tap()
+    }
+
+    private func waitForSheetToClose(_ app: XCUIApplication) -> Bool {
+        let gone = NSPredicate(format: "exists == false")
+        return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: gone,
+            object: app.navigationBars["Add journal context"])], timeout: settle) == .completed
+    }
+
     /// How long to wait for the chrome (tabs, the More menu) after a launch or
     /// a navigation. CI's simulators answer each query in seconds, so a 10 s
     /// wait could give up after two looks; waits return as soon as they're met.

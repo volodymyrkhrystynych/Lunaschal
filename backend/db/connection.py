@@ -165,6 +165,7 @@ def init_db() -> None:
     _ensure_stt_shortcuts(db)
     _ensure_stt_model_settings(db)
     _ensure_journal_raw_content(db)
+    _ensure_journal_context_prompts(db)
     _ensure_journal_idea_id(db)
     _ensure_journal_screenshot_event_threshold(db)
     _ensure_journal_attachment_youtube(db)
@@ -2171,6 +2172,15 @@ def _ensure_llama_server_settings(db: sqlite3.Connection) -> None:
                     f" WHEN {old} IS NULL OR {old} = 'none' THEN 0 ELSE 1 END"
                 )
             db.execute(f'ALTER TABLE settings DROP COLUMN {old}')
+    db.commit()
+
+
+def _ensure_journal_context_prompts(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
+    if 'context_prompt_day' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN context_prompt_day TEXT')
+    if 'context_prompt_status' not in cols:
+        db.execute("ALTER TABLE journal_entries ADD COLUMN context_prompt_status TEXT NOT NULL DEFAULT 'pending'")
     db.commit()
 
 

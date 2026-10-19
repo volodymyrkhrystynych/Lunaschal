@@ -10,6 +10,7 @@ struct CaptureRoot: View {
     @StateObject private var chat: ChatModel
     @StateObject private var todo: TodoModel
     @StateObject private var learning: LearningModel
+    @StateObject private var context: JournalContextModel
     @Environment(\.scenePhase) private var scenePhase
 
     init(model: CaptureModel) {
@@ -17,13 +18,14 @@ struct CaptureRoot: View {
         _chat = StateObject(wrappedValue: ChatModel(capture: model))
         _todo = StateObject(wrappedValue: TodoModel(capture: model))
         _learning = StateObject(wrappedValue: LearningModel(capture: model))
+        _context = StateObject(wrappedValue: JournalContextModel(capture: model))
     }
 
     var body: some View {
         TabView {
             NavigationStack { CaptureTab(model: model) }
                 .tabItem { Label("Capture", systemImage: "square.and.pencil") }
-            NavigationStack { JournalTab(model: model) }
+            NavigationStack { JournalTab(model: model, context: context, chat: chat) }
                 .tabItem { Label("Journal", systemImage: "book.closed") }
             NavigationStack { ChatView(chat: chat, capture: model) }
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
@@ -694,15 +696,17 @@ struct CameraPicker: UIViewControllerRepresentable {
     }
 }
 
-/// The Journal tab: Sync on the left on both pages, and a switch on the right
-/// between the journal and the calendar.
+/// The Journal tab: Sync on the left on every page, and a switch on the right
+/// between the journal, the calendar, and the entries waiting for context.
 private struct JournalTab: View {
     enum Page: String, CaseIterable, Identifiable {
-        case journal = "Journal", calendar = "Calendar"
+        case journal = "Journal", calendar = "Calendar", context = "Context"
         var id: Self { self }
     }
 
     @ObservedObject var model: CaptureModel
+    @ObservedObject var context: JournalContextModel
+    @ObservedObject var chat: ChatModel
     @SceneStorage("journalTabPage") private var page = Page.journal
 
     var body: some View {
@@ -710,9 +714,11 @@ private struct JournalTab: View {
             switch page {
             case .journal: JournalFeedView(model: model)
             case .calendar: CalendarPage(model: model)
+            case .context: JournalContextPage(context: context, capture: model, otherRecording: chat.isRecording)
             }
         }
         .onChange(of: page) { _, page in if page == .calendar { model.requestSync() } }
+        .task { await context.refresh() }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 if model.syncing { ProgressView() }
@@ -720,7 +726,12 @@ private struct JournalTab: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Picker("Journal page", selection: $page) {
-                    ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                    ForEach(Page.allCases) { page in
+                        // The count shows from the other pages, so the backlog
+                        // is noticed without opening it.
+                        Text(page == .context && !context.prompts.isEmpty
+                             ? "\(page.rawValue) \(context.prompts.count)" : page.rawValue).tag(page)
+                    }
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()
