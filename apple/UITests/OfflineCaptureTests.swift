@@ -2254,6 +2254,44 @@ final class OfflineCaptureTests: XCTestCase {
         detachDraftNotes(app)
     }
 
+    /// The drawing toolbar is the only way to change tools on a notes page,
+    /// so it has to outlive every way of moving between pages.
+    func testDrawingToolbarStaysThroughPageChanges() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        detachDraftNotes(app)
+        notes.tap()
+        let counter = app.buttons["notebook-page"]
+        XCTAssertTrue(counter.waitForExistence(timeout: 10))
+        let tools = app.buttons["drawing-all-tools"]
+        XCTAssertTrue(tools.waitForExistence(timeout: 5))
+        XCTAssertTrue(tools.isHittable, "toolbar shown on the first page")
+
+        app.buttons["notebook-add-page"].tap()
+        XCTAssertTrue(waitForLabel(counter, equalTo: "2 / 2"))
+        sleep(1)
+        attach(app, "toolbar after adding a page")
+        XCTAssertTrue(tools.exists && tools.isHittable, "toolbar shown after adding a page")
+
+        app.buttons["Previous page"].tap()
+        XCTAssertTrue(waitForLabel(counter, equalTo: "1 / 2"))
+        sleep(1)
+        attach(app, "toolbar after turning back")
+        XCTAssertTrue(tools.exists && tools.isHittable, "toolbar shown after turning back")
+
+        counter.tap()
+        app.buttons["Page 2"].tap()
+        XCTAssertTrue(waitForLabel(counter, equalTo: "2 / 2"))
+        sleep(1)
+        XCTAssertTrue(tools.exists && tools.isHittable, "toolbar shown after picking a page")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        detachDraftNotes(app)
+    }
+
     /// Notes reopen the entry draft's notebook until the entry is saved, so a
     /// test that wants a fresh one first takes any left over by an earlier
     /// test (or an earlier try of this one) out of the draft. They stay in Draw.

@@ -394,9 +394,16 @@ struct AttachmentButtons: View {
     var body: some View {
         Group {
             if recorder.activeID != nil {
-                Button(role: .destructive) { recorder.stop() } label: {
-                    Label("Stop recording", systemImage: "stop.circle.fill")
+                // Where Record and Transcribe were: the thumb that started the
+                // clip doesn't have to cross the row to stop it.
+                HStack {
+                    Spacer()
+                    Button(role: .destructive) { recorder.stop() } label: {
+                        Label("Stop recording", systemImage: "stop.circle.fill")
+                    }
                 }
+                // A plain button in a list row claims the whole row.
+                .buttonStyle(.borderless)
             } else {
                 // Most-used last: the right end of the row is under the thumb.
                 HStack {

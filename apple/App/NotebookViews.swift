@@ -1020,6 +1020,10 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // PaperKit puts its view back on top whenever a page's markup or
+        // newsprint is swapped in, which buried the toolbar under the page
+        // on every page turn.
+        if view.subviews.last !== drawingToolbar { view.bringSubviewToFront(drawingToolbar) }
         drawingToolbar.position()
         holdPageStill()
         // A rotation or a Split View resize refits the page being read.
@@ -1046,6 +1050,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         paper.markup = model.pages[page]
         if layerChanged { paper.contentView = background(for: page) }
         if pageChanged { fit() }
+        view.setNeedsLayout()
     }
 
     /// A column's markup only changes from outside on a revision (a page
