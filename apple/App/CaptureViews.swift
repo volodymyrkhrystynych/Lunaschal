@@ -713,7 +713,9 @@ private struct JournalTab: View {
 
     @ObservedObject var model: CaptureModel
     @ObservedObject var context: JournalContextModel
-    @ObservedObject var chat: ChatModel
+    // Not observed: Chat publishes on every refresh tick, and each one would
+    // redraw the whole feed. Only the Context page watches it.
+    let chat: ChatModel
     @SceneStorage("journalTabPage") private var page = Page.journal
 
     var body: some View {
@@ -721,7 +723,7 @@ private struct JournalTab: View {
             switch page {
             case .journal: JournalFeedView(model: model)
             case .calendar: CalendarPage(model: model)
-            case .context: JournalContextPage(context: context, capture: model, otherRecording: chat.isRecording)
+            case .context: JournalContextPage(context: context, capture: model, chat: chat)
             }
         }
         .onChange(of: page) { _, page in if page == .calendar { model.requestSync() } }
@@ -733,17 +735,28 @@ private struct JournalTab: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Picker("Journal page", selection: $page) {
+                    // Icons: three words don't fit beside Sync on a phone, and the
+                    // bar would fold the whole switch into its overflow menu.
                     ForEach(Page.allCases) { page in
-                        // The count shows from the other pages, so the backlog
-                        // is noticed without opening it.
-                        Text(page == .context && !context.prompts.isEmpty
-                             ? "\(page.rawValue) \(context.prompts.count)" : page.rawValue).tag(page)
+                        Image(systemName: symbol(page)).tag(page)
+                            .accessibilityLabel(page == .context && !context.prompts.isEmpty
+                                                ? "\(page.rawValue) \(context.prompts.count)" : page.rawValue)
                     }
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()
                 .accessibilityIdentifier("journal-page")
             }
+        }
+    }
+
+    /// Context's bubble fills while anything is waiting, so the backlog is
+    /// noticed from the other pages.
+    private func symbol(_ page: Page) -> String {
+        switch page {
+        case .journal: return "book"
+        case .calendar: return "calendar"
+        case .context: return context.prompts.isEmpty ? "text.bubble" : "text.bubble.fill"
         }
     }
 }

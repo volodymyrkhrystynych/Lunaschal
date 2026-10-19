@@ -69,7 +69,7 @@ struct JournalContextPage: View {
     @ObservedObject var context: JournalContextModel
     @ObservedObject var capture: CaptureModel
     /// Chat's voice message holds the microphone too.
-    var otherRecording: Bool = false
+    @ObservedObject var chat: ChatModel
     @State private var opened: JournalContextPrompt?
     @State private var busy: String?
     @State private var problem: String?
@@ -113,7 +113,7 @@ struct JournalContextPage: View {
         }
         .sheet(item: $opened) { prompt in
             JournalContextSheet(context: context, capture: capture, recorder: capture.recorder,
-                                prompt: prompt, otherRecording: otherRecording)
+                                prompt: prompt, otherRecording: chat.isRecording)
         }
     }
 

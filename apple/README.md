@@ -249,8 +249,8 @@ what each device can currently do and which work remains device-only.
   transcribes and answers it when it lands. A reply that outlives its stream is
   picked up by polling, as on the desktop. Passed in simulator, offline and
   against a local test server with a stand-in model; not yet verified on device.
-- Journal → Context (the page right of Calendar; its segment shows how many
-  are waiting) offers journal-context cards for yesterday's image/audio-only
+- Journal → Context (the speech-bubble page right of Calendar; the bubble
+  fills while any are waiting) offers journal-context cards for yesterday's image/audio-only
   entries, filled to three from older entries when needed. The server owns
   the daily batch and permanent dismissals, shared with the web. Each sheet
   previews photos and plays audio, accepts typed context, and stages transcribed
