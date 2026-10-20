@@ -42,6 +42,15 @@ Last updated: 2026-10-04. Working branch: `fix/apple-library-navigation`.
 
 Books-library follow-up:
 
+- Library navigation (`fix/ios-library-navigation`): a book opens its chapter
+  list and goes straight on into the resume chapter; the reader's Chapters
+  button pops back to that list instead of pushing a new one, so chapters no
+  longer stack. A compact iPad window uses the iPhone's five tabs (Study and
+  Draw in More), removing the doubled navigation bar that iPadOS's own More
+  overflow produced. `testChapterBackGoesToTheChapterListOnce` and
+  `testCompactIPadKeepsOneNavigationBar` passed in simulator; Split View on a
+  device is unverified.
+
 - iPad navigation now exposes Library, Jobs, Writing, Learning and Settings as separate
   tabs, leaving narrow-window overflow to iPadOS. iPhone keeps its app More
   menu. Three iPad navigation/jobs/library UI tests and two iPhone menu/jobs

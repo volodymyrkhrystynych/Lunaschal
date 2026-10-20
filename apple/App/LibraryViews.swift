@@ -279,9 +279,17 @@ private struct KnowledgeArticleView: View {
     }
 }
 
+/// A book's chapter list, and the one place a chapter is opened from: the
+/// reader's Chapters button comes back here rather than pushing another list,
+/// so a book is never more than list → chapter deep however long it is read.
 struct BookView: View {
     @ObservedObject var model: CaptureModel
     let book: SyncChange
+    /// Opened from the library: carry straight on into the chapter the book
+    /// was left at, as the desktop does, with this list one Back away.
+    var opensResume = false
+    @State private var resuming: ResumeTarget?
+    @State private var triedResume = false
     @State private var chapters: [SyncChange] = []
     @State private var resume: (chapter: SyncChange, fraction: Double?)?
     @State private var bookmarks: [SyncChange] = []
@@ -330,7 +338,7 @@ struct BookView: View {
                         if let chapter = chapters.first(where: { $0.id == bookmark.data?["chapterId"]?.string }) {
                             NavigationLink {
                                 TextChapterReader(owner: model, chapter: chapter,
-                                    initialFraction: bookmark.data?["scrollPosition"]?.number)
+                                    initialFraction: bookmark.data?["scrollPosition"]?.number, book: book)
                             } label: {
                                 Label("\(bookmark.data?["type"]?.string == "continue" ? "Continue" : "Favorite"): \(chapter.title)",
                                       systemImage: bookmark.data?["type"]?.string == "continue" ? "play.fill" : "star.fill")
@@ -367,6 +375,9 @@ struct BookView: View {
             chapterList
         }
         .navigationTitle(book.title)
+        .navigationDestination(item: $resuming) { target in
+            TextChapterReader(owner: model, chapter: target.chapter, initialFraction: target.fraction, book: book)
+        }
         .task(id: model.downloadingLibrary) { await refreshChapters() }
         .onChange(of: model.ficDownloadRevision) { _, _ in Task { await refreshChapters() } }
         .onAppear {
@@ -407,7 +418,7 @@ struct BookView: View {
 
     private func chapterLink(_ chapter: SyncChange) -> some View {
         NavigationLink {
-            TextChapterReader(owner: model, chapter: chapter)
+            TextChapterReader(owner: model, chapter: chapter, book: book)
         } label: { Text(chapter.title) }
     }
 
@@ -446,7 +457,27 @@ struct BookView: View {
             (chapters, resume, bookmarks, bookmarkEdits) = loaded
             onDevice = model.isFicOnDevice(book)
         } catch { model.message = error.localizedDescription }
+        // Only the first read decides: coming back to this list must not send
+        // the reader straight back in, and nor should a download finishing
+        // while the list is being looked at. With no chapter text on the
+        // device there is nothing to resume, and the list says why.
+        if opensResume, !triedResume {
+            triedResume = true
+            if let resume {
+                var instant = Transaction()
+                instant.disablesAnimations = true
+                withTransaction(instant) { resuming = ResumeTarget(chapter: resume.chapter, fraction: resume.fraction) }
+            }
+        }
     }
+}
+
+/// The chapter a book reopens at, as a navigation destination.
+private struct ResumeTarget: Hashable {
+    let chapter: SyncChange
+    let fraction: Double?
+    static func == (a: Self, b: Self) -> Bool { a.chapter.id == b.chapter.id && a.fraction == b.fraction }
+    func hash(into hasher: inout Hasher) { hasher.combine(chapter.id) }
 }
 
 struct JournalRecordView: View {

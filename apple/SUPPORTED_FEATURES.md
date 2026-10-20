@@ -75,8 +75,10 @@ The iPhone tabs are Capture, Journal, Chat, Todo, and More. More holds Library,
 Jobs, Writing, Learning and Settings; the workout log is Capture → Workout. Chat is the desktop's Chat
 tab, and Todo is the tasks card from the desktop's Lifestyle tab (see README.md).
 iPad exposes Library, Jobs, Writing, Learning and Settings as individual tabs alongside
-Capture, Journal, Chat, Todo, Study and Draw; iPadOS owns narrow-window overflow
-without an app More menu. It hides the tab bar while a drawing,
+Capture, Journal, Chat, Todo, Study and Draw in a wide window. A compact window (Split View,
+Slide Over) gets the iPhone's five tabs with Study and Draw at the top of More, because
+iPadOS's own More overflow nested each tab's navigation and showed two back buttons
+(passed in simulator with a forced compact width). It hides the tab bar while a drawing,
 a notebook (Capture → Notes / Newspaper) or a Study annotation is open, so its toolbar doesn't overflow;
 native drawing creation/editing is iPad-only, and so are Paper previews, since they live under Study.
 A notes notebook never moves sideways — pages turn and are added only from the toolbar — and a
@@ -115,7 +117,10 @@ The earlier link share extension passed its
 build and archive checks only: it needs a signed build to reach the shared
 sign-in, so it is not yet verified on a device. Opening a book
 resumes it the way the desktop does (continue bookmark, then last read, then the
-first chapter). The reader's bottom-left menu takes typed or spoken commentary
+first chapter), with the chapter list one Back away; the reader's Chapters
+button returns to that list rather than pushing another, so Back is always
+chapter → chapter list → Library however many chapters are picked (passed in
+simulator). The reader's bottom-left menu takes typed or spoken commentary
 (a journal entry linked to the chapter) and Continue/Favorite bookmarks. Scrolling
 is logged as reading spans, and the chapter is reported as last read; both are
 queued offline.
