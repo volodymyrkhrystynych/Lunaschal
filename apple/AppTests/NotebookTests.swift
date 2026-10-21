@@ -685,6 +685,28 @@ final class NotebookEditorTests: XCTestCase {
         withExtendedLifetime(controller) {}
     }
 
+    /// Written page by page, turning away from each: Save files every one,
+    /// not only the page on screen.
+    func testSaveFilesEveryWrittenPageNotOnlyTheOneShown() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = canvas(model)
+        controller.show(page: model.current, revision: model.revision)
+        for page in 0..<3 {
+            if page > 0 {
+                model.addPage()
+                controller.show(page: model.current, revision: model.revision)
+            }
+            drawUnreported(try inked(model.pages[page]), on: controller)
+        }
+        model.go(to: 1)
+        controller.show(page: model.current, revision: model.revision)
+        await model.checkpoint()
+        let files = await model.renderForSave()
+        XCTAssertEqual(files.map(\.name), ["Notes p1.jpg", "Notes p2.jpg", "Notes p3.jpg"])
+        withExtendedLifetime(controller) {}
+    }
+
     func testAPageAddedToAColumnKeepsInkTheCanvasHadNotReported() throws {
         let store = try store()
         let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try issuePDF(pages: 2), pageCount: 2)

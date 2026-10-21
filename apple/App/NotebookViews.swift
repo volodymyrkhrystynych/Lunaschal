@@ -832,19 +832,28 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 
     /// The pages a Save files, as JPEGs. A blank notebook drops empty pages;
     /// a newspaper files its cover and whatever was marked.
+    ///
+    /// Each page is drawn from a copy read back from its own bytes, as a
+    /// reopened notebook reads it. A page that came off the canvas still
+    /// shares state with it, and on an iPad one the canvas had since turned
+    /// away from drew as blank: Save dropped every page but the one on
+    /// screen, while Back (which only encodes) kept them all.
     func renderForSave() async -> [(data: Data, name: String)] {
         syncFromCanvas()
         var snapshot = notebook
         snapshot.pageCount = pageCount
-        if isColumn, let ink = pages.first { marked = await inkedSlots(ink, slots: slotCount) }
+        var copies: [PaperMarkup] = []
+        for page in pages { copies.append((try? await NotebookPage.detached(page)) ?? page) }
+        if isColumn, let column = copies.first { marked = await inkedSlots(column, slots: slotCount) }
         snapshot.markedPages = marked
         let prefix = isNewspaper ? notebook.title.replacingOccurrences(of: " · ", with: " ") : "Notes"
         var files: [(data: Data, name: String)] = []
         for index in snapshot.pagesToFile {
-            if !isNewspaper && NotebookPage.isBlank(pages[index]) && locked[index] == nil { continue }
+            let page = copies[isColumn ? 0 : index]
+            if !isNewspaper && NotebookPage.isBlank(page) && locked[index] == nil { continue }
             // Newsprint needs the extra pixels to stay legible.
             let width: CGFloat = pdfPage(index) == nil && !isColumn ? NotebookPage.width : 2000
-            guard let image = await render(index, width: width),
+            guard let image = await render(index, width: width, markup: page),
                   let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.85) else { continue }
             files.append((data, "\(prefix) p\(index + 1).jpg"))
         }
