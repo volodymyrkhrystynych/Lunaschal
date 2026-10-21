@@ -78,7 +78,9 @@ what each device can currently do and which work remains device-only.
   clips, files and the notes' pages (as JPEGs, blank pages dropped) as one journal
   entry. Food leaves the notes in the draft.
   A **newspaper's Save** files its cover plus the pages written on (found from the
-  ink itself) and the notebook's one YouTube link. Saving the same issue again
+  ink itself, each page under some ink drawn at half size: a whole-issue drawing at
+  a tenth of its size lost fine pen and light pencil lines, and with them the page;
+  passed in simulator) and the notebook's one YouTube link. Saving the same issue again
   (**Update entry**) files every page written on so far and **replaces** the
   earlier entry: the capture carries `replaces`, sync holds it until the entry it
   replaces has gone up, and `POST /api/journal` deletes that entry once the new one

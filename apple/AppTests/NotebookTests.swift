@@ -828,6 +828,41 @@ final class NotebookColumnConversionTests: XCTestCase {
         XCTAssertEqual(model.pages[0].bounds.height, top)
     }
 
+    /// Handwriting, not a big shape: a fine pen line, a light pencil line and
+    /// a short tick, each on its own later page. Each page is filed.
+    func testFineHandwritingOnLaterPagesIsFiled() async throws {
+        let store = try store()
+        let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
+        try NewspaperFixture.makeIssue(at: pdfURL)
+        let paper = try store.createNewspaper(date: "2026-10-06", pdf: pdfURL, pageCount: NewspaperFixture.shapes.count)
+        let model = NotebookEditorModel(store: store, notebook: paper)
+        XCTAssertTrue(model.isColumn)
+        var written = model.pages[0]
+        written.append(contentsOf: handwriting(in: model.pageRect(1), ink: PKInk(.pen, color: .black), width: 1, length: 200))
+        written.append(contentsOf: handwriting(in: model.pageRect(2), ink: PKInk(.pencil, color: .darkGray), width: 2,
+                                               length: 200, opacity: 0.25))
+        written.append(contentsOf: handwriting(in: model.pageRect(3), ink: PKInk(.pen, color: .blue), width: 2, length: 12))
+        model.canvasChanged(written, page: 0)
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(model.notebook.id).markedPages, [1, 2, 3], "every written page is marked")
+        let files = await model.renderForSave()
+        let filed: [String] = files.map { String($0.name.split(separator: " ").last ?? "") }
+        XCTAssertEqual(filed, ["p1.jpg", "p2.jpg", "p3.jpg", "p4.jpg"])
+    }
+
+    /// One pen stroke across the middle of `rect`.
+    private func handwriting(in rect: CGRect, ink: PKInk, width: CGFloat, length: CGFloat,
+                             opacity: CGFloat = 1) -> PKDrawing {
+        let points: [PKStrokePoint] = (0..<12).map { i in
+            let x = rect.midX + length * CGFloat(i) / 11
+            return PKStrokePoint(location: CGPoint(x: x, y: rect.midY), timeOffset: Double(i) * 0.01,
+                                 size: CGSize(width: width, height: width), opacity: opacity, force: 0.3,
+                                 azimuth: 0, altitude: .pi / 2)
+        }
+        let path = PKStrokePath(controlPoints: points, creationDate: Date())
+        return PKDrawing(strokes: [PKStroke(ink: ink, path: path)])
+    }
+
     func testANewIssueStartsAsAColumn() throws {
         let store = try store()
         let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")

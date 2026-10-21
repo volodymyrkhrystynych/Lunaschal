@@ -39,17 +39,12 @@ public enum NotebookColumn {
         NotebookFit.width(slot, in: view)
     }
 
-    /// Which pages carry ink, from a picture of the ink alone: one flag per
-    /// pixel row, true where anything was drawn, each row `unitsPerRow` of the
-    /// column tall. A newspaper files only these and its cover, and PaperKit
-    /// has no way to ask a markup what lies where.
-    public static func slotsWithInk(rows: [Bool], unitsPerRow: CGFloat, slots: [CGRect]) -> Set<Int> {
-        guard !slots.isEmpty, unitsPerRow > 0 else { return [] }
-        var found = Set<Int>()
-        for (row, inked) in rows.enumerated() where inked {
-            found.insert(slot(atY: (CGFloat(row) + 0.5) * unitsPerRow, in: slots))
-        }
-        return found
+    /// The pages any of `content` lies on, top to bottom: the only ones worth
+    /// drawing to find out which carry ink. A newspaper files only those and
+    /// its cover, and PaperKit has no way to ask a markup what lies where.
+    public static func slots(under content: CGRect, in slots: [CGRect]) -> [Int] {
+        guard !content.isNull, !content.isEmpty else { return [] }
+        return slots.indices.filter { slots[$0].intersects(content) }
     }
 }
 

@@ -371,15 +371,12 @@ final class NotebookColumnTests: XCTestCase {
         }
     }
 
-    func testWhichPagesCarryInk() {
-        // Ten units a row: rows 0-223 are page 1, 224-309 page 2, the rest page 3.
-        var rows = Array(repeating: false, count: 472)
-        rows[5] = true
-        rows[400] = true
-        XCTAssertEqual(NotebookColumn.slotsWithInk(rows: rows, unitsPerRow: 10, slots: slots), [0, 2])
-        rows[250] = true
-        XCTAssertEqual(NotebookColumn.slotsWithInk(rows: rows, unitsPerRow: 10, slots: slots), [0, 1, 2])
-        XCTAssertEqual(NotebookColumn.slotsWithInk(rows: [], unitsPerRow: 10, slots: slots), [])
+    func testOnlyPagesUnderTheInkAreLookedAt() {
+        // Page 1 is 0-2232, page 2 2232-3100, page 3 3100-4712.
+        XCTAssertEqual(NotebookColumn.slots(under: CGRect(x: 100, y: 500, width: 300, height: 4), in: slots), [0])
+        XCTAssertEqual(NotebookColumn.slots(under: CGRect(x: 100, y: 4000, width: 2, height: 2), in: slots), [2])
+        XCTAssertEqual(NotebookColumn.slots(under: CGRect(x: 0, y: 2000, width: 50, height: 1500), in: slots), [0, 1, 2])
+        XCTAssertEqual(NotebookColumn.slots(under: .null, in: slots), [], "nothing drawn, nothing to look at")
     }
 }
 
