@@ -125,6 +125,28 @@ def test_proposals_edit_accept_dismiss_and_rerun(client, monkeypatch):
     assert db.execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 1
 
 
+
+def test_model_picks_categories_and_the_user_can_untick_them(client, monkeypatch):
+    from backend.briefing_events import EVENT_SCHEMA
+    assert 'categoryTags' in EVENT_SCHEMA['items']['required']
+    picked = {**event(), 'categoryTags': ['family', 'outside', 'family', 'astral', 'work', 'leisure']}
+    result, proposals = prepare(monkeypatch, [picked])
+    p = proposals[0]
+    # Off-vocabulary dropped, duplicates folded, capped at three: pre-ticked on the card.
+    assert p['data']['categoryTags'] == ['family', 'outside', 'work']
+    url = f"/api/chat/proposals/{result['messageId']}/{p['id']}"
+    assert client.post(url, json={'action': 'accept', 'data': {**p['data'], 'categoryTags': ['family']}}).status_code == 200
+    row = get_db().execute('SELECT category_tags, classified_at FROM calendar_events').fetchone()
+    assert json.loads(row['category_tags']) == ['family']
+    assert row['classified_at'] is not None
+
+
+def test_categories_absent_stay_absent_and_garbage_is_rejected():
+    assert 'categoryTags' not in validate_event(event(), DAY)
+    assert validate_event({**event(), 'categoryTags': None}, DAY)['categoryTags'] == []
+    with pytest.raises(ValueError):
+        validate_event({**event(), 'categoryTags': 'family'}, DAY)
+
 # {'time': '03:00'} rolls to the small hours of TODAY (see the roll test) and is
 # then rejected for running to 09:00, past the 04:00 boundary -- still a bad edit.
 @pytest.mark.parametrize('patch', [{'date': TODAY}, {'time': '99:00'}, {'time': '03:00'},

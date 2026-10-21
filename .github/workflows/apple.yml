@@ -125,6 +125,8 @@ jobs:
             -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingWorkspaceReopensWithoutAServer \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testIPadDestinationsOpenWithoutAnAppMoreMenu \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate \
+            -only-testing:LunaschalUITests/OfflineCaptureTests/testCompactIPadKeepsOneNavigationBar \
+            -only-testing:LunaschalUITests/OfflineCaptureTests/testChapterBackGoesToTheChapterListOnce \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testNewspaperScrollsAsOneColumn \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesPagesDoNotTurnWithASwipe \

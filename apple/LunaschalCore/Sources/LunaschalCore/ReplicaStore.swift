@@ -451,12 +451,28 @@ public final class ReplicaStore {
             clauses.append("(json_extract(payload,'$.sourceType')=? OR json_extract(payload,'$.site')=?)")
             args += [filter.source, filter.source]
         }
+        let folders = FicLibrary.field("folderIds")
         if filter.folder == "unsorted" {
-            clauses.append("NOT EXISTS (SELECT 1 FROM json_each(payload,'$.folderIds'))")
+            clauses.append("NOT EXISTS (SELECT 1 FROM json_each(\(folders)))")
         } else if !filter.folder.isEmpty {
-            clauses.append("EXISTS (SELECT 1 FROM json_each(payload,'$.folderIds') WHERE value=?)")
+            clauses.append("EXISTS (SELECT 1 FROM json_each(\(folders)) WHERE value=?)")
             args.append(filter.folder)
         }
+        let shelf = "COALESCE(\(FicLibrary.field("shelf")),'reading')"
+        switch filter.shelf {
+        case FicLibrary.allShelves: break
+        case FicLibrary.archivedShelves: clauses.append("\(shelf) IN ('finished','dropped')")
+        case FicLibrary.activeShelves, "": clauses.append("\(shelf) NOT IN ('finished','dropped')")
+        default:
+            clauses.append("\(shelf)=?")
+            args.append(filter.shelf)
+        }
+        let rating = "COALESCE(\(FicLibrary.field("rating")),0)"
+        if filter.minRating > 0 {
+            clauses.append("\(rating)>=CAST(? AS INTEGER)")
+            args.append(String(filter.minRating))
+        }
+        if filter.unreadOnly { clauses.append("COALESCE(json_extract(payload,'$.unreadCount'),0)>0") }
         if !filter.tag.isEmpty {
             clauses.append("EXISTS (SELECT 1 FROM json_each(payload,'$.tags') WHERE value=?)")
             args.append(filter.tag)
@@ -485,11 +501,12 @@ public final class ReplicaStore {
                 json_extract(payload,'$.updatedAt') DESC,id
                 """
         case "title": order = "json_extract(payload,'$.title') COLLATE NOCASE,id"
+        case "rating": order = "\(rating) DESC,json_extract(payload,'$.title') COLLATE NOCASE,id"
         default: order = "COALESCE(json_extract(payload,'$.latestActivity'),CAST(strftime('%s',json_extract(payload,'$.createdAt')) AS REAL),0) DESC,id"
         }
         let count = Int(try rows("SELECT COUNT(*) FROM replica_records \(whereSQL)", args).first?[0] ?? "0") ?? 0
         let books = try recordsQuery("\(whereSQL) ORDER BY \(order) LIMIT ?", args + [String(limit)])
-        return (books, count)
+        return (try books.map(overlaid), count)
     }
 
     /// Where opening a book lands, in the desktop reader's order
@@ -507,7 +524,7 @@ public final class ReplicaStore {
         return try rows("""
             SELECT id,revision,json_object('id',id,'ficId',\(book),'title',json_extract(payload,'$.title'),
                 'position',json_extract(payload,'$.position'),'wordCount',json_extract(payload,'$.wordCount'),
-                'category',json_extract(payload,'$.category'))
+                'category',json_extract(payload,'$.category'),'sourceUrl',json_extract(payload,'$.sourceUrl'))
             FROM replica_records WHERE collection='fic_chapters' AND \(book)=? AND deleted=0
             ORDER BY COALESCE(json_extract(payload,'$.position'),0),id
             """, [bookID]).map {
@@ -540,12 +557,12 @@ public final class ReplicaStore {
     public func folderCounts() throws -> [String: Int] {
         var counts: [String: Int] = [:]
         for row in try rows("""
-            SELECT j.value, COUNT(*) FROM replica_records r, json_each(r.payload,'$.folderIds') j
-            WHERE r.collection='fics' AND r.deleted=0 GROUP BY j.value
+            SELECT j.value, COUNT(*) FROM replica_records, json_each(\(FicLibrary.field("folderIds"))) j
+            WHERE replica_records.collection='fics' AND replica_records.deleted=0 GROUP BY j.value
             """) { counts[row[0]] = Int(row[1]) ?? 0 }
         counts["unsorted"] = Int(try rows("""
             SELECT COUNT(*) FROM replica_records WHERE collection='fics' AND deleted=0
-            AND NOT EXISTS (SELECT 1 FROM json_each(payload,'$.folderIds'))
+            AND NOT EXISTS (SELECT 1 FROM json_each(\(FicLibrary.field("folderIds"))))
             """).first?[0] ?? "0") ?? 0
         return counts
     }
@@ -690,6 +707,12 @@ public final class ReplicaStore {
     public func hold(_ operation: ReplicaOperation, reply: OperationReply, state: String = "conflict") throws {
         try transaction {
             if let current = reply.current { try put(current) }
+            // A refused library choice has nothing to review: its book,
+            // chapter or folder is gone. Keeping it would only hide it forever.
+            if FicLibrary.lastWriteWins.contains(operation.collection) {
+                try execute("DELETE FROM replica_outbox WHERE id=?", [operation.id])
+                return
+            }
             try execute("UPDATE replica_outbox SET state=?,error=?,conflict=? WHERE id=?",
                         [state, reply.error ?? "Review this edit", try reply.current.map(json), operation.id])
         }
@@ -747,7 +770,7 @@ public final class ReplicaStore {
                     [rowid, change.title, text.joined(separator: "\n")])
     }
 
-    private func recordsQuery(_ suffix: String, _ arguments: [String?]) throws -> [SyncChange] {
+    func recordsQuery(_ suffix: String, _ arguments: [String?]) throws -> [SyncChange] {
         try rows("SELECT collection,id,revision,deleted,COALESCE(payload,''),COALESCE(body,'') FROM replica_records \(suffix)", arguments).map {
             var data = $0[4].isEmpty ? nil : try decode([String: JSONValue].self, $0[4])
             if !$0[5].isEmpty, data != nil {
@@ -760,18 +783,18 @@ public final class ReplicaStore {
     private func scope(_ collections: [String]) -> String { "cursor:" + collections.sorted().joined(separator: ",") }
     private func value(_ key: String) throws -> String? { try rows("SELECT value FROM replica_meta WHERE key=?", [key]).first?.first }
     private func set(_ key: String, _ value: String) throws { try execute("INSERT OR REPLACE INTO replica_meta(key,value) VALUES (?,?)", [key, value]) }
-    private func json<T: Encodable>(_ value: T) throws -> String { String(decoding: try encoder.encode(value), as: UTF8.self) }
-    private func decode<T: Decodable>(_ type: T.Type, _ text: String) throws -> T { try decoder.decode(type, from: Data(text.utf8)) }
+    func json<T: Encodable>(_ value: T) throws -> String { String(decoding: try encoder.encode(value), as: UTF8.self) }
+    func decode<T: Decodable>(_ type: T.Type, _ text: String) throws -> T { try decoder.decode(type, from: Data(text.utf8)) }
 
-    private func transaction(_ work: () throws -> Void) throws {
+    func transaction(_ work: () throws -> Void) throws {
         try execute("BEGIN IMMEDIATE")
         do { try work(); try execute("COMMIT") }
         catch { try? execute("ROLLBACK"); throw error }
     }
 
-    private func execute(_ sql: String, _ args: [String?] = []) throws { _ = try rows(sql, args) }
+    func execute(_ sql: String, _ args: [String?] = []) throws { _ = try rows(sql, args) }
 
-    private func rows(_ sql: String, _ args: [String?] = []) throws -> [[String]] {
+    func rows(_ sql: String, _ args: [String?] = []) throws -> [[String]] {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw failure() }
         defer { sqlite3_finalize(statement) }

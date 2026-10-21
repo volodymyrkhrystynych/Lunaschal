@@ -1113,6 +1113,73 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["Re-read edited chapters"].exists)
     }
 
+    /// A left swipe drops a fic with a rating and a review: it leaves the
+    /// library at once, offline, and waits under the Archived shelf filter
+    /// beside the fixture's already-dropped book.
+    func testDroppingAFicWithAReviewMovesItToTheArchive() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let row = app.staticTexts["Quiet Hours"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Abandoned Quest"].exists)
+        row.swipeLeft()
+        let drop = app.buttons["Drop"]
+        XCTAssertTrue(drop.waitForExistence(timeout: 5))
+        drop.tap()
+        XCTAssertTrue(app.navigationBars["Drop this fic"].waitForExistence(timeout: 5))
+        app.buttons["rating-star-2"].tap()
+        let review = app.textFields["fic-review-text"].exists ? app.textFields["fic-review-text"] : app.textViews["fic-review-text"]
+        review.tap()
+        review.typeText("Stopped caring about the cast.")
+        app.buttons["fic-review-save"].tap()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5))
+
+        app.buttons["Filter books"].tap()
+        let shelf = app.buttons["Shelf"]
+        XCTAssertTrue(shelf.waitForExistence(timeout: 5))
+        shelf.tap()
+        let archived = app.buttons["Archived (finished & dropped)"]
+        XCTAssertTrue(archived.waitForExistence(timeout: 5))
+        archived.tap()
+        XCTAssertTrue(app.staticTexts["Quiet Hours"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Abandoned Quest"].exists)
+        XCTAssertTrue(app.staticTexts["Dropped"].exists)
+    }
+
+    /// A book's chapter list says which chapters were read and what the forum
+    /// showed as the user's reaction, lists every tag, and a swipe marks one read.
+    func testChapterListShowsReadMarksReactionsAndTags() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == '3 unread'")).firstMatch.exists)
+        book.tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        XCTAssertTrue(app.staticTexts["2 of 5 chapters read · reacted on 1"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Slice of Life"].exists)
+        let list = app.collectionViews.firstMatch
+        let liked = app.staticTexts["Like"]
+        for _ in 0..<4 where !liked.isHittable { list.swipeUp() }
+        XCTAssertTrue(liked.exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Not reacted'")).firstMatch.exists)
+        // The fixture's chapter ids: the book id's prefix, its last two characters, the index.
+        let third = app.buttons["chapter-row-01K8BBBBBBBBBBBBBBBBBB0102"]
+        for _ in 0..<4 where !third.isHittable { list.swipeUp() }
+        third.swipeRight()
+        let markRead = app.buttons["Read"]
+        XCTAssertTrue(markRead.waitForExistence(timeout: 5))
+        markRead.tap()
+        for _ in 0..<4 where !app.staticTexts["3 of 5 chapters read · reacted on 1"].exists { list.swipeDown() }
+        XCTAssertTrue(app.staticTexts["3 of 5 chapters read · reacted on 1"].waitForExistence(timeout: 5))
+    }
+
     /// The book list pages itself as it is scrolled: the 70th book, past the
     /// first page of 50, is reached by scrolling alone, with no button to press.
     func testLibraryLoadsTheNextPageWhenScrolledToTheEnd() {
@@ -1175,7 +1242,10 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(progress.waitForExistence(timeout: 10), "The book says it is downloading")
         let finished = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: progress)
         XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 60), .completed, "The download finishes")
-        XCTAssertTrue(app.staticTexts["Chapter 1"].exists, "and its chapters are there to read")
+        // Below the book's shelf, review and tags.
+        let first = app.staticTexts["Chapter 1"]
+        for _ in 0..<4 where !first.exists { app.collectionViews.firstMatch.swipeUp() }
+        XCTAssertTrue(first.exists, "and its chapters are there to read")
 
         // Back in the list it is marked as downloaded, as the one already on
         // the device is, and the half-downloaded one isn't.
@@ -1236,6 +1306,9 @@ final class OfflineCaptureTests: XCTestCase {
         chapters.tap()
         let threadmarks = app.buttons["chapter-tab-Threadmarks"]
         let sidestory = app.buttons["chapter-tab-Sidestory"]
+        // Below the book's shelf, review and tags.
+        XCTAssertTrue(app.buttons["book-shelf-menu"].waitForExistence(timeout: 10))
+        for _ in 0..<4 where !threadmarks.isHittable { app.collectionViews.firstMatch.swipeUp() }
         XCTAssertTrue(threadmarks.waitForExistence(timeout: 10))
         XCTAssertTrue(sidestory.exists)
         XCTAssertTrue(app.staticTexts["Chapter 2"].exists)
@@ -2470,6 +2543,83 @@ final class OfflineCaptureTests: XCTestCase {
         let format = value != nil ? "label == %@" : "label != %@"
         let predicate = NSPredicate(format: format, value ?? other ?? "")
         return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 5) == .completed
+    }
+
+    /// A book opens at its chapter, Chapters goes back to the list rather
+    /// than pushing another one, so however many chapters are picked, Back
+    /// is always chapter → list → library.
+    func testChapterBackGoesToTheChapterListOnce() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 4"].waitForExistence(timeout: 10), "opens where it was left")
+
+        let list = app.navigationBars["The Long Way Round"]
+        for chapter in ["Chapter 2", "Chapter 5", "Chapter 1"] {
+            app.navigationBars.buttons["Chapters"].tap()
+            XCTAssertTrue(list.waitForExistence(timeout: 5), "Chapters goes back to the list")
+            let row = app.staticTexts[chapter]
+            for _ in 0..<6 where !reachable(row) { app.swipeUp() }
+            row.tap()
+            XCTAssertTrue(app.navigationBars[chapter].waitForExistence(timeout: 10))
+        }
+        attach(app, "third chapter")
+
+        app.navigationBars["Chapter 1"].buttons.firstMatch.tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 5), "Back from a chapter is the chapter list")
+        list.buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Library"].waitForExistence(timeout: 5), "and then the library")
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+        // Coming back out and in again resumes once more, with no stale reader:
+        // at the Continue bookmark, which outranks the chapter last read.
+        book.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 4"].waitForExistence(timeout: 10), "reopens at the Continue point")
+        app.navigationBars["Chapter 4"].buttons.firstMatch.tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+    }
+
+    /// An iPad window in Split View or Slide Over has the iPhone's five-slot
+    /// bottom bar. With every destination a tab, iPadOS put the rest in its own
+    /// More list, nesting each one's navigation stack inside it: Library and the
+    /// reader had two bars and two Backs. A compact iPad gets the iPhone's tabs.
+    func testCompactIPadKeepsOneNavigationBar() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad)
+        let app = XCUIApplication()
+        app.launchArguments += ["-libraryFixture", "-compactWidth"]
+        app.launch()
+        let bar = app.tabBars.firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: settle))
+        XCTAssertEqual(bar.buttons.allElementsBoundByIndex.map(\.label),
+                       ["Capture", "Journal", "Chat", "Todo", "More"])
+
+        bar.buttons["More"].tap()
+        XCTAssertTrue(app.navigationBars["More"].waitForExistence(timeout: 10))
+        for row in ["Study", "Draw", "Library", "Jobs", "Writing", "Learning", "Settings"] {
+            XCTAssertTrue(app.buttons["more-\(row)"].exists, "\(row) is in More")
+        }
+        app.buttons["more-Library"].tap()
+        XCTAssertTrue(app.navigationBars["Library"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.navigationBars.count, 1, "one bar over Library")
+
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 4"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.navigationBars.count, 1, "one bar over the reader")
+        attach(app, "compact reader")
+
+        // Back walks chapter → chapter list → Library → More, one bar each.
+        app.navigationBars["Chapter 4"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["The Long Way Round"].waitForExistence(timeout: 5))
+        app.navigationBars["The Long Way Round"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Library"].waitForExistence(timeout: 5))
+        app.navigationBars["Library"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["More"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.navigationBars.count, 1)
     }
 
     private func attach(_ app: XCUIApplication, _ name: String) {

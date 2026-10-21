@@ -7,7 +7,7 @@ from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict
 from backend.fanfic import download, storage, xenforo
-from backend.fanfic import collections, sites, browser
+from backend.fanfic import collections, sites, browser, library
 from backend.fanfic.download import FetchBlockedError
 from backend.fanfic.xenforo import KNOWN_SITES, UnsupportedUrlError
 
@@ -18,6 +18,7 @@ _LIST_COLS = (
     'id, title, author, source_type, source_url, site, cover_path, word_count,'
     ' chapter_count, download_status, download_error, update_pending, deep_pending,'
     ' last_read_chapter_id, last_checked_at, last_opened_at, rating, review,'
+    ' shelf, shelved_at,'
     ' description, created_at, updated_at'
 )
 
@@ -432,14 +433,7 @@ def add_fic_to_folder(fic_id):
         return jsonify({'error': 'Fic not found'}), 404
     if not db.execute('SELECT id FROM fic_folders WHERE id=?', (folder_id,)).fetchone():
         return jsonify({'error': 'Folder not found'}), 404
-    # Filing by hand claims the membership: an upgrade from 'import' is what
-    # stops the personal-tag sync from later unfiling something the user
-    # deliberately put here.
-    db.execute(
-        'INSERT INTO fic_folder_items(folder_id, fic_id, origin, created_at)'
-        " VALUES (?,?,'manual',?) ON CONFLICT(folder_id, fic_id)"
-        " DO UPDATE SET origin='manual'",
-        (folder_id, fic_id, int(time.time())))
+    library.file_in_folder(db, fic_id, folder_id)
     db.commit()
     return jsonify({'success': True})
 
@@ -1003,22 +997,8 @@ def set_chapters_read(fic_id):
     if not isinstance(chapter_ids, list) or not chapter_ids or not isinstance(read, bool):
         return jsonify({'error': 'chapterIds (non-empty list) and read (boolean) required'}), 400
     db = get_db()
-    placeholders = ','.join('?' * len(chapter_ids))
-    owned = {r['id'] for r in db.execute(
-        f'SELECT id FROM fic_chapters WHERE fic_id=? AND id IN ({placeholders})',
-        (fic_id, *chapter_ids))}
-    if owned != set(chapter_ids):
+    if not library.set_chapters_read(db, fic_id, chapter_ids, read):
         return jsonify({'error': 'Chapter not found in this fic'}), 404
-    if read:
-        now = int(time.time())
-        db.executemany(
-            'INSERT OR IGNORE INTO fic_chapter_reads(chapter_id, fic_id, created_at)'
-            ' VALUES (?,?,?)',
-            [(cid, fic_id, now) for cid in chapter_ids])
-    else:
-        db.execute(
-            f'DELETE FROM fic_chapter_reads WHERE fic_id=? AND chapter_id IN ({placeholders})',
-            (fic_id, *chapter_ids))
     db.commit()
     count = db.execute(
         'SELECT COUNT(*) AS n FROM fic_chapter_reads WHERE fic_id=?', (fic_id,)).fetchone()
@@ -1096,19 +1076,17 @@ def save_review(fic_id):
     body = request.json or {}
     sets = []
     params: list = []
-    if 'rating' in body:
-        rating = body['rating']
-        if rating is not None and (not isinstance(rating, int) or isinstance(rating, bool)
-                                   or not 1 <= rating <= 5):
-            return jsonify({'error': 'rating must be null or an integer from 1 to 5'}), 400
-        sets.append('rating=?')
-        params.append(rating)
-    if 'review' in body:
-        review = body['review']
-        if review is not None and not isinstance(review, str):
-            return jsonify({'error': 'review must be null or a string'}), 400
-        sets.append('review=?')
-        params.append(review.strip() or None if review else None)
+    try:
+        if 'rating' in body:
+            library.check_rating(body['rating'])
+            sets.append('rating=?')
+            params.append(body['rating'])
+        if 'review' in body:
+            library.check_review(body['review'])
+            sets.append('review=?')
+            params.append(library.clean_review(body['review']))
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
     if not sets:
         return jsonify({'error': 'nothing to update'}), 400
     db = get_db()
@@ -1118,6 +1096,20 @@ def save_review(fic_id):
     db.commit()
     if cur.rowcount == 0:
         return jsonify({'error': 'Not found'}), 404
+    return jsonify({'success': True})
+
+
+@bp.patch('/<fic_id>/shelf')
+def save_shelf(fic_id):
+    shelf = (request.json or {}).get('shelf')
+    try:
+        library.check_shelf(shelf)
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    db = get_db()
+    if not library.set_shelf(db, fic_id, shelf):
+        return jsonify({'error': 'Not found'}), 404
+    db.commit()
     return jsonify({'success': True})
 
 

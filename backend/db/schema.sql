@@ -930,6 +930,11 @@ CREATE TABLE IF NOT EXISTS fics (
     last_checked_at INTEGER,
     rating INTEGER CHECK(rating BETWEEN 1 AND 5),
     review TEXT,
+    -- Where the user has put this fic: dropped/finished are the archive and
+    -- leave the default library list. shelved_at is when it last moved.
+    shelf TEXT NOT NULL DEFAULT 'reading'
+        CHECK(shelf IN ('to_read','reading','paused','finished','dropped')),
+    shelved_at INTEGER,
     last_opened_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -1085,6 +1090,20 @@ CREATE TABLE IF NOT EXISTS fic_chapter_reads (
 );
 
 CREATE INDEX IF NOT EXISTS idx_fcr_fic ON fic_chapter_reads(fic_id);
+
+-- What the forum showed as the user's own reaction on a chapter's post, seen
+-- on a reader page fetched while logged in: the proof a chapter was read.
+-- reaction NULL with a checked_at is "checked, not reacted"; no row is
+-- unknown. A logged-out fetch writes nothing, so a lost session cannot erase
+-- proof. Its own table so a refresh never re-sends a chapter's HTML.
+CREATE TABLE IF NOT EXISTS fic_chapter_reactions (
+    chapter_id TEXT PRIMARY KEY REFERENCES fic_chapters(id) ON DELETE CASCADE,
+    fic_id TEXT NOT NULL REFERENCES fics(id) ON DELETE CASCADE,
+    reaction TEXT,
+    checked_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fcrx_fic ON fic_chapter_reactions(fic_id);
 
 CREATE TABLE IF NOT EXISTS fic_bookmarks (
     id TEXT PRIMARY KEY,

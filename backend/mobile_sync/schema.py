@@ -3,7 +3,7 @@ import time
 
 from ulid import ULID
 
-from .registry import COLLECTIONS, SCHEMA_HASH, included, payload
+from .registry import COLLECTIONS, SCHEMA_HASH, included, key, payload
 
 
 def ensure(db):
@@ -35,25 +35,25 @@ def ensure(db):
                 AFTER {event} ON "{table}" WHEN {condition}
                 BEGIN
                     INSERT INTO mobile_sync_changes(collection, record_id, payload)
-                    VALUES ('{table}', {prefix}.id, {value});
+                    VALUES ('{table}', {prefix}."{key(table)}", {value});
                 END
             ''')
         initial = payload(table, 'source')
         db.execute(f'''
             INSERT INTO mobile_sync_changes(collection, record_id, payload)
-            SELECT ?, source.id, {initial} FROM "{table}" AS source
+            SELECT ?, source."{key(table)}", {initial} FROM "{table}" AS source
             WHERE {included(table, 'source')} AND NOT EXISTS (
                 SELECT 1 FROM mobile_sync_changes AS c
-                WHERE c.collection=? AND c.record_id=source.id
+                WHERE c.collection=? AND c.record_id=source."{key(table)}"
             )
         ''', (table, table))
     # These relationships are part of each immutable book snapshot, rather than
     # live joins that could change halfway through a bootstrap.
-    for table in ('fic_folder_items', 'fic_site_tags', 'fic_chapters'):
+    for table in ('fic_folder_items', 'fic_site_tags', 'fic_chapters', 'fic_chapter_reads'):
         for event in ('INSERT', 'UPDATE', 'DELETE'):
             prefixes = ('OLD', 'NEW') if event == 'UPDATE' else ('OLD',) if event == 'DELETE' else ('NEW',)
             ids = ','.join(f'{prefix}.fic_id' for prefix in prefixes)
-            update = 'UPDATE OF fic_id,posted_at,created_at' if table == 'fic_chapters' and event == 'UPDATE' else event
+            update = 'UPDATE OF fic_id,posted_at,created_at,category' if table == 'fic_chapters' and event == 'UPDATE' else event
             db.execute(f"""
                 CREATE TRIGGER IF NOT EXISTS mobile_sync_book_meta_{table}_{event.lower()}
                 AFTER {update} ON "{table}"

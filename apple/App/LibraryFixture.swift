@@ -35,6 +35,9 @@ enum LibraryFixture {
         /// How many of its last chapters are threadmarked Sidestory rather
         /// than Threadmarks, which gives its chapter list a tab for each.
         var sidestories = 0
+        var shelf: String? = nil
+        var rating: Int? = nil
+        var review: String? = nil
     }
 
     static let reading = "01K8BBBBBBBBBBBBBBBBBBBBF1"
@@ -47,6 +50,7 @@ enum LibraryFixture {
     static let partial = "01K8BBBBBBBBBBBBBBBBBBBB04"
     static let pdf = "01K8BBBBBBBBBBBBBBBBBBBB05"
     static let missing = "01K8BBBBBBBBBBBBBBBBBBBB06"
+    static let dropped = "01K8BBBBBBBBBBBBBBBBBBBB09"
 
     static let books: [Book] = [
         Book(id: downloaded, title: "The Long Way Round", author: "Merrow", site: "forums.spacebattles.com",
@@ -74,7 +78,15 @@ enum LibraryFixture {
         Book(id: "01K8BBBBBBBBBBBBBBBBBBBB08", title: "The Lighthouse Keeper", author: "Ines Varga", site: nil,
              sourceType: "epub", tags: ["Literary"], folders: [finished], chapters: 5, onDevice: 5,
              daysSinceUpdate: 120, description: "An imported EPUB, on the device."),
+        Book(id: dropped, title: "Abandoned Quest", author: "Corvid", site: "forums.spacebattles.com",
+             sourceType: "xenforo", tags: ["Quest", "Grimdark"], folders: [], chapters: 3, onDevice: 3,
+             daysSinceUpdate: 15, description: "Dropped: only under the Archived shelf filter.",
+             shelf: "dropped", rating: 2, review: "Lost me at the council arc."),
     ]
+
+    /// The first book's first two chapters are read; the forum showed a Like
+    /// on the first and no reaction on the second, and never the rest.
+    static let readChapters = [0, 1]
 
     /// With `-libraryManyBooks` as well, enough more books that the list
     /// pages past its first 50 rows — oldest of all, in no folder, so the
@@ -107,10 +119,20 @@ enum LibraryFixture {
             change("fic_folders", toRead, ["name": "To read", "position": 2]),
         ]
         for book in books + filler {
-            changes.append(change("fics", book.id, bookData(book, now: now, iso: iso)))
+            changes.append(change("fics", book.id, bookData(book, now: now, iso: iso), revision: bookRevision))
             for index in 0..<book.onDevice { changes.append(chapter(book, index, now: now)) }
         }
         let first = books[0]
+        for index in readChapters {
+            let id = chapterID(first, index)
+            changes.append(change("fic_chapter_reads", id, ["chapterId": id, "ficId": first.id, "createdAt": 1]))
+        }
+        for (index, reaction) in [(0, "Like"), (1, nil)] as [(Int, String?)] {
+            let id = chapterID(first, index)
+            changes.append(change("fic_chapter_reactions", id,
+                                  ["chapterId": id, "ficId": first.id, "reaction": reaction ?? NSNull(),
+                                   "checkedAt": Int(now.timeIntervalSince1970) - 3600]))
+        }
         changes.append(change("fic_bookmarks", "01K8BBBBBBBBBBBBBBBBBBBBK1",
                               ["ficId": first.id, "chapterId": chapterID(first, 3), "type": "continue",
                                "scrollPosition": 0.35, "createdAt": iso.string(from: now.addingTimeInterval(-7200))]))
@@ -119,11 +141,17 @@ enum LibraryFixture {
                                "scrollPosition": 0, "createdAt": iso.string(from: now.addingTimeInterval(-86_400))]))
         let page: [String: Any] = ["protocolVersion": 1, "epoch": epoch, "mode": "bootstrap", "changes": changes,
                                    "hasMore": false, "cursor": "library-fixture",
-                                   "collections": ["fics", "fic_folders", "fic_bookmarks", "fic_chapters"]]
+                                   "collections": ["fics", "fic_folders", "fic_bookmarks", "fic_chapters"]
+                                       + FicLibrary.trackingCollections]
         let decoded = try JSONDecoder().decode(SyncPage.self, from: JSONSerialization.data(withJSONObject: page))
         // A complete bootstrap sweeps what it doesn't carry, so chapters the
         // last run downloaded are gone again and every launch starts the same.
-        try ReplicaStore(url: root.appendingPathComponent("replica.sqlite")).apply(decoded, startingBootstrap: true)
+        let store = try ReplicaStore(url: root.appendingPathComponent("replica.sqlite"))
+        try store.apply(decoded, startingBootstrap: true)
+        // Shelving, reviews and read marks a previous run left waiting.
+        for edit in try store.edits() where ["fics", "fic_chapter_reads"].contains(edit.operation.collection) {
+            try store.resolve(edit, keepLocal: false)
+        }
         // The PDF book goes back to not downloaded too.
         let media = try MediaStore(root: root.appendingPathComponent("downloaded-media", isDirectory: true))
         _ = try? media.removeDownloadedCopy(collection: "fics", id: pdf)
@@ -133,6 +161,8 @@ enum LibraryFixture {
     /// a simulator that ran an older fixture would keep its old chapters:
     /// bump this whenever a chapter's content changes.
     static let chapterRevision = 2
+    /// The same for a book's own fields (its shelf, rating and unread count).
+    static let bookRevision = 2
 
     private static func change(_ collection: String, _ id: String, _ data: [String: Any],
                                revision: Int = 1) -> [String: Any] {
@@ -151,6 +181,11 @@ enum LibraryFixture {
             "updatedAt": iso.string(from: now.addingTimeInterval(-book.daysSinceUpdate * 86_400)),
         ]
         if let site = book.site { data["site"] = site }
+        if let shelf = book.shelf { data["shelf"] = shelf }
+        if let rating = book.rating { data["rating"] = rating }
+        if let review = book.review { data["review"] = review }
+        let read = book.id == books[0].id ? readChapters.count : 0
+        data["unreadCount"] = max(0, book.chapters - book.sidestories - read)
         return data
     }
 

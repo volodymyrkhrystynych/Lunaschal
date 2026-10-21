@@ -772,6 +772,23 @@ class WalkResult(NamedTuple):
     first_author: str | None
 
 
+def _record_reaction(db, fic_id: str, chapter_id: str, post: xenforo.ReaderPost,
+                     logged_in: bool) -> None:
+    """Note what the forum showed as the user's own reaction on a chapter.
+
+    Only from a logged-in page whose post had a react button: an anonymous
+    page shows no button and would read as "reacted to nothing", erasing
+    proof the moment a session lapsed. `checked_at` moves on every look --
+    it is how the phone says how recent the evidence is."""
+    if not logged_in or not post.reaction_seen:
+        return
+    db.execute(
+        'INSERT INTO fic_chapter_reactions(chapter_id, fic_id, reaction, checked_at)'
+        ' VALUES (?,?,?,?) ON CONFLICT(chapter_id) DO UPDATE SET'
+        ' reaction=excluded.reaction, checked_at=excluded.checked_at',
+        (chapter_id, fic_id, post.my_reaction, int(time.time())))
+
+
 def _stored_entry(post: xenforo.ReaderPost, chapter_id: str | None) -> dict:
     """The subset of a chapter row `_chapter_changed` compares against."""
     return {'id': chapter_id, 'title': post.threadmark_title,
@@ -855,6 +872,10 @@ def _walk_category_reader(db, fic_id: str, ref: xenforo.ThreadRef,
                 stored[post.post_id] = _stored_entry(post, chapter_id)
             else:
                 position -= 1
+        for post in reader.posts:
+            entry = stored.get(post.post_id)
+            if entry is not None:
+                _record_reaction(db, fic_id, entry['id'], post, reader.logged_in)
         db.commit()
         _bump_progress(fic_id, len(reader.posts))
         if page >= reader.last_page:
@@ -903,6 +924,7 @@ def _walk_category_via_thread(db, fic_id: str, ref: xenforo.ThreadRef,
 
     harvested: dict[str, xenforo.ReaderPost] = {}
     harvested_meta: dict[str, str] = {}  # post_id -> base_url of its page
+    harvested_logged_in: dict[str, bool] = {}
     position = start_position
     inserted = updated = 0
     saw_posts = False
@@ -919,6 +941,7 @@ def _walk_category_via_thread(db, fic_id: str, ref: xenforo.ThreadRef,
                 if post.post_id in wanted and post.post_id not in harvested:
                     harvested[post.post_id] = post
                     harvested_meta[post.post_id] = str(resp.url)
+                    harvested_logged_in[post.post_id] = page.logged_in
         post = harvested.get(item.post_id)
         if post is None:
             raise ValueError(f'Threadmarked post {item.post_id} not found on its page')
@@ -932,7 +955,9 @@ def _walk_category_via_thread(db, fic_id: str, ref: xenforo.ThreadRef,
 
         existing = stored.get(item.post_id)
         if existing is not None:
+            _record_reaction(db, fic_id, existing['id'], post, harvested_logged_in[item.post_id])
             if not update_existing or not _chapter_changed(existing, post):
+                db.commit()
                 continue
             clean, text, _ = process_post_html(
                 fic_id, post.content_html, harvested_meta[item.post_id])
@@ -950,6 +975,7 @@ def _walk_category_via_thread(db, fic_id: str, ref: xenforo.ThreadRef,
         if chapter_id:
             inserted += 1
             stored[post.post_id] = _stored_entry(post, chapter_id)
+            _record_reaction(db, fic_id, chapter_id, post, harvested_logged_in[item.post_id])
             db.commit()
             _bump_progress(fic_id, 1)
         else:

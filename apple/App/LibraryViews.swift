@@ -279,9 +279,17 @@ private struct KnowledgeArticleView: View {
     }
 }
 
+/// A book's chapter list, and the one place a chapter is opened from: the
+/// reader's Chapters button comes back here rather than pushing another list,
+/// so a book is never more than list → chapter deep however long it is read.
 struct BookView: View {
     @ObservedObject var model: CaptureModel
     let book: SyncChange
+    /// Opened from the library: carry straight on into the chapter the book
+    /// was left at, as the desktop does, with this list one Back away.
+    var opensResume = false
+    @State private var resuming: ResumeTarget?
+    @State private var triedResume = false
     @State private var chapters: [SyncChange] = []
     @State private var resume: (chapter: SyncChange, fraction: Double?)?
     @State private var bookmarks: [SyncChange] = []
@@ -292,12 +300,22 @@ struct BookView: View {
     @State private var category: String?
     /// While the server is being asked; the chapters themselves arrive by sync.
     @State private var askingForUpdate = false
+    /// The book as last read from the replica, with this device's waiting
+    /// edits applied; `book` is only what the list handed over.
+    @State private var latest: SyncChange?
+    @State private var read: Set<String> = []
+    @State private var reactions: [String: ChapterReaction] = [:]
+    @State private var sheet: FicSheet?
+    @Environment(\.openURL) private var openURL
+
+    private var shown: SyncChange { latest ?? book }
 
     var body: some View {
         List {
             if let description = book.data?["description"]?.string, !description.isEmpty {
                 Text(description)
             }
+            organizeSection
             if book.data?["sourceType"]?.string == "pdf" {
                 NavigationLink("Open PDF") {
                     DownloadedMediaView(model: model, collection: "fics", id: book.id,
@@ -330,7 +348,7 @@ struct BookView: View {
                         if let chapter = chapters.first(where: { $0.id == bookmark.data?["chapterId"]?.string }) {
                             NavigationLink {
                                 TextChapterReader(owner: model, chapter: chapter,
-                                    initialFraction: bookmark.data?["scrollPosition"]?.number)
+                                    initialFraction: bookmark.data?["scrollPosition"]?.number, book: book)
                             } label: {
                                 Label("\(bookmark.data?["type"]?.string == "continue" ? "Continue" : "Favorite"): \(chapter.title)",
                                       systemImage: bookmark.data?["type"]?.string == "continue" ? "play.fill" : "star.fill")
@@ -367,6 +385,11 @@ struct BookView: View {
             chapterList
         }
         .navigationTitle(book.title)
+        .ficSheets($sheet, model: model)
+        .onChange(of: model.libraryRevision) { _, _ in Task { await refreshChapters() } }
+        .navigationDestination(item: $resuming) { target in
+            TextChapterReader(owner: model, chapter: target.chapter, initialFraction: target.fraction, book: book)
+        }
         .task(id: model.downloadingLibrary) { await refreshChapters() }
         .onChange(of: model.ficDownloadRevision) { _, _ in Task { await refreshChapters() } }
         .onAppear {
@@ -375,7 +398,9 @@ struct BookView: View {
             model.ensureFicOnDevice(book)
         }
         .onChange(of: model.syncChanges) { _, changes in
-            if changes.touches(["fics", "fic_chapters", "fic_bookmarks"]) { Task { await refreshChapters() } }
+            if changes.touches(["fics", "fic_chapters", "fic_bookmarks", "fic_chapter_reads", "fic_chapter_reactions"]) {
+                Task { await refreshChapters() }
+            }
         }
     }
 
@@ -406,9 +431,91 @@ struct BookView: View {
     }
 
     private func chapterLink(_ chapter: SyncChange) -> some View {
-        NavigationLink {
-            TextChapterReader(owner: model, chapter: chapter)
-        } label: { Text(chapter.title) }
+        let isRead = read.contains(chapter.id)
+        return NavigationLink {
+            TextChapterReader(owner: model, chapter: chapter, book: book)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: isRead ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isRead ? Color.green : Color.secondary.opacity(0.5))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(chapter.title).foregroundStyle(isRead ? .secondary : .primary)
+                    reactionLine(reactions[chapter.id])
+                }
+            }
+        }
+        .accessibilityValue(isRead ? "Read" : "Unread")
+        .accessibilityIdentifier("chapter-row-\(chapter.id)")
+        .swipeActions(edge: .leading) {
+            Button(isRead ? "Unread" : "Read", systemImage: isRead ? "circle" : "checkmark.circle") {
+                model.markChapters(bookID: book.id, chapterIDs: [chapter.id], read: !isRead)
+            }
+            .tint(isRead ? .gray : .green)
+        }
+        .contextMenu {
+            Button(isRead ? "Mark unread" : "Mark read", systemImage: isRead ? "circle" : "checkmark.circle") {
+                model.markChapters(bookID: book.id, chapterIDs: [chapter.id], read: !isRead)
+            }
+            Button("Mark all up to here read", systemImage: "checkmark.circle.badge.questionmark") {
+                model.markChapters(bookID: book.id, chapterIDs: FicLibrary.chapters(through: chapter.id, in: chapters), read: true)
+            }
+            if let link = chapter.data?["sourceUrl"]?.string, let url = URL(string: link) {
+                Button("Open on site", systemImage: "safari") { openURL(url) }
+            }
+        }
+    }
+
+    /// The forum's evidence for one chapter: the user's reaction, or that it
+    /// was checked and there was none. Nothing when it was never checked.
+    @ViewBuilder
+    private func reactionLine(_ reaction: ChapterReaction?) -> some View {
+        if let reaction {
+            Group {
+                if let name = reaction.reaction {
+                    Label(name, systemImage: "hand.thumbsup.fill").foregroundStyle(.tint)
+                } else {
+                    Text("Not reacted · checked \(reaction.checkedAt.formatted(date: .abbreviated, time: .omitted))")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption)
+        }
+    }
+
+    /// Shelf, rating, review and every tag, with the actions that change them.
+    @ViewBuilder
+    private var organizeSection: some View {
+        let shelf = FicLibrary.Shelf(book: shown)
+        Section {
+            Menu {
+                ShelfButtons(current: shelf) { model.editFics([book.id], ["shelf": .string($0.rawValue)]) }
+            } label: {
+                LabeledContent("Shelf") { Label(shelf.label, systemImage: shelf.systemImage) }
+            }
+            .accessibilityIdentifier("book-shelf-menu")
+            Button { sheet = .review(shown, dropping: false) } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let rating = shown.data?["rating"]?.int, rating > 0 { RatingStars(rating: rating) }
+                    else { Text("Rate and review").foregroundStyle(.tint) }
+                    if let review = shown.data?["review"]?.string, !review.isEmpty {
+                        Text(review).font(.callout).foregroundStyle(.primary)
+                    }
+                }
+            }
+            .accessibilityIdentifier("book-review")
+            Button("Folders", systemImage: "folder") { sheet = .folders([shown]) }
+            let tags = shown.data?["tags"]?.strings ?? []
+            if !tags.isEmpty { TagCloud(tags: tags) }
+        } footer: {
+            let story = chapters.filter(FicLibrary.isMainStory)
+            let total = story.count
+            if total > 0 {
+                let done = story.filter { read.contains($0.id) }.count
+                let reacted = reactions.values.filter { $0.reaction != nil }.count
+                Text("\(done) of \(total) chapters read" + (reactions.isEmpty ? "" : " · reacted on \(reacted)"))
+            }
+        }
     }
 
     private func categoryTabs(_ groups: [ChapterGroup], shown: String) -> some View {
@@ -443,10 +550,35 @@ struct BookView: View {
                 (try store.chapterOutline(bookID: id), try store.resumePoint(bookID: id),
                  try store.bookmarks(bookID: id), try store.bookmarkEdits(bookID: id))
             }
+            let tracking = try await model.reader.read { store in
+                (try store.record(collection: "fics", id: id).map(store.overlaid),
+                 try store.readChapterIDs(bookID: id), try store.reactions(bookID: id))
+            }
             (chapters, resume, bookmarks, bookmarkEdits) = loaded
+            (latest, read, reactions) = tracking
             onDevice = model.isFicOnDevice(book)
         } catch { model.message = error.localizedDescription }
+        // Only the first read decides: coming back to this list must not send
+        // the reader straight back in, and nor should a download finishing
+        // while the list is being looked at. With no chapter text on the
+        // device there is nothing to resume, and the list says why.
+        if opensResume, !triedResume {
+            triedResume = true
+            if let resume {
+                var instant = Transaction()
+                instant.disablesAnimations = true
+                withTransaction(instant) { resuming = ResumeTarget(chapter: resume.chapter, fraction: resume.fraction) }
+            }
+        }
     }
+}
+
+/// The chapter a book reopens at, as a navigation destination.
+private struct ResumeTarget: Hashable {
+    let chapter: SyncChange
+    let fraction: Double?
+    static func == (a: Self, b: Self) -> Bool { a.chapter.id == b.chapter.id && a.fraction == b.fraction }
+    func hash(into hasher: inout Hasher) { hasher.combine(chapter.id) }
 }
 
 struct JournalRecordView: View {

@@ -41,11 +41,18 @@ struct BookListView: View {
     @State private var limit = 50
     @State private var count = 0
     @State private var onDevice: Set<String> = []
+    @State private var reactions: [String: ReactionSummary] = [:]
     /// Bumped per refresh; an older one finishing late is dropped.
     @State private var loads = 0
+    @State private var sheet: FicSheet?
+    /// The book a swipe asked to move to another shelf.
+    @State private var shelving: SyncChange?
+    @State private var editMode: EditMode = .inactive
+    @State private var selection: Set<String> = []
 
     /// What a pass has to touch for this list to read the library again.
-    static let shows: Set<String> = ["fics", "fic_folders", "fic_bookmarks", "fic_chapters"]
+    static let shows: Set<String> = ["fics", "fic_folders", "fic_bookmarks", "fic_chapters",
+                                     "fic_chapter_reads", "fic_chapter_reactions"]
 
     static let providers = [
         ("", "All"), ("forums.spacebattles.com", "SpaceBattles"),
@@ -56,13 +63,51 @@ struct BookListView: View {
     ]
 
     var body: some View {
-        List {
+        List(selection: $selection) {
             if model.ficDownload != nil {
                 Section { FicDownloadBanner(model: model) }
             }
             ForEach(books) { book in
-                NavigationLink { BookReaderEntry(model: model, book: book) } label: { BookRow(book: book, downloaded: onDevice.contains(book.id)) }
+                NavigationLink {
+                    if book.data?["sourceType"]?.string == "pdf" {
+                        DownloadedMediaView(model: model, collection: "fics", id: book.id,
+                                            mime: "application/pdf", title: book.title)
+                        .task {
+                            do { try model.replica.markBookOpened(book.id) }
+                            catch { model.message = error.localizedDescription }
+                            // Straight to the front of the queue: this is the book being looked at.
+                            model.ensureFicOnDevice(book)
+                        }
+                    } else {
+                        BookView(model: model, book: book, opensResume: true)
+                    }
+                } label: {
+                    BookRow(book: book, downloaded: onDevice.contains(book.id), reactions: reactions[book.id])
+                }
+                    // Left swipe: the things you do to a book you're judging.
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button("Drop", systemImage: "archivebox") { sheet = .review(book, dropping: true) }
+                            .tint(.red)
+                            .accessibilityIdentifier("swipe-drop")
+                        Button("Review", systemImage: "star") { sheet = .review(book, dropping: false) }
+                            .tint(.orange)
+                            .accessibilityIdentifier("swipe-review")
+                        Button("Folders", systemImage: "folder") { sheet = .folders([book]) }
+                            .tint(.blue)
+                            .accessibilityIdentifier("swipe-folders")
+                    }
+                    .swipeActions(edge: .leading) {
+                        Button("Shelf", systemImage: "books.vertical") { shelving = book }
+                            .tint(.indigo)
+                            .accessibilityIdentifier("swipe-shelf")
+                    }
                     .contextMenu {
+                        Button("Review", systemImage: "star") { sheet = .review(book, dropping: false) }
+                        Button("Folders", systemImage: "folder") { sheet = .folders([book]) }
+                        Menu("Shelf", systemImage: "books.vertical") {
+                            ShelfButtons(current: FicLibrary.Shelf(book: book)) { model.editFics([book.id], ["shelf": .string($0.rawValue)]) }
+                        }
+                        Button("Drop…", systemImage: "archivebox", role: .destructive) { sheet = .review(book, dropping: true) }
                         if FicSources.isUpdatable(book.data?["sourceType"]?.string) {
                             Button("Check for updates", systemImage: "arrow.clockwise") {
                                 Task { await model.checkFicForUpdates(book, deep: false) }
@@ -83,6 +128,12 @@ struct BookListView: View {
                     systemImage: "books.vertical",
                     description: Text("Try another search or filter, or sync your library in Settings."))
             }
+        }
+        .environment(\.editMode, $editMode)
+        .ficSheets($sheet, model: model)
+        .confirmationDialog("Move to shelf", isPresented: Binding(get: { shelving != nil }, set: { if !$0 { shelving = nil } }),
+                            titleVisibility: .visible, presenting: shelving) { book in
+            ShelfButtons(current: FicLibrary.Shelf(book: book)) { model.editFics([book.id], ["shelf": .string($0.rawValue)]) }
         }
         .searchable(text: $filter.query, placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "Search titles and tags")
@@ -106,6 +157,30 @@ struct BookListView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(editMode.isEditing ? "Done" : "Select") {
+                    editMode = editMode.isEditing ? .inactive : .active
+                    selection = []
+                }
+                .accessibilityIdentifier("library-select")
+            }
+            if editMode.isEditing {
+                ToolbarItemGroup(placement: .bottomBar) {
+                    Button("Folders…", systemImage: "folder") {
+                        sheet = .folders(books.filter { selection.contains($0.id) })
+                    }
+                    .accessibilityIdentifier("selection-folders")
+                    Spacer()
+                    Text("\(selection.count) selected").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Menu {
+                        ShelfButtons(current: nil) { shelf in
+                            if model.editFics(Array(selection), ["shelf": .string(shelf.rawValue)]) { selection = [] }
+                        }
+                    } label: { Label("Shelf", systemImage: "books.vertical") }
+                    .accessibilityIdentifier("selection-shelf")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 if model.refreshingFics {
                     ProgressView()
@@ -122,10 +197,24 @@ struct BookListView: View {
                         Text("Favorites").tag("favorite")
                         Text("Continue reading").tag("continue")
                     }
+                    Picker("Shelf", selection: $filter.shelf) {
+                        Text("Active").tag(FicLibrary.activeShelves)
+                        ForEach(FicLibrary.Shelf.allCases) { Text($0.label).tag($0.rawValue) }
+                        Text("Archived (finished & dropped)").tag(FicLibrary.archivedShelves)
+                        Text("Everything").tag(FicLibrary.allShelves)
+                    }
+                    .pickerStyle(.menu)
+                    Picker("Rating", selection: $filter.minRating) {
+                        Text("Any rating").tag(0)
+                        ForEach([5, 4, 3, 2, 1], id: \.self) { Text(String(repeating: "★", count: $0) + ($0 < 5 ? " & up" : "")).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    Toggle("Unread chapters only", isOn: $filter.unreadOnly)
                     Picker("Sort", selection: $filter.sort) {
                         Text("Latest update on the site").tag("activity")
                         Text("Recently read").tag("recent")
                         Text("Title").tag("title")
+                        Text("Rating").tag("rating")
                     }
                     Button("Reset filters") { filter = fresh() }
                 } label: {
@@ -140,6 +229,7 @@ struct BookListView: View {
         .onChange(of: model.syncChanges) { _, changes in
             if changes.touches(Self.shows) { Task { await refresh() } }
         }
+        .onChange(of: model.libraryRevision) { _, _ in Task { await refresh() } }
         .onChange(of: filter) { _, _ in limit = 50 }
         // Typing searches once it pauses, not on every keystroke.
         .task(id: filter) {
@@ -163,13 +253,15 @@ struct BookListView: View {
         var query = filter
         query.folder = folder ?? ""
         do {
-            let (result, counts) = try await model.reader.read { store in
+            let (result, counts, summaries) = try await model.reader.read { store in
                 let result = try store.books(filter: query, limit: limit)
                 let text = result.records.filter { $0.data?["sourceType"]?.string != "pdf" }
-                return (result, try store.chapterCounts(bookIDs: text.map(\.id)))
+                return (result, try store.chapterCounts(bookIDs: text.map(\.id)),
+                        try store.reactionSummaries(bookIDs: result.records.map(\.id)))
             }
             guard load == loads else { return }
-            books = result.records; count = result.count
+            books = result.records; count = result.count; reactions = summaries
+            selection.formIntersection(books.map(\.id))
             onDevice = model.ficsOnDevice(books, chapterCounts: counts)
         } catch { model.message = error.localizedDescription }
     }
@@ -198,6 +290,7 @@ struct LoadMoreRow: View {
 struct BookRow: View {
     let book: SyncChange
     var downloaded = false
+    var reactions: ReactionSummary? = nil
 
     /// When the site last posted a chapter: unix seconds from the server's
     /// `latest_activity`, which is the chapters' own dates, not our download.
@@ -229,10 +322,44 @@ struct BookRow: View {
             }
             Text("\(Int(book.data?["chapterCount"]?.number ?? 0)) chapters · \(Int(book.data?["wordCount"]?.number ?? 0)) words")
                 .font(.caption).foregroundStyle(.secondary)
+            organized
             let tags = book.data?["tags"]?.strings ?? []
             if !tags.isEmpty {
                 Text(tags.prefix(4).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
             }
+        }
+    }
+}
+
+extension BookRow {
+    /// Shelf, rating, unread chapters and reaction proof, on one line; the
+    /// line is left out when there's nothing to say.
+    @ViewBuilder
+    var organized: some View {
+        let shelf = FicLibrary.Shelf(book: book)
+        let rating = book.data?["rating"]?.int ?? 0
+        let unread = book.data?["unreadCount"]?.int ?? 0
+        if shelf != .reading || rating > 0 || unread > 0 || (reactions?.checked ?? 0) > 0 {
+            HStack(spacing: 8) {
+                if shelf != .reading {
+                    Label(shelf.label, systemImage: shelf.systemImage)
+                        .accessibilityIdentifier("book-shelf")
+                }
+                if rating > 0 { RatingStars(rating: rating) }
+                if unread > 0 {
+                    Text("\(unread) unread")
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(Color.accentColor.opacity(0.15), in: Capsule())
+                        .accessibilityIdentifier("book-unread")
+                }
+                if let reactions, reactions.checked > 0 {
+                    Label("\(reactions.reacted)/\(reactions.checked)", systemImage: "hand.thumbsup")
+                        .accessibilityLabel("Reacted on \(reactions.reacted) of \(reactions.checked) checked chapters")
+                        .accessibilityIdentifier("book-reactions")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
 }
@@ -260,6 +387,7 @@ struct FolderListView: View {
         .onChange(of: model.syncChanges) { _, changes in
             if changes.touches(["fics", "fic_folders"]) { Task { await refresh() } }
         }
+        .onChange(of: model.libraryRevision) { _, _ in Task { await refresh() } }
     }
 
     private func link(id: String, title: String, icon: String) -> some View {
@@ -288,41 +416,3 @@ struct FolderListView: View {
     }
 }
 
-/// Opening a book, as the desktop does it: straight into the chapter it was
-/// left at (see `ReplicaStore.resumePoint`). The chapter list is one tap away
-/// in the reader's toolbar.
-struct BookReaderEntry: View {
-    @ObservedObject var model: CaptureModel
-    let book: SyncChange
-    @State private var resume: (chapter: SyncChange, fraction: Double?)?
-    @State private var loaded = false
-
-    var body: some View {
-        Group {
-            if book.data?["sourceType"]?.string == "pdf" {
-                DownloadedMediaView(model: model, collection: "fics", id: book.id,
-                                    mime: "application/pdf", title: book.title)
-            } else if let resume {
-                TextChapterReader(owner: model, chapter: resume.chapter, initialFraction: resume.fraction, book: book)
-            } else if loaded {
-                // No chapter text on this device: the book page says why.
-                BookView(model: model, book: book)
-            } else {
-                // Never empty: a Group with no view in it runs no `.task`, so
-                // the book never loaded, never started downloading, and the
-                // screen stayed blank.
-                ProgressView()
-            }
-        }
-        .task {
-            guard !loaded else { return }
-            do {
-                try model.replica.markBookOpened(book.id)
-                resume = try model.replica.resumePoint(bookID: book.id)
-            } catch { model.message = error.localizedDescription }
-            loaded = true
-            // Straight to the front of the queue: this is the book being looked at.
-            model.ensureFicOnDevice(book)
-        }
-    }
-}

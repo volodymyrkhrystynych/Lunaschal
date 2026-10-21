@@ -6,7 +6,7 @@ import time
 from backend.routes.journal import _client_id, _close_screenshot_session, delete_journal_entry
 from backend.tags import tags_json
 from .feed import change_dict, database
-from . import bookmarks
+from . import bookmarks, fic_edits
 
 
 def apply(body):
@@ -21,6 +21,9 @@ def apply(body):
     if body['collection'] == 'fic_bookmarks':
         bookmarks.validate(body)
         return transact(body, bookmarks.mutate)
+    if body['collection'] in ('fics', 'fic_chapter_reads'):
+        fic_edits.validate(body)
+        return transact(body, fic_edits.mutate)
     if not isinstance(body['epoch'], str) or type(body['baseRevision']) is not int or body['baseRevision'] < 1:
         raise ValueError('An epoch and positive baseRevision are required')
     if body['collection'] == 'food_entries':
