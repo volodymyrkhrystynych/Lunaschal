@@ -2542,6 +2542,83 @@ final class OfflineCaptureTests: XCTestCase {
         return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 5) == .completed
     }
 
+    /// A book opens at its chapter, Chapters goes back to the list rather
+    /// than pushing another one, so however many chapters are picked, Back
+    /// is always chapter → list → library.
+    func testChapterBackGoesToTheChapterListOnce() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 4"].waitForExistence(timeout: 10), "opens where it was left")
+
+        let list = app.navigationBars["The Long Way Round"]
+        for chapter in ["Chapter 2", "Chapter 5", "Chapter 1"] {
+            app.navigationBars.buttons["Chapters"].tap()
+            XCTAssertTrue(list.waitForExistence(timeout: 5), "Chapters goes back to the list")
+            let row = app.staticTexts[chapter]
+            for _ in 0..<6 where !reachable(row) { app.swipeUp() }
+            row.tap()
+            XCTAssertTrue(app.navigationBars[chapter].waitForExistence(timeout: 10))
+        }
+        attach(app, "third chapter")
+
+        app.navigationBars["Chapter 1"].buttons.firstMatch.tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 5), "Back from a chapter is the chapter list")
+        list.buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Library"].waitForExistence(timeout: 5), "and then the library")
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+        // Coming back out and in again resumes once more, with no stale reader:
+        // at the Continue bookmark, which outranks the chapter last read.
+        book.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 4"].waitForExistence(timeout: 10), "reopens at the Continue point")
+        app.navigationBars["Chapter 4"].buttons.firstMatch.tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+    }
+
+    /// An iPad window in Split View or Slide Over has the iPhone's five-slot
+    /// bottom bar. With every destination a tab, iPadOS put the rest in its own
+    /// More list, nesting each one's navigation stack inside it: Library and the
+    /// reader had two bars and two Backs. A compact iPad gets the iPhone's tabs.
+    func testCompactIPadKeepsOneNavigationBar() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad)
+        let app = XCUIApplication()
+        app.launchArguments += ["-libraryFixture", "-compactWidth"]
+        app.launch()
+        let bar = app.tabBars.firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: settle))
+        XCTAssertEqual(bar.buttons.allElementsBoundByIndex.map(\.label),
+                       ["Capture", "Journal", "Chat", "Todo", "More"])
+
+        bar.buttons["More"].tap()
+        XCTAssertTrue(app.navigationBars["More"].waitForExistence(timeout: 10))
+        for row in ["Study", "Draw", "Library", "Jobs", "Writing", "Learning", "Settings"] {
+            XCTAssertTrue(app.buttons["more-\(row)"].exists, "\(row) is in More")
+        }
+        app.buttons["more-Library"].tap()
+        XCTAssertTrue(app.navigationBars["Library"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.navigationBars.count, 1, "one bar over Library")
+
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 4"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.navigationBars.count, 1, "one bar over the reader")
+        attach(app, "compact reader")
+
+        // Back walks chapter → chapter list → Library → More, one bar each.
+        app.navigationBars["Chapter 4"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["The Long Way Round"].waitForExistence(timeout: 5))
+        app.navigationBars["The Long Way Round"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Library"].waitForExistence(timeout: 5))
+        app.navigationBars["Library"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["More"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.navigationBars.count, 1)
+    }
+
     private func attach(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name

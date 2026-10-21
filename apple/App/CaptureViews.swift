@@ -12,6 +12,17 @@ struct CaptureRoot: View {
     @StateObject private var learning: LearningModel
     @StateObject private var context: JournalContextModel
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var widthClass
+
+    /// Every destination gets a tab of its own only on an iPad window wide
+    /// enough for the floating tab bar, which pages through them. A compact one
+    /// (Split View, Slide Over, a narrow Stage Manager window) has the iPhone's
+    /// five-slot bottom bar, and the rest went into iPadOS's own More list —
+    /// which nests each tab's NavigationStack inside its navigation controller:
+    /// two bars, two back buttons. So a compact iPad gets the iPhone's tabs.
+    private var everyDestinationIsATab: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad && widthClass != .compact
+    }
 
     init(model: CaptureModel) {
         self.model = model
@@ -33,12 +44,11 @@ struct CaptureRoot: View {
                 .tabItem { Label("Todo", systemImage: "checklist") }
                 // Red, like a notification: to-dos due today or overdue.
                 .badge(todo.dueCount)
-            if UIDevice.current.userInterfaceIdiom == .pad {
+            if everyDestinationIsATab {
                 NavigationStack { StudyLibraryView(model: model) }
                     .tabItem { Label("Study", systemImage: "doc.text") }
                 NavigationStack { DrawingLibraryView(model: model) }
                     .tabItem { Label("Draw", systemImage: "pencil.tip") }
-                // Let iPadOS own overflow when Split View narrows the tab bar.
                 NavigationStack { LibraryView(model: model) }
                     .tabItem { Label("Library", systemImage: "books.vertical") }
                 NavigationStack { JobsFeedView(capture: model) }
@@ -51,7 +61,10 @@ struct CaptureRoot: View {
                 NavigationStack { ConnectionSettings(model: model) }
                     .tabItem { Label("Settings", systemImage: "gear") }
             } else {
-                NavigationStack { MoreMenu(model: model, learning: learning) }
+                NavigationStack {
+                    MoreMenu(model: model, learning: learning,
+                             showsStudyAndDraw: UIDevice.current.userInterfaceIdiom == .pad)
+                }
                     .tabItem { Label("More", systemImage: "line.3.horizontal") }
             }
         }
@@ -897,12 +910,23 @@ private struct AudioPreview: View {
 
 // The last tab: everything that doesn't earn a slot of its own. The iPhone
 // shows five tabs before iOS adds its own More overflow, so this owns that slot.
+// A compact iPad window has the same five, and its iPad-only Study and Draw
+// come in here too.
 private struct MoreMenu: View {
     @ObservedObject var model: CaptureModel
     @ObservedObject var learning: LearningModel
+    var showsStudyAndDraw = false
 
     var body: some View {
         List {
+            if showsStudyAndDraw {
+                NavigationLink { StudyLibraryView(model: model) } label: {
+                    Label("Study", systemImage: "doc.text")
+                }.accessibilityIdentifier("more-Study")
+                NavigationLink { DrawingLibraryView(model: model) } label: {
+                    Label("Draw", systemImage: "pencil.tip")
+                }.accessibilityIdentifier("more-Draw")
+            }
             NavigationLink { LibraryView(model: model) } label: {
                 Label("Library", systemImage: "books.vertical")
             }.accessibilityIdentifier("more-Library")

@@ -341,8 +341,10 @@ what each device can currently do and which work remains device-only.
   reuses its existing YouTube import pipeline.
 - Native Capture / Journal / Chat / Todo / More tabs on iPhone. iPad has
   Capture, Journal, Chat, Todo, Study, Draw, Library, Jobs, Learning and Settings
-  as individual tabs; iPadOS manages overflow in narrow windows without an app
-  More menu. Journal's toolbar has Sync on the left and a Journal/Calendar
+  as individual tabs when the window is wide. A compact window (Split View,
+  Slide Over) gets the iPhone's five tabs, with Study and Draw at the top of More:
+  left to iPadOS, the overflow nested every tab inside its own More list and
+  Library showed two back buttons. Journal's toolbar has Sync on the left and a Journal/Calendar
   switch on the right. The Journal page is the desktop's feed: one newest-first timeline
   with inline photos, playable voice clips (desktop WebM clips arrive as an AAC copy),
   videos and YouTube posters, and calendar events' category-coloured borders around the

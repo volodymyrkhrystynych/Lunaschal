@@ -33,6 +33,7 @@ struct TextChapterReader: View {
     @State private var autoReadChecked: Set<String> = []
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
+    @Environment(\.dismiss) private var dismiss
     private var store: ReplicaStore { owner.replica }
     private var ficID: String? { current.data?["ficId"]?.string }
 
@@ -61,8 +62,10 @@ struct TextChapterReader: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { textSizeMenu }
             if let book {
+                // Back to the list this chapter was opened from, never a new
+                // one on top: chapters used to stack up one per pick.
                 ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink { BookView(model: owner, book: book) } label: {
+                    Button { dismiss() } label: {
                         Label("Chapters", systemImage: "list.bullet")
                     }
                 }

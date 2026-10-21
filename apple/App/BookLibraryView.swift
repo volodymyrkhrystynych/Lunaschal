@@ -68,7 +68,20 @@ struct BookListView: View {
                 Section { FicDownloadBanner(model: model) }
             }
             ForEach(books) { book in
-                NavigationLink { BookReaderEntry(model: model, book: book) } label: {
+                NavigationLink {
+                    if book.data?["sourceType"]?.string == "pdf" {
+                        DownloadedMediaView(model: model, collection: "fics", id: book.id,
+                                            mime: "application/pdf", title: book.title)
+                        .task {
+                            do { try model.replica.markBookOpened(book.id) }
+                            catch { model.message = error.localizedDescription }
+                            // Straight to the front of the queue: this is the book being looked at.
+                            model.ensureFicOnDevice(book)
+                        }
+                    } else {
+                        BookView(model: model, book: book, opensResume: true)
+                    }
+                } label: {
                     BookRow(book: book, downloaded: onDevice.contains(book.id), reactions: reactions[book.id])
                 }
                     // Left swipe: the things you do to a book you're judging.
@@ -403,41 +416,3 @@ struct FolderListView: View {
     }
 }
 
-/// Opening a book, as the desktop does it: straight into the chapter it was
-/// left at (see `ReplicaStore.resumePoint`). The chapter list is one tap away
-/// in the reader's toolbar.
-struct BookReaderEntry: View {
-    @ObservedObject var model: CaptureModel
-    let book: SyncChange
-    @State private var resume: (chapter: SyncChange, fraction: Double?)?
-    @State private var loaded = false
-
-    var body: some View {
-        Group {
-            if book.data?["sourceType"]?.string == "pdf" {
-                DownloadedMediaView(model: model, collection: "fics", id: book.id,
-                                    mime: "application/pdf", title: book.title)
-            } else if let resume {
-                TextChapterReader(owner: model, chapter: resume.chapter, initialFraction: resume.fraction, book: book)
-            } else if loaded {
-                // No chapter text on this device: the book page says why.
-                BookView(model: model, book: book)
-            } else {
-                // Never empty: a Group with no view in it runs no `.task`, so
-                // the book never loaded, never started downloading, and the
-                // screen stayed blank.
-                ProgressView()
-            }
-        }
-        .task {
-            guard !loaded else { return }
-            do {
-                try model.replica.markBookOpened(book.id)
-                resume = try model.replica.resumePoint(bookID: book.id)
-            } catch { model.message = error.localizedDescription }
-            loaded = true
-            // Straight to the front of the queue: this is the book being looked at.
-            model.ensureFicOnDevice(book)
-        }
-    }
-}
