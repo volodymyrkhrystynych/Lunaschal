@@ -27,6 +27,9 @@ def fake_net(monkeypatch, tmp_path):
     monkeypatch.setenv('FANFIC_ROOT', str(tmp_path / 'fanfic'))
     monkeypatch.setattr(download, 'REQUEST_DELAY', 0)
     monkeypatch.setattr(fanfic_routes, '_start_watch_scan_bg', download.run_watched_scan)
+    # A direct /import would otherwise start a real thread sharing the one
+    # connection, racing the next request's write mid-transaction.
+    monkeypatch.setattr(fanfic_routes, '_start_import_bg', download.run_import)
 
     pages = {
         WATCHED_P1: (FIXTURES / 'watched_threads_p1.html').read_text(),
