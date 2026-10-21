@@ -28,8 +28,10 @@ def fake_net(monkeypatch, tmp_path):
     monkeypatch.setattr(download, 'REQUEST_DELAY', 0)
     monkeypatch.setattr(fanfic_routes, '_start_watch_scan_bg', download.run_watched_scan)
     # A direct /import would otherwise start a real thread sharing the one
-    # connection, racing the next request's write mid-transaction.
+    # connection, racing the next request's write mid-transaction. The drain
+    # worker the scan queues fics onto is the same kind of thread.
     monkeypatch.setattr(fanfic_routes, '_start_import_bg', download.run_import)
+    monkeypatch.setattr(download, 'start_drain', download.run_drain_pending)
 
     pages = {
         WATCHED_P1: (FIXTURES / 'watched_threads_p1.html').read_text(),
