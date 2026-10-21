@@ -279,7 +279,7 @@ struct LauncherComplication: Widget {
                 .containerBackground(.clear, for: .widget)
         }
         .configurationDisplayName("Lunaschal")
-        .description("Focus, timeout, workout, record and transcribe in one row.")
+        .description("Focus, timeout, record and transcribe in one row.")
         .supportedFamilies([.accessoryRectangular])
     }
 }
@@ -291,7 +291,6 @@ struct LauncherView: View {
         HStack(spacing: 4) {
             timer(.focus)
             timer(.timeout)
-            workout
             recording(.record)
             recording(.transcribe)
         }
@@ -305,19 +304,6 @@ struct LauncherView: View {
             }
         } else {
             button(choice.link, symbol: choice.symbol) { Text(choice.title) }
-        }
-    }
-
-    @ViewBuilder private var workout: some View {
-        switch entry.rest {
-        case .idle:
-            button(.workout, symbol: "dumbbell") { Text("Rest") }
-        case .running(let startedAt, let endsAt):
-            button(.workout, symbol: "dumbbell", tint: .orange) {
-                Text(timerInterval: startedAt...endsAt, countsDown: true).monospacedDigit()
-            }
-        case .ringing:
-            button(.workout, symbol: "bell.fill", tint: .orange) { Text("Done") }
         }
     }
 
@@ -413,29 +399,54 @@ struct RecordingGlyph: View {
     @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        // On: the same icon, in red, so the face says which kind of clip is going.
-        let symbol = choice.symbol
+        if let status { recording(since: status.startedAt) } else { idle }
+    }
+
+    @ViewBuilder private var idle: some View {
         switch family {
         case .accessoryCorner:
-            if let status {
-                Image(systemName: symbol).font(.title2).foregroundStyle(.red).widgetAccentable()
-                    .widgetLabel { Text(status.startedAt, style: .timer).foregroundStyle(.red) }
-            } else {
-                Image(systemName: symbol).font(.title2).widgetLabel(choice.title)
-            }
+            Image(systemName: choice.symbol).font(.title2).widgetLabel(choice.title)
         case .accessoryInline:
-            if let status {
-                Label { Text(status.startedAt, style: .timer) } icon: { Image(systemName: symbol) }
-            } else {
-                Label(choice.title, systemImage: symbol)
-            }
+            Label(choice.title, systemImage: choice.symbol)
+        default:
+            Glyph(symbol: choice.symbol).accessibilityLabel(choice.title)
+        }
+    }
+
+    /// On: the elapsed time takes the glyph's place. Red alone is not enough —
+    /// most faces draw complications tinted or accented, which drops the
+    /// colour, and a red mic then looked exactly like an idle one.
+    @ViewBuilder private func recording(since start: Date) -> some View {
+        let going = choice == .record ? "Recording" : "Transcribing"
+        switch family {
+        case .accessoryCorner:
+            Text(start, style: .timer)
+                .font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
+                .minimumScaleFactor(0.6)
+                .foregroundStyle(.red)
+                .widgetAccentable()
+                .widgetLabel { Text(going).foregroundStyle(.red) }
+        case .accessoryInline:
+            Label { Text(start, style: .timer).monospacedDigit() } icon: { Image(systemName: choice.symbol) }
         default:
             ZStack {
-                if status != nil { Circle().fill(.red.opacity(0.3)) } else { AccessoryWidgetBackground() }
-                Image(systemName: symbol).font(.title2).foregroundStyle(status == nil ? Color.primary : .red)
+                AccessoryWidgetBackground()
+                // A full ring, the shape a running timer has, so the face
+                // reads "going" in any rendering mode.
+                Circle().strokeBorder(.red, lineWidth: 3).widgetAccentable()
+                VStack(spacing: 0) {
+                    Image(systemName: choice.symbol).font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.red).widgetAccentable()
+                    Text(start, style: .timer)
+                        .font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit()
+                        .minimumScaleFactor(0.5)
+                        .lineLimit(1)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal, 6)
             }
-            .widgetAccentable(status != nil)
-            .accessibilityLabel(status == nil ? choice.title : "Stop \(choice.title.lowercased())")
+            .accessibilityLabel("Stop \(choice.title.lowercased())")
         }
     }
 }
