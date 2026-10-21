@@ -1242,7 +1242,10 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(progress.waitForExistence(timeout: 10), "The book says it is downloading")
         let finished = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: progress)
         XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 60), .completed, "The download finishes")
-        XCTAssertTrue(app.staticTexts["Chapter 1"].exists, "and its chapters are there to read")
+        // Below the book's shelf, review and tags.
+        let first = app.staticTexts["Chapter 1"]
+        for _ in 0..<4 where !first.exists { app.collectionViews.firstMatch.swipeUp() }
+        XCTAssertTrue(first.exists, "and its chapters are there to read")
 
         // Back in the list it is marked as downloaded, as the one already on
         // the device is, and the half-downloaded one isn't.
