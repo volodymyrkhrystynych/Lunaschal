@@ -119,6 +119,21 @@ first chapter). The reader's bottom-left menu takes typed or spoken commentary
 (a journal entry linked to the chapter) and Continue/Favorite bookmarks. Scrolling
 is logged as reading spans, and the chapter is reported as last read; both are
 queued offline.
+Organizing works offline and syncs last-write-wins. A left swipe on a book offers
+Folders (a checklist), Review (1–5 stars and text) and Drop (a review, then the
+Dropped shelf). A right swipe moves the book to a shelf: To read, Reading, Paused,
+Finished or Dropped. Finished and dropped books are the archive, left out of the
+default list and shown by the filter menu's Shelf → Archived. That menu also
+filters by minimum rating and by unread chapters, and sorts by rating. Select
+files or shelves several books at once. Rows show the shelf, the rating, an
+unread count (main-story chapters only) and reaction proof (reacted/checked).
+The chapter list carries every site tag and a read checkmark on each chapter.
+It also shows the reaction the forum showed you on that chapter's post, read
+from pages the server fetched while logged in. A swipe toggles read; long press
+offers "Mark all up to here read" and Open on site. Scrolling to the end of a
+chapter marks it read. Swipe, drop, filters, read marks, reactions and tags
+passed in simulator against the fixture; the reaction markup itself is
+unverified against a live forum (`python -m backend.fanfic.reaction_probe <reader url>`).
 Study owns Documents and other saved reference material, and is iPad-only.
 On iPad it provides Pencil annotations for downloaded PDFs
 and images without a Notebook editor. Ink autosaves locally and can be exported

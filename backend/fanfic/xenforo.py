@@ -77,12 +77,23 @@ class ReaderPost:
     # already-published chapter changed — editing a post raises no alert and
     # leaves the threadmarks index untouched.
     edited_at: int | None = None
+    # The reaction the *viewer* gave this post ("Like", "Informative", ...),
+    # None when they gave none. Only meaningful when `reaction_seen` -- the
+    # post carried a react button to read -- and the page was fetched logged
+    # in; an anonymous page has no button, and the author's own post never
+    # does.
+    my_reaction: str | None = None
+    reaction_seen: bool = False
 
 
 @dataclass
 class ReaderPage:
     posts: list[ReaderPost]
     last_page: int
+    # XenForo stamps <html data-logged-in="true|false">. Reactions are only
+    # trusted from a logged-in page: a lapsed session must not read as "the
+    # user reacted to nothing".
+    logged_in: bool = False
 
 
 @dataclass
@@ -435,6 +446,7 @@ def parse_reader_page(html: str) -> ReaderPage:
                 if posted_at is not None:
                     break
 
+        reaction_seen, my_reaction = _my_reaction(article)
         posts.append(ReaderPost(
             post_id=post_id,
             threadmark_title=_tag_text(label),
@@ -442,9 +454,33 @@ def parse_reader_page(html: str) -> ReaderPage:
             posted_at=posted_at,
             content_html=body.decode_contents(),
             edited_at=edited_at,
+            my_reaction=my_reaction,
+            reaction_seen=reaction_seen,
         ))
 
-    return ReaderPage(posts=posts, last_page=_last_page(soup))
+    root = soup.find('html')
+    logged_in = root is not None and root.get('data-logged-in') == 'true'
+    return ReaderPage(posts=posts, last_page=_last_page(soup), logged_in=logged_in)
+
+
+def _my_reaction(article) -> tuple[bool, str | None]:
+    """(whether the post has a react button, the viewer's reaction on it).
+
+    XenForo 2 renders the viewer's own react button in the post's action bar
+    as `a.actionBar-action--reaction`; it gains `has-reaction` once they have
+    reacted, and its `.reaction-text` names the reaction ("Like", or whichever
+    they picked). The reactions *bar* below a post lists everyone's reactions
+    and is not this -- only the button is about the viewer."""
+    button = article.select_one('a.actionBar-action--reaction')
+    if button is None:
+        return False, None
+    if 'has-reaction' not in (button.get('class') or []):
+        return True, None
+    name = _tag_text(button.select_one('.reaction-text'))
+    if not name:
+        img = button.select_one('img[title], img[alt]')
+        name = ((img.get('title') or img.get('alt') or '') if img else '').strip()
+    return True, name or 'Reacted'
 
 
 _SKIP_IMAGE = re.compile(r'/smilies/|/reaction/|^data:', re.I)

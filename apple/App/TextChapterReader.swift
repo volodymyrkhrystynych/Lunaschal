@@ -28,7 +28,11 @@ struct TextChapterReader: View {
     @State private var sheet: ReaderSheet?
     @State private var unsavedPosition: (String, String, Int, String?)?
     @State private var positionSave: Task<Void, Never>?
+    /// Chapters this reader has already considered marking read, so reaching
+    /// the end of one asks the store once, not on every scroll tick.
+    @State private var autoReadChecked: Set<String> = []
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     private var store: ReplicaStore { owner.replica }
     private var ficID: String? { current.data?["ficId"]?.string }
 
@@ -95,7 +99,10 @@ struct TextChapterReader: View {
             return min(1, max(0, (geometry.contentOffset.y + geometry.contentInsets.top) / range))
         } action: { _, value in
             fraction = value
-            if userScrolling { recordScroll(value) }
+            if userScrolling {
+                recordScroll(value)
+                markReadAtEnd(value)
+            }
         }
     }
 
@@ -192,6 +199,10 @@ struct TextChapterReader: View {
             Button("Transcribe", systemImage: "mic") { sheet = .transcribe }
             Button("Continue", systemImage: "bookmark") { bookmark("continue") }
             Button("Bookmark", systemImage: "star") { bookmark("favorite") }
+            if let link = current.data?["sourceUrl"]?.string, let url = URL(string: link) {
+                Button("Open on site", systemImage: "safari") { openURL(url) }
+                    .accessibilityIdentifier("reader-open-on-site")
+            }
             if let book, FicSources.isUpdatable(book.data?["sourceType"]?.string) {
                 Button("Get latest chapters", systemImage: "arrow.clockwise") {
                     Task { await owner.checkFicForUpdates(book, deep: false) }
@@ -283,6 +294,16 @@ struct TextChapterReader: View {
             owner.queueReading(.span(closed))
         }
         if let due = spans.takeFlush(now: now) { owner.queueReading(.span(due)) }
+    }
+
+    /// Scrolling to the end of a chapter marks it read, once.
+    private func markReadAtEnd(_ value: Double) {
+        guard let ficID, value >= FicLibrary.autoReadFraction, !autoReadChecked.contains(current.id) else { return }
+        autoReadChecked.insert(current.id)
+        let alreadyRead = (try? store.readChapterIDs(bookID: ficID).contains(current.id)) ?? true
+        guard FicLibrary.shouldAutoMark(fraction: value, alreadyRead: alreadyRead) else { return }
+        owner.markChapters(bookID: ficID, chapterIDs: [current.id], read: true)
+        show("Marked read")
     }
 
     private func closeSpan(sync: Bool) {

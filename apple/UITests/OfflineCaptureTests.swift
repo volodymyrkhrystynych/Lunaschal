@@ -1113,6 +1113,73 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["Re-read edited chapters"].exists)
     }
 
+    /// A left swipe drops a fic with a rating and a review: it leaves the
+    /// library at once, offline, and waits under the Archived shelf filter
+    /// beside the fixture's already-dropped book.
+    func testDroppingAFicWithAReviewMovesItToTheArchive() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let row = app.staticTexts["Quiet Hours"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Abandoned Quest"].exists)
+        row.swipeLeft()
+        let drop = app.buttons["Drop"]
+        XCTAssertTrue(drop.waitForExistence(timeout: 5))
+        drop.tap()
+        XCTAssertTrue(app.navigationBars["Drop this fic"].waitForExistence(timeout: 5))
+        app.buttons["rating-star-2"].tap()
+        let review = app.textFields["fic-review-text"].exists ? app.textFields["fic-review-text"] : app.textViews["fic-review-text"]
+        review.tap()
+        review.typeText("Stopped caring about the cast.")
+        app.buttons["fic-review-save"].tap()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5))
+
+        app.buttons["Filter books"].tap()
+        let shelf = app.buttons["Shelf"]
+        XCTAssertTrue(shelf.waitForExistence(timeout: 5))
+        shelf.tap()
+        let archived = app.buttons["Archived (finished & dropped)"]
+        XCTAssertTrue(archived.waitForExistence(timeout: 5))
+        archived.tap()
+        XCTAssertTrue(app.staticTexts["Quiet Hours"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Abandoned Quest"].exists)
+        XCTAssertTrue(app.staticTexts["Dropped"].exists)
+    }
+
+    /// A book's chapter list says which chapters were read and what the forum
+    /// showed as the user's reaction, lists every tag, and a swipe marks one read.
+    func testChapterListShowsReadMarksReactionsAndTags() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == '3 unread'")).firstMatch.exists)
+        book.tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        XCTAssertTrue(app.staticTexts["2 of 5 chapters read · reacted on 1"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Slice of Life"].exists)
+        let list = app.collectionViews.firstMatch
+        let liked = app.staticTexts["Like"]
+        for _ in 0..<4 where !liked.isHittable { list.swipeUp() }
+        XCTAssertTrue(liked.exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Not reacted'")).firstMatch.exists)
+        // The fixture's chapter ids: the book id's prefix, its last two characters, the index.
+        let third = app.buttons["chapter-row-01K8BBBBBBBBBBBBBBBBBB0102"]
+        for _ in 0..<4 where !third.isHittable { list.swipeUp() }
+        third.swipeRight()
+        let markRead = app.buttons["Read"]
+        XCTAssertTrue(markRead.waitForExistence(timeout: 5))
+        markRead.tap()
+        for _ in 0..<4 where !app.staticTexts["3 of 5 chapters read · reacted on 1"].exists { list.swipeDown() }
+        XCTAssertTrue(app.staticTexts["3 of 5 chapters read · reacted on 1"].waitForExistence(timeout: 5))
+    }
+
     /// The book list pages itself as it is scrolled: the 70th book, past the
     /// first page of 50, is reached by scrolling alone, with no button to press.
     func testLibraryLoadsTheNextPageWhenScrolledToTheEnd() {
@@ -1236,6 +1303,9 @@ final class OfflineCaptureTests: XCTestCase {
         chapters.tap()
         let threadmarks = app.buttons["chapter-tab-Threadmarks"]
         let sidestory = app.buttons["chapter-tab-Sidestory"]
+        // Below the book's shelf, review and tags.
+        XCTAssertTrue(app.buttons["book-shelf-menu"].waitForExistence(timeout: 10))
+        for _ in 0..<4 where !threadmarks.isHittable { app.collectionViews.firstMatch.swipeUp() }
         XCTAssertTrue(threadmarks.waitForExistence(timeout: 10))
         XCTAssertTrue(sidestory.exists)
         XCTAssertTrue(app.staticTexts["Chapter 2"].exists)

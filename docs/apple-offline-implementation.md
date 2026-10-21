@@ -57,6 +57,13 @@ Books-library follow-up:
 - Chapter bookmarks queue offline and sync to the desktop table through durable
   receipts and revision checks. Pending/conflicting changes are visible in the
   book; a pending Continue change must finish before another replaces it.
+- Library organizing: shelves (to read/reading/paused/finished/dropped, the last two
+  hidden by default), rating/review, folder filing, single and batch, and chapter read
+  marks queue offline as last-write-wins operations. Per-chapter forum reactions and
+  read marks sync as a separate chapter-keyed scope. This projection change forces a
+  fresh mobile bootstrap. Core tests (`FicLibraryTests`), backend tests
+  (`test_mobile_fic_edits.py`, `test_fanfic_reactions.py`) and two library UI tests
+  passed in simulator; the reaction markup is unverified against a live forum.
 - Study holds non-book material. The tab is iPad-only; the iPhone no longer shows it
   (UI test asserts its absence on iPhone).
 - Local verification: 110 Swift core tests and 54 backend bookmark/sync/seeding

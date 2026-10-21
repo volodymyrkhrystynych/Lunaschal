@@ -785,6 +785,42 @@ def seed_fanfic(db, journal_ids):
             (fic_id, name, ts(15)),
         )
 
+    # Shelves: the never-opened favorite waits on to_read, and a forum quest
+    # was dropped with a review -- the archive the library hides by default.
+    db.execute("UPDATE fics SET shelf='to_read' WHERE id=?", (browser_fic_id,))
+    db.execute("UPDATE fics SET rating=4, review=? WHERE id=?",
+               ('Gentle and strange; the second chapter earns the title.', fic_id))
+    dropped_id = new_id()
+    db.execute(
+        'INSERT INTO fics (id, title, author, source_type, source_url, site, thread_id, word_count,'
+        ' chapter_count, download_status, rating, review, shelf, shelved_at, last_opened_at,'
+        ' created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        (dropped_id, 'Quest for the Ninth Archive (demo)', 'forum_author', 'xenforo',
+         'https://forums.example.com/threads/ninth-archive.1001/', 'forums.example.com', '1001',
+         2400, 3, 'complete', 2, 'Lost me once the council arc started. Dropped at 3.',
+         'dropped', ts(2), ts(3), ts(40), ts(2)),
+    )
+    for position in (1, 2, 3):
+        text = f'Part {position} of the archive quest.'
+        db.execute(
+            'INSERT INTO fic_chapters (id, fic_id, position, title, content_html, content_text,'
+            ' source_url, source_post_id, word_count, posted_at, created_at)'
+            ' VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (new_id(), dropped_id, position, f'Part {position}', f'<p>{text}</p>', text,
+             f'https://forums.example.com/posts/{9000 + position}/', str(9000 + position),
+             800, ts(40 - position), ts(40)),
+        )
+    parts = [r['id'] for r in db.execute(
+        'SELECT id FROM fic_chapters WHERE fic_id=? ORDER BY position', (dropped_id,))]
+    for chapter_id in parts[:2]:
+        db.execute('INSERT INTO fic_chapter_reads (chapter_id, fic_id, created_at) VALUES (?,?,?)',
+                   (chapter_id, dropped_id, ts(3)))
+    # Part 1 liked, part 2 checked with no reaction, part 3 never checked.
+    db.execute('INSERT INTO fic_chapter_reactions (chapter_id, fic_id, reaction, checked_at)'
+               ' VALUES (?,?,?,?)', (parts[0], dropped_id, 'Like', ts(2)))
+    db.execute('INSERT INTO fic_chapter_reactions (chapter_id, fic_id, reaction, checked_at)'
+               ' VALUES (?,?,?,?)', (parts[1], dropped_id, None, ts(2)))
+
     # Site bookkeeping. The cookie is obviously fake on purpose — this database
     # is built from a script that ships in a public repo.
     db.execute(

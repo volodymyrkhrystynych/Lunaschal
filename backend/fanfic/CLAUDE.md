@@ -158,6 +158,27 @@ existing chapter bodies or changing their IDs and reading state.
   This can recheck today's updates, but older completed stories incur no
   story requests. AO3 and Patreon collection behavior is unchanged.
 
+## Shelves, read marks and reaction proof
+
+**A fic sits on one shelf** (`fics.shelf`: `to_read`/`reading`/`paused`/`finished`/`dropped`,
+with `shelved_at`), and finished/dropped are the archive the phone's list hides by default.
+The migration put never-opened, never-read fics on `to_read`. `library.py` holds the rules
+both callers share (`PATCH /<id>/shelf`, `/review`, `/read`, the folder routes, and the
+phone's `mobile_sync/fic_edits.py`). The phone's edits are **last write wins**: a fic's
+record moves on every chapter download, so a revision check would turn a review written
+offline into a conflict for nothing.
+
+**Your own forum reaction on each chapter is kept as proof it was read**
+(`fic_chapter_reactions`). `parse_reader_page` reads the viewer's react button
+(`a.actionBar-action--reaction`, `has-reaction` once reacted, `.reaction-text` for which
+one) and `<html data-logged-in>`. Every reader page any walk fetches records it, the deep
+check included, at no extra request. Two rules: **only a logged-in page writes**, so a
+lapsed session can't turn proof into "reacted to nothing"; and a row with a NULL reaction
+is "checked, not reacted", while no row is unknown (the author's own posts carry no
+button). `checked_at` moves on every look, which is how the phone says how fresh the
+evidence is. The markup is XenForo 2's default and unverified per theme: check a real
+thread with `python -m backend.fanfic.reaction_probe <reader url>`.
+
 ## Reading spans (`fic_reading_spans`)
 
 A chapter open **and being scrolled** is recorded as reading time. Calendar's day

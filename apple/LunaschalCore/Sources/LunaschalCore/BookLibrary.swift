@@ -7,6 +7,12 @@ public struct BookFilter: Equatable {
     public var tag = ""
     public var sort = "activity"
     public var bookmark = ""
+    /// `FicLibrary.activeShelves` (the default: not finished, not dropped),
+    /// `archivedShelves`, `allShelves`, or one `Shelf` raw value.
+    public var shelf = FicLibrary.activeShelves
+    /// 0 for any rating, unrated included.
+    public var minRating = 0
+    public var unreadOnly = false
     public init() {}
 }
 

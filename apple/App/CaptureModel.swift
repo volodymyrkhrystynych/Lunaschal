@@ -55,6 +55,9 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var ficErrors: [String: String] = [:]
     /// Bumped each time a fic page lands, so an open book redraws its chapters.
     @Published private(set) var ficDownloadRevision = 0
+    /// Bumped when this device files, rates, shelves or marks something read,
+    /// so library screens show it before any sync has run.
+    @Published private(set) var libraryRevision = 0
     /// The Daily tab: what this device has logged, and the server's record of today.
     @Published private(set) var dailyLogs: [DailyLog] = []
     @Published private(set) var dailyStatus: DailyStatus?
@@ -1290,8 +1293,10 @@ final class CaptureModel: ObservableObject {
             let food = FoodSync.supported(by: caps.collections)
             let spending = SpendingSync.supported(by: caps.collections)
             let libraryScope = LibraryDownload.collections(knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge"))
-            let scopes = [Self.journalScope, CalendarSync.collections, libraryScope, FoodSync.collections,
+            let tracking = FicLibrary.supported(by: caps.collections)
+            var scopes = [Self.journalScope, CalendarSync.collections, libraryScope, FoodSync.collections,
                           SpendingSync.collections]
+            if tracking { scopes.append(FicLibrary.trackingCollections) }
             var pull = scopes.map { _ in true }
             if !full, caps.syncStatus {
                 pull = try await timed("check for changes") { try await replicaSyncer.scopesToPull(using: api, scopes: scopes) }
@@ -1306,6 +1311,12 @@ final class CaptureModel: ObservableObject {
             if food, pull[3] {
                 changed.formUnion(try await timed("food log") {
                     try await replicaSyncer.run(using: api, collections: FoodSync.collections)
+                })
+            }
+            // Read marks and forum reactions: their own scope, like food.
+            if tracking, pull[5] {
+                changed.formUnion(try await timed("reading marks") {
+                    try await replicaSyncer.run(using: api, collections: FicLibrary.trackingCollections)
                 })
             }
             if spending, pull[4] {
@@ -1496,6 +1507,28 @@ final class CaptureModel: ObservableObject {
 
     /// Queues one fic for an update on the server, or takes it back out if it
     /// was already waiting. `deep` also re-reads chapters the author edited.
+    /// Change books' rating, review, shelf or folders on this device; they
+    /// sync when connected. False when it couldn't be saved.
+    @discardableResult
+    func editFics(_ ids: [String], _ changes: [String: JSONValue]) -> Bool {
+        do {
+            for id in ids { try replica.queueFicEdit(bookID: id, changes) }
+        } catch {
+            message = error.localizedDescription
+            return false
+        }
+        libraryRevision += 1
+        requestSync()
+        return true
+    }
+
+    func markChapters(bookID: String, chapterIDs: [String], read: Bool) {
+        do { try replica.setChaptersRead(bookID: bookID, chapterIDs: chapterIDs, read: read) }
+        catch { message = error.localizedDescription; return }
+        libraryRevision += 1
+        requestSync()
+    }
+
     func checkFicForUpdates(_ book: SyncChange, deep: Bool) async {
         guard let api = chatAPI() else { message = "Sign in to update fics on the server."; return }
         do { message = try await api.checkFicForUpdates(book.id, deep: deep).summary(title: book.title) }

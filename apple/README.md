@@ -363,7 +363,13 @@ what each device can currently do and which work remains device-only.
   Favorite/Continue-reading filters, and recent/title sorting; there is no tag filter, since
   fics carry hundreds of user tags. The toolbar's refresh calls `POST /api/fanfic/refresh-alerts`,
   and long-pressing a site's fic calls `POST /api/fanfic/<id>/check-updates` (shallow or deep);
-  both only queue work for the server, and new chapters arrive by sync. Importing goes through
+  both only queue work for the server, and new chapters arrive by sync. A book's rating, review,
+  shelf (`fics.shelf`; finished/dropped are the archive, hidden by default) and folders are
+  edited through the outbox as `fics` operations, and chapter read marks as
+  `fic_chapter_reads` create/delete. Both are last-write-wins
+  (`backend/mobile_sync/fic_edits.py`), and a book has at most one waiting edit
+  (`ReplicaStore.queueFicEdit` merges). `fic_chapter_reads` and `fic_chapter_reactions` sync
+  as their own scope, keyed by chapter id, only when the server advertises them. Importing goes through
   `POST /api/fanfic/import` from two places: the share extension (`Share/`, a link shared from
   any app) and Settings → Library downloads → Import a fic. A link sent while the server is
   unreachable waits in `FicImportOutbox`, in the App Group container the two share, and the

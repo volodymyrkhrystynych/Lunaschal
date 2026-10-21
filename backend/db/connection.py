@@ -238,6 +238,7 @@ def init_db() -> None:
     from backend.db.fic_sources_migration import ensure_fic_sources
     ensure_fic_sources(db)
     _ensure_fic_source_dates(db)
+    _ensure_fic_shelf(db)
     _ensure_collection_scan_retry(db)
     _ensure_site_cookie_user_agent(db)
     _repair_escaped_image_fallbacks(db)
@@ -568,6 +569,22 @@ def _ensure_collection_scan_retry(db: sqlite3.Connection) -> None:
     if 'attempts' not in cols:
         db.execute('ALTER TABLE fanfic_collection_scans'
                    ' ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0')
+    db.commit()
+
+
+def _ensure_fic_shelf(db: sqlite3.Connection) -> None:
+    """Reading shelves. A fic never opened and with nothing marked read has not
+    been started, so it lands on to_read; everything else is reading. The
+    CHECK in schema.sql is not repeated here -- the route and the mobile edit
+    validate the value, and a rebuild from schema.sql brings the constraint."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fics)')}
+    if 'shelf' in cols:
+        return
+    db.execute("ALTER TABLE fics ADD COLUMN shelf TEXT NOT NULL DEFAULT 'reading'")
+    db.execute('ALTER TABLE fics ADD COLUMN shelved_at INTEGER')
+    db.execute(
+        "UPDATE fics SET shelf='to_read' WHERE last_opened_at IS NULL"
+        ' AND NOT EXISTS (SELECT 1 FROM fic_chapter_reads r WHERE r.fic_id=fics.id)')
     db.commit()
 
 
