@@ -673,9 +673,12 @@ publicly to make CI work: simulator capture tests never contact it.
   the simulator too.
 - A running timer (Focus, Break, Timeout, Workout) shows on every timer
   complication as the system Timer draws one: a ring round the whole edge that
-  empties, with the time left centred inside it, the time with a gauge in a corner. A recording turns its Record
-  or Transcribe complication, launcher button and Control red, keeping the same
-  icon. Every change reloads all complications and Controls, and the app reloads
+  empties, with the time left centred inside it, the time with a gauge in a corner. A recording turns its launcher
+  button and Control red, and its Record or Transcribe complication into the
+  elapsed time (a full ring round it on the circular one, "Recording" or
+  "Transcribing" along a corner) — red alone vanished on faces drawn tinted or
+  accented, where an active mic looked exactly like an idle one. The launcher
+  row is Focus, Timeout, Record and Transcribe; Workout has its own complication. Every change reloads all complications and Controls, and the app reloads
   them again as the face comes back; before this, timer changes never reloaded
   the launcher row. Builds in the watchOS simulator; how it looks on the face
   needs the device.
