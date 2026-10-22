@@ -63,9 +63,17 @@ what each device can currently do and which work remains device-only.
   a second one, so a paper is written on through the day in one place.
   The web reader's own markup is untouched. Back autosaves (current + previous
   checkpoint, like drawings) and the notebook is listed under Draw → Notebooks to
-  continue. Ink the canvas hasn't reported yet is taken into the notebook before
-  any page turn, added page, lock or paste replaces the canvas, and before every
-  checkpoint and Save. While writing, ink is checkpointed at most every 5 seconds,
+  continue. **Each notes page has its own canvas** while the notebook is open: a
+  turn or an added page hides the page's canvas instead of loading the next page
+  into it, so ink PaperKit hands over late (seen on the iPad: a page written,
+  another added, most of the first gone) still lands on its own page. Every
+  page's canvas is read before each checkpoint, Save, lock or paste; a newspaper
+  keeps one canvas, scrolled. A stroke no longer re-runs the editor's SwiftUI
+  body. **Ink log** (the notebook's ⋯ menu) lists turns, added pages, where each
+  page's ink came from (the canvas on screen, a turned-away page's canvas, or only
+  the read before a save), save timings and what an entry filed; Copy puts it on
+  the clipboard for a bug report. Passed in simulator, not yet verified with a
+  Pencil. While writing, ink is checkpointed at most every 5 seconds,
   off the main thread; only touched pages are encoded and written, and untouched
   ones are hard-linked from the previous checkpoint. The cover preview and a
   newspaper's inked-page scan wait for Back, leaving the app, or Save, which save at

@@ -2472,6 +2472,34 @@ final class OfflineCaptureTests: XCTestCase {
         detachDraftNotes(app)
     }
 
+    /// The ink log, in the notebook's menu, reads what the editor did: here
+    /// the page added. On the iPad it is how a Pencil-only fault is seen.
+    func testNotebookInkLogShowsWhatHappened() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        detachDraftNotes(app)
+        notes.tap()
+        let counter = app.buttons["notebook-page"]
+        XCTAssertTrue(counter.waitForExistence(timeout: 10))
+        app.buttons["notebook-add-page"].tap()
+        XCTAssertTrue(waitForLabel(counter, equalTo: "2 / 2"))
+
+        app.buttons["notebook-more"].tap()
+        let open = app.buttons["notebook-ink-log"]
+        XCTAssertTrue(open.waitForExistence(timeout: 5))
+        open.tap()
+        let text = app.staticTexts["notebook-ink-log-text"]
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertTrue(text.label.contains("add p2 after p1"), text.label)
+        app.buttons["Done"].tap()
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        detachDraftNotes(app)
+    }
+
     /// Notes reopen the entry draft's notebook until the entry is saved, so a
     /// test that wants a fresh one first takes any left over by an earlier
     /// test (or an earlier try of this one) out of the draft. They stay in Draw.

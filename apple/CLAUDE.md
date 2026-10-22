@@ -38,6 +38,7 @@ xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesPagesDoNotTurnWithASwipe
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingToolbarStaysThroughPageChanges
 #        -only-testing:LunaschalUITests/OfflineCaptureTests/testNotebookZoomIsOffUntilSwitchedOn
+#        -only-testing:LunaschalUITests/OfflineCaptureTests/testNotebookInkLogShowsWhatHappened
 
 xcodebuild -project apple/Lunaschal.xcodeproj -scheme LunaschalWatch \
   -sdk watchsimulator -destination 'generic/platform=watchOS Simulator' \
