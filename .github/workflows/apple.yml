@@ -132,6 +132,7 @@ jobs:
             -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesPagesDoNotTurnWithASwipe \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingToolbarStaysThroughPageChanges \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testNotebookZoomIsOffUntilSwitchedOn \
+            -only-testing:LunaschalUITests/OfflineCaptureTests/testNotebookInkLogShowsWhatHappened \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingToolSizesApplyImmediatelyAndSurviveReopening \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesComeBackFromTheEntryDraftAndSaveWithIt \
             CODE_SIGNING_ALLOWED=NO test

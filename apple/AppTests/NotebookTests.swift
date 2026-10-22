@@ -4,6 +4,7 @@ import PaperKit
 import PencilKit
 import UIKit
 import SwiftUI
+import Combine
 import LunaschalCore
 @testable import Lunaschal
 
@@ -705,6 +706,127 @@ final class NotebookEditorTests: XCTestCase {
         let files = await model.renderForSave()
         XCTAssertEqual(files.map(\.name), ["Notes p1.jpg", "Notes p2.jpg", "Notes p3.jpg"])
         withExtendedLifetime(controller) {}
+    }
+
+    // MARK: A canvas per notes page
+
+    /// A picture on a page, in its own place so two pages' ink differs.
+    private func marked(_ page: PaperMarkup, at y: CGFloat) throws -> PaperMarkup {
+        var markup = page
+        markup.insertNewImage(try XCTUnwrap(solid(.blue, CGSize(width: 200, height: 100))),
+                              frame: CGRect(x: 100, y: y, width: 200, height: 100))
+        return markup
+    }
+
+    /// Turning a page hides its canvas rather than loading the next page into
+    /// it, and turning back shows that same canvas, untouched.
+    func testEachNotesPageKeepsItsOwnCanvas() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = canvas(model)
+        let first = controller.paper
+        model.addPage()
+        controller.show(page: model.current, revision: model.revision)
+        let second = controller.paper
+        XCTAssertFalse(first === second, "the new page has a canvas of its own")
+        XCTAssertEqual(controller.papers.count, 2)
+        XCTAssertTrue(first.view.isHidden, "only the page on screen is drawn")
+        XCTAssertFalse(second.view.isHidden)
+
+        let held = try marked(model.pages[1], at: 300)
+        drawUnreported(held, on: controller)
+        model.go(to: 0)
+        controller.show(page: model.current, revision: model.revision)
+        XCTAssertTrue(controller.paper === first, "turning back finds the same canvas")
+        XCTAssertTrue(second.view.isHidden)
+        XCTAssertEqual(second.markup, held, "a canvas turned away from keeps exactly what it held")
+    }
+
+    /// The fault on the iPad: ink PaperKit handed over only after its page was
+    /// turned away from. It now arrives from that page's own canvas, onto that page.
+    func testInkReportedAfterTurningAwayLandsOnItsOwnPage() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = canvas(model)
+        let first = controller.paper
+        model.addPage()
+        controller.show(page: model.current, revision: model.revision)
+
+        // The first page's canvas reports late, through its delegate.
+        first.markup = try marked(model.pages[0], at: 200)
+        XCTAssertFalse(NotebookPage.isBlank(model.pages[0]), "the late ink is the first page's")
+        XCTAssertTrue(NotebookPage.isBlank(model.pages[1]), "and not the page on screen")
+        XCTAssertEqual(model.marked, [0])
+
+        await model.checkpoint()
+        XCTAssertTrue(model.log.text.contains("late from turned-away page p1×1"), model.log.text)
+        let reopened = NotebookEditorModel(store: store, notebook: try store.notebook(model.notebook.id))
+        XCTAssertFalse(NotebookPage.isBlank(reopened.pages[0]))
+        XCTAssertTrue(NotebookPage.isBlank(reopened.pages[1]))
+        withExtendedLifetime(controller) {}
+    }
+
+    /// Save reads every page's canvas, not only the one on screen.
+    func testSaveReadsEveryPagesCanvas() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = canvas(model)
+        let first = controller.paper
+        model.addPage()
+        controller.show(page: model.current, revision: model.revision)
+        // Ink the first page's canvas never reported at all.
+        let delegate = first.delegate
+        first.delegate = nil
+        first.markup = try marked(model.pages[0], at: 200)
+        first.delegate = delegate
+        XCTAssertTrue(NotebookPage.isBlank(model.pages[0]), "the model has not been told")
+
+        let files = await model.renderForSave()
+        XCTAssertEqual(files.map(\.name), ["Notes p1.jpg"])
+        XCTAssertTrue(model.log.text.contains("unreported until read") == false, "renderForSave alone writes no checkpoint")
+        XCTAssertTrue(model.log.text.contains("entry pictures: p1.jpg · blank, left out p2"), model.log.text)
+        await model.checkpoint()
+        XCTAssertTrue(model.log.text.contains("unreported until read p1×1"), model.log.text)
+        withExtendedLifetime(controller) {}
+    }
+
+    func testDeletingAPageDropsItsCanvas() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = canvas(model)
+        model.addPage()
+        controller.show(page: model.current, revision: model.revision)
+        let doomed = controller.paper
+        model.deleteCurrentPage()
+        controller.show(page: model.current, revision: model.revision)
+        XCTAssertEqual(controller.papers.count, 1)
+        XCTAssertNil(doomed.parent, "the deleted page's canvas is let go")
+        XCTAssertFalse(controller.paper.view.isHidden)
+    }
+
+    func testANewPagesCanvasTakesTheChosenTool() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = shown(model)
+        controller.drawingToolbar.select(DrawingFavorite(kind: "marker", red: 1, width: 12))
+        model.addPage()
+        controller.show(page: model.current, revision: model.revision)
+        XCTAssertEqual((controller.paper.drawingTool as? PKInkingTool)?.inkType, .marker)
+        XCTAssertTrue(controller.paper.isFirstResponder, "the Pencil writes on the new page straight away")
+    }
+
+    /// Strokes no longer re-run the editor's SwiftUI body: once the page is
+    /// marked and the status says it's saving, a stroke publishes nothing.
+    func testAStrokeDoesNotRepublishTheEditor() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        model.canvasChanged(try marked(model.pages[0], at: 100), page: 0)
+        var published = 0
+        let watching = model.objectWillChange.sink { published += 1 }
+        model.canvasChanged(try marked(model.pages[0], at: 300), page: 0)
+        model.canvasChanged(try marked(model.pages[0], at: 500), page: 0)
+        XCTAssertEqual(published, 0)
+        withExtendedLifetime(watching) {}
     }
 
     func testAPageAddedToAColumnKeepsInkTheCanvasHadNotReported() throws {

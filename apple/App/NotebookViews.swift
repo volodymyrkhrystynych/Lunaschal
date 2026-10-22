@@ -61,7 +61,15 @@ enum NotebookPage {
 @MainActor
 final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     @Published private(set) var notebook: Notebook
-    @Published private(set) var pages: [PaperMarkup] = []
+    /// Not published: every stroke changes it, and publishing it re-ran the
+    /// whole editor's SwiftUI body (toolbar, page menu) once per stroke.
+    /// Changes the screen must show bump `revision` or `current` instead.
+    private(set) var pages: [PaperMarkup] = []
+    /// Who each notes page is, parallel to `pages`, for as long as the editor
+    /// is open: unlike `pageIDs` it survives the page's content changing, so
+    /// the canvas can keep one PaperKit canvas per page and never load one
+    /// page into another's.
+    private(set) var pageKeys: [UUID] = []
     @Published private(set) var current = 0
     @Published private(set) var marked: Set<Int> = []
     /// Each page's locked pictures, serialized; nil where a page has none.
@@ -121,6 +129,14 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     /// Leaving the notebook or the app saves at once, whatever the timer says.
     static let autosaveInterval: Duration = .seconds(5)
 
+    /// The ink log beside the notebooks (Settings in the notebook's menu shows it).
+    let log: NotebookLog
+    /// Where each page's ink came from since the last checkpoint, for the log:
+    /// the canvas on screen, a page's canvas after it was turned away from, or
+    /// only the read taken before a save or a page change.
+    enum InkSource { case shown, turnedAway, read }
+    private var arrivals: [InkSource: [Int: Int]] = [:]
+
     /// Editors still alive, by notebook. A notebook left with Back finishes
     /// its save in the background; reopening it straight away must pick up
     /// that editor, not read a disk the save hasn't reached yet — whose next
@@ -143,6 +159,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     init(store: NotebookStore, notebook: Notebook) {
         self.store = store
         self.notebook = notebook
+        log = NotebookLog(url: store.root.appendingPathComponent("ink-log.txt"))
         pdf = (try? store.pdfURL(notebook)).flatMap { $0 }.flatMap(PDFDocument.init(url:))
         marked = notebook.markedPages
         slotCount = max(notebook.pageCount, 1)
@@ -163,7 +180,9 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             if notebook.newspaperDate != nil && !notebook.isColumn { convertToColumn() }
             loaded = true
             refreshPictureState()
+            log.record("open \(notebook.title) · \(notebook.isColumn ? "column" : "paged") · \(pageCount) pages")
         } catch {
+            log.record("open \(notebook.title) failed: \(error.localizedDescription)")
             self.error = "Could not open this notebook. Its saved pages were kept. \(error.localizedDescription)"
             status = "Could not open notebook"
         }
@@ -205,6 +224,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         pages = [column]
         locked = [nil]
         pageIDs = [UUID()]
+        pageKeys = [UUID()]
         lockedIDs = [UUID()]
         pendingLocked = pictures
         notebook.layout = .column
@@ -245,6 +265,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     /// on disk yet, in none.
     private func adoptDisk(fresh: Bool) {
         pageIDs = pages.map { _ in UUID() }
+        pageKeys = pages.map { _ in UUID() }
         lockedIDs = locked.map { _ in UUID() }
         decodedLocked = [:]
         onDisk = fresh ? [:] : Dictionary(uniqueKeysWithValues: pageIDs.enumerated().map { ($1, $0) })
@@ -303,6 +324,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     func go(to index: Int) {
         guard (0..<pageCount).contains(index), index != current else { return }
         syncFromCanvas()
+        log.record("turn p\(current + 1) → p\(index + 1)")
         current = index
         refreshPictureState()
         if isColumn { canvas?.scroll(toSlot: index) }
@@ -332,7 +354,9 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         pages.append(PaperMarkup(bounds: NotebookPage.blank))
         locked.append(nil)
         pageIDs.append(UUID())
+        pageKeys.append(UUID())
         lockedIDs.append(UUID())
+        log.record("add p\(pages.count) after p\(current + 1)")
         current = pages.count - 1
         refreshPictureState()
         revision += 1
@@ -346,6 +370,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         pages.remove(at: index)
         locked.remove(at: index)
         pageIDs.remove(at: index)
+        pageKeys.remove(at: index)
         lockedIDs.remove(at: index)
         marked = Set(marked.compactMap { $0 == index ? nil : ($0 > index ? $0 - 1 : $0) })
         current = min(index, pages.count - 1)
@@ -354,17 +379,16 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         scheduleCheckpoint()
     }
 
-    /// What the canvas holds, taken into the model before anything replaces
-    /// the canvas's markup. The canvas reports ink only through its delegate,
-    /// and every page turn, added page, lock or pasted picture reassigns the
-    /// canvas from `pages` — so ink it had not reported yet was overwritten,
-    /// and missing from the checkpoint and the Save as well.
+    /// What every page's canvas holds, taken into the model before a save, a
+    /// page change, a lock or a pasted picture. The canvas reports ink only
+    /// through its delegate, in PaperKit's own time.
     private func syncFromCanvas() { canvas?.flushInk() }
 
-    /// From the canvas. Assigning a page's markup to the canvas can echo back
+    /// From a canvas. Assigning a page's markup to the canvas can echo back
     /// unchanged, which must not mark a newspaper page as written on.
-    func canvasChanged(_ markup: PaperMarkup, page: Int) {
+    func canvasChanged(_ markup: PaperMarkup, page: Int, source: InkSource = .shown) {
         guard loaded, pages.indices.contains(page), pages[page] != markup else { return }
+        arrivals[source, default: [:]][page, default: 0] += 1
         pages[page] = markup
         touch(page)
         // A column's written-on pages are found from the ink at checkpoint.
@@ -603,6 +627,9 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     /// seconds, which could freeze a save halfway; asking for background time
     /// lets it finish. The checkpoint itself is no different from Back's.
     func saveBeforeLeaving() {
+        // Now, while the canvases still exist: the checkpoint below runs in a
+        // task, by which time Back may have let them go.
+        syncFromCanvas()
         let app = UIApplication.shared
         let ticket = BackgroundTicket()
         ticket.id = app.beginBackgroundTask(withName: "Save notebook") { ticket.end() }
@@ -629,13 +656,19 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         let column = isColumn, slots = slotCount, cover = coverIdentity
         let hasCheckpoint = notebook.checkpoint != nil
         var keep = marked
+        let arrived = arrivals
+        arrivals = [:]
+        let started = Date()
         do {
             // Only what changed since the last checkpoint is encoded; the rest is linked.
             var files: [NotebookFile] = []
+            var encoded: [Int] = []
             for (index, page) in snapshot.enumerated() {
                 if let saved = onDisk[ids[index]] { files.append(.kept(saved)); continue }
                 files.append(.bytes(try await page.dataRepresentation()))
+                encoded.append(index)
             }
+            let encoding = Date().timeIntervalSince(started)
             let lockedFiles: [NotebookFile?] = layers.enumerated().map { index, data in
                 guard let data else { return nil }
                 return lockedOnDisk[layerIDs[index]].map(NotebookFile.kept) ?? .bytes(data)
@@ -671,8 +704,18 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             if column { marksBehind = !scanned }
             error = nil
             status = dirty ? Self.saving : "Saved on this device"
+            var line = "\(final ? "save" : "autosave"): wrote \(encoded.map { "p\($0 + 1)" }.joined(separator: " "))"
+            if encoded.isEmpty { line = "\(final ? "save" : "autosave"): nothing new" }
+            line += String(format: " · encode %.0f ms · total %.0f ms", encoding * 1000, Date().timeIntervalSince(started) * 1000)
+            if let shown = arrived[.shown] { line += " · reported \(NotebookLog.pages(shown))" }
+            if let late = arrived[.turnedAway] { line += " · late from turned-away page \(NotebookLog.pages(late))" }
+            if let read = arrived[.read] { line += " · unreported until read \(NotebookLog.pages(read))" }
+            if scanned { line += " · written on \(keep.sorted().map { "p\($0 + 1)" }.joined(separator: " "))" }
+            log.record(line)
         } catch {
             dirty = true
+            for (source, pages) in arrived { for (page, count) in pages { arrivals[source, default: [:]][page, default: 0] += count } }
+            log.record("\(final ? "save" : "autosave") failed: \(error.localizedDescription)")
             self.error = error.localizedDescription
             status = "Save failed · keep this notebook open"
         }
@@ -700,6 +743,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             dirty = pendingLocked != nil || pageIDs.contains { onDisk[$0] == nil }
             error = nil
             revision += 1
+            log.record("restored the previous saved version")
             status = "Previous saved version restored"
         } catch { self.error = error.localizedDescription }
     }
@@ -848,14 +892,21 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         snapshot.markedPages = marked
         let prefix = isNewspaper ? notebook.title.replacingOccurrences(of: " · ", with: " ") : "Notes"
         var files: [(data: Data, name: String)] = []
+        var blank: [Int] = [], failed: [Int] = []
+        let started = Date()
         for index in snapshot.pagesToFile {
-            if !isNewspaper && NotebookPage.isBlank(pages[index]) && locked[index] == nil { continue }
+            if !isNewspaper && NotebookPage.isBlank(pages[index]) && locked[index] == nil { blank.append(index); continue }
             // Newsprint needs the extra pixels to stay legible.
             let width: CGFloat = pdfPage(index) == nil && !isColumn ? NotebookPage.width : 2000
             guard let image = await render(index, width: width),
-                  let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.85) else { continue }
+                  let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.85) else { failed.append(index); continue }
             files.append((data, "\(prefix) p\(index + 1).jpg"))
         }
+        func named(_ pages: [Int]) -> String { pages.map { "p\($0 + 1)" }.joined(separator: " ") }
+        var line = "entry pictures: \(files.isEmpty ? "none" : files.map { String($0.name.split(separator: " ").last ?? "") }.joined(separator: " "))"
+        if !blank.isEmpty { line += " · blank, left out \(named(blank))" }
+        if !failed.isEmpty { line += " · could not draw \(named(failed))" }
+        log.record(line + String(format: " · %.0f ms", Date().timeIntervalSince(started) * 1000))
         return files
     }
 
@@ -886,13 +937,25 @@ private final class BackgroundTicket {
 
 // MARK: Canvas
 
-/// PaperKit's markup view. A paged notebook shows one page at a time, the
-/// newspaper page (if any) drawn underneath as its content view, turned by
-/// the toolbar's buttons. A column shows the whole issue as one scroll fitted to the
-/// width, each page's newsprint underneath its stretch of the column.
+/// PaperKit's markup view. A paged notebook shows one page at a time, each
+/// page in its own canvas, turned by the toolbar's buttons. A column shows the
+/// whole issue as one scroll fitted to the width, each page's newsprint
+/// underneath its stretch of the column.
 final class NotebookCanvasController: UIViewController, PaperMarkupViewController.Delegate {
     let model: NotebookEditorModel
-    let paper = PaperMarkupViewController(markup: nil, supportedFeatureSet: .latest)
+    /// The canvas on screen: a column's only one, or the current notes page's.
+    private(set) var paper = PaperMarkupViewController(markup: nil, supportedFeatureSet: .latest)
+    /// Each notes page's canvas, by `model.pageKeys`. One canvas reloaded with
+    /// every page lost writing on the iPad: a turn read the canvas and then
+    /// loaded the next page into it, and whatever PaperKit had not handed over
+    /// yet went with the swap. A page's canvas now keeps its page for as long
+    /// as the editor is open; turning away only hides it, so ink it reports
+    /// late still lands on its own page. Hidden, it draws nothing.
+    private(set) var papers: [UUID: PaperMarkupViewController] = [:]
+    /// The locked layer each notes canvas's background was drawn from.
+    private var papersLocked: [UUID: Data] = [:]
+    /// Whether viewDidLoad's canvas has been given to a page yet.
+    private var firstCanvasTaken = false
     private(set) lazy var drawingToolbar = DrawingToolbar(presenter: self)
     private var shownPage = -1
     private var shownRevision = -1
@@ -935,8 +998,8 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         }
         return navigationController
     }
-    /// PaperKit's scroll views, once found and told one finger doesn't scroll.
-    private let heldScrolls = NSHashTable<UIScrollView>.weakObjects()
+    /// Canvases whose scroll views have been told one finger doesn't scroll.
+    private var heldCanvases = Set<ObjectIdentifier>()
     /// The zoom switch as last applied to the canvas.
     private var zoomApplied = false
 
@@ -951,23 +1014,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         view.backgroundColor = .secondarySystemBackground
         view.clipsToBounds = true
         overrideUserInterfaceStyle = .light
-        // The page and its ink colors stay light even when the app is dark.
-        // SwiftUI can override the representable controller's traits after
-        // viewDidLoad. Pin the PaperKit child itself or black ink is rendered
-        // white (and white black) over our permanently white page.
-        paper.overrideUserInterfaceStyle = .light
-        addChild(paper)
-        paper.view.frame = view.bounds
-        paper.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(paper.view)
-        paper.didMove(toParent: self)
-        paper.delegate = self
-        paper.isEditable = model.loaded
-        // The Pencil writes; a finger scrolls, zooms and moves pictures.
-        paper.directTouchAutomaticallyDraws = false
-        // Sideways only ever means zoomed in; a scroll bar along the bottom
-        // would suggest otherwise.
-        if #available(iOS 26.1, *) { paper.showsHorizontalScrollIndicator = false }
+        install(paper)
         drawingToolbar.undoManagerProvider = { [weak self] in self?.paper.undoManager }
         // The system picker used to own these gestures. Our compact toolbar
         // must receive them on the canvas, even when the Pencil is away from it.
@@ -989,6 +1036,27 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         show(page: model.current, revision: model.revision)
         view.addSubview(drawingToolbar)
         drawingToolbar.activateInitialTool()
+    }
+
+    /// One canvas, set up as a child under the toolbar.
+    private func install(_ canvas: PaperMarkupViewController) {
+        // The page and its ink colors stay light even when the app is dark.
+        // SwiftUI can override the representable controller's traits after
+        // viewDidLoad. Pin the PaperKit child itself or black ink is rendered
+        // white (and white black) over our permanently white page.
+        canvas.overrideUserInterfaceStyle = .light
+        addChild(canvas)
+        canvas.view.frame = view.bounds
+        canvas.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.insertSubview(canvas.view, at: 0)
+        canvas.didMove(toParent: self)
+        canvas.delegate = self
+        canvas.isEditable = model.loaded
+        // The Pencil writes; a finger scrolls, zooms and moves pictures.
+        canvas.directTouchAutomaticallyDraws = false
+        // Sideways only ever means zoomed in; a scroll bar along the bottom
+        // would suggest otherwise.
+        if #available(iOS 26.1, *) { canvas.showsHorizontalScrollIndicator = false }
     }
 
     private func reportVisibleFrame() {
@@ -1038,27 +1106,96 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         if view.bounds.size != fittedSize { fit() }
     }
 
-    /// Hands the model whatever ink is on the canvas now. PaperKit reports
+    /// Hands the model whatever ink every canvas holds now. PaperKit reports
     /// changes through the delegate in its own time; the model asks for this
-    /// before it swaps the canvas's markup out, so nothing drawn is lost.
+    /// before a save, a page change, a lock or a pasted picture.
     func flushInk() {
-        guard isViewLoaded, shownRevision != -1, let markup = paper.markup else { return }
-        model.canvasChanged(markup, page: model.isColumn ? 0 : shownPage)
+        guard isViewLoaded, shownRevision != -1 else { return }
+        if model.isColumn {
+            if let markup = paper.markup { model.canvasChanged(markup, page: 0, source: .read) }
+            return
+        }
+        for (key, canvas) in papers {
+            guard let page = model.pageKeys.firstIndex(of: key), let markup = canvas.markup else { continue }
+            model.canvasChanged(markup, page: page, source: .read)
+        }
     }
 
     func show(page: Int, revision: Int) {
         if model.isColumn { showColumn(revision: revision); return }
-        guard page != shownPage || revision != shownRevision, model.pages.indices.contains(page) else { return }
+        guard page != shownPage || revision != shownRevision, model.pages.indices.contains(page),
+              model.pageKeys.indices.contains(page) else { return }
         let pageChanged = page != shownPage
-        let layer = model.locked.indices.contains(page) ? model.locked[page] : nil
-        let layerChanged = pageChanged || layer != shownLocked
+        let revised = revision != shownRevision
+        if revised { dropCanvasesOfRemovedPages() }
+        let key = model.pageKeys[page]
+        let existing = papers[key]
+        let target = existing ?? newCanvas(for: key)
         shownPage = page
         shownRevision = revision
-        shownLocked = layer
-        paper.markup = model.pages[page]
-        if layerChanged { paper.contentView = background(for: page) }
+        // A canvas is loaded from the model when it is made, and after that
+        // only when the model changed its page from outside — a pasted
+        // picture, a lock — which it does only to the page on screen, right
+        // after reading it. Never on a turn: a canvas turned back to may hold
+        // ink it hasn't reported, and loading the model's copy would erase it.
+        if existing == nil || (revised && target === paper) { target.markup = model.pages[page] }
+        let layer = model.locked.indices.contains(page) ? model.locked[page] : nil
+        if existing == nil || layer != papersLocked[key] {
+            papersLocked[key] = layer
+            target.contentView = background(for: page)
+        }
+        if target !== paper { bringForward(target) }
         if pageChanged { fit() }
         view.setNeedsLayout()
+    }
+
+    /// A page's own canvas, made the first time the page is shown.
+    private func newCanvas(for key: UUID) -> PaperMarkupViewController {
+        let canvas: PaperMarkupViewController
+        if !firstCanvasTaken {
+            canvas = paper
+            firstCanvasTaken = true
+        } else {
+            canvas = PaperMarkupViewController(markup: nil, supportedFeatureSet: .latest)
+            install(canvas)
+            canvas.view.isHidden = true
+        }
+        papers[key] = canvas
+        return canvas
+    }
+
+    /// Shows `canvas` in place of the one on screen, with the same tool.
+    private func bringForward(_ canvas: PaperMarkupViewController) {
+        let ruler = paper.isRulerActive
+        paper.view.isHidden = true
+        canvas.view.isHidden = false
+        paper = canvas
+        if let tool = drawingToolbar.activeTool?.tool { canvas.drawingTool = tool }
+        canvas.isRulerActive = ruler
+        holdPageStill()
+        applyZoomGestures()
+        if view.window != nil { canvas.becomeFirstResponder() }
+        drawingToolbar.refreshUndo()
+    }
+
+    /// Deleted pages, or every page after a restore: their canvases go.
+    private func dropCanvasesOfRemovedPages() {
+        let kept = Set(model.pageKeys)
+        for (key, canvas) in papers where !kept.contains(key) {
+            canvas.delegate = nil
+            canvas.willMove(toParent: nil)
+            canvas.view.removeFromSuperview()
+            canvas.removeFromParent()
+            papers[key] = nil
+            papersLocked[key] = nil
+            heldCanvases.remove(ObjectIdentifier(canvas))
+        }
+    }
+
+    /// The notes page a canvas belongs to, if it still has one.
+    private func page(of canvas: PaperMarkupViewController) -> Int? {
+        guard let key = papers.first(where: { $0.value === canvas })?.key else { return nil }
+        return model.pageKeys.firstIndex(of: key)
     }
 
     /// A column's markup only changes from outside on a revision (a page
@@ -1213,6 +1350,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     }
 
     func paperMarkupViewControllerDidChangeContentVisibleFrame(_ paperMarkupViewController: PaperMarkupViewController) {
+        guard paperMarkupViewController === paper else { return }
         reportVisibleFrame()
         guard model.isColumn else { return }
         let visible = paperMarkupViewController.contentVisibleFrame
@@ -1256,17 +1394,20 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     /// scroll views, found in its view tree. The newspaper column is read by
     /// scrolling, and keeps one-finger scrolling.
     private func holdPageStill() {
-        guard !model.isColumn, isViewLoaded, heldScrolls.count == 0 else { return }
+        guard !model.isColumn, isViewLoaded, !heldCanvases.contains(ObjectIdentifier(paper)) else { return }
         var pending: [UIView] = [paper.view]
+        var found = false
         while let next = pending.popLast() {
             if let scroll = next as? UIScrollView {
                 scroll.panGestureRecognizer.minimumNumberOfTouches = 2
                 scroll.alwaysBounceVertical = false
                 scroll.alwaysBounceHorizontal = false
-                heldScrolls.add(scroll)
+                found = true
             }
             pending.append(contentsOf: next.subviews)
         }
+        // PaperKit builds its scroll views lazily; until they exist, look again next layout.
+        if found { heldCanvases.insert(ObjectIdentifier(paper)) }
     }
 
     private func showInsertMenu() {
@@ -1279,9 +1420,11 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     }
 
     func paperMarkupViewControllerDidChangeMarkup(_ paperMarkupViewController: PaperMarkupViewController) {
-        drawingToolbar.refreshUndo()
+        if paperMarkupViewController === paper { drawingToolbar.refreshUndo() }
         guard let markup = paperMarkupViewController.markup else { return }
-        model.canvasChanged(markup, page: model.isColumn ? 0 : shownPage)
+        if model.isColumn { model.canvasChanged(markup, page: 0); return }
+        guard let page = page(of: paperMarkupViewController) else { return }
+        model.canvasChanged(markup, page: page, source: paperMarkupViewController === paper ? .shown : .turnedAway)
     }
 }
 
@@ -1316,6 +1459,7 @@ struct NotebookEditor: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var confirmResave = false
     @State private var saving = false
+    @State private var showingLog = false
 
     init(owner: CaptureModel, notebook: Notebook) {
         self.owner = owner
@@ -1372,6 +1516,8 @@ struct NotebookEditor: View {
                         Label("Zoom", systemImage: "plus.magnifyingglass")
                     }
                     .accessibilityIdentifier("notebook-zoom")
+                    Button { showingLog = true } label: { Label("Ink log", systemImage: "list.bullet.rectangle") }
+                        .accessibilityIdentifier("notebook-ink-log")
                 } label: {
                     Label("More", systemImage: model.notebook.youtubeURL != nil || model.notebook.isForReview || model.zoomEnabled
                           ? "line.3.horizontal.circle.fill" : "line.3.horizontal")
@@ -1414,6 +1560,7 @@ struct NotebookEditor: View {
             Button("Cancel", role: .cancel) {}
         }
         .sheet(isPresented: $showHelp) { ScreenshotHelp(waiting: owner.notebooks.inboxCount()) }
+        .sheet(isPresented: $showingLog) { NotebookLogSheet(log: model.log) }
         .onAppear {
             NotebookSession.shared.editor = model
             model.drainInbox()
@@ -1489,6 +1636,42 @@ struct NotebookEditor: View {
                 dismiss()
             }
         }
+    }
+}
+
+/// The ink log, newest at the bottom, to read or copy into a bug report.
+private struct NotebookLogSheet: View {
+    let log: NotebookLog
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+
+    var body: some View {
+        NavigationStack {
+            ScrollViewReader { reader in
+                ScrollView {
+                    Text(text.isEmpty ? "Nothing logged yet." : text)
+                        .font(.footnote.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .accessibilityIdentifier("notebook-ink-log-text")
+                    Color.clear.frame(height: 1).id("end")
+                }
+                .onAppear { reader.scrollTo("end", anchor: .bottom) }
+            }
+            .navigationTitle("Ink log")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Clear", role: .destructive) { log.clear(); text = "" }.disabled(text.isEmpty)
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button("Copy") { UIPasteboard.general.string = text }.disabled(text.isEmpty)
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .onAppear { text = log.text }
     }
 }
 
