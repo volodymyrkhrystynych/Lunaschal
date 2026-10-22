@@ -65,6 +65,13 @@ def _coerce_float(value):
 # Profile
 # --------------------------------------------------------------------------
 
+@bp.get('/distance-anchor')
+def distance_anchor():
+    """What the commute numbers are measured from, so the card can name it."""
+    (latitude, longitude), label = distance.anchor()
+    return jsonify({'label': label, 'latitude': latitude, 'longitude': longitude})
+
+
 @bp.get('/profile')
 def get_profile():
     return jsonify(profile_mod.load_profile(get_db()))

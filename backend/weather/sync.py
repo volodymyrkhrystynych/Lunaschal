@@ -24,13 +24,18 @@ _DEDUPE_DECIMALS = 3
 def resolve_location(db) -> tuple[float, float, str] | None:
     """(lat, lon, source) to sync with: the most recently logged location
     (any day — yesterday's last-known fix is still better than nothing),
-    else the configured default, else None."""
+    else the current Home, else the configured default, else None."""
     row = db.execute(
         'SELECT latitude, longitude FROM lifestyle_weather_locations'
         ' ORDER BY created_at DESC LIMIT 1'
     ).fetchone()
     if row:
         return row['latitude'], row['longitude'], 'geolocation'
+
+    from backend.place_roles import current_home
+    home = current_home(db)
+    if home is not None:
+        return home.lat, home.lon, 'home'
 
     settings = db.execute(
         'SELECT weather_default_lat, weather_default_lon FROM settings LIMIT 1'

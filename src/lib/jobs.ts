@@ -358,8 +358,9 @@ export function queueBreakdown(applications: JobApplication[]): {
 // Commute distance
 // --------------------------------------------------------------------------
 
-/** Where the backend measures from. Kept here so the card can name it rather
- * than showing a bare number the reader has to take on faith. */
+/** Where the backend measures from when no Home is set. The card names the
+ * anchor rather than showing a bare number the reader has to take on faith;
+ * once a Home exists, `GET /api/jobs/distance-anchor` supplies its name. */
 export const DISTANCE_ANCHOR_LABEL = 'Union Station';
 
 /** Bands for the commute annotation, sized for the GTA rather than for the
@@ -398,7 +399,10 @@ function attendsInPerson(job: CommuteFields): boolean {
   return job.workLocation === 'onsite' || job.workLocation === 'hybrid';
 }
 
-export function distanceLabel(job: CommuteFields): string | null {
+export function distanceLabel(
+  job: CommuteFields,
+  anchorLabel: string = DISTANCE_ANCHOR_LABEL
+): string | null {
   // Remote is answered first and never as a number — unless the body itself
   // contradicted it, in which case the commute is real and is the point.
   if (job.remote && !attendsInPerson(job)) return 'Remote';
@@ -416,7 +420,7 @@ export function distanceLabel(job: CommuteFields): string | null {
     job.remote && attendsInPerson(job)
       ? `${job.workLocation === 'hybrid' ? 'Hybrid' : 'On-site'} · `
       : '';
-  return `${lead}${prefix}${rounded} km from ${DISTANCE_ANCHOR_LABEL}`;
+  return `${lead}${prefix}${rounded} km from ${anchorLabel}`;
 }
 
 /** The band the commute pill is coloured by. A posting with no real commute

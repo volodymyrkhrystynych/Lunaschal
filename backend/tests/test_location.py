@@ -185,3 +185,41 @@ def test_the_picture_is_redrawn_when_its_inputs_change(client):
 def test_a_day_with_no_trail_has_no_picture(client):
     assert client.get(f'/api/location/days/{DAY}/map.png').status_code == 404
     assert client.get('/api/location/days/nonsense/map.png').status_code == 400
+
+
+# --- Home / Work ---
+
+def _home_at(lat=43.66, lon=-79.3832, since='2026-01-01'):
+    from backend import place_roles
+    db = get_db()
+    db.execute("INSERT INTO saved_places (id, name, latitude, longitude, radius_m, created_at, updated_at)"
+               " VALUES ('P1', 'Home', ?, ?, 150, 0, 0)", (lat, lon))
+    db.commit()
+    return place_roles.assign(db, 'home', 'P1', since)
+
+
+def test_a_card_says_how_long_was_spent_at_home():
+    _seed_day()
+    assert days.journal_days()[0]['whereabouts'] is None
+    _home_at()
+    where = days.journal_days()[0]['whereabouts']
+    assert where['home']['seconds'] == 2 * 3600 and where['home']['here'] is False
+    assert where['work'] == []
+
+
+def test_the_home_of_that_day_is_used_not_todays():
+    _seed_day()
+    _home_at(since='2026-08-01')  # moved in after the seeded day
+    assert days.journal_days()[0]['whereabouts'] is None
+
+
+def test_a_role_change_redraws_the_picture(client):
+    from backend import place_roles
+    _seed_day()
+    first = days.journal_days()[0]['imageUrl']
+    period = _home_at()
+    second = days.journal_days()[0]['imageUrl']
+    assert second != first
+    assert client.get(second).status_code == 200
+    place_roles.update_period(get_db(), period['id'], started_on='2026-07-09')
+    assert days.journal_days()[0]['imageUrl'] == first

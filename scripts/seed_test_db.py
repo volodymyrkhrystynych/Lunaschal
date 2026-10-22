@@ -2215,11 +2215,28 @@ def seed_files():
 def seed_memory(db):
     """The one standing document about the user, plus the revisions every write
     snapshots (backend/memory.py). Nothing but Settings → Memory writes it."""
-    db.execute(
-        'INSERT INTO saved_places(id,name,notes,latitude,longitude,radius_m,created_at,updated_at)'
-        ' VALUES (?,?,?,?,?,?,?,?)',
-        (new_id(), 'Home', 'Fictional demo location', 43.65, -79.38, 150, ts(2), ts(2)),
-    )
+    # Home and the office sit on the seeded trail's two visits (seed_location),
+    # so the Journal's map card shows time at each. The old flat is a former
+    # Home, which is what gives Settings → Saved Places a history to show.
+    old_flat, home, office = new_id(), new_id(), new_id()
+    for place_id, name, notes, lat, lon in (
+        (old_flat, 'Old flat', 'Fictional demo location', 43.6487, -79.4202),
+        (home, 'Home', 'Fictional demo location', 43.6677, -79.3948),
+        (office, 'Downtown office', 'Fictional demo workplace', 43.6532, -79.3832),
+    ):
+        db.execute(
+            'INSERT INTO saved_places(id,name,notes,latitude,longitude,radius_m,created_at,updated_at)'
+            ' VALUES (?,?,?,?,?,?,?,?)',
+            (place_id, name, notes, lat, lon, 150, ts(400), ts(400)),
+        )
+    for role, place_id, started, ended in (
+        ('home', old_flat, today_key(400), today_key(120)),
+        ('home', home, today_key(120), None),
+        ('work', office, today_key(300), None),
+    ):
+        db.execute(
+            'INSERT INTO place_roles(id,role,place_id,started_on,ended_on,created_at,updated_at)'
+            ' VALUES (?,?,?,?,?,?,?)', (new_id(), role, place_id, started, ended, ts(120), ts(120)))
     content = (
         "Lives in Toronto. Writes in the mornings.\n\n"
         "Names that dictation tends to mangle: Lyra Ashworth (a character), "

@@ -13,7 +13,7 @@ export interface WeatherHour {
   isActual: boolean;
   latitude: number;
   longitude: number;
-  locationSource: 'geolocation' | 'default';
+  locationSource: 'geolocation' | 'home' | 'default';
 }
 
 export interface WeatherCondition {

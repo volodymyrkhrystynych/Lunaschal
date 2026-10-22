@@ -307,9 +307,9 @@ def _store_inferred_distance(db, job_id: str, verdict: dict) -> None:
     if reading is None:
         return
     db.execute(
-        'UPDATE jobs SET distance_km=?, distance_precision=?'
+        'UPDATE jobs SET distance_km=?, distance_precision=?, distance_place=?'
         ' WHERE id=? AND distance_km IS NULL',
-        (reading.km, reading.precision, job_id),
+        (reading.km, reading.precision, reading.place, job_id),
     )
 
 

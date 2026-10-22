@@ -8,7 +8,12 @@ import { PlacesSection } from './PlacesSection';
 
 vi.mock('../../hooks/api', () => ({
   api: {
-    memory: { places: vi.fn(), savePlace: vi.fn(), deletePlace: vi.fn() },
+    memory: {
+      places: vi.fn(),
+      savePlace: vi.fn(),
+      deletePlace: vi.fn(),
+      placeRoles: vi.fn(),
+    },
   },
 }));
 vi.mock('../../lib/geo', () => ({ currentPosition: vi.fn() }));
@@ -25,6 +30,7 @@ beforeEach(() => {
   vi.mocked(api.memory.places).mockResolvedValue([home]);
   vi.mocked(api.memory.savePlace).mockResolvedValue(home);
   vi.mocked(api.memory.deletePlace).mockResolvedValue({ ok: true });
+  vi.mocked(api.memory.placeRoles).mockResolvedValue([]);
 });
 function mount() {
   return render(

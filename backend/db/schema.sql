@@ -162,6 +162,21 @@ CREATE TABLE IF NOT EXISTS saved_places (
     updated_at INTEGER NOT NULL
 );
 
+-- Home and Work as dated roles over saved places (backend/place_roles.py).
+-- Half-open 4am-day ranges [started_on, ended_on); ended_on NULL is current.
+-- A move is a new place and a new period, so the old one keeps its history;
+-- RESTRICT so deleting a place cannot silently erase where the user lived.
+CREATE TABLE IF NOT EXISTS place_roles (
+    id TEXT PRIMARY KEY,
+    role TEXT NOT NULL CHECK (role IN ('home', 'work')),
+    place_id TEXT NOT NULL REFERENCES saved_places(id) ON DELETE RESTRICT,
+    started_on TEXT NOT NULL,
+    ended_on TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_place_roles_role ON place_roles(role, started_on);
+
 CREATE TABLE IF NOT EXISTS calendar_events (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,

@@ -1655,6 +1655,11 @@ def _ensure_job_triage_columns(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE jobs ADD COLUMN triage_at INTEGER')
     if 'triage_error' not in cols:
         db.execute('ALTER TABLE jobs ADD COLUMN triage_error TEXT')
+    # The gazetteer key an `inferred` distance was measured to. Without it the
+    # reading could not be re-measured when the commute anchor (the current
+    # Home) moves, and it would keep the old origin's kilometres forever.
+    if 'distance_place' not in cols:
+        db.execute("ALTER TABLE jobs ADD COLUMN distance_place TEXT NOT NULL DEFAULT ''")
     db.commit()
 
     # The worker scans for pending rows on every tick, and the feed filters on

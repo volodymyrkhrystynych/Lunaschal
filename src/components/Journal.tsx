@@ -18,6 +18,7 @@ import {
 } from '@tanstack/react-query';
 import { api } from '../hooks/api';
 import { ulid } from '../lib/ulid';
+import { whereaboutsLine } from '../lib/whereabouts';
 import {
   enqueueJournalLink,
   useJournalCreate,
@@ -2018,6 +2019,7 @@ const JournalLocationItem = memo(function JournalLocationItem({
 }) {
   const lightbox = useLightbox();
   const dayLabel = formatDay(day.date + 'T00:00:00');
+  const spent = whereaboutsLine(day.whereabouts);
   const summary = [
     day.placeCount
       ? `${day.placeCount} place${day.placeCount === 1 ? '' : 's'}`
@@ -2044,6 +2046,11 @@ const JournalLocationItem = memo(function JournalLocationItem({
       }
       body={
         <>
+          {spent && (
+            <p className="text-sm text-[var(--color-text-muted)] mb-2">
+              {spent}
+            </p>
+          )}
           <button
             type="button"
             className="block w-full"
