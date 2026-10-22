@@ -786,29 +786,37 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         return CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: -region.minX * scale, ty: -region.minY * scale)
     }
 
-    /// Which pages of a column carry anything — ink, pictures, text — from one
-    /// small drawing of the whole column. PaperKit has no way to ask a markup
-    /// what lies where, so this draws it and looks.
-    private func inkedSlots(_ markup: PaperMarkup, slots: Int) async -> Set<Int> {
-        let width = 124
-        let height = max(1, Int((markup.bounds.height * CGFloat(width) / markup.bounds.width).rounded()))
-        guard let rows = await Self.inkedRows([lockedLayer(0), markup], region: markup.bounds, width: width, height: height)
-        else { return marked }
-        return NotebookColumn.slotsWithInk(rows: rows, unitsPerRow: markup.bounds.height / CGFloat(height),
-                                           slots: Array(self.slots.prefix(slots)))
+    /// Which pages of a column carry anything — ink, pictures, text. PaperKit
+    /// has no way to ask a markup what lies where, so this draws it and looks,
+    /// a page at a time and only the pages under something. It used to draw
+    /// the whole column at a tenth of its size, where PaperKit leaves out a
+    /// fine pen or a light pencil line altogether: the page went unfiled.
+    private func inkedSlots(_ markup: PaperMarkup, slots count: Int) async -> Set<Int> {
+        let layers = [lockedLayer(0), markup]
+        let content = layers.compactMap { $0?.contentsRenderFrame }.reduce(CGRect.null) { $0.union($1) }
+        var found = Set<Int>()
+        for index in NotebookColumn.slots(under: content, in: Array(slots.prefix(count))) {
+            let size = CGSize(width: (slots[index].width * Self.inkScanScale).rounded(),
+                              height: (slots[index].height * Self.inkScanScale).rounded())
+            guard let inked = await Self.hasInk(layers, region: slots[index], size: size) else { return marked }
+            if inked { found.insert(index) }
+        }
+        return found
     }
 
-    /// Top row first: whether anything was drawn in each row.
-    nonisolated private static func inkedRows(_ markups: [PaperMarkup?], region: CGRect, width: Int, height: Int) async -> [Bool]? {
+    /// How large a page is drawn to look for ink. Half size keeps a 1-point
+    /// pen line; a tenth lost it.
+    private static let inkScanScale: CGFloat = 0.5
+
+    /// Whether anything at all was drawn in `region`.
+    nonisolated private static func hasInk(_ markups: [PaperMarkup?], region: CGRect, size: CGSize) async -> Bool? {
+        let width = max(1, Int(size.width)), height = max(1, Int(size.height))
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
                                       space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         await draw(markups, region: region, into: context, size: CGSize(width: width, height: height))
         guard let bytes = context.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
-        // The context's memory runs top row first.
-        return (0..<height).map { row in
-            (0..<width).contains { bytes[row * width * 4 + $0 * 4 + 3] > 0 }
-        }
+        return (0..<width * height).contains { bytes[$0 * 4 + 3] > 0 }
     }
 
     /// The locked pictures alone, transparent, for the canvas to show under the
@@ -832,28 +840,19 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
 
     /// The pages a Save files, as JPEGs. A blank notebook drops empty pages;
     /// a newspaper files its cover and whatever was marked.
-    ///
-    /// Each page is drawn from a copy read back from its own bytes, as a
-    /// reopened notebook reads it. A page that came off the canvas still
-    /// shares state with it, and on an iPad one the canvas had since turned
-    /// away from drew as blank: Save dropped every page but the one on
-    /// screen, while Back (which only encodes) kept them all.
     func renderForSave() async -> [(data: Data, name: String)] {
         syncFromCanvas()
         var snapshot = notebook
         snapshot.pageCount = pageCount
-        var copies: [PaperMarkup] = []
-        for page in pages { copies.append((try? await NotebookPage.detached(page)) ?? page) }
-        if isColumn, let column = copies.first { marked = await inkedSlots(column, slots: slotCount) }
+        if isColumn, let ink = pages.first { marked = await inkedSlots(ink, slots: slotCount) }
         snapshot.markedPages = marked
         let prefix = isNewspaper ? notebook.title.replacingOccurrences(of: " · ", with: " ") : "Notes"
         var files: [(data: Data, name: String)] = []
         for index in snapshot.pagesToFile {
-            let page = copies[isColumn ? 0 : index]
-            if !isNewspaper && NotebookPage.isBlank(page) && locked[index] == nil { continue }
+            if !isNewspaper && NotebookPage.isBlank(pages[index]) && locked[index] == nil { continue }
             // Newsprint needs the extra pixels to stay legible.
             let width: CGFloat = pdfPage(index) == nil && !isColumn ? NotebookPage.width : 2000
-            guard let image = await render(index, width: width, markup: page),
+            guard let image = await render(index, width: width),
                   let data = UIImage(cgImage: image).jpegData(compressionQuality: 0.85) else { continue }
             files.append((data, "\(prefix) p\(index + 1).jpg"))
         }
