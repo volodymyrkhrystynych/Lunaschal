@@ -18,6 +18,8 @@ struct CalendarPage: View {
     @State private var dragMode = CalendarDragMode.off
     /// The event being dragged and where it would land, in offset minutes.
     @State private var dragging: (id: String, start: Int, end: Int)?
+    /// The timeline's drawable width, which every label is fitted into.
+    @State private var timelineWidth: CGFloat = 0
 
     /// Points per minute: the web's default 2x zoom, a 120pt hour.
     private let scale: CGFloat = 2
@@ -94,6 +96,38 @@ struct CalendarPage: View {
                                     labelMinutes: Int((readingLabelHeight / scale).rounded(.up)))
     }
 
+    /// How wide each event and reading label may be: as wide as its text
+    /// wants, unless an event label and a reading label share a row, when
+    /// they split it. Keyed by id.
+    private var labelWidths: (events: [String: CGFloat], readings: [String: CGFloat]) {
+        let width = Double(timelineWidth)
+        guard width > 0 else { return ([:], [:]) }
+        let railed = reading?.spans ?? []
+        let right = railed.isEmpty ? width : width - Double(readingRailWidth + 2)
+        let lineBoxes = plan.timed.map { item -> (top: Double, bottom: Double) in
+            let top = Double(CGFloat(item.startMinutes) * scale)
+            return (top, top + Double(max(minLineLength, CGFloat(item.endMinutes - item.startMinutes) * scale)))
+        }
+        let events = zip(plan.timed, lineBoxes).map { item, line -> CalendarLabelFit.EventLabel in
+            let bottom = line.bottom - Double(CGFloat(item.labelRow) * labelHeight)
+            return .init(box: .init(top: bottom - Double(labelHeight), bottom: bottom,
+                                    preferred: EventLine.preferredLabelWidth(item, pending: model.pendingCalendarIDs.contains(item.occurrence.event.id))),
+                         left: Double(gutter + CGFloat(item.labelLane) * (lineWidth + laneGutter) + lineWidth + 4))
+        }
+        let obstacles = zip(plan.timed, lineBoxes).map { item, line in
+            CalendarLabelFit.Obstacle(top: line.top, bottom: line.bottom,
+                                      right: Double(gutter + CGFloat(item.lane) * (lineWidth + laneGutter) + lineWidth))
+        }
+        let readings = railed.map { span -> CalendarLabelFit.Box in
+            let top = Double(CGFloat(span.labelMinutes) * scale)
+            return .init(top: top, bottom: top + Double(readingLabelHeight), preferred: ReadingRailView.preferredLabelWidth(span))
+        }
+        let fit = CalendarLabelFit.widths(events: events, readings: readings, obstacles: obstacles,
+                                          right: right, readingFloor: Double(gutter))
+        return (Dictionary(uniqueKeysWithValues: zip(plan.timed.map(\.id), fit.events.map { CGFloat($0) })),
+                Dictionary(uniqueKeysWithValues: zip(railed.map(\.id), fit.readings.map { CGFloat($0) })))
+    }
+
     private var header: some View {
         HStack {
             Button { day = CalendarTimeline.addingDays(-1, to: day) } label: { Image(systemName: "chevron.left") }
@@ -136,6 +170,7 @@ struct CalendarPage: View {
     private var timeline: some View {
         ScrollViewReader { proxy in
             ScrollView {
+                let widths = labelWidths
                 ZStack(alignment: .topLeading) {
                     VStack(spacing: 0) {
                         ForEach(Array(CalendarTimeline.displayHours.enumerated()), id: \.offset) { index, hour in
@@ -149,15 +184,19 @@ struct CalendarPage: View {
                     .allowsHitTesting(dragging == nil)
                     if day == today { NowLine(scale: scale) }
                     ForEach(plan.timed) { item in
-                        eventLine(item)
+                        eventLine(item, labelWidth: widths.events[item.id] ?? 170)
                             .accessibilityAction { opened = item.occurrence }
                     }
                     if let reading {
-                        ReadingRailView(rail: reading, scale: scale, labels: readingLabels) { readingLabels.toggle() }
-                            .allowsHitTesting(dragging == nil)
+                        ReadingRailView(rail: reading, scale: scale, labels: readingLabels, widths: widths.readings) {
+                            readingLabels.toggle()
+                        }
+                        .allowsHitTesting(dragging == nil)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
                 .frame(height: CGFloat(CalendarTimeline.minutesPerDay) * scale, alignment: .top)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { timelineWidth = $0 }
                 .padding(.trailing, 8)
                 // Room for "+" below the last hour.
                 .padding(.bottom, 80)
@@ -172,11 +211,11 @@ struct CalendarPage: View {
         })
     }
 
-    @ViewBuilder private func eventLine(_ item: TimedOccurrence) -> some View {
+    @ViewBuilder private func eventLine(_ item: TimedOccurrence, labelWidth: CGFloat) -> some View {
         let live = dragging.flatMap { $0.id == item.id ? ($0.start, $0.end) : nil }
         let line = EventLine(item: item, start: live?.0 ?? item.startMinutes, end: live?.1 ?? item.endMinutes,
                              scale: scale, pending: model.pendingCalendarIDs.contains(item.occurrence.event.id),
-                             changesLength: dragMode == .resize, dragged: live != nil)
+                             changesLength: dragMode == .resize, dragged: live != nil, labelWidth: labelWidth)
         if dragMode == .off {
             // No zero-distance drag recognizer: a swipe over the event must
             // reach the ScrollView, while a deliberate tap still opens it.
@@ -244,8 +283,16 @@ private let lineWidth: CGFloat = 28
 private let laneGutter: CGFloat = 6
 /// Long enough to tap, whatever the duration.
 private let minLineLength: CGFloat = 44
-/// One label's height: the plan stacks labels in rows this tall.
-private let labelHeight: CGFloat = 28
+/// One label's height, room for a title on two lines and the time: the plan
+/// stacks labels in rows this tall.
+private let labelHeight: CGFloat = 42
+private let eventTitleFont = UIFont.systemFont(ofSize: UIFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .medium)
+private let labelTimeFont = UIFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+
+/// What a string needs on one line, so the label fitter knows what to ask for.
+private func textWidth(_ text: String, _ font: UIFont) -> Double {
+    Double(ceil((text as NSString).size(withAttributes: [.font: font]).width))
+}
 
 private struct HourRow: View {
     let hour: Int
@@ -295,8 +342,17 @@ private struct EventLine: View {
     let pending: Bool
     let changesLength: Bool
     let dragged: Bool
+    /// Fitted by the page around the reading labels; the title wraps to two lines within it.
+    let labelWidth: CGFloat
 
     private var event: CalendarEvent { item.occurrence.event }
+
+    static func preferredLabelWidth(_ item: TimedOccurrence, pending: Bool) -> Double {
+        let event = item.occurrence.event
+        let icons = (item.occurrence.isRecurring ? 13.0 : 0) + (pending ? 15.0 : 0)
+        return max(textWidth(event.title.isEmpty ? "Untitled" : event.title, eventTitleFont) + icons,
+                   textWidth(eventTimeLabel(item.occurrence), labelTimeFont)) + 2
+    }
     private var length: CGFloat { max(minLineLength, CGFloat(end - start) * scale) }
     private var categories: [String] { event.categoryTags.filter { CalendarCategory.colors[$0] != nil } }
     private var time: String {
@@ -335,15 +391,16 @@ private struct EventLine: View {
 
     private var label: some View {
         VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 3) {
+            HStack(alignment: .lastTextBaseline, spacing: 3) {
                 Text(event.title.isEmpty ? "Untitled" : event.title)
-                    .font(.caption.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
+                    .font(Font(eventTitleFont)).foregroundStyle(.primary).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 if item.occurrence.isRecurring { Image(systemName: "repeat").font(.system(size: 9)).foregroundStyle(.secondary) }
                 if pending { Image(systemName: "icloud.slash").font(.system(size: 9)).foregroundStyle(.secondary) }
             }
             Text(time).font(.system(size: 10).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
         }
-        .frame(width: 170, height: labelHeight, alignment: .bottomLeading)
+        .frame(width: labelWidth, height: labelHeight, alignment: .bottomLeading)
         .fixedSize()
         // The label is grabbed and tapped like the line, as on the web.
         .contentShape(Rectangle())
@@ -362,19 +419,33 @@ private struct EventLine: View {
 }
 
 private let readingRailWidth: CGFloat = 22
-private let readingLabelWidth: CGFloat = 130
-/// One reading label's height: labels closer than this are pushed apart.
-private let readingLabelHeight: CGFloat = 30
+/// One reading label's height, two title lines and the detail: labels
+/// closer than this are pushed apart.
+private let readingLabelHeight: CGFloat = 46
+private let readingTitleFont = UIFont.systemFont(ofSize: 11, weight: .medium)
+/// The label's horizontal padding, both sides, and its border.
+private let readingLabelInset: Double = 14
 
 /// In-app reading, recorded by the reader rather than entered: a rail down the
 /// right edge from waking to sleep, filled where a chapter was being read.
-/// Titles hang to its left and show by default; tapping the rail (or a title)
-/// hides them, for when they cover an event.
+/// A fic's chapters read back to back share one title, hung to its left and
+/// shown by default; tapping the rail hides them, for when they cover an
+/// event, and tapping a title shows it in full with each chapter's times.
 private struct ReadingRailView: View {
     let rail: ReadingRail
     let scale: CGFloat
     let labels: Bool
+    let widths: [String: CGFloat]
     let toggle: () -> Void
+    @State private var detail: String?
+
+    static func detailLine(_ span: PlacedReading) -> String {
+        "\(span.session.chapterLabel) · \(CalendarSleep.clock(span.session.startedAt))–\(CalendarSleep.clock(span.session.endedAt))"
+    }
+
+    static func preferredLabelWidth(_ span: PlacedReading) -> Double {
+        max(textWidth(span.session.title, readingTitleFont), textWidth(detailLine(span), labelTimeFont)) + readingLabelInset
+    }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -382,9 +453,11 @@ private struct ReadingRailView: View {
                 ZStack(alignment: .top) {
                     Capsule().fill(Color.primary.opacity(0.12)).frame(width: 4)
                     ForEach(rail.spans) { span in
-                        Capsule().fill(Color.green)
-                            .frame(width: 8, height: max(2, CGFloat(span.endMinutes - span.startMinutes) * scale))
-                            .offset(y: CGFloat(span.startMinutes - rail.startMinutes) * scale)
+                        ForEach(Array(span.segments.enumerated()), id: \.offset) { _, segment in
+                            Capsule().fill(Color.green)
+                                .frame(width: 8, height: max(2, CGFloat(segment.upperBound - segment.lowerBound) * scale))
+                                .offset(y: CGFloat(segment.lowerBound - rail.startMinutes) * scale)
+                        }
                     }
                 }
                 .frame(width: readingRailWidth, height: CGFloat(rail.endMinutes - rail.startMinutes) * scale, alignment: .top)
@@ -404,22 +477,62 @@ private struct ReadingRailView: View {
     }
 
     private func label(_ span: PlacedReading) -> some View {
-        let clocks = "\(CalendarSleep.clock(span.span.startedAt))–\(CalendarSleep.clock(span.span.endedAt))"
-        return VStack(alignment: .trailing, spacing: 1) {
-            Text("\(span.span.title) · Ch. \(span.span.chapterNumber)")
-                .font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
-            Text("Reading · \(clocks)").font(.system(size: 10).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+        VStack(alignment: .trailing, spacing: 1) {
+            Text(span.session.title)
+                .font(Font(readingTitleFont)).lineLimit(2).multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(Self.detailLine(span)).font(Font(labelTimeFont)).foregroundStyle(.secondary).lineLimit(1)
         }
         .padding(.horizontal, 6).padding(.vertical, 2)
-        .frame(maxWidth: readingLabelWidth, alignment: .trailing)
         .background(RoundedRectangle(cornerRadius: 5).fill(.regularMaterial))
         .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.green.opacity(0.4)))
+        .frame(maxWidth: widths[span.id] ?? 130, alignment: .trailing)
         .fixedSize(horizontal: false, vertical: true)
-        .onTapGesture(perform: toggle)
+        .contentShape(Rectangle())
+        .onTapGesture { detail = span.id }
+        .popover(isPresented: Binding(get: { detail == span.id }, set: { if !$0 { detail = nil } })) {
+            ReadingSessionDetail(span: span).presentationCompactAdaptation(.popover)
+        }
         .padding(.trailing, readingRailWidth + 2)
         .offset(y: CGFloat(span.labelMinutes) * scale)
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Shows the full title and each chapter")
         .accessibilityIdentifier("calendar-reading-label")
+    }
+}
+
+/// A reading label in full: the whole title, however long, and when each chapter was read.
+private struct ReadingSessionDetail: View {
+    let span: PlacedReading
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(span.session.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+            Text(ReadingRailView.detailLine(span)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
+            if span.session.spans.count > 1 {
+                Divider()
+                // A long binge scrolls rather than outgrowing the popover.
+                ScrollView {
+                    VStack(spacing: 4) {
+                        ForEach(span.session.spans) { chapter in
+                            HStack {
+                                Text("Ch. \(chapter.chapterNumber)")
+                                Spacer()
+                                Text("\(CalendarSleep.clock(chapter.startedAt))–\(CalendarSleep.clock(chapter.endedAt))")
+                                    .monospacedDigit().foregroundStyle(.secondary)
+                            }
+                            .font(.footnote)
+                        }
+                    }
+                }
+                .frame(maxHeight: 240)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding()
+        .frame(width: 280)
+        .accessibilityIdentifier("calendar-reading-detail")
     }
 }
 

@@ -130,8 +130,8 @@ def test_calendar_reading_is_automatic_and_clipped_to_the_4am_day(client):
     response = client.get(f'/api/calendar/reading/{DAY}')
     assert response.status_code == 200
     assert response.get_json() == [
-        {'id': 'across', 'title': 'Lighthouse', 'chapterNumber': 1, 'startedAt': START, 'endedAt': START + 600},
-        {'id': 'late', 'title': 'Lighthouse', 'chapterNumber': 2, 'startedAt': END - 600, 'endedAt': END},
+        {'id': 'across', 'ficId': fic_id, 'title': 'Lighthouse', 'chapterNumber': 1, 'startedAt': START, 'endedAt': START + 600},
+        {'id': 'late', 'ficId': fic_id, 'title': 'Lighthouse', 'chapterNumber': 2, 'startedAt': END - 600, 'endedAt': END},
     ]
     # The existing span's heartbeat moves the fill, without creating events.
     span(client, fic_id, two, 'late', startedAt=END - 600, endedAt=END + 1200, activeSeconds=1600)

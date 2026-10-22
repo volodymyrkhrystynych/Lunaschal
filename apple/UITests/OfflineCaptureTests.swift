@@ -706,7 +706,7 @@ final class OfflineCaptureTests: XCTestCase {
             .matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch.exists)
     }
 
-    func testCalendarReadingRailShowsTitlesUntilTapped() {
+    func testCalendarReadingRailMergesChaptersAndFitsTitles() {
         let app = XCUIApplication()
         app.launchArguments += ["-calendarReadingFixture"]
         app.launch()
@@ -720,9 +720,24 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertGreaterThan(rail.frame.midX, app.windows.firstMatch.frame.width * 0.8)
         let labels = app.descendants(matching: .any).matching(identifier: "calendar-reading-label")
         XCTAssertTrue(labels.firstMatch.waitForExistence(timeout: 5), "titles show by default")
+        // Two chapters of Worm back to back are one label; the crossover is its own.
         XCTAssertEqual(labels.count, 2)
-        XCTAssertTrue(labels.firstMatch.label.contains("Worm · Ch. 12"))
+        XCTAssertTrue(labels.firstMatch.label.contains("Worm"))
+        XCTAssertTrue(labels.firstMatch.label.contains("Ch. 12–13"), labels.firstMatch.label)
         XCTAssertEqual(rail.value as? String, "titles shown")
+        // Nothing drawn over anything else: the labels stack, and stay left of the rail.
+        let first = labels.element(boundBy: 0).frame, second = labels.element(boundBy: 1).frame
+        XCTAssertFalse(first.intersects(second), "\(first) overlaps \(second)")
+        XCTAssertLessThanOrEqual(first.maxX, rail.frame.minX + 1)
+        // Wider than the old fixed 130pt, now that nothing shares its row.
+        XCTAssertGreaterThan(second.width, 140)
+        // A forum-length title is shown whole when its label is tapped.
+        labels.element(boundBy: 1).tap()
+        let detail = app.descendants(matching: .any)["calendar-reading-detail"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["The Long Way Round (Worm/Pact crossover, Taylor-centric, slow burn) [Thread 2]"].exists)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.95)).tap()
+        XCTAssertTrue(detail.waitForNonExistence(timeout: 5))
         // The rail runs the whole waking day, so its middle may be scrolled
         // away; tap it level with the first chapter, which is on screen.
         let level = labels.firstMatch.frame.minY + 6
