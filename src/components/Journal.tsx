@@ -18,7 +18,7 @@ import {
 } from '@tanstack/react-query';
 import { api } from '../hooks/api';
 import { ulid } from '../lib/ulid';
-import { whereaboutsLine } from '../lib/whereabouts';
+import { commuteLine, whereaboutsLine } from '../lib/whereabouts';
 import {
   enqueueJournalLink,
   useJournalCreate,
@@ -2051,6 +2051,11 @@ const JournalLocationItem = memo(function JournalLocationItem({
               {spent}
             </p>
           )}
+          {day.commutes?.map((trip, i) => (
+            <p key={i} className="text-xs text-[var(--color-text-muted)] mb-1">
+              {commuteLine(trip)}
+            </p>
+          ))}
           <button
             type="button"
             className="block w-full"

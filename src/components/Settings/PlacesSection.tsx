@@ -10,6 +10,7 @@ import { localDayKey } from '../../lib/dates';
 import { currentPosition } from '../../lib/geo';
 import {
   historyByRole,
+  patternsSummary,
   periodRange,
   roleLabel,
   roleOf,
@@ -103,6 +104,11 @@ export function PlacesSection() {
     p => p.latitude != null && p.longitude != null
   );
   const history = historyByRole(periods.data ?? []);
+  const patterns = useQuery({
+    queryKey: ['location', 'patterns'],
+    queryFn: () => api.location.patterns(),
+  });
+  const patternLine = patternsSummary(patterns.data);
   async function locate() {
     setLocating(true);
     const position = await currentPosition();
@@ -313,6 +319,14 @@ export function PlacesSection() {
           )}
         </div>
       </form>
+      {patternLine && (
+        <p
+          className="text-sm text-[var(--color-text-muted)]"
+          aria-label="Location patterns"
+        >
+          {patternLine}
+        </p>
+      )}
       {(save.error ||
         remove.error ||
         assign.error ||

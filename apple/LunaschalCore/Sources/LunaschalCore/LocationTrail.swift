@@ -15,7 +15,10 @@ import Foundation
 //   real routes come from.
 
 public struct TrailPoint: Codable, Equatable {
-    public enum Kind: String, Codable { case fine, coarse, visit }
+    /// `region` is a geofence stay at one of the user's saved places (Home or
+    /// a Work, RegionPlan in Places.swift): like a visit, its exit arrives
+    /// later as the same id with `departed` set.
+    public enum Kind: String, Codable { case fine, coarse, visit, region }
     /// Minted here; the server upserts on it, so a resend stores nothing twice.
     public let id: String
     /// Unix seconds of the fix (a visit's arrival).
@@ -26,14 +29,22 @@ public struct TrailPoint: Codable, Equatable {
     public let altitude: Double?
     public let speed: Double?
     public let kind: Kind
-    /// A visit's departure; nil while still there.
+    /// A visit's or region stay's departure; nil while still there.
     public let departed: Double?
+    /// The saved place a region stay was at.
+    public let placeId: String?
+    /// What Core Motion said the user was doing when the fix was taken. The
+    /// server reads it to tell a commute by bike from one by car.
+    public let activity: TrailPolicy.Activity?
 
     public init(id: String, ts: Double, latitude: Double, longitude: Double, accuracy: Double? = nil,
-                altitude: Double? = nil, speed: Double? = nil, kind: Kind, departed: Double? = nil) {
+                altitude: Double? = nil, speed: Double? = nil, kind: Kind, departed: Double? = nil,
+                placeId: String? = nil, activity: TrailPolicy.Activity? = nil) {
         self.id = id; self.ts = ts; self.latitude = latitude; self.longitude = longitude
         self.accuracy = accuracy; self.altitude = altitude; self.speed = speed; self.kind = kind
-        self.departed = departed
+        self.departed = departed; self.placeId = placeId
+        // `unknown` says nothing the server could use.
+        self.activity = activity == .unknown ? nil : activity
     }
 
     /// iOS reports a visit twice -- on arrival, and again on departure with the
@@ -46,7 +57,7 @@ public struct TrailPoint: Codable, Equatable {
 /// every one of them would otherwise be drawn as a scribble.
 public struct TrailFilter {
     /// Past these, a fix says less than the map's own detail.
-    public static let maxAccuracy: [TrailPoint.Kind: Double] = [.fine: 75, .coarse: 1000, .visit: 1000]
+    public static let maxAccuracy: [TrailPoint.Kind: Double] = [.fine: 75, .coarse: 1000, .visit: 1000, .region: 5000]
     /// A fine fix closer than this to the last one kept adds nothing.
     public static let minStep: Double = 10
     /// ...unless this long has passed, so a long pause still leaves a mark.

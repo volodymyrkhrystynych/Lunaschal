@@ -11,7 +11,7 @@ import math
 from dataclasses import dataclass
 
 # Past these, a fix says less about where you were than the map's own detail.
-MAX_ACCURACY_M = {'fine': 75.0, 'coarse': 1000.0, 'visit': 1000.0}
+MAX_ACCURACY_M = {'fine': 75.0, 'coarse': 1000.0, 'visit': 1000.0, 'region': 5000.0}
 # Two fine fixes further apart in time than this weren't one continuous walk:
 # the phone went coarse, or lost the sky, in between.
 TRACK_GAP_S = 5 * 60
@@ -32,6 +32,10 @@ class Fix:
     kind: str = 'fine'
     accuracy: float | None = None
     departed: float | None = None
+    # A geofence ('region') stay names the saved place it was at; Core Motion's
+    # activity rides on any fix the phone took while it knew one.
+    place_id: str | None = None
+    activity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,11 +88,15 @@ def segments(fixes: list[Fix]) -> list[Segment]:
     return out
 
 
+STAY_KINDS = ('visit', 'region')
+
+
 def places(fixes: list[Fix], now: float) -> list[Fix]:
-    """Visits long enough to count as somewhere you were. A visit still in
-    progress has no departure yet and is measured up to now."""
+    """Stays long enough to count as somewhere you were: iOS visits, and
+    geofence stays at a saved place. One still in progress has no departure
+    yet and is measured up to now."""
     return [f for f in fixes
-            if f.kind == 'visit' and (f.departed if f.departed is not None else now) - f.ts >= MIN_DWELL_S]
+            if f.kind in STAY_KINDS and (f.departed if f.departed is not None else now) - f.ts >= MIN_DWELL_S]
 
 
 def tracked_m(fixes: list[Fix]) -> float:

@@ -1723,6 +1723,46 @@ export interface JournalLocationDay {
   /** Time at the Home and Work in force that day, or null when no visit was
    *  at one (backend/location/whereabouts.py). */
   whereabouts?: Whereabouts | null;
+  /** Home↔Work trips read off the trail (backend/location/commute.py). */
+  commutes?: Commute[];
+}
+
+export interface Commute {
+  direction: 'toWork' | 'toHome';
+  from: string;
+  to: string;
+  departed: string | null;
+  arrived: string | null;
+  seconds: number;
+  meters: number;
+  mode: 'walking' | 'running' | 'cycling' | 'automotive';
+  modeSource: 'motion' | 'speed';
+}
+
+interface CommuteStats {
+  toWork: { count: number; avgSeconds: number | null };
+  toHome: { count: number; avgSeconds: number | null };
+  modes: Record<string, number>;
+}
+
+/** Office days, hours at work and commute times (backend/location/patterns.py). */
+export interface LocationPatterns {
+  weeks: {
+    weekStart: string;
+    observedDays: number;
+    officeDays: number;
+    workSeconds: number;
+    homeSeconds: number;
+    avgArrival: string | null;
+    avgDeparture: string | null;
+    commute: CommuteStats;
+  }[];
+  weekdays: { weekday: string; observedDays: number; officeDays: number }[];
+  commute: CommuteStats;
+  observedDays: number;
+  officeDays: number;
+  days: number;
+  since: string;
 }
 
 export interface Whereabouts {
@@ -2849,13 +2889,13 @@ export interface WeatherHour {
   isActual: boolean;
   latitude: number;
   longitude: number;
-  locationSource: 'geolocation' | 'home' | 'default';
+  locationSource: 'geolocation' | 'trail' | 'home' | 'default';
 }
 
 export interface WeatherLocation {
   latitude: number;
   longitude: number;
-  source: 'geolocation' | 'home' | 'default';
+  source: 'geolocation' | 'trail' | 'home' | 'default';
 }
 
 export interface WeatherToday {
@@ -5097,6 +5137,8 @@ export const api = {
 
   location: {
     journal: () => get<JournalLocationDay[]>('/api/location/journal'),
+    patterns: (days = 56) =>
+      get<LocationPatterns>(`/api/location/patterns?days=${days}`),
   },
   newspapers: {
     pressreader: () => get<PressReaderStatus>('/api/newspapers/pressreader'),

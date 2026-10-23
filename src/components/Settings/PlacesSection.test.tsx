@@ -8,6 +8,7 @@ import { PlacesSection } from './PlacesSection';
 
 vi.mock('../../hooks/api', () => ({
   api: {
+    location: { patterns: vi.fn().mockResolvedValue(undefined) },
     memory: {
       places: vi.fn(),
       savePlace: vi.fn(),

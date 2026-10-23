@@ -67,6 +67,12 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var sleepWeek: SleepWeek?
     @Published private(set) var sleepError: String?
     private var weatherFetchedAt: Date?
+    /// Saved places and the Home/Work periods over them (PlacesModel.swift),
+    /// the Journal's day cards, and the weekly patterns: all fetched, all kept
+    /// on disk so they show offline.
+    @Published var places = PlacesSnapshot()
+    @Published var locationDays: [LocationDay] = []
+    @Published var locationPatterns: LocationPatterns?
     let location = LocationProvider()
     /// The Workout page: queued sets, and the server's recent exercises and workouts.
     @Published private(set) var workoutLogs: [WorkoutLog] = []
@@ -227,6 +233,7 @@ final class CaptureModel: ObservableObject {
         try SleepWeekFixture.seedIfAsked(at: healthSleepCache)
         #endif
         sleepWeek = try? JSONDecoder().decode(SleepWeek.self, from: Data(contentsOf: healthSleepCache))
+        loadPlaceCaches()
         pendingEdits = try replica.edits().filter { Self.feedCollections.contains($0.operation.collection) }
         Task { await reloadJournal(); await reloadCalendar() }
         refreshLibraryBytes()
@@ -1286,6 +1293,7 @@ final class CaptureModel: ObservableObject {
             if full || hadWorkouts { await timed("workout history") { await refreshWorkouts(using: api) } }
             if full || hadDaily { await timed("daily status") { await refreshDaily(using: api) } }
             await timed("weather") { await refreshWeather(using: api) }
+            if full { await timed("places") { await refreshPlaces(using: api) } }
 
             // Pull.
             let caps = try await timed("capabilities") { try await serverCapabilities(api) }
@@ -1356,6 +1364,7 @@ final class CaptureModel: ObservableObject {
                 startLibraryDownload()
             }
             try await timed("location") { try await syncTrail(using: api) }
+            if full { await timed("day maps") { await refreshLocationDays(using: api) } }
             try await timed("health") { try await syncHealth(using: api, force: full) }
             // Once per device, after everything else has synced: never at launch,
             // where building the indexes on a large library outlasted the watchdog.

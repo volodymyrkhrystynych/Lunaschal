@@ -222,6 +222,7 @@ def init_db() -> None:
     _ensure_journal_attachment_location(db)
     _ensure_journal_attachment_exif(db)
     _ensure_journal_entry_location(db)
+    _ensure_location_point_columns(db)
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
@@ -1459,6 +1460,19 @@ def _ensure_email_settings(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN google_oauth_client_id TEXT')
     if 'google_oauth_client_secret' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN google_oauth_client_secret TEXT')
+    db.commit()
+
+
+def _ensure_location_point_columns(db: sqlite3.Connection) -> None:
+    """Two optional facts the phone now sends with a trail point: which saved
+    place a geofence ('region') stay was at, and what Core Motion said the
+    user was doing (walking/cycling/automotive...), which is what tells a
+    commute by bike from one by car."""
+    cols = {r['name'] for r in db.execute('PRAGMA table_info(location_points)')}
+    if 'place_id' not in cols:
+        db.execute('ALTER TABLE location_points ADD COLUMN place_id TEXT')
+    if 'activity' not in cols:
+        db.execute('ALTER TABLE location_points ADD COLUMN activity TEXT')
     db.commit()
 
 

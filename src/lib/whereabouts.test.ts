@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatStay, whereaboutsLine } from './whereabouts';
+import { commuteLine, formatStay, whereaboutsLine } from './whereabouts';
 
 const local = (h: number, m: number) =>
   new Date(2026, 6, 8, h, m).toISOString();
@@ -46,5 +46,36 @@ describe('whereabouts', () => {
     expect(whereaboutsLine(null)).toBeNull();
     expect(whereaboutsLine(undefined)).toBeNull();
     expect(whereaboutsLine({ home: null, work: [] })).toBeNull();
+  });
+});
+
+describe('commuteLine', () => {
+  it('reads as time, target, mode and distance', () => {
+    expect(
+      commuteLine({
+        direction: 'toWork',
+        from: 'Home',
+        to: 'Office',
+        departed: null,
+        arrived: null,
+        seconds: 1800,
+        meters: 2140,
+        mode: 'cycling',
+        modeSource: 'motion',
+      })
+    ).toBe('30m to Office by bike (2.1 km)');
+    expect(
+      commuteLine({
+        direction: 'toHome',
+        from: 'Office',
+        to: 'Home',
+        departed: null,
+        arrived: null,
+        seconds: 2700,
+        meters: 14800,
+        mode: 'automotive',
+        modeSource: 'speed',
+      })
+    ).toBe('45m home by car or transit (15 km)');
   });
 });

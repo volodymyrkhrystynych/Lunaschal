@@ -430,7 +430,10 @@ struct AttachmentButtons: View {
                         Label("Choose photo", systemImage: "photo.on.rectangle")
                     }
                     Spacer()
-                    Button { onUse(); showCamera = true } label: {
+                    // The camera hands back pixels without the photo's GPS,
+                    // so a fresh fix is what places a meal. Asked for now so it
+                    // has landed by the time the capture is saved.
+                    Button { onUse(); model.location.refresh(); showCamera = true } label: {
                         Label("Take photo", systemImage: "camera")
                     }.disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
                     Spacer()
@@ -942,6 +945,9 @@ private struct MoreMenu: View {
             // Cards due for review, as the desktop's Review button counts them.
             .badge(learning.stats.due)
             .accessibilityIdentifier("more-Learning")
+            NavigationLink { PlacesScreen(model: model) } label: {
+                Label("Places", systemImage: "mappin.and.ellipse")
+            }.accessibilityIdentifier("more-Places")
             NavigationLink { ConnectionSettings(model: model) } label: {
                 Label("Settings", systemImage: "gear")
             }.accessibilityIdentifier("more-Settings")
@@ -1009,6 +1015,13 @@ private struct ConnectionSettings: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             LocationTrailSettings(model: model, trail: model.trail)
+            Section {
+                NavigationLink { PlacesScreen(model: model) } label: {
+                    Label("Places, Home & Work", systemImage: "mappin.and.ellipse")
+                }.accessibilityIdentifier("settings-places")
+            } footer: {
+                Text("Your Home and Works are watched as geofences while the trail is on, so the calendar's workday follows when you actually arrive and leave.")
+            }
             if model.healthAvailable { HealthSettings(model: model) }
             IntelligenceAvailabilityView()
         }

@@ -1,4 +1,4 @@
-import type { Whereabouts } from '../hooks/api';
+import type { Commute, Whereabouts } from '../hooks/api';
 
 /** "7h 20m", "45m", "3h". Under a minute rounds to nothing worth saying. */
 export function formatStay(seconds: number): string {
@@ -31,4 +31,19 @@ export function whereaboutsLine(
       parts.push(`${formatStay(w.home.seconds)} at home`);
   }
   return parts.length ? parts.join(' · ') : null;
+}
+
+const MODE_LABEL: Record<string, string> = {
+  walking: 'on foot',
+  running: 'running',
+  cycling: 'by bike',
+  automotive: 'by car or transit',
+};
+
+/** "30m to Office by bike (2.1 km)" — the same words as the iOS card. */
+export function commuteLine(c: Commute): string {
+  const km = c.meters / 1000;
+  const distance = km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
+  const target = c.direction === 'toWork' ? `to ${c.to}` : 'home';
+  return `${formatStay(c.seconds)} ${target} ${MODE_LABEL[c.mode] ?? MODE_LABEL.automotive} (${distance})`;
 }

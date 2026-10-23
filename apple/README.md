@@ -190,6 +190,27 @@ what each device can currently do and which work remains device-only.
   `LocationTrailTests`; the Settings flow passed in simulator
   (`testLocationTrailAsksForLocationAndExplainsTheAnswer`). Background wakes,
   the Always upgrade prompt and battery cost are not yet verified on device.
+  Each fix also carries Core Motion's current activity, which is how the
+  server tells a commute by bike from one by car.
+- **Places, Home & Work** (More → Places, or Settings → Places, Home & Work;
+  `PlacesScreen`). The server's saved places and the dated Home/Work periods
+  over them (`backend/place_roles.py`): add or edit a place with "Use current
+  location", set Home or a Work from a date, edit or remove a period in the
+  Home/Work history, and see the last eight weeks: office days of recorded
+  days, average commute each way and how it was made, and a bar per weekday.
+  The snapshot is cached, so the screen and the geofences work offline; edits
+  need the server. While the trail is on, the current Home and every current
+  Work are watched with `CLMonitor` (`RegionPlan`, at most 20, radius at least
+  100 m), and each stay inside one becomes a `region` trail point whose exit
+  updates the same id (`RegionLedger`). The server moves that day's recurring
+  work occurrence to the real arrival and departure, or creates an
+  "At <place>" event, and stops touching a day once it is edited by hand
+  (`backend/location/work_calendar.py`). The Journal feed shows a card per
+  recorded day: the server's map, time at Home and Work, and each commute.
+  Core logic tested in `PlacesTests`; the Places screen offline passed in
+  simulator (`testPlacesOpensOfflineAndSaysEditsNeedTheServer`). Geofence
+  events, relaunch on an exit and the day card against a real server are not
+  yet verified on device.
 - Weather. The Entry page shows the conditions now at its top left; tapping them
   shows feels-like (Open-Meteo's apparent temperature: wind chill and humidity),
   wind and gusts ("windy" from 30 km/h sustained or 50 km/h gusts), and whether

@@ -8,6 +8,10 @@ phone drops points from its outbox only once this answers, so
 - **a bad point is skipped and reported, never a reason to refuse the batch** --
   a 400 would leave the point in the outbox and resend it forever;
 - only the batch's *shape* is a 400, because that is a bug in the sender.
+
+A 'region' point is a geofence stay at one of the user's saved places (the
+phone monitors the current Home and Works): it carries that place's id, and
+like a visit its exit arrives later as an upsert that sets `departed`.
 """
 import math
 import re
@@ -18,7 +22,12 @@ from backend.db.connection import get_db
 
 MAX_POINTS = 5000
 MAX_REPORTED_REJECTIONS = 50
-KINDS = ('fine', 'coarse', 'visit')
+KINDS = ('fine', 'coarse', 'visit', 'region')
+# Core Motion's activity when the fix was taken (LocationTrail.swift's
+# TrailPolicy.Activity). Optional; anything else is dropped, not rejected.
+ACTIVITIES = ('stationary', 'walking', 'running', 'cycling', 'automotive')
+# A stay -- something with an arrival and, later, a departure.
+STAYS = ('visit', 'region')
 
 _ID = re.compile(r'^[A-Za-z0-9_-]{8,64}$')
 _EARLIEST = 1262304000  # 2010-01-01: before any phone that runs this app
@@ -64,13 +73,21 @@ def _point(item, now: float, received: int) -> tuple:
     if accuracy is not None and accuracy < 0:
         raise ValueError('accuracy is negative (an invalid fix)')
     speed = _number(item.get('speed'), allow_none=True)
-    departed = _time(item.get('departed'), now, allow_none=True) if kind == 'visit' else None
+    departed = _time(item.get('departed'), now, allow_none=True) if kind in STAYS else None
     if departed is not None and departed < fix:
         raise ValueError('departs before it arrives')
+    place_id = item.get('placeId')
+    if kind == 'region':
+        if not isinstance(place_id, str) or not _ID.match(place_id):
+            raise ValueError('a region stay needs the placeId it was at')
+    else:
+        place_id = None
+    activity = item.get('activity')
     return (point_id, fix, day_key_for(int(fix)), lat, lon, accuracy,
             _number(item.get('altitude'), allow_none=True),
             speed if speed is None or speed >= 0 else None,
-            kind, departed, received)
+            kind, departed, received, place_id,
+            activity if activity in ACTIVITIES else None)
 
 
 def ingest(body) -> dict:
@@ -97,8 +114,13 @@ def ingest(body) -> dict:
     db = get_db()
     db.executemany(
         'INSERT OR REPLACE INTO location_points (id, fix_ts, day_key, latitude, longitude, accuracy_m,'
-        ' altitude_m, speed_mps, kind, departed_ts, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        ' altitude_m, speed_mps, kind, departed_ts, received_at, place_id, activity)'
+        ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
         rows,
     )
     db.commit()
-    return {'points': len(rows), 'rejectedCount': rejected_count, 'rejected': rejected}
+    return {'points': len(rows), 'rejectedCount': rejected_count, 'rejected': rejected,
+            # The days whose stays changed: what the work calendar re-reads.
+            'stayDays': sorted({r[2] for r in rows if r[8] in STAYS}),
+            # The span the batch covers: meals in it may now be locatable.
+            'span': (min(r[1] for r in rows), max(r[1] for r in rows)) if rows else None}

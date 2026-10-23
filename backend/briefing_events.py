@@ -148,18 +148,19 @@ def gather_day(db, today: str) -> dict:
     # force that day. Unlike nearbyPlaces on a capture, these are where the
     # user actually stayed, with arrival and departure times.
     import time
-    from backend.location import trail, whereabouts
+    from backend.location import whereabouts
     roles = roles_for_day(list_periods(db), day)
-    visit_fixes = [trail.Fix(r['fix_ts'], r['latitude'], r['longitude'], r['kind'], r['accuracy_m'], r['departed_ts'])
-                   for r in db.execute("SELECT fix_ts,latitude,longitude,kind,accuracy_m,departed_ts FROM location_points"
-                                       " WHERE day_key=? AND kind='visit' ORDER BY fix_ts", (day,))]
-    stays = whereabouts.describe(whereabouts.stays(visit_fixes, roles, time.time()))
+    from backend.location import commute, days as trail_days
+    day_fixes = trail_days.fixes(day)
+    day_stays = whereabouts.stays(day_fixes, roles, time.time())
+    stays = whereabouts.describe(day_stays)
+    commutes = commute.commutes(day_stays, day_fixes)
     from backend.memory import get_memory
     return {'day': day, 'nextDate': (date.fromisoformat(day) + timedelta(days=1)).isoformat(),
             'start': datetime.fromtimestamp(start).isoformat(),
             'end': datetime.fromtimestamp(end).isoformat(), 'sources': sources,
             'calendar': calendar_for_day(db, day), 'places': places,
-            'locationObservations': locations, 'stays': stays,
+            'locationObservations': locations, 'stays': stays, 'commutes': commutes,
             'placeRoles': {'home': next((r.name for r in roles if r.role == 'home'), None),
                            'work': [r.name for r in roles if r.role == 'work']},
             'userMemory': get_memory(),
@@ -227,7 +228,9 @@ not necessarily where an earlier narrated activity happened. Without a stay to
 support it, never assume cooking means home, or a workday means the workplace.
 A stay is not an activity on its own: never propose an event just because the
 user was at home, but do use stays to place and time activities other evidence
-supports, and to give a workday its real hours. Use an empty location if
+supports, and to give a workday its real hours. "commutes" are trips between
+Home and Work measured from the trail, with how they were made; they are
+already shown to the user and need no events of their own. Use an empty location if
 unknown. Explain any inferred location in evidence. Weather observations
 labelled fallback/default/home are configured forecast locations, not proof of
 presence. Return an empty events array if nothing is supported.

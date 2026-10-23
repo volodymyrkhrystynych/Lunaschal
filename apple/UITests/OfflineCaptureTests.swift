@@ -264,6 +264,39 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
     }
 
+    func testPlacesOpensOfflineAndSaysEditsNeedTheServer() {
+        let app = XCUIApplication()
+        app.launch()
+        openMore(app, "Places")
+        // The cached snapshot: nothing set yet, and nothing to make Home.
+        XCTAssertTrue(app.staticTexts["Home & Work"].waitForExistence(timeout: 5)
+                      || app.staticTexts["HOME & WORK"].waitForExistence(timeout: 1))
+        let home = app.descendants(matching: .any)["places-home"]
+        XCTAssertTrue(home.waitForExistence(timeout: 5))
+        XCTAssertTrue("\(home.label) \(home.value ?? "")".contains("Not set"), "Home row: \(home.label)")
+        XCTAssertFalse(app.buttons["places-assign"].isEnabled, "Set Home or Work needs a place with a pin")
+
+        app.buttons["places-add"].tap()
+        let name = app.textFields["place-name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap()
+        name.typeText("Home")
+        let latitude = app.textFields["place-latitude"]
+        latitude.tap()
+        latitude.typeText("43.6677")
+        let save = app.buttons["place-save"]
+        // Half a pin is not a pin.
+        XCTAssertFalse(save.isEnabled)
+        let longitude = app.textFields["place-longitude"]
+        longitude.tap()
+        longitude.typeText("-79.3948")
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        // No server in UI tests: the edit is refused, and says why.
+        XCTAssertTrue(app.alerts["Places"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.alerts["Places"].staticTexts["Connect to your server to change places."].exists)
+    }
+
     func testLearningOpensFromMoreAndAsksForTheServer() {
         let app = XCUIApplication()
         app.launch()

@@ -360,6 +360,27 @@ CREATE TABLE IF NOT EXISTS location_points (
     received_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_location_points_day ON location_points(day_key, fix_ts);
+-- "Where was the phone at this moment" (weather and meals without their own
+-- coordinates, backend/location/lookup.py) searches by time alone.
+CREATE INDEX IF NOT EXISTS idx_location_points_ts ON location_points(fix_ts);
+
+-- What backend/location/work_calendar.py wrote to the calendar for one 4am day
+-- of being at work: the occurrence of the recurring work event it moved to the
+-- real arrival/departure, or the one-off event it created when none was
+-- scheduled. `written_*` is what it last wrote, so a later edit by the user
+-- (the stored times no longer match) is noticed and the day is `released`:
+-- never touched again.
+CREATE TABLE IF NOT EXISTS work_attendance (
+    day_key TEXT PRIMARY KEY,
+    event_id TEXT REFERENCES calendar_events(id) ON DELETE SET NULL,
+    occurrence_date TEXT,           -- set when a recurring occurrence was moved
+    created_event INTEGER NOT NULL DEFAULT 0,
+    place_name TEXT NOT NULL,
+    written_time TEXT,
+    written_end_time TEXT,
+    released INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS mcp_servers (
     id TEXT PRIMARY KEY,

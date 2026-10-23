@@ -1,4 +1,9 @@
-import type { PlaceRole, PlaceRolePeriod } from '../hooks/api';
+import type {
+  LocationPatterns,
+  PlaceRole,
+  PlaceRolePeriod,
+} from '../hooks/api';
+import { formatStay } from './whereabouts';
 
 /** Whether a period covers a 4am day key. Ranges are [startedOn, endedOn). */
 export function activeOn(period: PlaceRolePeriod, day: string): boolean {
@@ -38,4 +43,20 @@ export function periodRange(period: PlaceRolePeriod): string {
   return period.endedOn
     ? `${period.startedOn} → ${period.endedOn}`
     : `since ${period.startedOn}`;
+}
+
+/** One line over the weekly patterns: office days of the days the phone
+ *  recorded, and the average commute each way. Null with nothing recorded. */
+export function patternsSummary(
+  p: LocationPatterns | undefined
+): string | null {
+  if (!p || p.observedDays === 0) return null;
+  const parts = [
+    `Last ${Math.round(p.days / 7)} weeks: at work ${p.officeDays} of ${p.observedDays} recorded days`,
+  ];
+  if (p.commute.toWork.avgSeconds)
+    parts.push(`commute in ${formatStay(p.commute.toWork.avgSeconds)}`);
+  if (p.commute.toHome.avgSeconds)
+    parts.push(`home in ${formatStay(p.commute.toHome.avgSeconds)}`);
+  return parts.join(' · ');
 }

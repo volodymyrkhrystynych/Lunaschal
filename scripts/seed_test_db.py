@@ -1692,25 +1692,52 @@ def seed_location(db):
         start, _ = day_bounds(today_key(days_ago))
         home, downtown = (43.6677, -79.3948), (43.6532, -79.3832)
         rows.append((f'visit-{start}-home', start + 3 * 3600, today_key(days_ago), *home, 25.0,
-                     None, None, 'visit', start + 5 * 3600, received))
+                     None, None, 'visit', start + 5 * 3600, received, None))
         walk_start = start + 5 * 3600 + 120
         for i in range(40):
             f = i / 39
             lat = home[0] + (downtown[0] - home[0]) * f
             lon = home[1] + (downtown[1] - home[1]) * f + 0.0012 * math.sin(f * math.pi * 3)
             rows.append((f'fix-{start}-{i:03d}', walk_start + i * 45, today_key(days_ago), lat, lon,
-                         8.0, 90.0, 1.4, 'fine', None, received))
+                         8.0, 90.0, 1.4, 'fine', None, received, 'walking'))
         arrive = walk_start + 40 * 45 + 60
         rows.append((f'visit-{start}-downtown', arrive, today_key(days_ago), *downtown, 30.0,
-                     None, None, 'visit', arrive + 3 * 3600, received))
+                     None, None, 'visit', arrive + 3 * 3600, received, None))
         for i, (lat, lon) in enumerate(((43.6600, -79.3790), (43.6650, -79.3900))):
             rows.append((f'sig-{start}-{i}', arrive + 3 * 3600 + (i + 1) * 900, today_key(days_ago),
-                         lat, lon, 300.0, None, None, 'coarse', None, received))
+                         lat, lon, 300.0, None, None, 'coarse', None, received, 'automotive'))
+        # Home again for the evening, so the day has a commute each way.
+        rows.append((f'visit-{start}-evening', arrive + 4 * 3600, today_key(days_ago), *home, 25.0,
+                     None, None, 'visit', None if days_ago == 0 else arrive + 9 * 3600, received, None))
     db.executemany(
         'INSERT INTO location_points (id, fix_ts, day_key, latitude, longitude, accuracy_m, altitude_m,'
-        ' speed_mps, kind, departed_ts, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        ' speed_mps, kind, departed_ts, received_at, activity) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
         rows,
     )
+
+
+def seed_work_attendance(db):
+    """Yesterday's seeded afternoon downtown, as the work calendar records it:
+    a one-off "At Downtown office" event, since the demo has no recurring work
+    event (backend/location/work_calendar.py). Runs after seed_memory, which
+    makes the office a Work place."""
+    from datetime import datetime
+
+    start, _ = day_bounds(today_key(1))
+    arrive = start + 5 * 3600 + 120 + 40 * 45 + 60
+    leave = arrive + 3 * 3600
+    clock = lambda t: datetime.fromtimestamp(t).strftime('%H:%M')  # noqa: E731
+    event_id = new_id()
+    db.execute(
+        'INSERT INTO calendar_events (id, title, description, date, time, end_time, created_at,'
+        ' category_tags, classified_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        (event_id, 'At Downtown office', 'Recorded from your location trail.',
+         datetime.fromtimestamp(arrive).date().isoformat(), clock(arrive), clock(leave), ts(1),
+         json.dumps(['work']), ts(1)))
+    db.execute(
+        'INSERT INTO work_attendance (day_key, event_id, occurrence_date, created_event, place_name,'
+        ' written_time, written_end_time, released, updated_at) VALUES (?,?,NULL,1,?,?,?,0,?)',
+        (today_key(1), event_id, 'Downtown office', clock(arrive), clock(leave), ts(1)))
 
 
 def _seed_weather(db):
@@ -2529,6 +2556,7 @@ def main() -> None:
     seed_study(db)
     seed_files()
     seed_memory(db)
+    seed_work_attendance(db)
     seed_knowledge(db)
     seed_docpacks(db)
     seed_infra(db)

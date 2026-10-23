@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { PlaceRolePeriod } from '../hooks/api';
-import { activeOn, historyByRole, periodRange, roleOf } from './placeRoles';
+import {
+  activeOn,
+  historyByRole,
+  patternsSummary,
+  periodRange,
+  roleOf,
+} from './placeRoles';
 
 const period = (over: Partial<PlaceRolePeriod>): PlaceRolePeriod => ({
   id: 'p',
@@ -50,5 +56,42 @@ describe('place roles', () => {
     expect(periodRange(period({ endedOn: '2026-03-01' }))).toBe(
       '2026-01-01 → 2026-03-01'
     );
+  });
+});
+
+describe('patternsSummary', () => {
+  const stats = (toWork: number | null, toHome: number | null) => ({
+    toWork: { count: 1, avgSeconds: toWork },
+    toHome: { count: 1, avgSeconds: toHome },
+    modes: {},
+  });
+  it('counts office days of recorded days and averages the commute', () => {
+    expect(
+      patternsSummary({
+        weeks: [],
+        weekdays: [],
+        commute: stats(1800, 2100),
+        observedDays: 30,
+        officeDays: 12,
+        days: 56,
+        since: '2026-05-01',
+      })
+    ).toBe(
+      'Last 8 weeks: at work 12 of 30 recorded days · commute in 30m · home in 35m'
+    );
+  });
+  it('says nothing with nothing recorded', () => {
+    expect(patternsSummary(undefined)).toBeNull();
+    expect(
+      patternsSummary({
+        weeks: [],
+        weekdays: [],
+        commute: stats(null, null),
+        observedDays: 0,
+        officeDays: 0,
+        days: 56,
+        since: '',
+      })
+    ).toBeNull();
   });
 });

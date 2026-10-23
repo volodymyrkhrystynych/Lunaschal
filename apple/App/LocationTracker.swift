@@ -16,6 +16,13 @@ import LunaschalCore
 ///
 /// Separate from `LocationProvider`, the Capture tab's one-shot fix: that one
 /// only ever asks for While Using, and must keep working when this is off.
+///
+/// It also watches the current Home and each Work as geofences (`CLMonitor`,
+/// regions from `RegionPlan`), and records each stay inside one as a `region`
+/// trail point: the exact minute of arriving and leaving, which is what the
+/// server's work calendar moves the workday to. iOS keeps a monitor's
+/// conditions across launches and relaunches the app for an event, so the
+/// monitor is reopened by name in `init` along with everything else.
 @MainActor
 final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let enabledKey = "locationTrailEnabled"
@@ -39,11 +46,24 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     private var filter = TrailFilter()
     private var motionSamples: [TrailPolicy.Motion] = []
     private var monitoring = false
+    private var placeMonitor: CLMonitor?
+    private var placeEvents: Task<Void, Never>?
+    /// What is being watched, and the stays still open, on disk: an exit may
+    /// be the event iOS relaunched the app for.
+    @Published private(set) var regions: [MonitoredRegion]
+    private var ledger: RegionLedger
+    private var regionsURL: URL { outbox.root.appendingPathComponent("regions.json") }
+    private var ledgerURL: URL { outbox.root.appendingPathComponent("region-ledger.json") }
+    private static let monitorName = "lunaschal-places"
 
     init(outbox: TrailOutbox) {
         self.outbox = outbox
         status = outbox.status()
         pending = outbox.count
+        regions = (try? JSONDecoder().decode([MonitoredRegion].self,
+                                             from: Data(contentsOf: outbox.root.appendingPathComponent("regions.json")))) ?? []
+        ledger = (try? JSONDecoder().decode(RegionLedger.self,
+                                            from: Data(contentsOf: outbox.root.appendingPathComponent("region-ledger.json")))) ?? RegionLedger()
         authorization = manager.authorizationStatus
         reducedAccuracy = manager.accuracyAuthorization == .reducedAccuracy
         super.init()
@@ -100,6 +120,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
             }
         }
         askMotionHistory()
+        if hasAlways { startPlaceMonitor() }
     }
 
     private func stop() {
@@ -109,7 +130,75 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         manager.stopMonitoringSignificantLocationChanges()
         manager.stopUpdatingLocation()
         motion.stopActivityUpdates()
+        placeEvents?.cancel()
+        placeEvents = nil
+        if let monitor = placeMonitor {
+            placeMonitor = nil
+            Task { for id in await monitor.identifiers { await monitor.remove(id) } }
+        }
         mode = .coarse
+    }
+
+    // MARK: Home and Work geofences
+
+    /// Replace what is watched with `next` (the current Home and Works). Called
+    /// whenever the places are refreshed from the server.
+    func monitor(_ next: [MonitoredRegion]) {
+        guard next != regions else { return }
+        regions = next
+        ledger.keepOnly(next)
+        try? JSONEncoder().encode(next).write(to: regionsURL, options: .atomic)
+        saveLedger()
+        guard let monitor = placeMonitor else { return }
+        Task { await Self.apply(next, to: monitor) }
+    }
+
+    private func startPlaceMonitor() {
+        guard placeEvents == nil else { return }
+        placeEvents = Task { [weak self] in
+            let monitor = await CLMonitor(Self.monitorName)
+            guard let self else { return }
+            placeMonitor = monitor
+            await Self.apply(regions, to: monitor)
+            do {
+                for try await event in await monitor.events {
+                    handle(identifier: event.identifier, inside: event.state == .satisfied, at: event.date)
+                }
+            } catch {}
+        }
+    }
+
+    private static func apply(_ regions: [MonitoredRegion], to monitor: CLMonitor) async {
+        let wanted = Dictionary(uniqueKeysWithValues: regions.map { ($0.placeID, $0) })
+        for id in await monitor.identifiers where wanted[id] == nil { await monitor.remove(id) }
+        for region in regions {
+            let condition = CLMonitor.CircularGeographicCondition(
+                center: CLLocationCoordinate2D(latitude: region.latitude, longitude: region.longitude),
+                radius: region.radius)
+            // Re-adding replaces the condition: a corrected radius or a moved
+            // pin takes effect without forgetting the rest.
+            await monitor.add(condition, identifier: region.placeID, assuming: .unsatisfied)
+        }
+    }
+
+    private func handle(identifier: String, inside: Bool, at date: Date) {
+        guard let region = regions.first(where: { $0.placeID == identifier }) else { return }
+        let ts = date.timeIntervalSince1970
+        let point = inside ? ledger.enter(region, at: ts) : ledger.exit(region, at: ts)
+        saveLedger()
+        guard let point else { return }
+        do { try outbox.append([point]) } catch { return }
+        refreshStatus()
+        onPoints?()
+    }
+
+    private func saveLedger() {
+        try? JSONEncoder().encode(ledger).write(to: ledgerURL, options: .atomic)
+    }
+
+    /// The newest confident Core Motion reading, attached to each fix.
+    private var currentActivity: TrailPolicy.Activity? {
+        motionSamples.last { $0.confident }?.activity
     }
 
     /// A background wake doesn't replay the activity updates missed while the
@@ -166,12 +255,13 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         Task { @MainActor in
             let kind: TrailPoint.Kind = mode == .fine ? .fine : .coarse
+            let activity = currentActivity
             record(locations.map { loc in
                 TrailPoint(id: ULID.make(now: loc.timestamp), ts: loc.timestamp.timeIntervalSince1970,
                            latitude: loc.coordinate.latitude, longitude: loc.coordinate.longitude,
                            accuracy: loc.horizontalAccuracy,
                            altitude: loc.verticalAccuracy >= 0 ? loc.altitude : nil,
-                           speed: loc.speed >= 0 ? loc.speed : nil, kind: kind)
+                           speed: loc.speed >= 0 ? loc.speed : nil, kind: kind, activity: activity)
             })
             // A coarse wake is the moment to notice a walk has begun.
             if kind == .coarse {

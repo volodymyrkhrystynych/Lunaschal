@@ -11,12 +11,13 @@ free: there is no job to schedule and nothing to invalidate.
 import hashlib
 import logging
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 
 from backend.day_boundary import day_bounds, day_key_for
 from backend.db.connection import get_db
 from backend.journal_moment import journal_moment
-from backend.location import render, tiles, trail, whereabouts
+from backend.location import commute, render, tiles, trail, whereabouts
 from backend.location.storage import location_root, map_path
 from backend.place_roles import list_periods, roles_for_day
 
@@ -26,12 +27,18 @@ log = logging.getLogger(__name__)
 RENDER_VERSION = 2
 
 
+_FIX_COLUMNS = 'fix_ts, latitude, longitude, kind, accuracy_m, departed_ts, place_id, activity'
+
+
+def to_fix(r) -> trail.Fix:
+    return trail.Fix(r['fix_ts'], r['latitude'], r['longitude'], r['kind'], r['accuracy_m'],
+                     r['departed_ts'], r['place_id'], r['activity'])
+
+
 def fixes(day: str) -> list[trail.Fix]:
     rows = get_db().execute(
-        'SELECT fix_ts, latitude, longitude, kind, accuracy_m, departed_ts FROM location_points'
-        ' WHERE day_key=? ORDER BY fix_ts', (day,)).fetchall()
-    return [trail.Fix(r['fix_ts'], r['latitude'], r['longitude'], r['kind'], r['accuracy_m'], r['departed_ts'])
-            for r in rows]
+        f'SELECT {_FIX_COLUMNS} FROM location_points WHERE day_key=? ORDER BY fix_ts', (day,)).fetchall()
+    return [to_fix(r) for r in rows]
 
 
 def _located_entries(start: int | None = None, end: int | None = None):
@@ -98,18 +105,13 @@ def journal_days() -> list[dict]:
     for e in _located_entries():
         by_day.setdefault(day_key_for(e['created_at']), []).append(e)
     periods = list_periods(db)
-    visits_by_day: dict[str, list] = {}
-    for v in db.execute('SELECT day_key, fix_ts, latitude, longitude, kind, accuracy_m, departed_ts'
-                        " FROM location_points WHERE kind='visit' ORDER BY fix_ts"):
-        visits_by_day.setdefault(v['day_key'], []).append(
-            trail.Fix(v['fix_ts'], v['latitude'], v['longitude'], v['kind'], v['accuracy_m'], v['departed_ts']))
     out = []
     for row in rows:
         day = row['day_key']
         entries = by_day.get(day, [])
         roles = roles_for_day(periods, day)
         ver = _version(_stats_key(row), entries, roles)
-        stays = whereabouts.stays(visits_by_day.get(day, []), roles, now) if roles else []
+        summary = day_summary(day, ver, roles, now)
         at = journal_moment(None, day_bounds(day)[0], unworked_at_day_end=True)
         out.append({
             'date': day,
@@ -118,8 +120,53 @@ def journal_days() -> list[dict]:
             'placeCount': row['places'] or 0,
             'entryCount': len(entries),
             'imageUrl': image_url(day, ver),
-            'whereabouts': whereabouts.summarize(stays, day_bounds(day), now) if stays else None,
+            'whereabouts': summary['whereabouts'],
+            'commutes': summary['commutes'],
         })
+    return out
+
+
+# Derived per-day summaries, keyed by the day's picture version: that hash
+# already moves with every input (fixes, roles), so a stale entry is simply
+# never asked for again. Today is never cached — an ongoing stay grows.
+_SUMMARIES: OrderedDict[tuple[str, str], dict] = OrderedDict()
+_SUMMARY_LIMIT = 1000
+
+
+def day_summary(day: str, ver: str | None, roles: list, now: float) -> dict:
+    """{whereabouts, commutes} for one day — what the map card says in words,
+    and what the weekly patterns are built from."""
+    key = (day, ver or '')
+    cacheable = ver is not None and day != day_key_for(int(now))
+    if cacheable and key in _SUMMARIES:
+        _SUMMARIES.move_to_end(key)
+        return _SUMMARIES[key]
+    result = {'whereabouts': None, 'commutes': []}
+    if roles:
+        day_fixes = fixes(day)
+        stays = whereabouts.stays(day_fixes, roles, now)
+        result = {'whereabouts': whereabouts.summarize(stays, day_bounds(day), now),
+                  'commutes': commute.commutes(stays, day_fixes)}
+    if cacheable:
+        _SUMMARIES[key] = result
+        while len(_SUMMARIES) > _SUMMARY_LIMIT:
+            _SUMMARIES.popitem(last=False)
+    return result
+
+
+def summaries_since(start_day: str) -> list[tuple[str, dict]]:
+    """(day, day_summary) for every trail day on or after `start_day`."""
+    db = get_db()
+    now = time.time()
+    rows = db.execute(_DAY_STATS + ' WHERE day_key >= ? GROUP BY day_key ORDER BY day_key',
+                      (now, trail.MIN_DWELL_S, start_day)).fetchall()
+    periods = list_periods(db)
+    out = []
+    for row in rows:
+        day = row['day_key']
+        roles = roles_for_day(periods, day)
+        ver = _version(_stats_key(row), _located_entries(*day_bounds(day)), roles)
+        out.append((day, day_summary(day, ver, roles, now)))
     return out
 
 

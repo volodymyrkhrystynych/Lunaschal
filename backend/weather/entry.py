@@ -12,7 +12,10 @@ neither wait behind a polish nor give up after one bad minute.
 It is looked up for the entry's *capture* hour, not the hour it arrived: an
 entry written offline on the phone and uploaded that evening still gets the
 morning's weather. The place is the entry's own fix. An unlocated entry uses
-the last place the weather card knew (backend/weather/sync.py's
+where the phone's location trail says the user was at that moment
+(backend/location/lookup.py) — which is the point: the weather at the place
+and time the thing happened, not wherever the app last looked. Failing that it
+uses the last place the weather card knew (backend/weather/sync.py's
 resolve_location), but only while it is less than a day old — using today's
 location for a two-month-old entry would be a guess presented as a record.
 """
@@ -23,6 +26,7 @@ import os
 import threading
 import time
 
+from backend.location import lookup
 from backend.weather import fetch, sync
 
 logger = logging.getLogger(__name__)
@@ -113,16 +117,27 @@ def sweep(*, now: float | None = None, limit: int = BATCH) -> int:
             f'SELECT id, created_at, latitude, longitude FROM {table}'
             ' WHERE weather IS NULL AND created_at >= ?'
             ' AND (weather_checked_at IS NULL OR weather_checked_at < ?)'
-            ' AND ((latitude IS NOT NULL AND longitude IS NOT NULL) OR created_at >= ?)'
+            ' AND ((latitude IS NOT NULL AND longitude IS NOT NULL) OR created_at >= ?'
+            # Any trail in the week before (a stay can span the moment) or
+            # the half hour after is worth a lookup; fix_near decides.
+            '      OR EXISTS (SELECT 1 FROM location_points lp'
+            f'                 WHERE lp.fix_ts BETWEEN {table}.created_at - ? AND {table}.created_at + ?))'
             ' ORDER BY created_at DESC LIMIT ?',
-            (int(now - fetch.MAX_PAST_DAYS * 86400), int(now - RETRY_AFTER), int(now - UNLOCATED_FOR), limit),
+            (int(now - fetch.MAX_PAST_DAYS * 86400), int(now - RETRY_AFTER), int(now - UNLOCATED_FOR),
+             7 * 86400, lookup.MAX_GAP_S, limit),
         ).fetchall()
         for row in rows:
             if row['latitude'] is not None and row['longitude'] is not None:
                 lat, lon = row['latitude'], row['longitude']
-            elif known is not None:
+            elif (near := lookup.fix_near(db, row['created_at'])) is not None:
+                lat, lon = near
+            elif known is not None and row['created_at'] >= now - UNLOCATED_FOR:
                 lat, lon, _ = known
             else:
+                # Nowhere to look it up for. Marked, so the trail clause above
+                # does not hand the same row back on every sweep.
+                db.execute(f'UPDATE {table} SET weather_checked_at=? WHERE id=?', (int(now), row['id']))
+                db.commit()
                 continue
             try:
                 found = weather_at(lat, lon, row['created_at'], now=now, cache=cache)
