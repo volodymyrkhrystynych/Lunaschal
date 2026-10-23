@@ -9,6 +9,7 @@ from flask import Blueprint, Response, jsonify, request
 from backend.day_boundary import day_key_for
 from backend.db.connection import get_db
 from backend.food import location as meal_location
+from backend.journal import location as entry_location
 from backend.location import days, ingest, patterns, work_calendar
 
 log = logging.getLogger(__name__)
@@ -36,8 +37,9 @@ def upload_points():
     if span:
         try:
             meal_location.fill_between(db, *span)
+            entry_location.fill_between(db, *span)
         except Exception:
-            log.exception('meal location fill failed for %s', span)
+            log.exception('location fill failed for %s', span)
     return jsonify(result)
 
 

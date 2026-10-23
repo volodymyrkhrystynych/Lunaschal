@@ -291,3 +291,60 @@ def test_an_open_stay_whose_exit_never_arrived_is_believed_for_a_day_only(client
         region('region-stale-01', 'PLACE-OFFICE', at('09:00'), None, OFFICE)]})
     assert lookup.fix_near(get_db(), at('18:00')) == OFFICE
     assert lookup.fix_near(get_db(), at('12:00', '2026-07-10')) is None
+
+
+# --- journal entries: the phone, Watch and iPad travel together ---
+
+def entry_row(entry_id):
+    return get_db().execute('SELECT latitude, longitude, location_source FROM journal_entries WHERE id=?',
+                            (entry_id,)).fetchone()
+
+
+@pytest.fixture
+def quiet_journal(monkeypatch):
+    from backend.routes import journal as journal_routes
+    monkeypatch.setattr(journal_routes, '_polish_bg', lambda *a, **k: None)
+    monkeypatch.setattr(journal_routes, '_generate_metadata_bg', lambda *a, **k: None)
+
+
+def test_an_entry_without_a_fix_is_placed_by_the_trail(client, places, quiet_journal):
+    workday(client)
+    entry_id = client.post('/api/journal', json={'content': 'lunch thoughts', 'capturedAt': captured('12:30')}
+                           ).get_json()['id']
+    row = entry_row(entry_id)
+    assert (row['latitude'], row['longitude'], row['location_source']) == (*OFFICE, 'trail')
+
+
+def test_a_device_fix_is_kept_and_labelled(client, places, quiet_journal):
+    workday(client)
+    entry_id = client.post('/api/journal', json={'content': 'x', 'capturedAt': captured('12:30'),
+                                                 'latitude': 43.7, 'longitude': -79.4}).get_json()['id']
+    assert tuple(entry_row(entry_id)) == (43.7, -79.4, 'device')
+
+
+def test_a_watch_recording_is_placed_by_the_phones_trail(client, places, quiet_journal):
+    import io
+    workday(client)
+    res = client.post('/api/journal/recordings', content_type='multipart/form-data', data={
+        'file': (io.BytesIO(b'RIFF0000WAVEfmt '), 'watch.wav', 'audio/wav'),
+        'id': '01JWATCHENTRY0000000000000', 'attachmentId': '01JWATCHCA1P00000000000000',
+        'capturedAt': captured('19:00')})
+    assert res.status_code in (200, 201), res.get_json()
+    row = entry_row('01JWATCHENTRY0000000000000')
+    assert (row['latitude'], row['longitude'], row['location_source']) == (*HOME, 'trail')
+
+
+def test_an_entry_uploaded_before_its_trail_is_placed_when_the_trail_lands(client, places, quiet_journal):
+    entry_id = client.post('/api/journal', json={'content': 'evening', 'capturedAt': captured('19:00')}
+                           ).get_json()['id']
+    assert entry_row(entry_id)['latitude'] is None
+    workday(client)
+    assert tuple(entry_row(entry_id)) == (*HOME, 'trail')
+
+
+def test_an_entry_far_from_any_trail_stays_unlocated(client, places, quiet_journal):
+    workday(client)
+    entry_id = client.post('/api/journal', json={'content': 'old', 'capturedAt':
+                           datetime.fromtimestamp(at('12:00', '2026-06-01')).astimezone().isoformat()}
+                           ).get_json()['id']
+    assert tuple(entry_row(entry_id)) == (None, None, None)

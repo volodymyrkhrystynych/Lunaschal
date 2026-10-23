@@ -76,7 +76,7 @@ def gather_day(db, today: str) -> dict:
         sources.append(item)
         return item
 
-    for row in db.execute('SELECT id,title,content,raw_content,latitude,longitude,created_at FROM journal_entries'
+    for row in db.execute('SELECT id,title,content,raw_content,latitude,longitude,location_source,created_at FROM journal_entries'
                           ' WHERE created_at>=? AND created_at<? ORDER BY created_at', (start, end)):
         item = add('journal', row)
         item['chapterCommentary'] = [dict(r) for r in db.execute(
@@ -222,7 +222,10 @@ places that were the user's Home and Work that day. "stays" are the phone's own
 records of where the user remained, with arrival/departure times; a stay whose
 role is home or work is direct evidence of being there then (departed null
 means still there at day end). A stay with no role was somewhere unnamed.
-nearbyPlaces are GPS matches within a user-set radius, not certainty. Multiple
+nearbyPlaces are GPS matches within a user-set radius, not certainty. A journal
+entry whose location_source is "trail" was located from the phone's trail at
+the moment it was recorded (the phone, Watch and iPad travel together), not by
+a fix taken for it. Multiple
 matches are ambiguous. Capture location describes where something was recorded,
 not necessarily where an earlier narrated activity happened. Without a stay to
 support it, never assume cooking means home, or a workday means the workplace.

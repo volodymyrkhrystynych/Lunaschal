@@ -2119,6 +2119,15 @@ def _ensure_journal_entry_location(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE journal_entries ADD COLUMN latitude REAL')
     if 'longitude' not in cols:
         db.execute('ALTER TABLE journal_entries ADD COLUMN longitude REAL')
+    # Where the coordinates came from: 'device' (a fix measured at capture) or
+    # 'trail' (backend/journal/location.py: the phone's location trail at that
+    # moment, for an entry that arrived without one -- the Watch, a standalone
+    # recording, a fix gone stale). Rows located before this were all device
+    # fixes, so they are labelled once.
+    if 'location_source' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN location_source TEXT')
+        db.execute("UPDATE journal_entries SET location_source='device'"
+                   ' WHERE latitude IS NOT NULL AND longitude IS NOT NULL')
     db.commit()
 
 

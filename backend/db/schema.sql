@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     -- this (backend/routes/journal.py's _entry_coords fallback).
     latitude REAL,
     longitude REAL,
+    -- 'device' (that fix) or 'trail': an entry that arrived with no fix of its
+    -- own -- from the Watch, a standalone recording, a fix gone stale -- is
+    -- placed where the phone's location trail was at that moment
+    -- (backend/journal/location.py). The phone, Watch and iPad travel together.
+    location_source TEXT,
     -- The weather where and when the entry was written, as JSON
     -- (backend/weather/entry.py). Filled in by a sweep after the entry lands,
     -- so an offline capture uploaded hours later still gets the weather of its

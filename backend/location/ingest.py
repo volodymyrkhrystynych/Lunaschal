@@ -122,5 +122,16 @@ def ingest(body) -> dict:
     return {'points': len(rows), 'rejectedCount': rejected_count, 'rejected': rejected,
             # The days whose stays changed: what the work calendar re-reads.
             'stayDays': sorted({r[2] for r in rows if r[8] in STAYS}),
-            # The span the batch covers: meals in it may now be locatable.
-            'span': (min(r[1] for r in rows), max(r[1] for r in rows)) if rows else None}
+            # The span the batch covers: meals and entries in it may now be
+            # locatable. A stay reaches to its departure, or to now while open.
+            'span': _span(rows, now)}
+
+
+def _span(rows, now: float) -> tuple[float, float] | None:
+    if not rows:
+        return None
+    end = max(r[1] for r in rows)
+    for r in rows:
+        if r[8] in STAYS:
+            end = max(end, r[9] if r[9] is not None else now)
+    return min(r[1] for r in rows), end
