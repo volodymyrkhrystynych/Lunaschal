@@ -253,6 +253,10 @@ what each device can currently do and which work remains device-only.
   edited like any other once it has synced. Typed journal entries only, not
   meals or recordings, and not their attachments. Passed in simulator offline;
   the offline-retry path is covered by `CaptureEditTests` only.
+- Saved morning briefings show a Server oddities button when a report is present.
+  It opens a large sheet with expandable explanations and selectable log text,
+  using the cached message so past reports remain readable offline. iOS sheet
+  verification requires the simulator; Linux tests cover report extraction.
 - Chat works like the desktop's: today's one conversation, the streamed reply
   with its steps and reasoning, sources, Markdown, New chat / Clean slate, the
   delegate's editable confirm cards (calendar, calories, food, recipe, recipe

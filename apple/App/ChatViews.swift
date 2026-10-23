@@ -163,7 +163,7 @@ private struct MessageRow: View {
                         ForEach(message.clips) { ClipRow(chat: chat, clip: $0) }
                         if !message.content.isEmpty {
                             if isUser { Text(message.content).textSelection(.enabled) }
-                            else { MarkdownText(text: message.content) }
+                            else { BriefingContent(message: message) }
                         }
                     }
                     .padding(.horizontal, 14).padding(.vertical, 9)
@@ -299,6 +299,49 @@ private struct Reasoning: View {
                     .overlay(alignment: .leading) { Rectangle().frame(width: 2).foregroundStyle(.quaternary) }
             }
             .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct BriefingContent: View {
+    let message: ChatMessage
+    @State private var showingOddities = false
+
+    var body: some View {
+        if let report = ServerOddities.parse(content: message.content, metadata: message.metadata) {
+            if !report.prose.isEmpty { MarkdownText(text: report.prose) }
+            Button { showingOddities = true } label: {
+                Label("Server oddities (past day) · \(report.items.count) entries", systemImage: "server.rack")
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+            }
+            .accessibilityIdentifier("server-oddities-open")
+            .sheet(isPresented: $showingOddities) {
+                NavigationStack {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            ForEach(Array(report.items.enumerated()), id: \.offset) { _, item in
+                                DisclosureGroup {
+                                    MarkdownText(text: item.note.isEmpty ? "No explanation was recorded." : item.note)
+                                        .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
+                                } label: {
+                                    MarkdownText(text: item.title)
+                                }
+                                Divider()
+                            }
+                            if !report.notices.isEmpty { MarkdownText(text: report.notices) }
+                        }.padding()
+                    }
+                    .navigationTitle("Server oddities")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingOddities = false }
+                    } }
+                }
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
+        } else {
+            MarkdownText(text: message.content)
         }
     }
 }

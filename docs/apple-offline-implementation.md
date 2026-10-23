@@ -1,5 +1,11 @@
 # Apple apps and offline experience — implementation tracker
 
+Server oddities (`feat/server-oddities-modal`): saved briefing reports open in
+a native sheet with expandable entries; the web uses a modal. Both extract the
+saved report without a new API or sync format, so existing cached briefings work.
+Parser regression tests cover counts, explanations, notices and ordinary replies.
+Native sheet interaction remains to be verified in the iOS simulator.
+
 Journal-context prompts (2026-10-15, `feat/journal-context-prompts`): the native
 Journal tab's Context page (right of Calendar; the web keeps them in Chat) uses the same daily selection and permanent-dismissal endpoints as the web.
 Sheets reuse journal photo/audio viewers and stage transcribed clips through

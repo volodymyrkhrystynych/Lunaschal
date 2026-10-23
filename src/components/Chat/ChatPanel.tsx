@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type ChatAttachment, type DraftCard } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
 import { MessageMarkdown } from '../MessageMarkdown';
+import { BriefingContent } from './BriefingContent';
 import { AgentSteps } from './AgentSteps';
 import { DelegateProposals } from './DelegateProposals';
 import { JournalContextPrompts } from './JournalContextPrompts';
@@ -843,7 +844,10 @@ export function ChatPanel() {
                         {message.content}
                       </div>
                     ) : (
-                      <MessageMarkdown content={message.content} />
+                      <BriefingContent
+                        content={message.content}
+                        metadata={message.metadata}
+                      />
                     )}
                   </div>
                 )}
