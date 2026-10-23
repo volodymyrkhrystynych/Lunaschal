@@ -210,13 +210,14 @@ def get_reading(date):
         return jsonify({'error': 'invalid date'}), 400
     start, end = day_bounds(date)
     rows = get_db().execute(
-        'SELECT s.id, s.started_at, s.ended_at, f.title, c.position AS chapter_number'
+        'SELECT s.id, s.fic_id, s.started_at, s.ended_at, f.title, c.position AS chapter_number'
         ' FROM fic_reading_spans s JOIN fics f ON f.id=s.fic_id'
         ' JOIN fic_chapters c ON c.id=s.chapter_id'
         ' WHERE s.started_at<? AND s.ended_at>? AND s.active_seconds>=60'
         ' ORDER BY s.started_at, s.id', (end, start))
     return jsonify([{
-        'id': row['id'], 'title': row['title'], 'chapterNumber': row['chapter_number'],
+        'id': row['id'], 'ficId': row['fic_id'], 'title': row['title'],
+        'chapterNumber': row['chapter_number'],
         'startedAt': max(start, row['started_at']),
         'endedAt': min(end, row['ended_at']),
     } for row in rows])
