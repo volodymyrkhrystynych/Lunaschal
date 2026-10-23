@@ -135,14 +135,14 @@ final class CalendarReadingTests: XCTestCase {
     func testAnEventLabelNeverRunsIntoTheRail() {
         let fit = Fit.widths(events: [.init(box: .init(top: 0, bottom: 40, preferred: 500), left: 90)],
                              readings: [], obstacles: [], right: 360, readingFloor: 52)
-        XCTAssertEqual(fit.events, [360 - 6 - 90])
+        XCTAssertEqual(fit.events, [360.0 - 6 - 90])
     }
 
     func testAReadingLabelStopsShortOfAnEventLineBesideIt() {
         let fit = Fit.widths(events: [], readings: [.init(top: 0, bottom: 40, preferred: 500)],
                              obstacles: [.init(top: 20, bottom: 300, right: 80), .init(top: 50, bottom: 60, right: 200)],
                              right: 360, readingFloor: 52)
-        XCTAssertEqual(fit.readings, [360 - 86])
+        XCTAssertEqual(fit.readings, [360.0 - 86])
     }
 
     func testLabelsOnOneRowShareItWithoutOverlapping() {
