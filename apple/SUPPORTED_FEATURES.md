@@ -1,5 +1,9 @@
 # Supported experience and recovery
 
+Chat's saved Server oddities reports open in a large sheet with expandable
+explanations and selectable log text, including from the offline message cache.
+The iOS sheet still needs simulator verification.
+
 The Capture entry text box accepts pasted images as persistent draft photo
 attachments, alongside typed text. Standard text paste remains available.
 
