@@ -50,14 +50,19 @@ what each device can currently do and which work remains device-only.
   Two fingers still pinch, and pan when zoomed in. The system's swipe-back is
   off while notes are open (the Back button stays), for the same stray palm.
   **Newspaper** opens today's archived issue (by the 4am day; the newest is offered if
-  today's isn't in) as **one continuous scroll**: a single canvas with every PDF
-  page stacked down it at its own shape, so ink can cross from one page to the
-  next. It is always fitted to the width, either way up, so nothing scrolls
-  sideways unless zoomed in and the paper reads by scrolling down. An issue's
-  pages share that one canvas, so they can't be deleted (Add page puts a blank
-  A4 sheet at the foot). An issue opened by an earlier build (one markup per
-  page) is converted on open, each page's ink moved down to its place in the
-  column; the paged original stays as the previous checkpoint. It downloads the PDF once
+  today's isn't in) as **one continuous scroll** of its PDF pages, each at its
+  own shape and each **its own canvas and its own saved markup**, stacked in a
+  scroll view of the app's that fits them to the width (and, with Zoom on, zooms
+  them). Only the pages near the screen have canvases, plus any written on this
+  session, which are kept until the notebook closes. An autosave encodes only the
+  pages written on since the last one, and a page's own markup says whether it
+  carries ink, with nothing drawn to find out; the single canvas this replaced
+  re-encoded the whole issue's ink on every save, which heated the iPad. Issue
+  pages can't be deleted (Add page puts a blank A4 sheet at the foot, which can).
+  An issue from before columns (a markup per page) opens as the stack as it is;
+  one saved as a column stays one, since ink can't be cut out of a PaperKit
+  markup by region. Passed in simulator; Pencil writing at the stack's zoom
+  needs checking on the iPad. It downloads the PDF once
   from `GET /api/newspapers/issues/<date>/pdf`, since mobile sync doesn't carry
   issue PDFs, and reopens that issue's notebook — filed or not — instead of making
   a second one, so a paper is written on through the day in one place.
@@ -67,8 +72,7 @@ what each device can currently do and which work remains device-only.
   turn or an added page hides the page's canvas instead of loading the next page
   into it, so ink PaperKit hands over late (seen on the iPad: a page written,
   another added, most of the first gone) still lands on its own page. Every
-  page's canvas is read before each checkpoint, Save, lock or paste; a newspaper
-  keeps one canvas, scrolled. A stroke no longer re-runs the editor's SwiftUI
+  page's canvas is read before each checkpoint, Save, lock or paste. A stroke no longer re-runs the editor's SwiftUI
   body. **Ink log** (the notebook's ⋯ menu) lists turns, added pages, where each
   page's ink came from (the canvas on screen, a turned-away page's canvas, or only
   the read before a save), save timings and what an entry filed; Copy puts it on
@@ -85,10 +89,10 @@ what each device can currently do and which work remains device-only.
   composer, or **Save** inside the notes — files the typed text, links,
   clips, files and the notes' pages (as JPEGs, blank pages dropped) as one journal
   entry. Food leaves the notes in the draft.
-  A **newspaper's Save** files its cover plus the pages written on (found from the
-  ink itself, each page under some ink drawn at half size: a whole-issue drawing at
-  a tenth of its size lost fine pen and light pencil lines, and with them the page;
-  passed in simulator) and the notebook's one YouTube link. Saving the same issue again
+  A **newspaper's Save** files its cover plus the pages written on (each page's
+  own markup; for a column issue, each page under some ink drawn at half size: a
+  whole-issue drawing at a tenth of its size lost fine pen and light pencil lines,
+  and with them the page; passed in simulator) and the notebook's one YouTube link. Saving the same issue again
   (**Update entry**) files every page written on so far and **replaces** the
   earlier entry: the capture carries `replaces`, sync holds it until the entry it
   replaces has gone up, and `POST /api/journal` deletes that entry once the new one

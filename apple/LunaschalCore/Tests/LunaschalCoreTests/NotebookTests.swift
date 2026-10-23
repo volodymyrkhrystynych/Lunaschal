@@ -272,12 +272,21 @@ final class NotebookColumnStoreTests: XCTestCase {
         return url
     }
 
-    func testANewIssueIsAColumnAndABlankNotebookIsNot() throws {
+    func testANewIssueHasAMarkupPerPage() throws {
         let root = try directory(), store = try NotebookStore(root: root)
         let paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 40)
-        XCTAssertTrue(paper.isColumn)
-        XCTAssertEqual(paper.markupCount, 1)
+        XCTAssertFalse(paper.isColumn, "a column re-encoded the whole issue's ink on every save")
+        XCTAssertEqual(paper.layout, .paged)
+        XCTAssertEqual(paper.markupCount, 40)
         XCTAssertFalse(try store.create().isColumn)
+    }
+
+    /// An issue made while issues were columns, as that build saved it.
+    private func columnIssue(_ store: NotebookStore, root: URL, pageCount: Int) throws -> Notebook {
+        var paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: pageCount)
+        paper.layout = .column
+        try JSONEncoder().encode(paper).write(to: root.appendingPathComponent(paper.id + ".json"))
+        return try store.notebook(paper.id)
     }
 
     func testANotebookFromBeforeColumnsReadsAsPaged() throws {
@@ -295,7 +304,7 @@ final class NotebookColumnStoreTests: XCTestCase {
 
     func testAColumnSavesOneMarkupForEveryPage() throws {
         let root = try directory(), store = try NotebookStore(root: root)
-        let paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 40)
+        let paper = try columnIssue(store, root: root, pageCount: 40)
         let saved = try store.checkpoint(paper.id, pages: [Data([7])], locked: [Data([8])], marked: [3, 39, 40],
                                          preview: Data([9]), column: 41)
         XCTAssertEqual(saved.pageCount, 41, "an added page at the foot of the column")
@@ -306,7 +315,7 @@ final class NotebookColumnStoreTests: XCTestCase {
 
     func testAColumnCannotDropIssuePagesOrBeSavedAsPages() throws {
         let root = try directory(), store = try NotebookStore(root: root)
-        let paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3)
+        let paper = try columnIssue(store, root: root, pageCount: 3)
         XCTAssertThrowsError(try store.checkpoint(paper.id, pages: [Data([1])], marked: [], preview: Data([9]), column: 2))
         XCTAssertThrowsError(try store.checkpoint(paper.id, pages: [Data([1]), Data([2])], marked: [], preview: Data([9]), column: 3))
         XCTAssertThrowsError(try store.checkpoint(paper.id, pages: [Data([1]), Data([2]), Data([3])], marked: [], preview: Data([9])),
@@ -323,14 +332,14 @@ final class NotebookColumnStoreTests: XCTestCase {
         let column = try store.checkpoint(paper.id, pages: [Data([4])], marked: [1], preview: Data([9]), column: 3)
         XCTAssertTrue(column.isColumn)
         let restored = try store.restorePrevious(paper.id)
-        XCTAssertFalse(restored.isColumn, "back to the paged pages, to be converted again on open")
+        XCTAssertFalse(restored.isColumn, "back to the paged pages, which open as a stack of page canvases")
         XCTAssertEqual(restored.pageCount, 3)
         XCTAssertEqual(try store.pages(restored), [Data([1]), Data([2]), Data([3])])
     }
 
     func testRestoringAColumnKeepsItsPageCount() throws {
         let root = try directory(), store = try NotebookStore(root: root)
-        let paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3)
+        let paper = try columnIssue(store, root: root, pageCount: 3)
         try store.checkpoint(paper.id, pages: [Data([1])], marked: [], preview: Data([9]), column: 4)
         try store.checkpoint(paper.id, pages: [Data([2])], marked: [], preview: Data([9]), column: 4)
         let restored = try store.restorePrevious(paper.id)

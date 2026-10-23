@@ -141,7 +141,9 @@ public final class NotebookStore: @unchecked Sendable {
             try Self.validatePDF(pdf)
             var notebook = Notebook(title: NewspaperIssue.title(date), source: .newspaper(date: date),
                                     pageCount: pageCount, pdfPageCount: pageCount, now: now)
-            notebook.layout = .column
+            // A markup per page, read as one scroll. Issues made as a column
+            // stay one; this only decides what a new issue is.
+            notebook.layout = .paged
             let folder = try directory(notebook.id)
             try fm.createDirectory(at: folder, withIntermediateDirectories: true)
             let destination = folder.appendingPathComponent("source.pdf")

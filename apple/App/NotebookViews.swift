@@ -98,8 +98,6 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     @Published private(set) var slotCount = 1
     /// Where each page is in a column, top to bottom. Empty for a paged notebook.
     private(set) var slots: [CGRect] = []
-    /// A converted issue's locked pictures, serialized on the next checkpoint.
-    private var pendingLocked: PaperMarkup?
     /// Who each markup is, parallel to `pages`: a page gets a new identity
     /// whenever its content changes, and keeps it through pages being added
     /// or deleted around it. `onDisk` says which file of the current
@@ -177,7 +175,6 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             }
             locked = Self.padded((try? store.lockedLayers(notebook)) ?? [], to: pages.count)
             adoptDisk(fresh: data.isEmpty)
-            if notebook.newspaperDate != nil && !notebook.isColumn { convertToColumn() }
             loaded = true
             refreshPictureState()
             log.record("open \(notebook.title) · \(notebook.isColumn ? "column" : "paged") · \(pageCount) pages")
@@ -197,48 +194,6 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     /// the newsprint it lines the ink up with.
     private func columnSlots(count: Int) -> [CGRect] {
         NotebookColumn.slots(heights: (0..<max(count, 1)).map { pageBounds($0).height })
-    }
-
-    /// An issue opened before columns existed has one markup per page, each
-    /// the shape of its PDF page at the column's width. Each is moved down to
-    /// its place in the column and stacked, so the ink lands on the same
-    /// newsprint it was written on. The paged original stays in the previous
-    /// checkpoint.
-    private func convertToColumn() {
-        let count = pages.count
-        slots = columnSlots(count: count)
-        var column = PaperMarkup(bounds: NotebookColumn.bounds(of: slots))
-        var pictures: PaperMarkup?
-        for index in 0..<count {
-            let transform = Self.into(slots[index], from: pages[index].bounds)
-            var page = pages[index]
-            page.transformContent(transform)
-            column.append(contentsOf: page)
-            if let layer = lockedLayer(index) {
-                var moved = layer
-                moved.transformContent(transform)
-                if pictures == nil { pictures = PaperMarkup(bounds: column.bounds) }
-                pictures?.append(contentsOf: moved)
-            }
-        }
-        pages = [column]
-        locked = [nil]
-        pageIDs = [UUID()]
-        pageKeys = [UUID()]
-        lockedIDs = [UUID()]
-        pendingLocked = pictures
-        notebook.layout = .column
-        slotCount = count
-        dirty = true
-        status = "Newspaper converted to one scroll"
-    }
-
-    /// Moves a page of `bounds` onto `slot`, scaled to its width — which for
-    /// a page already the column's width is a plain move down.
-    private static func into(_ slot: CGRect, from bounds: CGRect) -> CGAffineTransform {
-        let scale = bounds.width > 0 ? slot.width / bounds.width : 1
-        return CGAffineTransform(a: scale, b: 0, c: 0, d: scale,
-                                 tx: slot.minX - bounds.minX * scale, ty: slot.minY - bounds.minY * scale)
     }
 
     private static func padded(_ layers: [Data?], to count: Int) -> [Data?] {
@@ -301,6 +256,11 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             && !NotebookPage.isBlank(NotebookPage.pictures(of: pages[markupIndex]))
     }
     var isNewspaper: Bool { notebook.newspaperDate != nil }
+    /// A newspaper stored a markup per page and read as one scroll: its pages
+    /// stacked top to bottom, each in its own canvas. Every issue made since
+    /// the column was retired; a column issue stays a column, since ink can't
+    /// be cut out of one by region.
+    var isStack: Bool { isNewspaper && !isColumn }
     var pageLabel: String { pages.isEmpty ? "" : "\(isNewspaper ? "p. " : "")\(current + 1) / \(pageCount)" }
     /// Issue pages stay; only pages added after them (or any page of a blank
     /// notebook, keeping one) can go. A column's pages share one markup, and
@@ -327,12 +287,12 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         log.record("turn p\(current + 1) → p\(index + 1)")
         current = index
         refreshPictureState()
-        if isColumn { canvas?.scroll(toSlot: index) }
+        if isColumn || isStack { canvas?.scroll(toSlot: index) }
     }
 
     /// The column scrolled; the page under the middle of the screen is current.
     func scrolled(toSlot index: Int) {
-        guard isColumn, index != current, (0..<pageCount).contains(index) else { return }
+        guard isColumn || isStack, index != current, (0..<pageCount).contains(index) else { return }
         current = index
     }
 
@@ -357,6 +317,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         pageKeys.append(UUID())
         lockedIDs.append(UUID())
         log.record("add p\(pages.count) after p\(current + 1)")
+        if isStack { slots = columnSlots(count: pages.count) }
         current = pages.count - 1
         refreshPictureState()
         revision += 1
@@ -373,6 +334,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         pageKeys.remove(at: index)
         lockedIDs.remove(at: index)
         marked = Set(marked.compactMap { $0 == index ? nil : ($0 > index ? $0 - 1 : $0) })
+        if isStack { slots = columnSlots(count: pages.count) }
         current = min(index, pages.count - 1)
         refreshPictureState()
         revision += 1
@@ -644,16 +606,9 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
     private func performCheckpoint(final: Bool) async {
         guard loaded, dirty || (final && (previewOf != coverIdentity || marksBehind)) else { return }
         dirty = false
-        if let pictures = pendingLocked {
-            do {
-                locked = [try await pictures.dataRepresentation()]
-                touchLocked(0)
-                pendingLocked = nil
-            } catch { dirty = true; self.error = error.localizedDescription; return }
-        }
         refreshPictureState()
         let snapshot = pages, ids = pageIDs, layers = locked, layerIDs = lockedIDs
-        let column = isColumn, slots = slotCount, cover = coverIdentity
+        let column = isColumn, stack = isStack, slots = slotCount, cover = coverIdentity
         let hasCheckpoint = notebook.checkpoint != nil
         var keep = marked
         let arrived = arrivals
@@ -673,9 +628,12 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
                 guard let data else { return nil }
                 return lockedOnDisk[layerIDs[index]].map(NotebookFile.kept) ?? .bytes(data)
             }
-            let scanned = final && column
-            if scanned, let ink = snapshot.first {
+            let scanned = final && (column || stack)
+            if scanned, column, let ink = snapshot.first {
                 keep = await inkedSlots(ink, slots: slots)
+                marked = keep
+            } else if scanned {
+                keep = Self.inkedPages(snapshot, locked: layers)
                 marked = keep
             }
             var preview: Data?
@@ -701,7 +659,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             lockedOnDisk = Dictionary(uniqueKeysWithValues: layerIDs.enumerated()
                 .filter { layers[$0.offset] != nil }.map { ($1, $0) })
             if drawn != nil { previewOf = cover }
-            if column { marksBehind = !scanned }
+            if column || stack { marksBehind = !scanned }
             error = nil
             status = dirty ? Self.saving : "Saved on this device"
             var line = "\(final ? "save" : "autosave"): wrote \(encoded.map { "p\($0 + 1)" }.joined(separator: " "))"
@@ -735,12 +693,10 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
             marked = notebook.markedPages
             slotCount = max(notebook.pageCount, 1)
             slots = columnSlots(count: slotCount)
-            pendingLocked = nil
-            if notebook.newspaperDate != nil && !notebook.isColumn { convertToColumn() }
             current = min(current, pageCount - 1)
             refreshPictureState()
             loaded = true
-            dirty = pendingLocked != nil || pageIDs.contains { onDisk[$0] == nil }
+            dirty = pageIDs.contains { onDisk[$0] == nil }
             error = nil
             revision += 1
             log.record("restored the previous saved version")
@@ -848,6 +804,12 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         return found
     }
 
+    /// A stacked newspaper's written-on pages: each page is its own markup,
+    /// so its own content frame says, with nothing drawn to find out.
+    static func inkedPages(_ pages: [PaperMarkup], locked: [Data?]) -> Set<Int> {
+        Set(pages.indices.filter { !NotebookPage.isBlank(pages[$0]) || (locked.indices.contains($0) && locked[$0] != nil) })
+    }
+
     /// How large a page is drawn to look for ink. Half size keeps a 1-point
     /// pen line; a tenth lost it.
     private static let inkScanScale: CGFloat = 0.5
@@ -889,6 +851,7 @@ final class NotebookEditorModel: ObservableObject, NotebookScreenshotReceiver {
         var snapshot = notebook
         snapshot.pageCount = pageCount
         if isColumn, let ink = pages.first { marked = await inkedSlots(ink, slots: slotCount) }
+        if isStack { marked = Self.inkedPages(pages, locked: locked) }
         snapshot.markedPages = marked
         let prefix = isNewspaper ? notebook.title.replacingOccurrences(of: " · ", with: " ") : "Notes"
         var files: [(data: Data, name: String)] = []
@@ -956,6 +919,20 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     private var papersLocked: [UUID: Data] = [:]
     /// Whether viewDidLoad's canvas has been given to a page yet.
     private var firstCanvasTaken = false
+    /// A stacked newspaper: its pages top to bottom at the column's width, in
+    /// one scroll view of ours that fits them to the window and, with zoom on,
+    /// zooms them. Each page near the screen has a canvas of its own over it,
+    /// so a save encodes only the pages written on since the last one, where
+    /// one canvas over the whole issue re-encoded all of its ink every time.
+    private let stackScroll = UIScrollView()
+    private let stackContent = UIView()
+    private var stackPlaceholders: [UIView] = []
+    /// Pages whose canvas reported writing this session: kept until the
+    /// editor closes, so ink PaperKit hasn't handed over can't go with a
+    /// canvas let go for scrolling out of sight.
+    private(set) var writtenKeys = Set<UUID>()
+    /// Set while a canvas is loaded from the model; its echo isn't writing.
+    private var assigning = false
     private(set) lazy var drawingToolbar = DrawingToolbar(presenter: self)
     private var shownPage = -1
     private var shownRevision = -1
@@ -998,8 +975,6 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         }
         return navigationController
     }
-    /// Canvases whose scroll views have been told one finger doesn't scroll.
-    private var heldCanvases = Set<ObjectIdentifier>()
     /// The zoom switch as last applied to the canvas.
     private var zoomApplied = false
 
@@ -1014,7 +989,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         view.backgroundColor = .secondarySystemBackground
         view.clipsToBounds = true
         overrideUserInterfaceStyle = .light
-        install(paper)
+        if model.isStack { setUpStack() } else { install(paper) }
         drawingToolbar.undoManagerProvider = { [weak self] in self?.paper.undoManager }
         // The system picker used to own these gestures. Our compact toolbar
         // must receive them on the canvas, even when the Pencil is away from it.
@@ -1022,7 +997,11 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         drawingToolbar.onSelect = { [weak self] favorite in
             guard let self else { return }
             paper.becomeFirstResponder()
-            if let tool = favorite.tool { paper.drawingTool = tool }
+            if let tool = favorite.tool {
+                paper.drawingTool = tool
+                // A newspaper's pages near the screen are all written on with it.
+                if model.isStack { for canvas in papers.values { canvas.drawingTool = tool } }
+            }
             else if favorite.kind == "ruler" { paper.isRulerActive.toggle() }
             else if favorite.kind == "insert" { showInsertMenu() }
         }
@@ -1061,7 +1040,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
 
     private func reportVisibleFrame() {
         #if DEBUG
-        let frame = paper.contentVisibleFrame
+        let frame = model.isStack ? stackVisibleFrame : paper.contentVisibleFrame
         visibleProbe.accessibilityValue = [frame.minX, frame.minY, frame.width, frame.height]
             .map { String(Int($0.rounded())) }.joined(separator: ",")
         #endif
@@ -1074,7 +1053,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         // Nothing on a notes page moves sideways — the toolbar turns and adds
         // pages — and the system's swipe back from the left edge would take
         // the whole notebook away under a stray palm. The Back button stays.
-        if !model.isColumn, let stack = hostNavigation {
+        if !model.isColumn && !model.isStack, let stack = hostNavigation {
             var backSwipes = [stack.interactivePopGestureRecognizer]
             if #available(iOS 26.0, *) { backSwipes.append(stack.interactiveContentPopGestureRecognizer) }
             for case let recognizer? in backSwipes where recognizer.isEnabled {
@@ -1123,6 +1102,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
 
     func show(page: Int, revision: Int) {
         if model.isColumn { showColumn(revision: revision); return }
+        if model.isStack { showStack(page: page, revision: revision); return }
         guard page != shownPage || revision != shownRevision, model.pages.indices.contains(page),
               model.pageKeys.indices.contains(page) else { return }
         let pageChanged = page != shownPage
@@ -1188,7 +1168,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
             canvas.removeFromParent()
             papers[key] = nil
             papersLocked[key] = nil
-            heldCanvases.remove(ObjectIdentifier(canvas))
+            writtenKeys.remove(key)
         }
     }
 
@@ -1219,6 +1199,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     private func fit() {
         guard view.bounds.width > 0 else { return }
         fittedSize = view.bounds.size
+        if model.isStack { fitStack(); return }
         let frame: CGRect
         if model.isColumn {
             frame = NotebookColumn.visibleFrame(slot: model.pageRect(model.current), view: view.bounds.size)
@@ -1238,6 +1219,7 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         paper.zoomRange = NotebookFit.zoomRange(fitted: fitted, maximum: Self.maximumZoom, enabled: model.zoomEnabled)
         paper.setContentVisibleFrame(frame, animated: animated)
         reportVisibleFrame()
+        holdPageStill()
     }
 
     /// How far past the fit a page can be zoomed: small print on a broadsheet.
@@ -1250,7 +1232,9 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         zoomApplied = enabled
         applyZoomGestures()
         guard view.bounds.width > 0 else { return }
-        if model.isColumn {
+        if model.isStack {
+            fitStack(keepZoom: enabled)
+        } else if model.isColumn {
             let fit = NotebookColumn.visibleFrame(slot: model.pageRect(model.current), view: view.bounds.size)
             show(enabled ? paper.contentVisibleFrame : NotebookFit.unzoomed(paper.contentVisibleFrame, fit: fit))
         } else if model.pages.indices.contains(shownPage) {
@@ -1264,6 +1248,11 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     /// bounces back; with zoom off, PaperKit's scroll views stop listening.
     private func applyZoomGestures() {
         guard isViewLoaded else { return }
+        if model.isStack {
+            stackScroll.pinchGestureRecognizer?.isEnabled = zoomApplied
+            stackScroll.bouncesZoom = zoomApplied
+            return
+        }
         var pending: [UIView] = [paper.view]
         while let next = pending.popLast() {
             if let scroll = next as? UIScrollView {
@@ -1274,11 +1263,220 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
         }
     }
 
-    func scroll(toSlot index: Int) {
+    func scroll(toSlot index: Int, animated: Bool = true) {
+        if model.isStack, model.slots.indices.contains(index) {
+            // The top of that page, at whatever zoom the reader is at.
+            let scale = stackScroll.zoomScale
+            let bottom = max(0, stackScroll.contentSize.height - stackScroll.bounds.height)
+            stackScroll.setContentOffset(CGPoint(x: 0, y: min(model.slots[index].minY * scale, bottom)), animated: animated)
+            return
+        }
         guard model.isColumn else { return }
         loadSlotsNear(index)
         // From wherever the reader has zoomed to, back to the fit at that page.
         show(NotebookColumn.visibleFrame(slot: model.pageRect(index), view: view.bounds.size), animated: true)
+    }
+
+    // MARK: Stack
+
+    private func setUpStack() {
+        stackScroll.frame = view.bounds
+        stackScroll.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        stackScroll.delegate = self
+        stackScroll.backgroundColor = .secondarySystemBackground
+        stackScroll.showsHorizontalScrollIndicator = false
+        stackScroll.alwaysBounceHorizontal = false
+        stackScroll.isDirectionalLockEnabled = true
+        stackScroll.contentInsetAdjustmentBehavior = .never
+        stackScroll.accessibilityIdentifier = "notebook-stack"
+        stackScroll.addSubview(stackContent)
+        view.insertSubview(stackScroll, at: 0)
+        layOutStack()
+    }
+
+    /// The pages' places, after the page count changed.
+    private func layOutStack() {
+        let size = NotebookColumn.bounds(of: model.slots).size
+        stackContent.bounds = CGRect(origin: .zero, size: size)
+        stackContent.center = CGPoint(x: size.width * stackScroll.zoomScale / 2, y: size.height * stackScroll.zoomScale / 2)
+        stackScroll.contentSize = CGSize(width: size.width * stackScroll.zoomScale, height: size.height * stackScroll.zoomScale)
+        if stackPlaceholders.count != model.slots.count {
+            stackPlaceholders.forEach { $0.removeFromSuperview() }
+            stackPlaceholders = model.slots.indices.map { index in
+                let page = UIView()
+                page.backgroundColor = .white
+                stackContent.insertSubview(page, at: index)
+                return page
+            }
+        }
+        for (index, slot) in model.slots.enumerated() { stackPlaceholders[index].frame = slot }
+        for (key, canvas) in papers {
+            guard let page = model.pageKeys.firstIndex(of: key), model.slots.indices.contains(page) else { continue }
+            canvas.view.frame = model.slots[page]
+        }
+    }
+
+    /// Fitted to the window's width; zoomed in only while zoom is on.
+    private func fitStack(keepZoom: Bool = false) {
+        let width = NotebookColumn.width
+        guard view.bounds.width > 0, width > 0 else { return }
+        let fitted = view.bounds.width / width
+        // Where the reader was, in page units, so a resize or the switch keeps it.
+        let top = stackScroll.contentOffset.y / max(stackScroll.zoomScale, 0.0001)
+        let wasFitted = stackScroll.minimumZoomScale
+        stackScroll.minimumZoomScale = fitted
+        stackScroll.maximumZoomScale = zoomApplied ? fitted * Self.maximumZoom : fitted
+        if !keepZoom || stackScroll.zoomScale < fitted || abs(stackScroll.zoomScale - wasFitted) < 0.0001 {
+            stackScroll.zoomScale = fitted
+        }
+        layOutStack()
+        let bottom = max(0, stackScroll.contentSize.height - stackScroll.bounds.height)
+        stackScroll.contentOffset = CGPoint(x: keepZoom ? stackScroll.contentOffset.x : 0,
+                                            y: min(max(0, top * stackScroll.zoomScale), bottom))
+        reportVisibleFrame()
+    }
+
+    /// What is on screen, in page units, for the probe.
+    private var stackVisibleFrame: CGRect {
+        let scale = max(stackScroll.zoomScale, 0.0001)
+        return CGRect(x: stackScroll.contentOffset.x / scale, y: stackScroll.contentOffset.y / scale,
+                      width: stackScroll.bounds.width / scale, height: stackScroll.bounds.height / scale)
+    }
+
+    private func showStack(page: Int, revision: Int) {
+        guard model.pages.indices.contains(page), page != shownPage || revision != shownRevision else { return }
+        let first = shownRevision == -1
+        let revised = revision != shownRevision
+        shownPage = page
+        shownRevision = revision
+        if revised {
+            dropCanvasesOfRemovedPages()
+            layOutStack()
+            // Everything was read from the canvases before the model changed a
+            // page from outside (a paste, a lock), so a canvas that now differs
+            // from its page differs by that change alone.
+            for (key, canvas) in papers {
+                guard let index = model.pageKeys.firstIndex(of: key) else { continue }
+                if canvas.markup != model.pages[index] { load(canvas, page: index) }
+                let layer = model.locked.indices.contains(index) ? model.locked[index] : nil
+                if layer != papersLocked[key] {
+                    papersLocked[key] = layer
+                    canvas.contentView = stackBackground(for: index)
+                }
+            }
+        }
+        if first { fitStack() }
+        loadStackNear(page)
+    }
+
+    /// Canvases for the page in the middle of the screen and one either side;
+    /// others go, unless written on this session.
+    private func loadStackNear(_ center: Int) {
+        let wanted = Set((center - 1)...(center + 1)).filter { model.pages.indices.contains($0) }
+        for (key, canvas) in papers {
+            guard let page = model.pageKeys.firstIndex(of: key), !wanted.contains(page), !writtenKeys.contains(key) else { continue }
+            // Nothing was written on it, but read it anyway: it costs nothing.
+            if let markup = canvas.markup { model.canvasChanged(markup, page: page, source: .read) }
+            canvas.delegate = nil
+            canvas.willMove(toParent: nil)
+            canvas.view.removeFromSuperview()
+            canvas.removeFromParent()
+            papers[key] = nil
+            papersLocked[key] = nil
+        }
+        for page in wanted.sorted() where papers[model.pageKeys[page]] == nil {
+            let key = model.pageKeys[page]
+            let canvas: PaperMarkupViewController
+            if !firstCanvasTaken {
+                canvas = paper
+                firstCanvasTaken = true
+            } else {
+                canvas = PaperMarkupViewController(markup: nil, supportedFeatureSet: .latest)
+            }
+            papers[key] = canvas
+            canvas.overrideUserInterfaceStyle = .light
+            addChild(canvas)
+            canvas.view.frame = model.slots[page]
+            stackContent.addSubview(canvas.view)
+            canvas.didMove(toParent: self)
+            canvas.delegate = self
+            canvas.isEditable = model.loaded
+            canvas.directTouchAutomaticallyDraws = false
+            if let tool = drawingToolbar.activeTool?.tool { canvas.drawingTool = tool }
+            load(canvas, page: page)
+            papersLocked[key] = model.locked.indices.contains(page) ? model.locked[page] : nil
+            canvas.contentView = stackBackground(for: page)
+            canvas.view.layoutIfNeeded()
+            canvas.setContentVisibleFrame(model.pageBounds(page), animated: false)
+            pinStackCanvas(canvas)
+        }
+        // The toolbar's undo and inserts act on the page being read.
+        if let current = papers[model.pageKeys[center]], current !== paper {
+            paper = current
+            drawingToolbar.refreshUndo()
+        }
+    }
+
+    private func load(_ canvas: PaperMarkupViewController, page: Int) {
+        assigning = true
+        canvas.markup = model.pages[page]
+        assigning = false
+    }
+
+    /// A stacked page's canvas holds its page still: the stack scrolls and zooms.
+    private func pinStackCanvas(_ canvas: PaperMarkupViewController) {
+        for scroll in Self.scrollViews(in: canvas.view) {
+            if scroll.isScrollEnabled { scroll.isScrollEnabled = false }
+            if scroll.pinchGestureRecognizer?.isEnabled == true { scroll.pinchGestureRecognizer?.isEnabled = false }
+            if scroll.bouncesZoom { scroll.bouncesZoom = false }
+            if scroll.showsVerticalScrollIndicator { scroll.showsVerticalScrollIndicator = false }
+            if scroll.showsHorizontalScrollIndicator { scroll.showsHorizontalScrollIndicator = false }
+        }
+    }
+
+    /// PaperKit's scroll views, found in its view tree.
+    private static func scrollViews(in root: UIView) -> [UIScrollView] {
+        var found: [UIScrollView] = []
+        var pending: [UIView] = [root]
+        while let next = pending.popLast() {
+            if let scroll = next as? UIScrollView { found.append(scroll) }
+            pending.append(contentsOf: next.subviews)
+        }
+        return found
+    }
+
+    /// A page's newsprint, rendered off the main thread and cached, with its
+    /// locked pictures over it.
+    private func stackBackground(for index: Int) -> UIView {
+        let bounds = model.pageBounds(index)
+        let view = UIImageView(frame: bounds)
+        view.backgroundColor = .white
+        if let page = model.pdfPage(index) {
+            view.isAccessibilityElement = true
+            view.accessibilityLabel = "Newspaper page \(index + 1)"
+            if let cached = newsprint.object(forKey: index as NSNumber) {
+                view.image = cached
+            } else {
+                thumbnails.async { [weak self, weak view] in
+                    // Twice the page's size, so zooming in on small print stays sharp.
+                    let picture = page.thumbnail(of: CGSize(width: bounds.width * 2, height: bounds.height * 2), for: .cropBox)
+                    DispatchQueue.main.async {
+                        let pixels = picture.size.width * picture.scale * picture.size.height * picture.scale
+                        self?.newsprint.setObject(picture, forKey: index as NSNumber, cost: Int(pixels) * 4)
+                        view?.image = picture
+                    }
+                }
+            }
+        }
+        if model.locked.indices.contains(index), model.locked[index] != nil {
+            let pictures = UIImageView(frame: view.bounds)
+            pictures.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(pictures)
+            Task { [weak pictures, model] in
+                pictures?.image = await model.lockedImage(index, width: bounds.width * 2)
+            }
+        }
+        return view
     }
 
     // MARK: Column
@@ -1350,7 +1548,8 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     }
 
     func paperMarkupViewControllerDidChangeContentVisibleFrame(_ paperMarkupViewController: PaperMarkupViewController) {
-        guard paperMarkupViewController === paper else { return }
+        // A stacked page's canvas never scrolls; the stack's scroll view does.
+        guard paperMarkupViewController === paper, !model.isStack else { return }
         reportVisibleFrame()
         guard model.isColumn else { return }
         let visible = paperMarkupViewController.contentVisibleFrame
@@ -1393,21 +1592,20 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
     /// zoomed in, pan. PaperKit has no setting for this, so it is set on its
     /// scroll views, found in its view tree. The newspaper column is read by
     /// scrolling, and keeps one-finger scrolling.
+    ///
+    /// Applied again on every layout and refit, never once and remembered:
+    /// PaperKit builds its scroll views lazily and can set them up again when
+    /// a page is fitted or zoomed, and one-finger scrolling came back on the
+    /// iPad. Only a setting that drifted is written.
     private func holdPageStill() {
-        guard !model.isColumn, isViewLoaded, !heldCanvases.contains(ObjectIdentifier(paper)) else { return }
-        var pending: [UIView] = [paper.view]
-        var found = false
-        while let next = pending.popLast() {
-            if let scroll = next as? UIScrollView {
-                scroll.panGestureRecognizer.minimumNumberOfTouches = 2
-                scroll.alwaysBounceVertical = false
-                scroll.alwaysBounceHorizontal = false
-                found = true
-            }
-            pending.append(contentsOf: next.subviews)
+        guard isViewLoaded else { return }
+        if model.isStack { for canvas in papers.values { pinStackCanvas(canvas) }; return }
+        guard !model.isColumn else { return }
+        for scroll in Self.scrollViews(in: paper.view) {
+            if scroll.panGestureRecognizer.minimumNumberOfTouches != 2 { scroll.panGestureRecognizer.minimumNumberOfTouches = 2 }
+            if scroll.alwaysBounceVertical { scroll.alwaysBounceVertical = false }
+            if scroll.alwaysBounceHorizontal { scroll.alwaysBounceHorizontal = false }
         }
-        // PaperKit builds its scroll views lazily; until they exist, look again next layout.
-        if found { heldCanvases.insert(ObjectIdentifier(paper)) }
     }
 
     private func showInsertMenu() {
@@ -1421,10 +1619,44 @@ final class NotebookCanvasController: UIViewController, PaperMarkupViewControlle
 
     func paperMarkupViewControllerDidChangeMarkup(_ paperMarkupViewController: PaperMarkupViewController) {
         if paperMarkupViewController === paper { drawingToolbar.refreshUndo() }
-        guard let markup = paperMarkupViewController.markup else { return }
+        guard !assigning, let markup = paperMarkupViewController.markup else { return }
         if model.isColumn { model.canvasChanged(markup, page: 0); return }
         guard let page = page(of: paperMarkupViewController) else { return }
+        if model.isStack {
+            writtenKeys.insert(model.pageKeys[page])
+            model.canvasChanged(markup, page: page)
+            return
+        }
         model.canvasChanged(markup, page: page, source: paperMarkupViewController === paper ? .shown : .turnedAway)
+    }
+}
+
+extension NotebookCanvasController: UIScrollViewDelegate {
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+        scrollView === stackScroll ? stackContent : nil
+    }
+
+    /// The page under the middle of the screen is current.
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView === stackScroll, model.isStack else { return }
+        // Fitted to the width, there is nothing to either side: only zoomed
+        // in does the paper move sideways.
+        if scrollView.zoomScale <= scrollView.minimumZoomScale + 0.0001, scrollView.contentOffset.x != 0 {
+            scrollView.contentOffset.x = 0
+            return
+        }
+        reportVisibleFrame()
+        let index = NotebookColumn.slot(atY: stackVisibleFrame.midY, in: model.slots)
+        loadStackNear(index)
+        model.scrolled(toSlot: index)
+    }
+
+    /// A Pencil set down on a stacked page makes that page the one the
+    /// toolbar's undo and inserts act on.
+    func paperMarkupViewControllerDidBeginDrawing(_ paperMarkupViewController: PaperMarkupViewController) {
+        guard model.isStack, paperMarkupViewController !== paper else { return }
+        paper = paperMarkupViewController
+        drawingToolbar.refreshUndo()
     }
 }
 
