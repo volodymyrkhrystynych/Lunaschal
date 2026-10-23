@@ -1471,9 +1471,8 @@ describe('filed study sources in the feed', () => {
   });
 });
 
-// The composer's location button. The Journal asks out loud, where Food and
-// Chat grab the fix silently on submit, because a photo taken through the
-// browser's camera has no GPS EXIF of its own — see LocationButton.
+// The composer sends no location: the server places the entry where the
+// phone's trail was when it was written (backend/journal/location.py).
 describe('Journal new-entry location', () => {
   const createMock = api.journal.create as ReturnType<typeof vi.fn>;
 
@@ -1484,72 +1483,21 @@ describe('Journal new-entry location', () => {
     createMock.mockResolvedValue({ id: 'new' });
   });
 
-  async function openComposer() {
+  it('never asks the device, and leaves the location to the server', async () => {
+    const spy = vi.spyOn(geo, 'currentPosition');
     renderJournal();
     fireEvent.click(await screen.findByText('+ New Entry'));
-    return screen.getByPlaceholderText('Write your journal entry...');
-  }
-
-  it('saves without a location when the button is never pressed', async () => {
-    const spy = vi.spyOn(geo, 'currentPosition');
-    const textarea = await openComposer();
-    fireEvent.change(textarea, { target: { value: 'no map today' } });
+    const textarea = screen.getByPlaceholderText('Write your journal entry...');
+    expect(
+      screen.queryByTestId('journal-new-entry-location-button')
+    ).toBeNull();
+    fireEvent.change(textarea, { target: { value: 'no button today' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
     await waitFor(() => expect(createMock).toHaveBeenCalled());
     expect(spy).not.toHaveBeenCalled();
     expect(createMock.mock.calls[0][0].latitude).toBeUndefined();
     expect(createMock.mock.calls[0][0].longitude).toBeUndefined();
-  });
-
-  it('sends the fix with the create once it has been asked for', async () => {
-    vi.spyOn(geo, 'currentPosition').mockResolvedValue({
-      latitude: 43.6532,
-      longitude: -79.3832,
-    });
-    const textarea = await openComposer();
-    fireEvent.click(screen.getByTestId('journal-new-entry-location-button'));
-    await screen.findByText('43.6532, -79.3832');
-
-    fireEvent.change(textarea, { target: { value: 'by the river' } });
-    fireEvent.keyDown(textarea, { key: 'Enter' });
-
-    await waitFor(() => expect(createMock).toHaveBeenCalled());
-    expect(createMock.mock.calls[0][0].latitude).toBeCloseTo(43.6532);
-    expect(createMock.mock.calls[0][0].longitude).toBeCloseTo(-79.3832);
-  });
-
-  it('saves anyway when the device refuses', async () => {
-    vi.spyOn(geo, 'currentPosition').mockResolvedValue(null);
-    const textarea = await openComposer();
-    fireEvent.click(screen.getByTestId('journal-new-entry-location-button'));
-    await screen.findByText('Location unavailable');
-
-    fireEvent.change(textarea, { target: { value: 'indoors somewhere' } });
-    fireEvent.keyDown(textarea, { key: 'Enter' });
-
-    await waitFor(() => expect(createMock).toHaveBeenCalled());
-    expect(createMock.mock.calls[0][0].latitude).toBeUndefined();
-  });
-
-  it('starts the next entry unlocated', async () => {
-    // The fix belongs to the entry that was saved, not to the composer. Left
-    // behind, tomorrow's entry would silently claim yesterday's place.
-    vi.spyOn(geo, 'currentPosition').mockResolvedValue({
-      latitude: 1,
-      longitude: 2,
-    });
-    const textarea = await openComposer();
-    fireEvent.click(screen.getByTestId('journal-new-entry-location-button'));
-    await screen.findByText('1.0000, 2.0000');
-    fireEvent.change(textarea, { target: { value: 'first' } });
-    fireEvent.keyDown(textarea, { key: 'Enter' });
-    await waitFor(() => expect(createMock).toHaveBeenCalled());
-
-    fireEvent.click(await screen.findByText('+ New Entry'));
-    expect(
-      screen.getByTestId('journal-new-entry-location-label').textContent
-    ).toBe('Add location');
   });
 
   it('links a located entry to a map, and leaves an unlocated one alone', async () => {
