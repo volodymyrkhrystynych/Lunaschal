@@ -395,7 +395,12 @@ function FeedCard({
   const percent = matchPercent(job.matchReasons);
   const gaps = topGaps(job.matchReasons);
   const salary = formatSalary(job.salaryMin, job.salaryMax, job.salaryCurrency);
-  const commute = distanceLabel(job);
+  const anchor = useQuery({
+    queryKey: ['jobs', 'distanceAnchor'],
+    queryFn: api.jobs.distanceAnchor,
+    staleTime: 5 * 60_000,
+  });
+  const commute = distanceLabel(job, anchor.data?.label);
   const assessment = rationale.data ?? job.matchReasons?.assessment;
 
   return (

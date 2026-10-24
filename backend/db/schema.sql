@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     -- this (backend/routes/journal.py's _entry_coords fallback).
     latitude REAL,
     longitude REAL,
+    -- 'device' (that fix) or 'trail': an entry that arrived with no fix of its
+    -- own -- from the Watch, a standalone recording, a fix gone stale -- is
+    -- placed where the phone's location trail was at that moment
+    -- (backend/journal/location.py). The phone, Watch and iPad travel together.
+    location_source TEXT,
     -- The weather where and when the entry was written, as JSON
     -- (backend/weather/entry.py). Filled in by a sweep after the entry lands,
     -- so an offline capture uploaded hours later still gets the weather of its
@@ -161,6 +166,21 @@ CREATE TABLE IF NOT EXISTS saved_places (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+-- Home and Work as dated roles over saved places (backend/place_roles.py).
+-- Half-open 4am-day ranges [started_on, ended_on); ended_on NULL is current.
+-- A move is a new place and a new period, so the old one keeps its history;
+-- RESTRICT so deleting a place cannot silently erase where the user lived.
+CREATE TABLE IF NOT EXISTS place_roles (
+    id TEXT PRIMARY KEY,
+    role TEXT NOT NULL CHECK (role IN ('home', 'work')),
+    place_id TEXT NOT NULL REFERENCES saved_places(id) ON DELETE RESTRICT,
+    started_on TEXT NOT NULL,
+    ended_on TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_place_roles_role ON place_roles(role, started_on);
 
 CREATE TABLE IF NOT EXISTS calendar_events (
     id TEXT PRIMARY KEY,
@@ -345,6 +365,27 @@ CREATE TABLE IF NOT EXISTS location_points (
     received_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_location_points_day ON location_points(day_key, fix_ts);
+-- "Where was the phone at this moment" (weather and meals without their own
+-- coordinates, backend/location/lookup.py) searches by time alone.
+CREATE INDEX IF NOT EXISTS idx_location_points_ts ON location_points(fix_ts);
+
+-- What backend/location/work_calendar.py wrote to the calendar for one 4am day
+-- of being at work: the occurrence of the recurring work event it moved to the
+-- real arrival/departure, or the one-off event it created when none was
+-- scheduled. `written_*` is what it last wrote, so a later edit by the user
+-- (the stored times no longer match) is noticed and the day is `released`:
+-- never touched again.
+CREATE TABLE IF NOT EXISTS work_attendance (
+    day_key TEXT PRIMARY KEY,
+    event_id TEXT REFERENCES calendar_events(id) ON DELETE SET NULL,
+    occurrence_date TEXT,           -- set when a recurring occurrence was moved
+    created_event INTEGER NOT NULL DEFAULT 0,
+    place_name TEXT NOT NULL,
+    written_time TEXT,
+    written_end_time TEXT,
+    released INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS mcp_servers (
     id TEXT PRIMARY KEY,

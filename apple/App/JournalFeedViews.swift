@@ -38,7 +38,13 @@ struct JournalFeedView: View {
         let purchases = model.spendingRecords.map {
             FeedItem.purchase($0, JournalTimestamp.parse($0.data?["createdAt"]?.string) ?? .distantPast)
         }
-        return (records + meals + purchases + localCaptures.map { FeedItem.capture($0) }).sorted { $0.time > $1.time }
+        // A day's map card sits at the day's last second, as its summary. Not
+        // a search result: it has no text of its own.
+        let days = searching ? [] : model.locationDays.map {
+            FeedItem.day($0, JournalTimestamp.parse($0.archivedAt) ?? .distantPast)
+        }
+        return (records + meals + purchases + days + localCaptures.map { FeedItem.capture($0) })
+            .sorted { $0.time > $1.time }
     }
 
     var body: some View {
@@ -105,6 +111,7 @@ struct JournalFeedView: View {
         case .entry(let record, _): EntryCard(model: model, record: record)
         case .meal(let record, _): FoodEntryCard(model: model, record: record)
         case .purchase(let record, _): SpendingEntryCard(model: model, record: record)
+        case .day(let day, _): LocationDayCard(model: model, day: day)
         case .capture(let capture):
             NavigationLink { CaptureDetail(model: model, id: capture.id) } label: {
                 LocalCaptureCard(model: model, capture: capture)
@@ -116,12 +123,14 @@ struct JournalFeedView: View {
         case entry(SyncChange, Date)
         case meal(SyncChange, Date)
         case purchase(SyncChange, Date)
+        case day(LocationDay, Date)
         case capture(Capture)
         var id: String {
             switch self {
             case .entry(let record, _): return record.id
             case .meal(let record, _): return "meal:" + record.id
             case .purchase(let record, _): return "purchase:" + record.id
+            case .day(let day, _): return "day:" + day.date
             // The entry's own id: the same card before and after it syncs.
             case .capture(let capture):
                 let id = capture.snapshot?.id ?? capture.id
@@ -134,7 +143,7 @@ struct JournalFeedView: View {
         }
         var time: Date {
             switch self {
-            case .entry(_, let time), .meal(_, let time), .purchase(_, let time): return time
+            case .entry(_, let time), .meal(_, let time), .purchase(_, let time), .day(_, let time): return time
             case .capture(let capture): return capture.createdAt
             }
         }
@@ -626,6 +635,78 @@ struct SpendingRecordView: View {
         merchant = purchase?.merchant ?? ""; category = purchase?.category ?? ""
         notes = purchase?.notes ?? ""; amount = shownAmount
         editing = true
+    }
+}
+
+// MARK: Where the day went
+
+/// The web's map card: where the phone went that day, time at Home and Work,
+/// and each commute with how it was made. The picture is the server's, named
+/// by version, so a cached copy is never stale.
+private struct LocationDayCard: View {
+    @ObservedObject var model: CaptureModel
+    let day: LocationDay
+    @State private var image: UIImage?
+    @State private var missing = false
+    @State private var enlarged = false
+
+    private var summary: String {
+        var parts: [String] = []
+        if day.placeCount > 0 { parts.append("\(day.placeCount) place\(day.placeCount == 1 ? "" : "s")") }
+        if day.entryCount > 0 { parts.append("\(day.entryCount) \(day.entryCount == 1 ? "entry" : "entries") pinned") }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        FeedCard {
+            HStack(alignment: .firstTextBaseline) {
+                Label(dayTitle, systemImage: "map").font(.subheadline.weight(.semibold))
+                Spacer()
+                if !summary.isEmpty { Text(summary).font(.caption).foregroundStyle(.secondary) }
+            }
+            if let line = Whereabouts.line(day.whereabouts) {
+                Text(line).font(.subheadline).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("day-whereabouts")
+            }
+            ForEach(Array((day.commutes ?? []).enumerated()), id: \.offset) { _, trip in
+                Label(Whereabouts.commuteLine(trip), systemImage: Whereabouts.modeSymbol(trip.mode))
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Button { if image != nil { enlarged = true } } label: {
+                Group {
+                    if let image {
+                        Image(uiImage: image).resizable().scaledToFit()
+                    } else {
+                        ZStack {
+                            Color.secondary.opacity(0.15)
+                            if missing { Image(systemName: "map").foregroundStyle(.secondary) } else { ProgressView() }
+                        }
+                        .aspectRatio(1.5, contentMode: .fit)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Map of \(dayTitle)")
+        }
+        .task(id: day.imageUrl) {
+            if let data = await model.dayMap(day) { image = UIImage(data: data) }
+            missing = image == nil
+        }
+        .fullScreenCover(isPresented: $enlarged) {
+            NavigationStack {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    if let image { Image(uiImage: image).resizable().scaledToFit() }
+                }
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { enlarged = false } } }
+            }
+        }
+    }
+
+    private var dayTitle: String {
+        guard let date = DayKey.date(day.date) else { return day.date }
+        return date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
     }
 }
 

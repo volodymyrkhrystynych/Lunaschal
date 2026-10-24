@@ -18,6 +18,7 @@ import {
 } from '@tanstack/react-query';
 import { api } from '../hooks/api';
 import { ulid } from '../lib/ulid';
+import { commuteLine, whereaboutsLine } from '../lib/whereabouts';
 import {
   enqueueJournalLink,
   useJournalCreate,
@@ -73,8 +74,6 @@ import { useShortcutScope } from '../shortcuts/ShortcutProvider';
 import { useListSelection } from '../shortcuts/useListSelection';
 import { useClipStage } from '../hooks/useClipStage';
 import { ClipStrip } from './ClipRecorder';
-import { LocationButton, useLocationAsk } from './LocationButton';
-import type { Coords } from '../lib/geo';
 import { MealClips, visualMedia } from './Food/MealClips';
 import {
   isCompactSpending,
@@ -475,8 +474,7 @@ export function Journal({
     content: string,
     staged: StagedFile[],
     clipCount: number,
-    links: string[] = [],
-    coords: Coords | null = null
+    links: string[] = []
   ) => {
     // Fired first, so it is first into JOURNAL_LANE and the entry exists before
     // anything is hung off it — online *and* on a queue replayed after a
@@ -493,12 +491,9 @@ export function Journal({
       // out to be about, so the title waits for the download and the summary
       // that follows it (backend/routes/journal.py's `_attachments_settled`).
       pendingAttachments: staged.length + clipCount + links.length || undefined,
-      // Sent with the create rather than with each file, because it is the
-      // *entry's* location: the server hands it down to any attachment whose
-      // own EXIF has none (backend/routes/journal.py's `_entry_coords`), which
-      // covers every photo taken through the camera and every voice clip.
-      latitude: coords?.latitude,
-      longitude: coords?.longitude,
+      // No location: the server places the entry where the phone's trail was
+      // at that moment (backend/journal/location.py), which is where the
+      // desktop is too — the phone is always beside it.
     });
     setStagedUploadError(null);
     setShowNewEntry(false);
@@ -1237,8 +1232,7 @@ function NewEntryComposer({
     content: string,
     files: StagedFile[],
     clipCount: number,
-    links: string[],
-    coords: Coords | null
+    links: string[]
   ) => void;
   onCancel: () => void;
 }) {
@@ -1262,11 +1256,6 @@ function NewEntryComposer({
   // did not exist yet and there was nowhere server-side for the text to go.
   // Minting the id up front is what removed that constraint.
   const clips = useClipStage({ kind: 'journal' });
-
-  // Nothing is asked of the device until the button is pressed — see
-  // LocationButton for why the Journal asks out loud where Food and Chat grab
-  // the fix silently.
-  const location = useLocationAsk();
 
   const stage = (transfer: DataTransfer | null, e: React.SyntheticEvent) => {
     const { accepted, rejected } = filesFromTransfer(transfer);
@@ -1292,14 +1281,7 @@ function NewEntryComposer({
       clips.clips.length === 0
     )
       return;
-    onSubmit(
-      clips.claimId(),
-      content,
-      files,
-      clips.clips.length,
-      links,
-      location.coords
-    );
+    onSubmit(clips.claimId(), content, files, clips.clips.length, links);
     // Not awaited: the clips are on the device, and the queue lands them behind
     // the create in JOURNAL_LANE whenever the backend is next reachable.
     void clips.commit();
@@ -1307,7 +1289,6 @@ function NewEntryComposer({
     setFiles([]);
     setLinks([]);
     clips.reset();
-    location.reset();
   };
 
   return (
@@ -1418,7 +1399,6 @@ function NewEntryComposer({
         </div>
       )}
       <div className="flex items-center justify-end gap-2 mt-2">
-        <LocationButton ask={location} testId="journal-new-entry-location" />
         <div className="flex-1" />
         <button
           onClick={() => {
@@ -1430,7 +1410,6 @@ function NewEntryComposer({
             setFiles([]);
             setLinks([]);
             setContent('');
-            location.reset();
             onCancel();
           }}
           className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
@@ -2018,6 +1997,7 @@ const JournalLocationItem = memo(function JournalLocationItem({
 }) {
   const lightbox = useLightbox();
   const dayLabel = formatDay(day.date + 'T00:00:00');
+  const spent = whereaboutsLine(day.whereabouts);
   const summary = [
     day.placeCount
       ? `${day.placeCount} place${day.placeCount === 1 ? '' : 's'}`
@@ -2044,6 +2024,16 @@ const JournalLocationItem = memo(function JournalLocationItem({
       }
       body={
         <>
+          {spent && (
+            <p className="text-sm text-[var(--color-text-muted)] mb-2">
+              {spent}
+            </p>
+          )}
+          {day.commutes?.map((trip, i) => (
+            <p key={i} className="text-xs text-[var(--color-text-muted)] mb-1">
+              {commuteLine(trip)}
+            </p>
+          ))}
           <button
             type="button"
             className="block w-full"

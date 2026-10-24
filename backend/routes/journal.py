@@ -21,6 +21,7 @@ from backend.ai.journal import (
 from backend.ai import jobs
 from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
 from backend.journal import archive, context_prompts, playable, storage, voice_drafts, youtube_import
+from backend.journal import location as entry_location
 from backend.learning.review_cards import carry_review_card, ensure_review_card
 from backend.study import youtube
 from backend.tags import tags_json
@@ -297,12 +298,16 @@ def create_journal_entry(
     id = entry_id or str(ULID())
     db = get_db()
     latitude, longitude = coords if coords else (None, None)
+    source = 'device' if coords else None
     cur = db.execute(
         'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags,'
-        ' latitude, longitude, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        ' latitude, longitude, location_source, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
         (id, content, raw_content, title, tags_json(tags),
-         latitude, longitude, created_at, created_at),
+         latitude, longitude, source, created_at, created_at),
     )
+    # With no fix of its own, where the phone's trail was at that moment.
+    if cur.rowcount and not coords:
+        entry_location.fill(db, id)
     db.commit()
     if cur.rowcount == 0:
         if not content.strip():
@@ -310,12 +315,17 @@ def create_journal_entry(
         # COALESCE on the coordinates rather than a plain assignment: the
         # recording route may have located the row already, and a create with
         # no fix (button not pressed, permission refused) must not erase it.
+        # A device fix arriving with the words replaces a trail lookup the
+        # recording route made: measured beats looked up.
         adopted = db.execute(
             "UPDATE journal_entries SET content=?, raw_content=?, updated_at=?,"
-            " latitude=COALESCE(?, latitude), longitude=COALESCE(?, longitude)"
+            " latitude=COALESCE(?, latitude), longitude=COALESCE(?, longitude),"
+            " location_source=COALESCE(?, location_source)"
             " WHERE id=? AND content='' AND COALESCE(raw_content, '')=''",
-            (content, raw_content, created_at, latitude, longitude, id),
+            (content, raw_content, created_at, latitude, longitude, source, id),
         )
+        if adopted.rowcount and not coords:
+            entry_location.fill(db, id)
         db.commit()
         if not adopted.rowcount:
             return None
@@ -1171,6 +1181,7 @@ def upload_screenshot():
                 (entry_id, '', None, 'Screenshots', None,
                  captured_at, captured_at),
             )
+            entry_location.fill(db, entry_id)
             now = int(time.time())
             db.execute(
                 'INSERT INTO journal_screenshot_sessions('
@@ -1377,6 +1388,10 @@ def create_recording_entry():
     # file is rejected must not delete the entry an earlier call got right.
     created_entry = cur.rowcount > 0
     if created_entry:
+        # A recording carries no fix (the Watch has none, nor does the bottom
+        # bar's Record): the trail says where it was made.
+        if entry_location.fill(db, entry_id):
+            db.commit()
         entry_weather.nudge()
 
     def _rollback_entry():

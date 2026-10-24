@@ -307,3 +307,24 @@ def test_two_untimed_activities_can_cite_one_evening_recap(client):
     ctx = gather_day(db, TODAY)
     proposals = stage_events(db, [{**event(title), 'time': None, 'endTime': None} for title in ('Cooking', 'Family time')], ctx)
     assert len(proposals) == 2
+
+
+def test_stays_at_home_and_work_reach_the_briefing(client):
+    from backend import place_roles
+    db = get_db()
+    for pid, name, lat in (('H', 'Home', 43.65), ('O', 'Office', 43.70)):
+        db.execute('INSERT INTO saved_places(id,name,latitude,longitude,radius_m,created_at,updated_at)'
+                   ' VALUES (?,?,?,?,150,0,0)', (pid, name, lat, -79.38))
+    db.commit()
+    place_roles.assign(db, 'home', 'H', '2026-01-01')
+    place_roles.assign(db, 'work', 'O', '2026-01-01')
+    for vid, lat, arrive, depart in (('v1', 43.70, START + 5 * 3600, START + 13 * 3600),
+                                     ('v2', 43.65, START + 14 * 3600, None),
+                                     ('v3', 43.80, START + 13 * 3600, START + 13.5 * 3600)):
+        db.execute("INSERT INTO location_points(id,fix_ts,day_key,latitude,longitude,accuracy_m,kind,departed_ts,received_at)"
+                   " VALUES (?,?,?,?,?,20,'visit',?,0)", (vid, arrive, DAY, lat, -79.38, depart))
+    db.commit()
+    ctx = gather_day(db, TODAY)
+    assert ctx['placeRoles'] == {'home': 'Home', 'work': ['Office']}
+    assert [(s['role'], s['place']) for s in ctx['stays']] == [('work', 'Office'), (None, None), ('home', 'Home')]
+    assert ctx['stays'][-1]['departed'] is None

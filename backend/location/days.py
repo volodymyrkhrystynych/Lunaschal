@@ -11,26 +11,34 @@ free: there is no job to schedule and nothing to invalidate.
 import hashlib
 import logging
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 
 from backend.day_boundary import day_bounds, day_key_for
 from backend.db.connection import get_db
 from backend.journal_moment import journal_moment
-from backend.location import render, tiles, trail
+from backend.location import commute, render, tiles, trail, whereabouts
 from backend.location.storage import location_root, map_path
+from backend.place_roles import list_periods, roles_for_day
 
 log = logging.getLogger(__name__)
 
 # Bump when the drawing changes, so every cached map is redrawn on next view.
-RENDER_VERSION = 1
+RENDER_VERSION = 2
+
+
+_FIX_COLUMNS = 'fix_ts, latitude, longitude, kind, accuracy_m, departed_ts, place_id, activity'
+
+
+def to_fix(r) -> trail.Fix:
+    return trail.Fix(r['fix_ts'], r['latitude'], r['longitude'], r['kind'], r['accuracy_m'],
+                     r['departed_ts'], r['place_id'], r['activity'])
 
 
 def fixes(day: str) -> list[trail.Fix]:
     rows = get_db().execute(
-        'SELECT fix_ts, latitude, longitude, kind, accuracy_m, departed_ts FROM location_points'
-        ' WHERE day_key=? ORDER BY fix_ts', (day,)).fetchall()
-    return [trail.Fix(r['fix_ts'], r['latitude'], r['longitude'], r['kind'], r['accuracy_m'], r['departed_ts'])
-            for r in rows]
+        f'SELECT {_FIX_COLUMNS} FROM location_points WHERE day_key=? ORDER BY fix_ts', (day,)).fetchall()
+    return [to_fix(r) for r in rows]
 
 
 def _located_entries(start: int | None = None, end: int | None = None):
@@ -48,9 +56,12 @@ def pins(day: str) -> list[tuple[float, float]]:
     return [(r['latitude'], r['longitude']) for r in _located_entries(*day_bounds(day))]
 
 
-def _version(point_stats: tuple, entries: list) -> str:
+def _version(point_stats: tuple, entries: list, roles: list) -> str:
+    # The role places are drawn into the picture (home and work visits are
+    # coloured), so a new Home, or a corrected Work radius, is a new picture.
     h = hashlib.sha1(repr((RENDER_VERSION, tuple(point_stats),
-                           [(e['id'], e['updated_at'], e['latitude'], e['longitude']) for e in entries])).encode())
+                           [(e['id'], e['updated_at'], e['latitude'], e['longitude']) for e in entries],
+                           sorted(roles, key=lambda r: r.place_id))).encode())
     return h.hexdigest()[:16]
 
 
@@ -70,7 +81,7 @@ def version(day: str) -> str | None:
                            (time.time(), trail.MIN_DWELL_S, day)).fetchone()
     if row is None:
         return None
-    return _version(_stats_key(row), _located_entries(*day_bounds(day)))
+    return _version(_stats_key(row), _located_entries(*day_bounds(day)), roles_for_day(list_periods(get_db()), day))
 
 
 def image_url(day: str, ver: str) -> str:
@@ -87,16 +98,20 @@ def journal_days() -> list[dict]:
     summary, above that day's last entry.
     """
     db = get_db()
+    now = time.time()
     rows = db.execute(_DAY_STATS + ' GROUP BY day_key ORDER BY day_key DESC',
-                      (time.time(), trail.MIN_DWELL_S)).fetchall()
+                      (now, trail.MIN_DWELL_S)).fetchall()
     by_day: dict[str, list] = {}
     for e in _located_entries():
         by_day.setdefault(day_key_for(e['created_at']), []).append(e)
+    periods = list_periods(db)
     out = []
     for row in rows:
         day = row['day_key']
         entries = by_day.get(day, [])
-        ver = _version(_stats_key(row), entries)
+        roles = roles_for_day(periods, day)
+        ver = _version(_stats_key(row), entries, roles)
+        summary = day_summary(day, ver, roles, now)
         at = journal_moment(None, day_bounds(day)[0], unworked_at_day_end=True)
         out.append({
             'date': day,
@@ -105,7 +120,53 @@ def journal_days() -> list[dict]:
             'placeCount': row['places'] or 0,
             'entryCount': len(entries),
             'imageUrl': image_url(day, ver),
+            'whereabouts': summary['whereabouts'],
+            'commutes': summary['commutes'],
         })
+    return out
+
+
+# Derived per-day summaries, keyed by the day's picture version: that hash
+# already moves with every input (fixes, roles), so a stale entry is simply
+# never asked for again. Today is never cached — an ongoing stay grows.
+_SUMMARIES: OrderedDict[tuple[str, str], dict] = OrderedDict()
+_SUMMARY_LIMIT = 1000
+
+
+def day_summary(day: str, ver: str | None, roles: list, now: float) -> dict:
+    """{whereabouts, commutes} for one day — what the map card says in words,
+    and what the weekly patterns are built from."""
+    key = (day, ver or '')
+    cacheable = ver is not None and day != day_key_for(int(now))
+    if cacheable and key in _SUMMARIES:
+        _SUMMARIES.move_to_end(key)
+        return _SUMMARIES[key]
+    result = {'whereabouts': None, 'commutes': []}
+    if roles:
+        day_fixes = fixes(day)
+        stays = whereabouts.stays(day_fixes, roles, now)
+        result = {'whereabouts': whereabouts.summarize(stays, day_bounds(day), now),
+                  'commutes': commute.commutes(stays, day_fixes)}
+    if cacheable:
+        _SUMMARIES[key] = result
+        while len(_SUMMARIES) > _SUMMARY_LIMIT:
+            _SUMMARIES.popitem(last=False)
+    return result
+
+
+def summaries_since(start_day: str) -> list[tuple[str, dict]]:
+    """(day, day_summary) for every trail day on or after `start_day`."""
+    db = get_db()
+    now = time.time()
+    rows = db.execute(_DAY_STATS + ' WHERE day_key >= ? GROUP BY day_key ORDER BY day_key',
+                      (now, trail.MIN_DWELL_S, start_day)).fetchall()
+    periods = list_periods(db)
+    out = []
+    for row in rows:
+        day = row['day_key']
+        roles = roles_for_day(periods, day)
+        ver = _version(_stats_key(row), _located_entries(*day_bounds(day)), roles)
+        out.append((day, day_summary(day, ver, roles, now)))
     return out
 
 
@@ -120,9 +181,13 @@ def map_png(day: str) -> tuple[bytes, str] | None:
         return path.read_bytes(), ver
     except FileNotFoundError:
         pass
+    now = time.time()
     cleaned = trail.clean(fixes(day))
-    png = render.render(cleaned, trail.segments(cleaned), trail.places(cleaned, time.time()),
-                        pins(day), tiles.fetch_tile)
+    roles = roles_for_day(list_periods(get_db()), day)
+    places = trail.places(cleaned, now)
+    png = render.render(cleaned, trail.segments(cleaned), places,
+                        pins(day), tiles.fetch_tile,
+                        place_roles=[(m.role if (m := whereabouts.match(p, roles)) else None) for p in places])
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix('.tmp')

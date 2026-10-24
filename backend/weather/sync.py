@@ -22,15 +22,27 @@ _DEDUPE_DECIMALS = 3
 
 
 def resolve_location(db) -> tuple[float, float, str] | None:
-    """(lat, lon, source) to sync with: the most recently logged location
-    (any day — yesterday's last-known fix is still better than nothing),
-    else the configured default, else None."""
+    """(lat, lon, source) to sync with: the newest of the phone's location
+    trail and the logged weather locations (any day — yesterday's last-known
+    fix is still better than nothing), else the current Home, else the
+    configured default, else None."""
+    from backend.location.lookup import latest_fix
     row = db.execute(
-        'SELECT latitude, longitude FROM lifestyle_weather_locations'
+        'SELECT latitude, longitude, created_at FROM lifestyle_weather_locations'
         ' ORDER BY created_at DESC LIMIT 1'
     ).fetchone()
+    # The trail is recorded all day, so it is usually the fresher of the two;
+    # only a fix newer than the logged location is worth looking for.
+    trail = latest_fix(db, row['created_at'] if row else 0)
+    if trail is not None and (row is None or trail[2] > row['created_at']):
+        return trail[0], trail[1], 'trail'
     if row:
         return row['latitude'], row['longitude'], 'geolocation'
+
+    from backend.place_roles import current_home
+    home = current_home(db)
+    if home is not None:
+        return home.lat, home.lon, 'home'
 
     settings = db.execute(
         'SELECT weather_default_lat, weather_default_lon FROM settings LIMIT 1'

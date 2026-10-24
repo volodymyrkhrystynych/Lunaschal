@@ -46,7 +46,8 @@ import unicodedata
 from dataclasses import dataclass
 
 # Union Station: the transit hub the commute would actually be measured from,
-# not the geographic middle of the core.
+# not the geographic middle of the core. Only the fallback now — the commute
+# is measured from the current Home (`backend/place_roles.py`) once one is set.
 ANCHOR = (43.6453, -79.3806)
 ANCHOR_LABEL = 'Union Station'
 
@@ -347,17 +348,40 @@ def _longest_spans(found: list[tuple[int, int, str]]) -> list[str]:
     return kept
 
 
-def from_coords(latitude, longitude) -> Reading | None:
+def anchor() -> tuple[tuple[float, float], str]:
+    """Where commutes are measured from, and what to call it: the current
+    Home, else Union Station.
+
+    The one database read in this module. Everything below takes the origin
+    as an argument and only falls back to this when given none, so a pass
+    over thousands of rows (`sync.recompute_distances`) reads it once.
+    """
+    try:
+        from backend.db.connection import get_db
+        from backend.place_roles import current_home
+        home = current_home(get_db())
+    except Exception:  # no database yet, or no migration: measure as before
+        home = None
+    if home is not None:
+        return (home.lat, home.lon), home.name
+    return ANCHOR, ANCHOR_LABEL
+
+
+def _origin(origin):
+    return origin if origin is not None else anchor()[0]
+
+
+def from_coords(latitude, longitude, origin=None) -> Reading | None:
     """A reading from coordinates a source supplied, e.g. Adzuna's."""
     from backend.geo import coord_pair
 
     pair = coord_pair(latitude, longitude)
     if pair is None:
         return None
-    return Reading(km=haversine(ANCHOR, pair), precision='exact', place='')
+    return Reading(km=haversine(_origin(origin), pair), precision='exact', place='')
 
 
-def resolve(location: str) -> Reading | None:
+def resolve(location: str, origin=None) -> Reading | None:
     """Distance from the anchor for a free-text location, or None.
 
     None is returned for an empty string, for a place the gazetteer does not
@@ -368,13 +392,14 @@ def resolve(location: str) -> Reading | None:
     if not tokens:
         return None
 
+    origin = _origin(origin)
     best: Reading | None = None
     for key in _longest_spans(_matches(tokens)):
         if key in _AMBIGUOUS:
             continue
         point = GAZETTEER[key]
         reading = Reading(
-            km=haversine(ANCHOR, point),
+            km=haversine(origin, point),
             precision='district' if key in _DISTRICTS else 'city',
             place=key,
         )
@@ -395,7 +420,7 @@ def selectable_places() -> list[str]:
     return sorted(key for key in GAZETTEER if key not in _AMBIGUOUS)
 
 
-def resolve_keys(keys) -> Reading | None:
+def resolve_keys(keys, origin=None) -> Reading | None:
     """A reading from gazetteer keys a model selected, or None.
 
     Precision is 'inferred' and never anything better: this came from reading
@@ -405,11 +430,12 @@ def resolve_keys(keys) -> Reading | None:
     near-miss to be repaired here.
     """
     best: Reading | None = None
+    origin = _origin(origin) if keys else origin
     for key in keys or []:
         point = GAZETTEER.get(key) if isinstance(key, str) else None
         if point is None or key in _AMBIGUOUS:
             continue
-        reading = Reading(km=haversine(ANCHOR, point), precision='inferred',
+        reading = Reading(km=haversine(origin, point), precision='inferred',
                           place=key)
         if best is None or reading.km < best.km:
             best = reading
@@ -504,13 +530,14 @@ def verdict(job, max_km: float) -> str:
     return 'unknown'
 
 
-def reading_for(job: dict) -> Reading | None:
+def reading_for(job: dict, origin=None) -> Reading | None:
     """The best reading available for one normalized posting.
 
     Source-supplied coordinates beat the gazetteer — Adzuna is the only adapter
     that carries them, and a real point is better than a city centroid.
     """
-    exact = from_coords(job.get('latitude'), job.get('longitude'))
+    origin = _origin(origin)
+    exact = from_coords(job.get('latitude'), job.get('longitude'), origin)
     if exact is not None:
         return exact
-    return resolve(job.get('location') or '')
+    return resolve(job.get('location') or '', origin)

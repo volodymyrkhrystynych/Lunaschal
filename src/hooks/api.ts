@@ -1720,6 +1720,59 @@ export interface JournalLocationDay {
   placeCount: number;
   entryCount: number;
   imageUrl: string;
+  /** Time at the Home and Work in force that day, or null when no visit was
+   *  at one (backend/location/whereabouts.py). */
+  whereabouts?: Whereabouts | null;
+  /** Home↔Work trips read off the trail (backend/location/commute.py). */
+  commutes?: Commute[];
+}
+
+export interface Commute {
+  direction: 'toWork' | 'toHome';
+  from: string;
+  to: string;
+  departed: string | null;
+  arrived: string | null;
+  seconds: number;
+  meters: number;
+  mode: 'walking' | 'running' | 'cycling' | 'automotive';
+  modeSource: 'motion' | 'speed';
+}
+
+interface CommuteStats {
+  toWork: { count: number; avgSeconds: number | null };
+  toHome: { count: number; avgSeconds: number | null };
+  modes: Record<string, number>;
+}
+
+/** Office days, hours at work and commute times (backend/location/patterns.py). */
+export interface LocationPatterns {
+  weeks: {
+    weekStart: string;
+    observedDays: number;
+    officeDays: number;
+    workSeconds: number;
+    homeSeconds: number;
+    avgArrival: string | null;
+    avgDeparture: string | null;
+    commute: CommuteStats;
+  }[];
+  weekdays: { weekday: string; observedDays: number; officeDays: number }[];
+  commute: CommuteStats;
+  observedDays: number;
+  officeDays: number;
+  days: number;
+  since: string;
+}
+
+export interface Whereabouts {
+  home: { seconds: number; lastArrival: string | null; here: boolean } | null;
+  work: {
+    name: string;
+    seconds: number;
+    firstArrival: string | null;
+    lastDeparture: string | null;
+  }[];
 }
 
 export interface NewspaperDownload {
@@ -2836,13 +2889,13 @@ export interface WeatherHour {
   isActual: boolean;
   latitude: number;
   longitude: number;
-  locationSource: 'geolocation' | 'default';
+  locationSource: 'geolocation' | 'trail' | 'home' | 'default';
 }
 
 export interface WeatherLocation {
   latitude: number;
   longitude: number;
-  source: 'geolocation' | 'default';
+  source: 'geolocation' | 'trail' | 'home' | 'default';
 }
 
 export interface WeatherToday {
@@ -3194,6 +3247,30 @@ export interface SavedPlaceInput {
 }
 export interface SavedPlace extends SavedPlaceInput {
   id: string;
+}
+
+export type PlaceRole = 'home' | 'work';
+
+/** A saved place holding Home or Work over a range of 4am days
+ *  (backend/place_roles.py). `endedOn` is exclusive; null means current. */
+export interface PlaceRolePeriod {
+  id: string;
+  role: PlaceRole;
+  placeId: string;
+  placeName: string;
+  latitude: number;
+  longitude: number;
+  radiusM: number;
+  startedOn: string;
+  endedOn: string | null;
+}
+
+/** Where commute distances are measured from: the current Home, else
+ *  Union Station. */
+export interface DistanceAnchor {
+  label: string;
+  latitude: number;
+  longitude: number;
 }
 
 export const api = {
@@ -4405,6 +4482,19 @@ export const api = {
         : post<SavedPlace>('/api/memory/places', place),
     deletePlace: (id: string) =>
       del<{ ok: boolean }>(`/api/memory/places/${id}`),
+    placeRoles: () => get<PlaceRolePeriod[]>('/api/memory/places/roles'),
+    assignRole: (role: PlaceRole, placeId: string, startedOn?: string) =>
+      post<PlaceRolePeriod>('/api/memory/places/roles', {
+        role,
+        placeId,
+        ...(startedOn ? { startedOn } : {}),
+      }),
+    updateRole: (
+      id: string,
+      changes: { startedOn?: string; endedOn?: string | null }
+    ) => patch<PlaceRolePeriod>(`/api/memory/places/roles/${id}`, changes),
+    deleteRole: (id: string) =>
+      del<{ ok: boolean }>(`/api/memory/places/roles/${id}`),
     get: () => get<UserMemory>('/api/memory'),
     update: (content: string) => put<UserMemory>('/api/memory', { content }),
     revisions: () => get<MemoryRevision[]>('/api/memory/revisions'),
@@ -5047,6 +5137,8 @@ export const api = {
 
   location: {
     journal: () => get<JournalLocationDay[]>('/api/location/journal'),
+    patterns: (days = 56) =>
+      get<LocationPatterns>(`/api/location/patterns?days=${days}`),
   },
   newspapers: {
     pressreader: () => get<PressReaderStatus>('/api/newspapers/pressreader'),
@@ -5447,6 +5539,7 @@ export const api = {
   },
 
   jobs: {
+    distanceAnchor: () => get<DistanceAnchor>('/api/jobs/distance-anchor'),
     profile: {
       get: () => get<JobProfileBundle>('/api/jobs/profile'),
       update: (data: Partial<JobProfileContact>) =>

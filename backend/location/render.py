@@ -25,6 +25,9 @@ SS = 2  # overlay supersampling
 
 ROUTE = (37, 99, 235)
 ENTRY = (234, 88, 12)
+# Visits at a Home or Work place (backend/place_roles.py), told apart from
+# the route's blue and the entries' orange.
+PLACE_COLOURS = {'home': (22, 163, 74), 'work': (147, 51, 234)}
 WHITE = (255, 255, 255)
 BACKGROUND = (232, 234, 237)
 # Tiles are washed toward white so the trail, not the street names, is what
@@ -79,7 +82,10 @@ def _font(size: int):
 
 
 def render(fixes: list[Fix], segments: list[Segment], places: list[Fix],
-           pins: list[tuple[float, float]], fetch_tile: TileFetcher, size=SIZE) -> bytes:
+           pins: list[tuple[float, float]], fetch_tile: TileFetcher, size=SIZE,
+           place_roles: list[str | None] | None = None) -> bytes:
+    """`place_roles`, parallel to `places`, colours a visit by the role of the
+    place it was at; None (or no list) keeps the route colour."""
     coords = [(f.lat, f.lon) for f in fixes] + list(pins)
     if not coords:
         raise ValueError('nothing to draw')
@@ -118,8 +124,9 @@ def render(fixes: list[Fix], segments: list[Segment], places: list[Fix],
             draw.line([a, b], fill=fill, width=width)
             for p in (a, b):
                 draw.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r], fill=fill)
-    for place in places:
-        _dot(draw, px(place.lat, place.lon), 8, ROUTE)
+    for i, place in enumerate(places):
+        role = place_roles[i] if place_roles and i < len(place_roles) else None
+        _dot(draw, px(place.lat, place.lon), 8, PLACE_COLOURS.get(role, ROUTE))
     # A day with fixes but no route still shows where they were.
     if not segments and fixes:
         for f in fixes:

@@ -15,6 +15,7 @@ from backend.calendar_query import events_in_range
 from backend.day_boundary import day_bounds
 from backend.journal_moment import journal_moment
 from backend.places import list_places, nearby_places
+from backend.place_roles import list_periods, roles_for_day
 from backend.tags import normalize_tags
 
 MIN_READING_SECONDS = 60
@@ -75,7 +76,7 @@ def gather_day(db, today: str) -> dict:
         sources.append(item)
         return item
 
-    for row in db.execute('SELECT id,title,content,raw_content,latitude,longitude,created_at FROM journal_entries'
+    for row in db.execute('SELECT id,title,content,raw_content,latitude,longitude,location_source,created_at FROM journal_entries'
                           ' WHERE created_at>=? AND created_at<? ORDER BY created_at', (start, end)):
         item = add('journal', row)
         item['chapterCommentary'] = [dict(r) for r in db.execute(
@@ -143,12 +144,26 @@ def gather_day(db, today: str) -> dict:
     for location in locations:
         location['recordedAt'] = datetime.fromtimestamp(location['created_at']).isoformat()
         location['nearbyPlaces'] = nearby_places(location['latitude'], location['longitude'], places)
+    # The phone's own visit records, each matched to the Home/Work that was in
+    # force that day. Unlike nearbyPlaces on a capture, these are where the
+    # user actually stayed, with arrival and departure times.
+    import time
+    from backend.location import whereabouts
+    roles = roles_for_day(list_periods(db), day)
+    from backend.location import commute, days as trail_days
+    day_fixes = trail_days.fixes(day)
+    day_stays = whereabouts.stays(day_fixes, roles, time.time())
+    stays = whereabouts.describe(day_stays)
+    commutes = commute.commutes(day_stays, day_fixes)
     from backend.memory import get_memory
     return {'day': day, 'nextDate': (date.fromisoformat(day) + timedelta(days=1)).isoformat(),
             'start': datetime.fromtimestamp(start).isoformat(),
             'end': datetime.fromtimestamp(end).isoformat(), 'sources': sources,
             'calendar': calendar_for_day(db, day), 'places': places,
-            'locationObservations': locations, 'userMemory': get_memory(),
+            'locationObservations': locations, 'stays': stays, 'commutes': commutes,
+            'placeRoles': {'home': next((r.name for r in roles if r.role == 'home'), None),
+                           'work': [r.name for r in roles if r.role == 'work']},
+            'userMemory': get_memory(),
             'previousSuggestions': previous_proposals(db, day)}
 
 
@@ -202,14 +217,26 @@ The day runs 04:00 to 04:00, so it ends on the calendar date named by
 dated nextDate, not the day key. Untimed activities use the day key. Late-night
 accounts are ordinary evidence, not a special case -- an entry recorded at 03:00
 describing the previous two hours supports an event from 01:00 to 03:00.
-Known places and memory can resolve names like home/work. nearbyPlaces are GPS
-matches within a user-set radius, not certainty. Multiple matches are ambiguous.
-Capture location describes where something was recorded, not necessarily where
-an earlier narrated activity happened. Never assume cooking means home, or a
-workday means the workplace. Use an empty location if unknown. Explain any
-inferred location in evidence. Weather observations labelled fallback/default
-are configured forecast locations, not proof of presence. Return an empty
-events array if nothing is supported.
+Known places and memory can resolve names like home/work. placeRoles names the
+places that were the user's Home and Work that day. "stays" are the phone's own
+records of where the user remained, with arrival/departure times; a stay whose
+role is home or work is direct evidence of being there then (departed null
+means still there at day end). A stay with no role was somewhere unnamed.
+nearbyPlaces are GPS matches within a user-set radius, not certainty. A journal
+entry whose location_source is "trail" was located from the phone's trail at
+the moment it was recorded (the phone, Watch and iPad travel together), not by
+a fix taken for it. Multiple
+matches are ambiguous. Capture location describes where something was recorded,
+not necessarily where an earlier narrated activity happened. Without a stay to
+support it, never assume cooking means home, or a workday means the workplace.
+A stay is not an activity on its own: never propose an event just because the
+user was at home, but do use stays to place and time activities other evidence
+supports, and to give a workday its real hours. "commutes" are trips between
+Home and Work measured from the trail, with how they were made; they are
+already shown to the user and need no events of their own. Use an empty location if
+unknown. Explain any inferred location in evidence. Weather observations
+labelled fallback/default/home are configured forecast locations, not proof of
+presence. Return an empty events array if nothing is supported.
 Each event has title, description, date (YYYY-MM-DD), time/endTime (HH:MM or
 null), location, tags, categoryTags, evidence (short reviewable reasoning),
 sourceIds. categoryTags are 0-3 of the calendar's fixed categories: leisure,

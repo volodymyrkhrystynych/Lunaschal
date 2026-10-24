@@ -222,6 +222,7 @@ def init_db() -> None:
     _ensure_journal_attachment_location(db)
     _ensure_journal_attachment_exif(db)
     _ensure_journal_entry_location(db)
+    _ensure_location_point_columns(db)
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
@@ -1462,6 +1463,19 @@ def _ensure_email_settings(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_location_point_columns(db: sqlite3.Connection) -> None:
+    """Two optional facts the phone now sends with a trail point: which saved
+    place a geofence ('region') stay was at, and what Core Motion said the
+    user was doing (walking/cycling/automotive...), which is what tells a
+    commute by bike from one by car."""
+    cols = {r['name'] for r in db.execute('PRAGMA table_info(location_points)')}
+    if 'place_id' not in cols:
+        db.execute('ALTER TABLE location_points ADD COLUMN place_id TEXT')
+    if 'activity' not in cols:
+        db.execute('ALTER TABLE location_points ADD COLUMN activity TEXT')
+    db.commit()
+
+
 def _ensure_backup_settings(db: sqlite3.Connection) -> None:
     """Where the nightly backup writes, and how many DB snapshots it keeps.
 
@@ -1655,6 +1669,11 @@ def _ensure_job_triage_columns(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE jobs ADD COLUMN triage_at INTEGER')
     if 'triage_error' not in cols:
         db.execute('ALTER TABLE jobs ADD COLUMN triage_error TEXT')
+    # The gazetteer key an `inferred` distance was measured to. Without it the
+    # reading could not be re-measured when the commute anchor (the current
+    # Home) moves, and it would keep the old origin's kilometres forever.
+    if 'distance_place' not in cols:
+        db.execute("ALTER TABLE jobs ADD COLUMN distance_place TEXT NOT NULL DEFAULT ''")
     db.commit()
 
     # The worker scans for pending rows on every tick, and the feed filters on
@@ -2100,6 +2119,15 @@ def _ensure_journal_entry_location(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE journal_entries ADD COLUMN latitude REAL')
     if 'longitude' not in cols:
         db.execute('ALTER TABLE journal_entries ADD COLUMN longitude REAL')
+    # Where the coordinates came from: 'device' (a fix measured at capture) or
+    # 'trail' (backend/journal/location.py: the phone's location trail at that
+    # moment, for an entry that arrived without one -- the Watch, a standalone
+    # recording, a fix gone stale). Rows located before this were all device
+    # fixes, so they are labelled once.
+    if 'location_source' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN location_source TEXT')
+        db.execute("UPDATE journal_entries SET location_source='device'"
+                   ' WHERE latitude IS NOT NULL AND longitude IS NOT NULL')
     db.commit()
 
 
