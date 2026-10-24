@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from ulid import ULID
 
 from backend.db.connection import get_db
-from backend.fanfic import personal_tags, storage, xenforo
+from backend.fanfic import personal_tags, source_lists, storage, xenforo
 from backend.fanfic.sanitize import count_words, html_to_text, sanitize_chapter_html
 
 # Fallback UA for a domain with no stored cookie yet (or one saved before UA
@@ -176,6 +176,30 @@ def _http_get(url: str, *, headers: dict, cookies: dict | None, timeout: float, 
     import requests
     return requests.get(url, headers=headers, cookies=cookies, timeout=timeout, stream=stream,
                         allow_redirects=allow_redirects)
+
+
+def _http_post(url: str, *, data: dict, headers: dict, cookies: dict | None, timeout: float):
+    import requests
+    return requests.post(url, data=data, headers=headers, cookies=cookies, timeout=timeout,
+                         allow_redirects=False)
+
+
+def _post_form(url: str, data: dict):
+    """POST a form through the same lock, pacing and session as a fetch.
+
+    The one write the library makes to a site (a reaction, `likes.py`). Not
+    retried: a POST that may have landed is not safe to repeat blind, so the
+    caller re-reads the page before trying again."""
+    from backend.fanfic import pacing
+    with _fetch_lock:
+        pacing.before_request(url, wait_for=_wait_for_pacing)
+        resp = _http_post(url, data=data, headers=_headers(url), cookies=_cookies_for(url), timeout=20)
+        marker = _blocked_marker(resp)
+        if marker is not None:
+            raise FetchBlockedError(f'{urlparse(url).netloc} {_BLOCKED_HINT} (HTTP {resp.status_code})')
+        resp.raise_for_status()
+        time.sleep(REQUEST_DELAY)
+        return resp
 
 
 def _blocked_marker(resp) -> str | None:
@@ -391,7 +415,7 @@ def run_watched_scan(domain: str) -> None:
     db = get_db()
     now = int(time.time())
     row = db.execute(
-        'SELECT next_page, found, imported, already_in_library'
+        'SELECT next_page, found, imported, already_in_library, pass_started_at'
         ' FROM fanfic_watched_scans WHERE domain=?', (domain,)).fetchone()
     if row is None:
         db.execute(
@@ -404,6 +428,14 @@ def run_watched_scan(domain: str) -> None:
     else:
         page = row['next_page']
         found, imported, already = row['found'], row['imported'], row['already_in_library']
+    # A pass begins at page 1; a resumed one keeps the start it had, since
+    # that is what decides which fics it may take off the list at the end.
+    if page == 1:
+        pass_started = now
+        db.execute('UPDATE fanfic_watched_scans SET pass_started_at=? WHERE domain=?', (now, domain))
+        db.commit()
+    else:
+        pass_started = row['pass_started_at']
 
     with _watch_scan_lock:
         _watch_scan_progress[domain] = {
@@ -424,15 +456,20 @@ def run_watched_scan(domain: str) -> None:
                     (ref.domain, ref.thread_id)).fetchone()
                 if existing:
                     already += 1
+                    source_lists.mark(db, existing['id'], 'watched')
                     continue
                 fic_now = int(time.time())
+                fic_id = str(ULID())
                 placeholder = ref.slug.replace('-', ' ').strip() or 'Importing…'
                 db.execute(
                     'INSERT INTO fics(id, title, source_type, source_url, site, thread_id,'
                     ' update_pending, created_at, updated_at) VALUES (?,?,?,?,?,?,1,?,?)',
-                    (str(ULID()), placeholder, 'xenforo', ref.thread_url, ref.domain,
+                    (fic_id, placeholder, 'xenforo', ref.thread_url, ref.domain,
                      ref.thread_id, fic_now, fic_now))
+                source_lists.mark(db, fic_id, 'watched', fic_now)
                 imported += 1
+            if page >= watched.last_page:
+                source_lists.complete_pass(db, domain, 'watched', pass_started)
             next_page = page + 1 if page < watched.last_page else 1
             db.execute(
                 'UPDATE fanfic_watched_scans SET next_page=?, found=?, imported=?,'
@@ -526,7 +563,7 @@ def run_bookmark_scan(domain: str) -> None:
     db = get_db()
     now = int(time.time())
     row = db.execute(
-        'SELECT next_page, found, imported, already_in_library'
+        'SELECT next_page, found, imported, already_in_library, pass_started_at'
         ' FROM fanfic_bookmark_scans WHERE domain=?', (domain,)).fetchone()
     if row is None:
         db.execute(
@@ -539,6 +576,14 @@ def run_bookmark_scan(domain: str) -> None:
     else:
         page = row['next_page']
         found, imported, already = row['found'], row['imported'], row['already_in_library']
+    # A pass begins at page 1; a resumed one keeps the start it had, since
+    # that is what decides which fics it may take off the list at the end.
+    if page == 1:
+        pass_started = now
+        db.execute('UPDATE fanfic_bookmark_scans SET pass_started_at=? WHERE domain=?', (now, domain))
+        db.commit()
+    else:
+        pass_started = row['pass_started_at']
 
     with _bookmark_scan_lock:
         _bookmark_scan_progress[domain] = {
@@ -577,6 +622,9 @@ def run_bookmark_scan(domain: str) -> None:
                 # user put it, and the folder is what makes it findable.
                 if personal_tags.sync_personal_folders(db, fic_id, item.labels):
                     foldered += 1
+                source_lists.mark(db, fic_id, 'bookmarks')
+            if page >= bookmarks.last_page:
+                source_lists.complete_pass(db, domain, 'bookmarks', pass_started)
             next_page = page + 1 if page < bookmarks.last_page else 1
             db.execute(
                 'UPDATE fanfic_bookmark_scans SET next_page=?, found=?, imported=?,'
@@ -782,10 +830,13 @@ def _record_reaction(db, fic_id: str, chapter_id: str, post: xenforo.ReaderPost,
     it is how the phone says how recent the evidence is."""
     if not logged_in or not post.reaction_seen:
         return
+    # A like still waiting to be made on the forum is the newer word: the
+    # page predates it, so reading the page must not undo it.
     db.execute(
         'INSERT INTO fic_chapter_reactions(chapter_id, fic_id, reaction, checked_at)'
         ' VALUES (?,?,?,?) ON CONFLICT(chapter_id) DO UPDATE SET'
-        ' reaction=excluded.reaction, checked_at=excluded.checked_at',
+        " reaction=excluded.reaction, checked_at=excluded.checked_at, source='site'"
+        ' WHERE fic_chapter_reactions.pending IS NULL',
         (chapter_id, fic_id, post.my_reaction, int(time.time())))
 
 

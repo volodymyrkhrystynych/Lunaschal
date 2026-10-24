@@ -412,7 +412,10 @@ what each device can currently do and which work remains device-only.
   `fic_chapter_reads` create/delete. Both are last-write-wins
   (`backend/mobile_sync/fic_edits.py`), and a book has at most one waiting edit
   (`ReplicaStore.queueFicEdit` merges). `fic_chapter_reads` and `fic_chapter_reactions` sync
-  as their own scope, keyed by chapter id, only when the server advertises them. Importing goes through
+  as their own scope, keyed by chapter id, only when the server advertises them. A like is a
+  `fic_chapter_reactions` update (`{ficId, liked, assumed}`); the server pushes it to the forum,
+  except an `assumed` one (Open on site). Re-get chapter calls
+  `POST /api/fanfic/chapters/<id>/refetch`, and the Backlog folder reads each book's `backlog` flag. Importing goes through
   `POST /api/fanfic/import` from two places: the share extension (`Share/`, a link shared from
   any app) and Settings → Library downloads → Import a fic. A link sent while the server is
   unreachable waits in `FicImportOutbox`, in the App Group container the two share, and the

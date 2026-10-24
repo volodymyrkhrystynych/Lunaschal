@@ -1228,6 +1228,45 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["3 of 5 chapters read · reacted on 1"].waitForExistence(timeout: 5))
     }
 
+    /// A forum chapter can be liked from the reader: it shows liked at once,
+    /// waiting to be sent, and the chapter list says so too.
+    func testAForumChapterCanBeLikedFromTheReader() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let like = app.buttons["reader-like"]
+        XCTAssertTrue(like.waitForExistence(timeout: 10))
+        XCTAssertEqual(like.value as? String, "Not liked")
+        like.tap()
+        XCTAssertEqual(like.value as? String, "Liked, waiting to send")
+        XCTAssertTrue(app.staticTexts["Liked · Sent to the forum when connected"].waitForExistence(timeout: 5))
+        app.buttons["reader-menu"].tap()
+        XCTAssertTrue(app.buttons["reader-refetch-chapter"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["reader-open-on-site"].exists)
+    }
+
+    /// A book on none of the user's lists on its site is under Backlog.
+    func testTheBacklogFolderHoldsBooksOnNoSiteList() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let mode = app.segmentedControls["library-mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 10))
+        mode.buttons["Folders"].tap()
+        let backlog = app.buttons["folder-backlog"]
+        XCTAssertTrue(backlog.waitForExistence(timeout: 5))
+        backlog.tap()
+        XCTAssertTrue(app.staticTexts["Field Notes on Dragons"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["The Long Way Round"].exists)
+        app.navigationBars["Backlog"].buttons.firstMatch.tap()
+        app.segmentedControls["library-mode"].buttons["Library"].tap()
+    }
+
     /// The book list pages itself as it is scrolled: the 70th book, past the
     /// first page of 50, is reached by scrolling alone, with no button to press.
     func testLibraryLoadsTheNextPageWhenScrolledToTheEnd() {

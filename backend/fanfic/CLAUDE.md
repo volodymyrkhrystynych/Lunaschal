@@ -179,6 +179,51 @@ button). `checked_at` moves on every look, which is how the phone says how fresh
 evidence is. The markup is XenForo 2's default and unverified per theme: check a real
 thread with `python -m backend.fanfic.reaction_probe <reader url>`.
 
+## Likes, re-getting one chapter, and the Backlog
+
+**A like from the Library is made on the forum by the server** (`likes.py`). The tap
+writes the chapter's `fic_chapter_reactions` row at once — `reaction='Like'`,
+`source='app'`, `pending='like'` — so every client shows it, and a single worker pushes
+it: GET the post (`ref.post_url`, which lands on the thread page holding it), read the
+viewer's button and `<html data-csrf>`, and **POST `/posts/<id>/react` only if the page
+disagrees**. XenForo's react endpoint toggles, so a blind POST replayed after a lost
+reply would un-like the post; reading first is what makes a retry safe. Un-liking sends
+back the user's own `reaction_id` from the button, since that is what toggles it off.
+While `pending` is set, `_record_reaction` leaves the row alone: the page a walk just
+read predates the tap. A logged-out page or a challenge parks the push (`push_error`
+shown, no timer — it wants cookies); a transient failure retries on `RETRY_SCHEDULE`;
+asking again resets both. `download._post_form` is the library's one write to a site:
+same lock, pacing and session as `_fetch`, never retried blind. The phone sends likes
+as `fic_chapter_reactions` outbox operations (`mobile_sync/fic_edits.py`, last write
+wins); the web posts `POST /api/fanfic/chapters/<id>/like`.
+
+**Opening a chapter on the site assumes a like and sends nothing** (`assumed: true`,
+`source='assumed'`): the user is going there to press Like themselves. It never
+overrides a reaction the forum showed or a pending request, and the next walk over that
+page replaces it with the truth either way.
+
+**Finding out which chapters are liked is the deep check.** Reactions live on reader
+pages, so `POST /api/fanfic/reactions/recheck` just queues a deep check of every forum
+fic whose site has a saved session; it costs what Deep costs and picks up silent edits
+on the way. Its button is in the web app's Settings → Fanfic site cookies, beside the
+other per-site scans, since it is server work rather than library browsing.
+
+**Re-getting one chapter** (`POST /api/fanfic/chapters/<id>/refetch`, status on GET)
+fetches that one post and rewrites the chapter in place **whether or not** its edit
+time moved — the case Deep's edit-time comparison can miss. Id, position, read mark and
+bookmarks stay; the reaction is read too. Forum chapters only.
+
+**Backlog is derived from which of your site lists a fic is on** (`source_lists.py`,
+`fic_source_lists`, `fic_list_passes`). The watched and bookmark scans mark `watched` /
+`bookmarks`; collection scans mark their collection name (`favorites`, `follows`,
+`bookmarks`, `subscriptions`, `feed`). Only a pass that walked a list from page 1 to its
+last page without an error may take a fic off it, by dropping marks older than the
+pass's `pass_started_at` (persisted on the scan row, so a resumed pass keeps the start it
+had). A fic is Backlog when it is an online source, on no list, **and its site has had a
+complete pass** — before the first watched walk finishes, "on no list" only means "not
+looked yet". `GET /api/fanfic?folderId=backlog`; the phone reads the snapshot's
+`backlog` flag. Local uploads are never Backlog.
+
 ## Reading spans (`fic_reading_spans`)
 
 A chapter open **and being scrolled** is recorded as reading time. Calendar's day

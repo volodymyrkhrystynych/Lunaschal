@@ -6,6 +6,8 @@ file path. New projections change the schema fingerprint and force a bootstrap.
 import hashlib
 import json
 
+from backend.fanfic.source_lists import backlog_sql
+
 COLLECTIONS = {
     'journal_entries': 'id content raw_content title tags latitude longitude weather created_at updated_at',
     'journal_attachments': 'id entry_id kind name mime size position source_url import_status transcript transcript_status description description_status created_at',
@@ -16,7 +18,7 @@ COLLECTIONS = {
     # Keyed by chapter: one row per chapter marked read, and one per chapter
     # whose post the forum showed the user's own reaction on (or none).
     'fic_chapter_reads': 'chapter_id fic_id created_at',
-    'fic_chapter_reactions': 'chapter_id fic_id reaction checked_at',
+    'fic_chapter_reactions': 'chapter_id fic_id reaction checked_at source pending push_error',
     'papers': 'id title archive_requested_at content_updated_at created_at updated_at',
     'paper_pages': 'id paper_id position strokes width height created_at updated_at',
     'paper_native_ink': 'id format sha256 preview_sha256 created_at updated_at',
@@ -47,7 +49,7 @@ KEYS = {'fic_chapter_reads': 'chapter_id', 'fic_chapter_reactions': 'chapter_id'
 
 def key(table: str) -> str:
     return KEYS.get(table, 'id')
-SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, KEYS, 'book-metadata-v2'], sort_keys=True).encode()).hexdigest()
+SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, KEYS, 'book-metadata-v3'], sort_keys=True).encode()).hexdigest()
 
 
 def payload(table: str, prefix: str) -> str:
@@ -64,6 +66,9 @@ def payload(table: str, prefix: str) -> str:
             'unread_count',(SELECT COUNT(*) FROM fic_chapters c WHERE c.fic_id={prefix}.id
                 AND lower(c.category)='threadmarks'
                 AND NOT EXISTS (SELECT 1 FROM fic_chapter_reads r WHERE r.chapter_id=c.id)),
+            'source_lists',json((SELECT json_group_array(list) FROM
+                (SELECT list FROM fic_source_lists WHERE fic_id={prefix}.id ORDER BY list))),
+            'backlog',{backlog_sql(prefix)},
             'latest_activity',COALESCE(
                 (SELECT MAX(posted_at) FROM fic_chapters WHERE fic_id={prefix}.id),
                 (SELECT MAX(created_at) FROM fic_chapters WHERE fic_id={prefix}.id),{prefix}.created_at)

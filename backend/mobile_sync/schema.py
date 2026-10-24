@@ -49,7 +49,7 @@ def ensure(db):
         ''', (table, table))
     # These relationships are part of each immutable book snapshot, rather than
     # live joins that could change halfway through a bootstrap.
-    for table in ('fic_folder_items', 'fic_site_tags', 'fic_chapters', 'fic_chapter_reads'):
+    for table in ('fic_folder_items', 'fic_site_tags', 'fic_chapters', 'fic_chapter_reads', 'fic_source_lists'):
         for event in ('INSERT', 'UPDATE', 'DELETE'):
             prefixes = ('OLD', 'NEW') if event == 'UPDATE' else ('OLD',) if event == 'DELETE' else ('NEW',)
             ids = ','.join(f'{prefix}.fic_id' for prefix in prefixes)
@@ -63,4 +63,17 @@ def ensure(db):
                     WHERE source.id IN ({ids});
                 END
             """)
+    # A site's first complete list pass is what lets its fics count as
+    # Backlog at all, so it changes every one of their snapshots. Later
+    # passes only move completed_at, which changes none.
+    db.execute(f"""
+        CREATE TRIGGER IF NOT EXISTS mobile_sync_book_meta_fic_list_passes_insert
+        AFTER INSERT ON fic_list_passes
+        WHEN (SELECT COUNT(*) FROM fic_list_passes WHERE site=NEW.site)=1
+        BEGIN
+            INSERT INTO mobile_sync_changes(collection,record_id,payload)
+            SELECT 'fics',source.id,{payload('fics', 'source')} FROM fics source
+            WHERE source.site=NEW.site;
+        END
+    """)
     db.commit()

@@ -821,6 +821,19 @@ def seed_fanfic(db, journal_ids):
     db.execute('INSERT INTO fic_chapter_reactions (chapter_id, fic_id, reaction, checked_at)'
                ' VALUES (?,?,?,?)', (parts[1], dropped_id, None, ts(2)))
 
+    # Which of the user's own lists on the source each fic is on. The FF.net
+    # favorite is on one; a second FF.net story imported from a link is on
+    # none, and since favorites has had a full pass, it is the Backlog.
+    db.execute('INSERT INTO fic_source_lists (fic_id, list, seen_at) VALUES (?,?,?)',
+               (browser_fic_id, 'favorites', ts(2)))
+    db.execute('INSERT INTO fic_list_passes (site, list, completed_at) VALUES (?,?,?)',
+               ('fanfiction.net', 'favorites', ts(2)))
+    db.execute(
+        'INSERT INTO fics(id,title,author,source_type,source_url,site,thread_id,download_status,'
+        "chapter_count,shelf,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'complete',0,'to_read',?,?)",
+        (new_id(), 'Something to get around to (demo)', 'a_backlog_author', 'fanfiction',
+         'https://www.fanfiction.net/s/456/1/', 'fanfiction.net', '456', ts(6), ts(6)))
+
     # Site bookkeeping. The cookie is obviously fake on purpose — this database
     # is built from a script that ships in a public repo.
     db.execute(

@@ -174,4 +174,73 @@ final class FicLibraryTests: XCTestCase {
         XCTAssertTrue(FicLibrary.isMainStory(chapter(book, position: 0, category: "Threadmarks")))
         XCTAssertFalse(FicLibrary.isMainStory(chapter(book, position: 0, category: "Sidestory")))
     }
+
+    func testALikeShowsAtOnceAndOnlyTheNewestTapIsSent() throws {
+        let (store, _) = try store()
+        let book = book(1)
+        let a = chapter(book, position: 0)
+        try apply([book, a], to: store)
+        try store.setChapterLiked(bookID: book.id, chapterID: a.id, liked: true)
+        let shown = try XCTUnwrap(store.reactions(bookID: book.id)[a.id])
+        XCTAssertEqual([shown.reaction, shown.source, shown.pending], ["Like", "app", "like"])
+        try store.setChapterLiked(bookID: book.id, chapterID: a.id, liked: false)
+        let edits = try store.edits()
+        XCTAssertEqual(edits.count, 1)
+        XCTAssertEqual(edits[0].operation.collection, "fic_chapter_reactions")
+        XCTAssertEqual(edits[0].operation.data["liked"], .bool(false))
+        XCTAssertEqual(edits[0].operation.data["assumed"], .bool(false))
+        XCTAssertEqual(try store.reactions(bookID: book.id)[a.id]?.pending, "unlike")
+        XCTAssertNil(try store.reactions(bookID: book.id)[a.id]?.reaction)
+    }
+
+    func testOpeningOnSiteAssumesALikeOnlyWhenThereIsNone() throws {
+        let (store, _) = try store()
+        let book = book(1)
+        let a = chapter(book, position: 0), b = chapter(book, position: 1)
+        let reacted = SyncChange(revision: 400, collection: "fic_chapter_reactions", id: b.id, deleted: false,
+                                 data: ["id": .string(b.id), "chapterId": .string(b.id), "ficId": .string(book.id),
+                                        "reaction": .string("Informative"), "checkedAt": .number(5), "source": .string("site")])
+        try apply([book, a, b, reacted], to: store)
+        try store.setChapterLiked(bookID: book.id, chapterID: a.id, liked: true, assumed: true)
+        try store.setChapterLiked(bookID: book.id, chapterID: b.id, liked: true, assumed: true)
+        let found = try store.reactions(bookID: book.id)
+        XCTAssertEqual(found[a.id]?.reaction, "Like")
+        XCTAssertEqual(found[a.id]?.source, "assumed")
+        XCTAssertNil(found[a.id]?.pending)
+        XCTAssertEqual(found[b.id]?.reaction, "Informative")
+        XCTAssertEqual(try store.edits().count, 1)  // nothing queued for the reacted chapter
+    }
+
+    func testARefusedLikeIsDroppedNotHeld() throws {
+        let (store, _) = try store()
+        let book = book(1)
+        let a = chapter(book, position: 0)
+        try apply([book, a], to: store)
+        try store.setChapterLiked(bookID: book.id, chapterID: a.id, liked: true)
+        let edit = try XCTUnwrap(store.edits().first)
+        try store.hold(edit.operation, reply: OperationReply(operationId: edit.id, change: nil, conflict: true,
+                                                             current: nil, error: "gone", resetRequired: nil))
+        XCTAssertTrue(try store.edits().isEmpty)
+    }
+
+    private func with(_ change: SyncChange, _ extra: [String: JSONValue]) -> SyncChange {
+        SyncChange(revision: change.revision, collection: change.collection, id: change.id, deleted: false,
+                   data: (change.data ?? [:]).merging(extra) { _, new in new })
+    }
+
+    func testTheBacklogIsTheBooksTheServerFlagged() throws {
+        let (store, _) = try store()
+        let listed = with(book(1), ["backlog": .number(0)]), backlog = with(book(2), ["backlog": .number(1)])
+        try apply([listed, backlog], to: store)
+        XCTAssertEqual(try ids(store) { $0.folder = FicLibrary.backlogFolder }, [backlog.id])
+        XCTAssertEqual(try store.folderCounts()[FicLibrary.backlogFolder], 1)
+    }
+
+    func testOnlyForumPostsAreLikeable() {
+        let forum = with(book(1), ["sourceType": .string("xenforo")])
+        let post = with(chapter(forum, position: 0), ["sourceUrl": .string("https://forums.example.com/threads/x.1/post-55")])
+        XCTAssertTrue(FicLibrary.isLikeable(book: forum, chapter: post))
+        let epub = with(forum, ["sourceType": .string("epub")])
+        XCTAssertFalse(FicLibrary.isLikeable(book: epub, chapter: post))
+    }
 }

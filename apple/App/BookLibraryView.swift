@@ -376,6 +376,11 @@ struct FolderListView: View {
                 link(id: folder.id, title: folder.title, icon: "folder")
             }
             link(id: "unsorted", title: "Unsorted", icon: "tray")
+            // Imported, but on none of your lists on the site: the things you
+            // might get around to. Only once the server knows your lists.
+            if counts[FicLibrary.backlogFolder, default: 0] > 0 {
+                link(id: FicLibrary.backlogFolder, title: "Backlog", icon: "tray.full")
+            }
         }
         .overlay {
             if folders.isEmpty && counts["unsorted", default: 0] == 0 {

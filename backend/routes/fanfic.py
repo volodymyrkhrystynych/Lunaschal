@@ -7,7 +7,7 @@ from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict
 from backend.fanfic import download, storage, xenforo
-from backend.fanfic import collections, sites, browser, library
+from backend.fanfic import collections, sites, browser, library, likes, source_lists
 from backend.fanfic.download import FetchBlockedError
 from backend.fanfic.xenforo import KNOWN_SITES, UnsupportedUrlError
 
@@ -75,7 +75,12 @@ def _attach_library_meta(dicts: list[dict]) -> list[dict]:
             f'SELECT fic_id, COUNT(*) AS n FROM fic_chapter_reads'
             f' WHERE fic_id IN ({placeholders}) GROUP BY fic_id', ids):
         reads[r['fic_id']] = r['n']
+    lists = source_lists.lists_for(db, ids)
+    backlog = {r[0] for r in db.execute(
+        f'SELECT id FROM fics WHERE id IN ({placeholders}) AND {source_lists.backlog_sql("fics")}', ids)}
     for d in dicts:
+        d['sourceLists'] = lists.get(d['id'], [])
+        d['backlog'] = d['id'] in backlog
         d['folderIds'] = folders.get(d['id'], [])
         d['tags'] = tags.get(d['id'], [])
         d['readCount'] = reads.get(d['id'], 0)
@@ -102,6 +107,8 @@ def list_fics():
     folder_id = request.args.get('folderId')
     if folder_id == 'unsorted':
         where.append('NOT EXISTS (SELECT 1 FROM fic_folder_items WHERE fic_id=fics.id)')
+    elif folder_id == 'backlog':
+        where.append(source_lists.backlog_sql('fics'))
     elif folder_id:
         where.append('EXISTS (SELECT 1 FROM fic_folder_items'
                      ' WHERE folder_id=? AND fic_id=fics.id)')
@@ -482,9 +489,12 @@ def delete_fic(fic_id):
 @bp.get('/<fic_id>/chapters')
 def list_chapters(fic_id):
     rows = get_db().execute(
-        f'SELECT {_CHAPTER_LIST_COLS}, r.chapter_id IS NOT NULL AS is_read'
-        ' FROM fic_chapters c'
+        f'SELECT {_CHAPTER_LIST_COLS}, r.chapter_id IS NOT NULL AS is_read,'
+        ' x.reaction AS reaction, x.pending AS reaction_pending,'
+        " (c.source_post_id IS NOT NULL AND f.source_type = 'xenforo') AS likeable"
+        ' FROM fic_chapters c JOIN fics f ON f.id = c.fic_id'
         ' LEFT JOIN fic_chapter_reads r ON r.chapter_id = c.id'
+        ' LEFT JOIN fic_chapter_reactions x ON x.chapter_id = c.id'
         ' WHERE c.fic_id=?'
         " ORDER BY CASE WHEN LOWER(c.category) IN ('threadmarks','chapters') THEN 0 ELSE 1 END,"
         ' c.category, c.position',
@@ -493,6 +503,7 @@ def list_chapters(fic_id):
     dicts = [row_to_dict(r) for r in rows]
     for d in dicts:
         d['isRead'] = bool(d['isRead'])
+        d['likeable'] = bool(d['likeable'])
     return jsonify(dicts)
 
 
@@ -503,6 +514,75 @@ def get_chapter(chapter_id):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     return jsonify(row_to_dict(row))
+
+
+@bp.get('/chapters/<chapter_id>/like')
+def get_chapter_like(chapter_id):
+    return jsonify(likes.state(get_db(), chapter_id))
+
+
+@bp.post('/chapters/<chapter_id>/like')
+def like_chapter(chapter_id):
+    """`{"liked": true|false, "assumed": false}`. A like asked for here is
+    made on the forum by a background worker; `assumed` records a like the
+    user is about to press on the site themselves, and sends nothing."""
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get('liked'), bool) or not isinstance(body.get('assumed', False), bool):
+        return jsonify({'error': 'liked must be true or false'}), 400
+    db = get_db()
+    try:
+        result = likes.set_like(db, chapter_id, body['liked'], assumed=body.get('assumed', False))
+    except LookupError:
+        return jsonify({'error': 'Not found'}), 404
+    except likes.LikeError as e:
+        return jsonify({'error': str(e)}), 400
+    db.commit()
+    if result['pending']:
+        likes.start_push()
+    return jsonify(result)
+
+
+@bp.post('/chapters/<chapter_id>/refetch')
+def refetch_chapter(chapter_id):
+    """Re-get one forum chapter from its post, rewriting it in place whether
+    or not the post says it was edited."""
+    db = get_db()
+    row = db.execute(
+        'SELECT c.fic_id, c.source_post_id, f.source_type, f.download_status FROM fic_chapters c'
+        ' JOIN fics f ON f.id=c.fic_id WHERE c.id=?', (chapter_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if row['source_type'] != 'xenforo' or not row['source_post_id']:
+        return jsonify({'error': 'Only forum chapters can be re-fetched'}), 400
+    if download.is_active(row['fic_id']) or row['download_status'] == 'downloading':
+        return jsonify({'error': 'A download is already running for this fic'}), 409
+    if not likes.start_refetch(chapter_id):
+        return jsonify({'error': 'This chapter is already being re-fetched'}), 409
+    return jsonify({'chapterId': chapter_id, 'queued': True}), 202
+
+
+@bp.get('/chapters/<chapter_id>/refetch')
+def refetch_chapter_status(chapter_id):
+    status = likes.refetch_status(chapter_id)
+    if status is None:
+        return jsonify({'error': 'No re-fetch has run for this chapter'}), 404
+    return jsonify(status)
+
+
+@bp.post('/reactions/recheck')
+def recheck_reactions():
+    """Queue a deep check of every forum fic whose site has a saved session:
+    likes are only on reader pages, so finding out which chapters carry one
+    is the deep walk, which also picks up silent edits on the way."""
+    db = get_db()
+    cur = db.execute(
+        "UPDATE fics SET update_pending=1, deep_pending=1 WHERE source_type='xenforo'"
+        " AND download_status != 'downloading'"
+        " AND EXISTS (SELECT 1 FROM site_cookies s WHERE fics.site IN (s.domain, 'www.' || s.domain))")
+    db.commit()
+    if cur.rowcount:
+        _start_drain_bg()
+    return jsonify({'queued': cur.rowcount}), 202
 
 
 def _start_import_bg(fic_id: str, ref: xenforo.ThreadRef) -> None:

@@ -241,6 +241,7 @@ def init_db() -> None:
     _ensure_fic_source_dates(db)
     _ensure_fic_shelf(db)
     _ensure_collection_scan_retry(db)
+    _ensure_fic_like_push(db)
     _ensure_site_cookie_user_agent(db)
     _repair_escaped_image_fallbacks(db)
     _ensure_paper_archive_requested(db)
@@ -586,6 +587,27 @@ def _ensure_fic_shelf(db: sqlite3.Connection) -> None:
     db.execute(
         "UPDATE fics SET shelf='to_read' WHERE last_opened_at IS NULL"
         ' AND NOT EXISTS (SELECT 1 FROM fic_chapter_reads r WHERE r.fic_id=fics.id)')
+    db.commit()
+
+
+def _ensure_fic_like_push(db: sqlite3.Connection) -> None:
+    """Likes asked for from the Library, and the scans' pass bookkeeping that
+    the Backlog is derived from. Existing reaction rows were all read off the
+    site, which is the column default."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fic_chapter_reactions)')}
+    if 'source' not in cols:
+        db.execute("ALTER TABLE fic_chapter_reactions ADD COLUMN source TEXT NOT NULL DEFAULT 'site'")
+    if 'pending' not in cols:
+        db.execute('ALTER TABLE fic_chapter_reactions ADD COLUMN pending TEXT')
+    if 'push_error' not in cols:
+        db.execute('ALTER TABLE fic_chapter_reactions ADD COLUMN push_error TEXT')
+    if 'push_attempts' not in cols:
+        db.execute('ALTER TABLE fic_chapter_reactions ADD COLUMN push_attempts INTEGER NOT NULL DEFAULT 0')
+    if 'push_after' not in cols:
+        db.execute('ALTER TABLE fic_chapter_reactions ADD COLUMN push_after INTEGER NOT NULL DEFAULT 0')
+    for table in ('fanfic_watched_scans', 'fanfic_bookmark_scans', 'fanfic_collection_scans'):
+        if 'pass_started_at' not in {r[1] for r in db.execute(f'PRAGMA table_info({table})')}:
+            db.execute(f'ALTER TABLE {table} ADD COLUMN pass_started_at INTEGER')
     db.commit()
 
 

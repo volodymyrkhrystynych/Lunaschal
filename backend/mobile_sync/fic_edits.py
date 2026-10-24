@@ -7,7 +7,7 @@ review written offline would otherwise come back as a conflict whenever the
 library updated in the meantime, and there is nothing to merge: these are
 one person's choices about their own library.
 """
-from backend.fanfic import library
+from backend.fanfic import library, likes
 from backend.routes.journal import _client_id
 from .feed import change_dict
 
@@ -80,3 +80,37 @@ def mutate(db, body):
             db.execute("INSERT INTO mobile_sync_changes(collection, record_id, payload)"
                        " VALUES ('fic_chapter_reads', ?, NULL)", (record_id,))
     return {'operationId': body['id'], 'change': change_dict(latest(db, body['collection'], record_id))}, 200
+
+
+def validate_like(body):
+    """A like on a forum chapter: `{ficId, liked, assumed}`, as an update."""
+    if not isinstance(body['epoch'], str) or type(body['baseRevision']) is not int or body['baseRevision'] < 0:
+        raise ValueError('An epoch and nonnegative baseRevision are required')
+    data = body['data']
+    if body['action'] != 'update' or not isinstance(data, dict) or set(data) != {'ficId', 'liked', 'assumed'}:
+        raise ValueError('Expected the chapter\'s ficId, liked and assumed')
+    if not isinstance(data['ficId'], str) or not _client_id(data['ficId']):
+        raise ValueError('ficId must be a ULID')
+    if not isinstance(data['liked'], bool) or not isinstance(data['assumed'], bool):
+        raise ValueError('liked and assumed must be true or false')
+
+
+def mutate_like(db, body):
+    """Last write wins, like the rest of the library: the newest tap is what
+    the user wants the forum to show."""
+    data, record_id = body['data'], body['recordId']
+    owner = db.execute('SELECT fic_id FROM fic_chapters WHERE id=?', (record_id,)).fetchone()
+    if owner is None or owner['fic_id'] != data['ficId']:
+        return _gone('This chapter is no longer in the library.')
+    try:
+        likes.set_like(db, record_id, data['liked'], assumed=data['assumed'])
+    except likes.LikeError as e:
+        return {'error': str(e), 'conflict': True}, 409
+    change = latest(db, 'fic_chapter_reactions', record_id)
+    if change is None:
+        # An assumed un-like of a chapter with no reaction row writes
+        # nothing, and the phone still needs a change to acknowledge.
+        db.execute("INSERT INTO mobile_sync_changes(collection, record_id, payload)"
+                   " VALUES ('fic_chapter_reactions', ?, NULL)", (record_id,))
+        change = latest(db, 'fic_chapter_reactions', record_id)
+    return {'operationId': body['id'], 'change': change_dict(change)}, 200
