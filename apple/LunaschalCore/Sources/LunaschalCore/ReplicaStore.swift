@@ -454,6 +454,8 @@ public final class ReplicaStore {
         let folders = FicLibrary.field("folderIds")
         if filter.folder == "unsorted" {
             clauses.append("NOT EXISTS (SELECT 1 FROM json_each(\(folders)))")
+        } else if filter.folder == FicLibrary.backlogFolder {
+            clauses.append("COALESCE(json_extract(payload,'$.backlog'),0)=1")
         } else if !filter.folder.isEmpty {
             clauses.append("EXISTS (SELECT 1 FROM json_each(\(folders)) WHERE value=?)")
             args.append(filter.folder)
@@ -553,7 +555,7 @@ public final class ReplicaStore {
     }
 
     /// How many books each folder holds, keyed by folder id, with books in no
-    /// folder at all under `"unsorted"`.
+    /// folder at all under `"unsorted"` and any Backlog under `"backlog"`.
     public func folderCounts() throws -> [String: Int] {
         var counts: [String: Int] = [:]
         for row in try rows("""
@@ -564,6 +566,13 @@ public final class ReplicaStore {
             SELECT COUNT(*) FROM replica_records WHERE collection='fics' AND deleted=0
             AND NOT EXISTS (SELECT 1 FROM json_each(\(FicLibrary.field("folderIds"))))
             """).first?[0] ?? "0") ?? 0
+        // Only when there is one: a server or a library without the flag has
+        // no Backlog to show, rather than an empty one.
+        let backlog = Int(try rows("""
+            SELECT COUNT(*) FROM replica_records WHERE collection='fics' AND deleted=0
+            AND COALESCE(json_extract(payload,'$.backlog'),0)=1
+            """).first?[0] ?? "0") ?? 0
+        if backlog > 0 { counts[FicLibrary.backlogFolder] = backlog }
         return counts
     }
 

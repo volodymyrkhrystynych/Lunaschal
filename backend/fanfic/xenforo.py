@@ -84,6 +84,10 @@ class ReaderPost:
     # does.
     my_reaction: str | None = None
     reaction_seen: bool = False
+    # The reaction_id the react button would send. Once the viewer has
+    # reacted it is *their* reaction's id, which is what un-reacting has to
+    # send back: XenForo toggles a reaction off by reacting with it again.
+    my_reaction_id: str | None = None
 
 
 @dataclass
@@ -94,6 +98,8 @@ class ReaderPage:
     # trusted from a logged-in page: a lapsed session must not read as "the
     # user reacted to nothing".
     logged_in: bool = False
+    # <html data-csrf>: the _xfToken a reaction POST from this session needs.
+    csrf: str | None = None
 
 
 @dataclass
@@ -446,7 +452,7 @@ def parse_reader_page(html: str) -> ReaderPage:
                 if posted_at is not None:
                     break
 
-        reaction_seen, my_reaction = _my_reaction(article)
+        reaction_seen, my_reaction, my_reaction_id = _my_reaction(article)
         posts.append(ReaderPost(
             post_id=post_id,
             threadmark_title=_tag_text(label),
@@ -456,15 +462,21 @@ def parse_reader_page(html: str) -> ReaderPage:
             edited_at=edited_at,
             my_reaction=my_reaction,
             reaction_seen=reaction_seen,
+            my_reaction_id=my_reaction_id,
         ))
 
     root = soup.find('html')
     logged_in = root is not None and root.get('data-logged-in') == 'true'
-    return ReaderPage(posts=posts, last_page=_last_page(soup), logged_in=logged_in)
+    csrf = (root.get('data-csrf') or None) if root is not None else None
+    return ReaderPage(posts=posts, last_page=_last_page(soup), logged_in=logged_in, csrf=csrf)
 
 
-def _my_reaction(article) -> tuple[bool, str | None]:
-    """(whether the post has a react button, the viewer's reaction on it).
+_REACTION_ID = re.compile(r'[?&]reaction_id=(\d+)')
+
+
+def _my_reaction(article) -> tuple[bool, str | None, str | None]:
+    """(whether the post has a react button, the viewer's reaction on it, the
+    reaction_id the button sends).
 
     XenForo 2 renders the viewer's own react button in the post's action bar
     as `a.actionBar-action--reaction`; it gains `has-reaction` once they have
@@ -473,14 +485,16 @@ def _my_reaction(article) -> tuple[bool, str | None]:
     and is not this -- only the button is about the viewer."""
     button = article.select_one('a.actionBar-action--reaction')
     if button is None:
-        return False, None
+        return False, None, None
+    match = _REACTION_ID.search(button.get('href', ''))
+    reaction_id = button.get('data-reaction-id') or (match.group(1) if match else None)
     if 'has-reaction' not in (button.get('class') or []):
-        return True, None
+        return True, None, reaction_id
     name = _tag_text(button.select_one('.reaction-text'))
     if not name:
         img = button.select_one('img[title], img[alt]')
         name = ((img.get('title') or img.get('alt') or '') if img else '').strip()
-    return True, name or 'Reacted'
+    return True, name or 'Reacted', reaction_id
 
 
 _SKIP_IMAGE = re.compile(r'/smilies/|/reaction/|^data:', re.I)

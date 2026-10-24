@@ -143,7 +143,8 @@ def test_desktop_read_marks_and_reactions_replicate_keyed_by_chapter(client):
     by_collection = {c['collection']: c for c in changes}
     assert by_collection['fic_chapter_reads']['id'] == chapter
     assert by_collection['fic_chapter_reactions']['data'] == {
-        'id': chapter, 'chapterId': chapter, 'ficId': fic, 'reaction': 'Like', 'checkedAt': 5}
+        'id': chapter, 'chapterId': chapter, 'ficId': fic, 'reaction': 'Like', 'checkedAt': 5,
+        'source': 'site', 'pending': None, 'pushError': None}
 
 
 def test_shelf_route_validates_and_sets(client):
@@ -153,3 +154,64 @@ def test_shelf_route_validates_and_sets(client):
     assert client.patch(f'/api/fanfic/{fic}/shelf', json={'shelf': 'finished'}).status_code == 200
     row = get_db().execute('SELECT shelf, shelved_at FROM fics WHERE id=?', (fic,)).fetchone()
     assert row['shelf'] == 'finished' and row['shelved_at'] is not None
+
+
+def like_edit(client, fic, chapter, liked=True, assumed=False):
+    return dict(id=str(ULID()), epoch=epoch(client), collection='fic_chapter_reactions',
+                recordId=chapter, baseRevision=0, action='update',
+                data={'ficId': fic, 'liked': liked, 'assumed': assumed})
+
+
+def forum_book():
+    fic, chapter = book()
+    db = get_db()
+    db.execute("UPDATE fics SET source_url='https://forums.spacebattles.com/threads/x.5/' WHERE id=?", (fic,))
+    db.execute("UPDATE fic_chapters SET source_post_id='55' WHERE id=?", (chapter,))
+    db.commit()
+    return fic, chapter
+
+
+def test_a_like_from_the_phone_is_queued_for_the_forum(client, monkeypatch):
+    from backend.fanfic import likes
+    pushes = []
+    monkeypatch.setattr(likes, 'start_push', lambda: pushes.append(1))
+    fic, chapter = forum_book()
+    body = like_edit(client, fic, chapter)
+    response = send(client, body)
+    assert response.status_code == 200
+    data = response.json['change']['data']
+    assert (data['reaction'], data['source'], data['pending']) == ('Like', 'app', 'like')
+    assert pushes
+    assert send(client, body).json == response.json  # a replay is the same receipt
+
+
+def test_an_assumed_like_from_the_phone_queues_nothing(client, monkeypatch):
+    from backend.fanfic import likes
+    monkeypatch.setattr(likes, 'start_push', lambda: None)
+    fic, chapter = forum_book()
+    data = send(client, like_edit(client, fic, chapter, assumed=True)).json['change']['data']
+    assert (data['reaction'], data['source'], data['pending']) == ('Like', 'assumed', None)
+
+
+def test_a_like_names_its_book_and_must_be_a_forum_chapter(client):
+    fic, chapter = book()
+    other, _ = book()
+    assert send(client, like_edit(client, other, chapter)).status_code == 409
+    assert send(client, like_edit(client, fic, chapter)).status_code == 409  # not a forum post
+
+
+def test_a_books_snapshot_says_whether_it_is_backlog(client):
+    fic, _ = book()
+    db = get_db()
+    snapshot = lambda: db.execute(  # noqa: E731
+        "SELECT payload FROM mobile_sync_changes WHERE collection='fics' AND record_id=?"
+        ' ORDER BY sequence DESC LIMIT 1', (fic,)).fetchone()[0]
+    import json
+    assert json.loads(snapshot())['backlog'] == 0
+    db.execute("INSERT INTO fic_list_passes(site, list, completed_at) VALUES ('forums.spacebattles.com','watched',1)")
+    db.commit()
+    assert json.loads(snapshot())['backlog'] == 1
+    db.execute("INSERT INTO fic_source_lists(fic_id, list, seen_at) VALUES (?, 'watched', 1)", (fic,))
+    db.commit()
+    data = json.loads(snapshot())
+    assert data['backlog'] == 0 and data['source_lists'] == ['watched']

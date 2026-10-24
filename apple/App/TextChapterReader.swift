@@ -31,6 +31,8 @@ struct TextChapterReader: View {
     /// Chapters this reader has already considered marking read, so reaching
     /// the end of one asks the store once, not on every scroll tick.
     @State private var autoReadChecked: Set<String> = []
+    /// What the forum shows (or will) as the user's reaction on this chapter.
+    @State private var reaction: ChapterReaction?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
@@ -61,6 +63,9 @@ struct TextChapterReader: View {
         .navigationTitle(current.title).navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { textSizeMenu }
+            if FicLibrary.isLikeable(book: book, chapter: current) {
+                ToolbarItem(placement: .topBarTrailing) { likeButton }
+            }
             if let book {
                 // Back to the list this chapter was opened from, never a new
                 // one on top: chapters used to stack up one per pick.
@@ -203,8 +208,14 @@ struct TextChapterReader: View {
             Button("Continue", systemImage: "bookmark") { bookmark("continue") }
             Button("Bookmark", systemImage: "star") { bookmark("favorite") }
             if let link = current.data?["sourceUrl"]?.string, let url = URL(string: link) {
-                Button("Open on site", systemImage: "safari") { openURL(url) }
+                Button("Open on site", systemImage: "safari") { openOnSite(url) }
                     .accessibilityIdentifier("reader-open-on-site")
+            }
+            if FicLibrary.isLikeable(book: book, chapter: current) {
+                Button("Re-get this chapter", systemImage: "arrow.down.doc") {
+                    Task { await owner.refetchChapter(current) }
+                }
+                .accessibilityIdentifier("reader-refetch-chapter")
             }
             if let book, FicSources.isUpdatable(book.data?["sourceType"]?.string) {
                 Button("Get latest chapters", systemImage: "arrow.clockwise") {
@@ -220,6 +231,35 @@ struct TextChapterReader: View {
         }
         .accessibilityLabel("Reader menu")
         .accessibilityIdentifier("reader-menu")
+    }
+
+    /// Filled once liked; a clock badge while the server has still to make
+    /// the like on the forum.
+    private var likeButton: some View {
+        let liked = reaction?.isLiked ?? false
+        return Button {
+            setLike(!liked, assumed: false)
+            show(liked ? "Like removed · Syncs when connected" : "Liked · Sent to the forum when connected")
+        } label: {
+            Label(liked ? "Unlike" : "Like",
+                  systemImage: reaction?.pending != nil ? "clock.arrow.circlepath" : liked ? "heart.fill" : "heart")
+        }
+        .tint(liked ? .pink : nil)
+        .accessibilityIdentifier("reader-like")
+        .accessibilityValue(liked ? (reaction?.pending != nil ? "Liked, waiting to send" : "Liked") : "Not liked")
+    }
+
+    /// Opening a chapter on the forum is going there to like it: it shows as
+    /// liked here, and the server sends nothing.
+    private func openOnSite(_ url: URL) {
+        if FicLibrary.isLikeable(book: book, chapter: current) { setLike(true, assumed: true) }
+        openURL(url)
+    }
+
+    private func setLike(_ liked: Bool, assumed: Bool) {
+        guard let ficID else { return }
+        owner.likeChapter(bookID: ficID, chapterID: current.id, liked: liked, assumed: assumed)
+        reaction = (try? store.reactions(bookID: ficID))?[current.id]
     }
 
     /// Shown at the top and the bottom of the text; `edge` keeps the two
@@ -257,6 +297,7 @@ struct TextChapterReader: View {
             if let ficID {
                 if book == nil { book = try store.record(collection: "fics", id: ficID) }
                 if chapters.isEmpty { chapters = try store.chapterOutline(bookID: ficID) }
+                reaction = try store.reactions(bookID: ficID)[current.id]
                 // The desktop's last-read pointer, so it resumes here too.
                 owner.queueReading(.progress(ficId: ficID, chapterId: current.id))
             }

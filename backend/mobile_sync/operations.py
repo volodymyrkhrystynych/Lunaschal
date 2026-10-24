@@ -24,6 +24,12 @@ def apply(body):
     if body['collection'] in ('fics', 'fic_chapter_reads'):
         fic_edits.validate(body)
         return transact(body, fic_edits.mutate)
+    if body['collection'] == 'fic_chapter_reactions':
+        fic_edits.validate_like(body)
+        result = transact(body, fic_edits.mutate_like)
+        from backend.fanfic import likes
+        likes.start_push()
+        return result
     if not isinstance(body['epoch'], str) or type(body['baseRevision']) is not int or body['baseRevision'] < 1:
         raise ValueError('An epoch and positive baseRevision are required')
     if body['collection'] == 'food_entries':

@@ -1029,6 +1029,7 @@ CREATE TABLE IF NOT EXISTS fanfic_watched_scans (
     imported INTEGER NOT NULL DEFAULT 0,
     already_in_library INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
+    pass_started_at INTEGER,
     updated_at INTEGER NOT NULL
 );
 
@@ -1039,6 +1040,7 @@ CREATE TABLE IF NOT EXISTS fanfic_bookmark_scans (
     imported INTEGER NOT NULL DEFAULT 0,
     already_in_library INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
+    pass_started_at INTEGER,
     updated_at INTEGER NOT NULL
 );
 
@@ -1069,6 +1071,7 @@ CREATE TABLE IF NOT EXISTS fanfic_collection_scans (
     error TEXT,
     retry_after INTEGER NOT NULL DEFAULT 0,
     attempts INTEGER NOT NULL DEFAULT 0,
+    pass_started_at INTEGER,
     updated_at INTEGER NOT NULL,
     UNIQUE(site, collection, username)
 );
@@ -1141,10 +1144,42 @@ CREATE TABLE IF NOT EXISTS fic_chapter_reactions (
     chapter_id TEXT PRIMARY KEY REFERENCES fic_chapters(id) ON DELETE CASCADE,
     fic_id TEXT NOT NULL REFERENCES fics(id) ON DELETE CASCADE,
     reaction TEXT,
-    checked_at INTEGER NOT NULL
+    checked_at INTEGER NOT NULL,
+    -- Where `reaction` came from: 'site' (read off a logged-in page), 'app'
+    -- (asked for from the Library, pushed to the forum by likes.py) or
+    -- 'assumed' (the chapter was opened on the site, where the user presses
+    -- Like themselves). The next look at the page overwrites the last two.
+    source TEXT NOT NULL DEFAULT 'site' CHECK(source IN ('site','app','assumed')),
+    -- A like/unlike the server still has to make on the forum. While set, a
+    -- walk's reading of the page does not overwrite the row.
+    pending TEXT CHECK(pending IN ('like','unlike')),
+    push_error TEXT,
+    push_attempts INTEGER NOT NULL DEFAULT 0,
+    push_after INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_fcrx_fic ON fic_chapter_reactions(fic_id);
+
+-- Which of the user's own lists on the source a fic was last seen on:
+-- XenForo 'watched'/'bookmarks', or a collection scan's collection name
+-- (FF.net favorites/follows, AO3 bookmarks/subscriptions, ...). A fic on
+-- none of them, from a site whose lists have been walked, is the Backlog.
+CREATE TABLE IF NOT EXISTS fic_source_lists (
+    fic_id TEXT NOT NULL REFERENCES fics(id) ON DELETE CASCADE,
+    list TEXT NOT NULL,
+    seen_at INTEGER NOT NULL,
+    PRIMARY KEY(fic_id, list)
+);
+
+-- The last time each (site, list) was walked from its first page to its last
+-- without an error: the only moment it is safe to drop a fic from the list,
+-- and what lets a fic count as Backlog at all.
+CREATE TABLE IF NOT EXISTS fic_list_passes (
+    site TEXT NOT NULL,
+    list TEXT NOT NULL,
+    completed_at INTEGER NOT NULL,
+    PRIMARY KEY(site, list)
+);
 
 CREATE TABLE IF NOT EXISTS fic_bookmarks (
     id TEXT PRIMARY KEY,

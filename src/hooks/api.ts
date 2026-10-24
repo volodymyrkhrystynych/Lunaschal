@@ -255,6 +255,10 @@ export interface Fic {
   folderIds?: string[];
   tags?: string[];
   readCount?: number;
+  /** The user's own lists on the site this fic was last seen on. */
+  sourceLists?: string[];
+  /** On none of them, from a site whose lists have been walked. */
+  backlog?: boolean;
 }
 
 export interface FicBookmark {
@@ -303,6 +307,21 @@ export interface FicChapterSummary {
   createdAt: string;
   updatedAt: string;
   isRead: boolean;
+  /** The user's own reaction on the forum post, null when none or unknown. */
+  reaction?: string | null;
+  /** 'like'/'unlike' while the server has still to make it on the forum. */
+  reactionPending?: 'like' | 'unlike' | null;
+  /** A forum chapter: the server can like and re-get it. */
+  likeable?: boolean;
+}
+
+export interface FicLikeState {
+  chapterId: string;
+  reaction: string | null;
+  checked: boolean;
+  source: 'site' | 'app' | 'assumed' | null;
+  pending: 'like' | 'unlike' | null;
+  error: string | null;
 }
 
 export interface FicChapter extends FicChapterSummary {
@@ -3934,6 +3953,23 @@ export const api = {
       get<FicChapterSummary[]>(`/api/fanfic/${ficId}/chapters`),
     chapter: (chapterId: string) =>
       get<FicChapter>(`/api/fanfic/chapters/${chapterId}`),
+    /** Like on the forum (sent by the server), or `assumed` when opening it
+     * on the site, where the user presses Like themselves. */
+    likeChapter: (chapterId: string, liked: boolean, assumed = false) =>
+      post<FicLikeState>(`/api/fanfic/chapters/${chapterId}/like`, {
+        liked,
+        assumed,
+      }),
+    refetchChapter: (chapterId: string) =>
+      post<{ chapterId: string; queued: boolean }>(
+        `/api/fanfic/chapters/${chapterId}/refetch`
+      ),
+    refetchStatus: (chapterId: string) =>
+      get<{ done: boolean; error: string | null }>(
+        `/api/fanfic/chapters/${chapterId}/refetch`
+      ),
+    recheckReactions: () =>
+      post<{ queued: number }>('/api/fanfic/reactions/recheck'),
     importUrl: (url: string) =>
       post<{ id: string; alreadyExists?: boolean }>('/api/fanfic/import', {
         url,
