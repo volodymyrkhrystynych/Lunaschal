@@ -144,6 +144,18 @@ offers "Mark all up to here read" and Open on site. Scrolling to the end of a
 chapter marks it read. Swipe, drop, filters, read marks, reactions and tags
 passed in simulator against the fixture; the reaction markup itself is
 unverified against a live forum (`python -m backend.fanfic.reaction_probe <reader url>`).
+A forum chapter can be liked from the reader's heart button or the chapter row's
+long press; it shows liked at once, queues offline, and the server makes the like
+on the forum (reading the post first, so a retry never toggles it back off).
+Open on site marks the chapter liked without sending anything, since you press
+Like there yourself. Long press and the reader menu also offer Re-get this
+chapter (the server rewrites it from its post, for an author's edit). Rechecking
+which chapters are liked is a server job, started from the web app's Settings →
+Fanfic site cookies. Folders mode lists a **Backlog**: books on none of your
+lists on their site (watched, bookmarked, followed, favorited, subscribed), shown
+once the server has walked that site's lists. Liking from the reader and the
+Backlog folder passed in simulator against the fixture; the like POST itself is
+unverified against a live forum.
 Study owns Documents and other saved reference material, and is iPad-only.
 On iPad it provides Pencil annotations for downloaded PDFs
 and images without a Notebook editor. Ink autosaves locally and can be exported

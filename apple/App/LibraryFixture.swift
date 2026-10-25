@@ -38,6 +38,8 @@ enum LibraryFixture {
         var shelf: String? = nil
         var rating: Int? = nil
         var review: String? = nil
+        /// On none of the user's lists on its site: the Backlog.
+        var backlog = false
     }
 
     static let reading = "01K8BBBBBBBBBBBBBBBBBBBBF1"
@@ -65,7 +67,8 @@ enum LibraryFixture {
              daysSinceUpdate: 3, description: "Not on the device: open it while another is downloading to see it queue."),
         Book(id: partial, title: "Field Notes on Dragons", author: "Ossory", site: nil, sourceType: "fanfiction",
              tags: ["Dragons", "Adventure"], folders: [], chapters: 10, onDevice: 3,
-             daysSinceUpdate: 6, description: "Half on the device: the first chapters read now, the rest arrive."),
+             daysSinceUpdate: 6, description: "Half on the device: the first chapters read now, the rest arrive.",
+             backlog: true),
         Book(id: pdf, title: "A Treatise on Clockwork", author: "H. Ambrose", site: nil, sourceType: "pdf",
              tags: ["Non-fiction"], folders: [toRead], chapters: 0, onDevice: 0,
              daysSinceUpdate: 20, description: "A PDF book that isn't on the device yet."),
@@ -148,8 +151,8 @@ enum LibraryFixture {
         // last run downloaded are gone again and every launch starts the same.
         let store = try ReplicaStore(url: root.appendingPathComponent("replica.sqlite"))
         try store.apply(decoded, startingBootstrap: true)
-        // Shelving, reviews and read marks a previous run left waiting.
-        for edit in try store.edits() where ["fics", "fic_chapter_reads"].contains(edit.operation.collection) {
+        // Shelving, reviews, read marks and likes a previous run left waiting.
+        for edit in try store.edits() where ["fics", "fic_chapter_reads", "fic_chapter_reactions"].contains(edit.operation.collection) {
             try store.resolve(edit, keepLocal: false)
         }
         // The PDF book goes back to not downloaded too.
@@ -160,9 +163,9 @@ enum LibraryFixture {
     /// The replica keeps a record it already holds at the same revision, so
     /// a simulator that ran an older fixture would keep its old chapters:
     /// bump this whenever a chapter's content changes.
-    static let chapterRevision = 2
+    static let chapterRevision = 3
     /// The same for a book's own fields (its shelf, rating and unread count).
-    static let bookRevision = 2
+    static let bookRevision = 3
 
     private static func change(_ collection: String, _ id: String, _ data: [String: Any],
                                revision: Int = 1) -> [String: Any] {
@@ -184,6 +187,7 @@ enum LibraryFixture {
         if let shelf = book.shelf { data["shelf"] = shelf }
         if let rating = book.rating { data["rating"] = rating }
         if let review = book.review { data["review"] = review }
+        data["backlog"] = book.backlog ? 1 : 0
         let read = book.id == books[0].id ? readChapters.count : 0
         data["unreadCount"] = max(0, book.chapters - book.sidestories - read)
         return data
@@ -218,7 +222,11 @@ enum LibraryFixture {
             "wordCount": text.split(separator: " ").count,
             "postedAt": Int(now.addingTimeInterval(-Double(book.chapters - index) * 86_400).timeIntervalSince1970),
         ]
-        if book.sourceType == "xenforo" { data["category"] = sidestory ? "Sidestory" : "Threadmarks" }
+        if book.sourceType == "xenforo" {
+            data["category"] = sidestory ? "Sidestory" : "Threadmarks"
+            // A post URL, which is what makes a forum chapter likeable.
+            data["sourceUrl"] = "https://\(book.site ?? "forums.example.com")/threads/fixture.1/post-\(1000 + index)"
+        }
         return change("fic_chapters", chapterID(book, index), data, revision: chapterRevision)
     }
 

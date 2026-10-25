@@ -207,6 +207,11 @@ export function FanficCookiesSection() {
     queryKey: ['fanfic', 'cookies'],
     queryFn: api.fanfic.cookies.list,
   });
+  // Likes live on reader pages, so finding them is a deep check of every
+  // forum fic whose site has a cookie saved here.
+  const recheckReactions = useMutation({
+    mutationFn: () => api.fanfic.recheckReactions(),
+  });
 
   useEffect(() => {
     const scanning = cookies?.some(
@@ -247,6 +252,28 @@ export function FanficCookiesSection() {
             bookmarkScan={c.bookmarkScan}
           />
         ))}
+      </div>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => recheckReactions.mutate()}
+          disabled={recheckReactions.isPending}
+          title="Re-read every forum fic in full to find which chapters you have liked"
+          className="px-3 py-1.5 text-sm rounded border border-white/10 text-[var(--color-text)] hover:bg-white/5 disabled:opacity-50"
+        >
+          Recheck likes on all forum fics
+        </button>
+        {recheckReactions.data && (
+          <span className="text-xs text-[var(--color-text-muted)]">
+            {recheckReactions.data.queued
+              ? `${recheckReactions.data.queued} forum fic${recheckReactions.data.queued > 1 ? 's' : ''} queued for a full re-read`
+              : 'No forum fics with a saved cookie to recheck'}
+          </span>
+        )}
+        {recheckReactions.error && (
+          <span className="text-xs text-red-400">
+            {recheckReactions.error.message}
+          </span>
+        )}
       </div>
     </>
   );

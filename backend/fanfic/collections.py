@@ -7,7 +7,7 @@ import time
 from ulid import ULID
 
 from backend.db.connection import get_db
-from backend.fanfic import download, personal_tags, sites, pacing, browser
+from backend.fanfic import download, personal_tags, sites, source_lists, pacing, browser
 from backend.fanfic.sanitize import sanitize_chapter_html, html_to_text
 from backend.fanfic.xenforo import ReaderPost
 
@@ -37,7 +37,8 @@ def _fetch_for(url, **owner):
     return _fetch(url)
 
 
-def queue_work(ref: sites.WorkRef, *, check_updates: bool = False) -> tuple[str, bool]:
+def queue_work(ref: sites.WorkRef, *, check_updates: bool = False,
+               listed_on: str | None = None) -> tuple[str, bool]:
     db = get_db()
     now, fic_id = int(time.time()), str(ULID())
     result = db.execute(
@@ -61,6 +62,8 @@ def queue_work(ref: sites.WorkRef, *, check_updates: bool = False) -> tuple[str,
     db.execute('UPDATE fics SET source_favorited_at=COALESCE(?,source_favorited_at),'
                'source_followed_at=COALESCE(?,source_followed_at) WHERE id=?',
                (ref.favorited_at, ref.followed_at, fic_id))
+    if listed_on:
+        source_lists.mark(db, fic_id, listed_on)
     db.commit()
     # A rescan of the bookmarks is how folders stay current, so this runs for
     # an already-present story too and not only for a fresh import.
@@ -170,12 +173,13 @@ def create_scan(site: str, collection: str, username: str) -> str:
             return row['id']
         scan_id = row['id'] if row else str(ULID())
         db.execute('INSERT INTO fanfic_collection_scans'
-                   '(id,site,collection,username,remaining_urls,status,updated_at)'
-                   " VALUES (?,?,?,?,?,'pending',?) ON CONFLICT(id) DO UPDATE SET"
+                   "(id,site,collection,username,remaining_urls,status,pass_started_at,updated_at)"
+                   " VALUES (?,?,?,?,?,'pending',?,?) ON CONFLICT(id) DO UPDATE SET"
                    " remaining_urls=excluded.remaining_urls,status='pending',error=NULL,"
                    'found=0,imported=0,skipped=0,pages=0,attempts=0,retry_after=0,'
-                   'updated_at=excluded.updated_at',
-                   (scan_id, site, collection, username, json.dumps(urls), int(time.time())))
+                   'pass_started_at=excluded.pass_started_at,updated_at=excluded.updated_at',
+                   (scan_id, site, collection, username, json.dumps(urls), int(time.time()),
+                    int(time.time())))
         db.commit()
         return scan_id
 
@@ -201,7 +205,7 @@ def run_scan(scan_id: str) -> None:
             else:
                 refs, next_url = sites.parse_collection(response.text, url)
             for ref in refs:
-                _, created = queue_work(ref, check_updates=True)
+                _, created = queue_work(ref, check_updates=True, listed_on=row['collection'])
                 found += 1
                 imported += int(created)
             urls = ([next_url] if next_url else []) + urls[1:]
@@ -214,6 +218,7 @@ def run_scan(scan_id: str) -> None:
                        (json.dumps(urls), found, imported, skipped, pages, int(time.time()), scan_id))
             db.commit()
             browser.clear(scan_id=scan_id)
+        source_lists.complete_pass(db, row['site'], row['collection'], row['pass_started_at'])
         db.execute("UPDATE fanfic_collection_scans SET status='complete',error=NULL WHERE id=?", (scan_id,))
         db.commit()
     except pacing.DeferredDownload as exc:

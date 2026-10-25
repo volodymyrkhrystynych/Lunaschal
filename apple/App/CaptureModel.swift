@@ -1531,6 +1531,24 @@ final class CaptureModel: ObservableObject {
         return true
     }
 
+    /// Like a forum chapter, or take the like back; the server makes it on the
+    /// forum. `assumed` is opening it on the site: it shows as liked and the
+    /// server sends nothing, since the user presses Like there.
+    func likeChapter(bookID: String, chapterID: String, liked: Bool, assumed: Bool = false) {
+        do { try replica.setChapterLiked(bookID: bookID, chapterID: chapterID, liked: liked, assumed: assumed) }
+        catch { message = error.localizedDescription; return }
+        libraryRevision += 1
+        requestSync()
+    }
+
+    func refetchChapter(_ chapter: SyncChange) async {
+        guard let api = chatAPI() else { message = "Sign in to re-get chapters from the server."; return }
+        do {
+            try await api.refetchFicChapter(chapter.id)
+            message = "“\(chapter.title)” is being re-read from the site. The new text arrives with the next sync."
+        } catch { message = error.localizedDescription }
+    }
+
     func markChapters(bookID: String, chapterIDs: [String], read: Bool) {
         do { try replica.setChaptersRead(bookID: bookID, chapterIDs: chapterIDs, read: read) }
         catch { message = error.localizedDescription; return }

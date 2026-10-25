@@ -79,6 +79,14 @@ Books-library follow-up:
   fresh mobile bootstrap. Core tests (`FicLibraryTests`), backend tests
   (`test_mobile_fic_edits.py`, `test_fanfic_reactions.py`) and two library UI tests
   passed in simulator; the reaction markup is unverified against a live forum.
+- Forum likes from the phone queue offline as last-write-wins `fic_chapter_reactions`
+  operations (`ReplicaStore.setChapterLiked`; a newer tap replaces a waiting one), and
+  the server's `backend/fanfic/likes.py` makes them on the forum. Open on site queues
+  an `assumed` like, which the server never sends. Re-get chapter is an
+  online-only call; rechecking likes lives in the web app's Settings. The Backlog is the snapshot's server-derived `backlog` flag
+  (`backend/fanfic/source_lists.py`). Core tests (`FicLibraryTests`), backend tests
+  (`test_fanfic_likes.py`, `test_fanfic_source_lists.py`, `test_mobile_fic_edits.py`)
+  and two UI tests passed in simulator; the like POST is unverified against a live forum.
 - Study holds non-book material. The tab is iPad-only; the iPhone no longer shows it
   (UI test asserts its absence on iPhone).
 - Local verification: 110 Swift core tests and 54 backend bookmark/sync/seeding

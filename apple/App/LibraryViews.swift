@@ -460,8 +460,23 @@ struct BookView: View {
             Button("Mark all up to here read", systemImage: "checkmark.circle.badge.questionmark") {
                 model.markChapters(bookID: book.id, chapterIDs: FicLibrary.chapters(through: chapter.id, in: chapters), read: true)
             }
+            if FicLibrary.isLikeable(book: book, chapter: chapter) {
+                let liked = reactions[chapter.id]?.isLiked ?? false
+                Button(liked ? "Unlike" : "Like", systemImage: liked ? "heart.slash" : "heart") {
+                    model.likeChapter(bookID: book.id, chapterID: chapter.id, liked: !liked)
+                }
+                Button("Re-get this chapter", systemImage: "arrow.down.doc") {
+                    Task { await model.refetchChapter(chapter) }
+                }
+            }
             if let link = chapter.data?["sourceUrl"]?.string, let url = URL(string: link) {
-                Button("Open on site", systemImage: "safari") { openURL(url) }
+                Button("Open on site", systemImage: "safari") {
+                    // Going to the forum is going there to like it.
+                    if FicLibrary.isLikeable(book: book, chapter: chapter) {
+                        model.likeChapter(bookID: book.id, chapterID: chapter.id, liked: true, assumed: true)
+                    }
+                    openURL(url)
+                }
             }
         }
     }
@@ -472,8 +487,15 @@ struct BookView: View {
     private func reactionLine(_ reaction: ChapterReaction?) -> some View {
         if let reaction {
             Group {
-                if let name = reaction.reaction {
-                    Label(name, systemImage: "hand.thumbsup.fill").foregroundStyle(.tint)
+                if let error = reaction.error, reaction.pending != nil {
+                    Label("Not sent: \(error)", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                } else if reaction.pending == "like" {
+                    Label("Liked · waiting to send", systemImage: "clock.arrow.circlepath").foregroundStyle(.tint)
+                } else if reaction.pending == "unlike" {
+                    Label("Like removed · waiting to send", systemImage: "heart.slash").foregroundStyle(.secondary)
+                } else if let name = reaction.reaction {
+                    Label(reaction.source == "assumed" ? "\(name) · opened on site" : name,
+                          systemImage: "hand.thumbsup.fill").foregroundStyle(.tint)
                 } else {
                     Text("Not reacted · checked \(reaction.checkedAt.formatted(date: .abbreviated, time: .omitted))")
                         .foregroundStyle(.secondary)

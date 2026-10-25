@@ -306,6 +306,11 @@ export function Library({ onOpen }: LibraryProps) {
                   [null, 'All', 'Books ordered by latest chapter publication'],
                   ['recent', 'Recent', 'Books ordered by most recently opened'],
                   ['unsorted', 'Unsorted', 'Books not assigned to a folder'],
+                  [
+                    'backlog',
+                    'Backlog',
+                    'Imported, but on none of your lists on the site (watched, bookmarked, followed, favorited)',
+                  ],
                 ].map(([id, label, title]) => (
                   <TagPill
                     key={label}

@@ -21,7 +21,18 @@ public enum FicLibrary {
 
     /// Collections whose refused edits are dropped rather than held for
     /// review: a refusal means the book, chapter or folder is gone.
-    static let lastWriteWins: Set<String> = ["fics", "fic_chapter_reads"]
+    static let lastWriteWins: Set<String> = ["fics", "fic_chapter_reads", "fic_chapter_reactions"]
+
+    /// The library filter's pseudo-folder for books on none of the user's own
+    /// lists on their site (watched, bookmarked, followed, favorited): read
+    /// off each book's `backlog` flag, which the server derives.
+    public static let backlogFolder = "backlog"
+
+    /// Whether the server can like this chapter on its forum: a forum book,
+    /// and a chapter that came from a post.
+    public static func isLikeable(book: SyncChange?, chapter: SyncChange) -> Bool {
+        book?.data?["sourceType"]?.string == "xenforo" && chapter.data?["sourceUrl"]?.string?.contains("/post-") == true
+    }
 
     public enum Shelf: String, CaseIterable, Identifiable, Sendable {
         case toRead = "to_read", reading, paused, finished, dropped
@@ -105,6 +116,23 @@ public enum FicLibrary {
 public struct ChapterReaction: Equatable, Sendable {
     public let reaction: String?
     public let checkedAt: Date
+    /// "site" (read off the forum), "app" (asked for here) or "assumed"
+    /// (opened on the site, where the user presses Like themselves).
+    public var source: String? = nil
+    /// "like"/"unlike" while the server has still to make it on the forum.
+    public var pending: String? = nil
+    /// Why the server's last try at making it failed.
+    public var error: String? = nil
+
+    public init(reaction: String?, checkedAt: Date, source: String? = nil, pending: String? = nil, error: String? = nil) {
+        self.reaction = reaction
+        self.checkedAt = checkedAt
+        self.source = source
+        self.pending = pending
+        self.error = error
+    }
+
+    public var isLiked: Bool { reaction != nil }
 }
 
 /// A book's reaction proof at a glance: how many chapters carry a reaction of
@@ -197,18 +225,63 @@ public extension ReplicaStore {
         }
     }
 
-    /// Each checked chapter's reaction, keyed by chapter id.
+    /// Each checked chapter's reaction, keyed by chapter id, with likes
+    /// still waiting to sync applied.
     func reactions(bookID: String) throws -> [String: ChapterReaction] {
         var found: [String: ChapterReaction] = [:]
         for row in try rows("""
-            SELECT id,COALESCE(json_extract(payload,'$.reaction'),''),COALESCE(json_extract(payload,'$.checkedAt'),0)
+            SELECT id,COALESCE(json_extract(payload,'$.reaction'),''),COALESCE(json_extract(payload,'$.checkedAt'),0),
+                json_extract(payload,'$.source'),json_extract(payload,'$.pending'),json_extract(payload,'$.pushError')
             FROM replica_records WHERE collection='fic_chapter_reactions' AND deleted=0
             AND json_extract(payload,'$.ficId')=?
             """, [bookID]) {
             found[row[0]] = ChapterReaction(reaction: row[1].isEmpty ? nil : row[1],
-                                            checkedAt: Date(timeIntervalSince1970: Double(row[2]) ?? 0))
+                                            checkedAt: Date(timeIntervalSince1970: Double(row[2]) ?? 0),
+                                            source: row[3].isEmpty ? nil : row[3],
+                                            pending: row[4].isEmpty ? nil : row[4],
+                                            error: row[5].isEmpty ? nil : row[5])
+        }
+        for edit in try edits() where edit.state == "pending" && edit.operation.collection == "fic_chapter_reactions"
+            && edit.operation.data["ficId"]?.string == bookID {
+            found[edit.operation.recordId] = Self.applying(edit.operation.data, to: found[edit.operation.recordId])
         }
         return found
+    }
+
+    /// What a like the user just asked for makes of a chapter's reaction, the
+    /// same rules the server applies (`backend/fanfic/likes.py`).
+    static func applying(_ like: [String: JSONValue], to current: ChapterReaction?) -> ChapterReaction? {
+        let liked = like["liked"]?.bool ?? false
+        if like["assumed"]?.bool == true {
+            guard liked, current?.reaction == nil, current?.pending == nil else { return current }
+            return ChapterReaction(reaction: "Like", checkedAt: current?.checkedAt ?? Date(), source: "assumed")
+        }
+        return ChapterReaction(reaction: liked ? (current?.reaction ?? "Like") : nil,
+                               checkedAt: current?.checkedAt ?? Date(), source: "app",
+                               pending: liked ? "like" : "unlike")
+    }
+
+    /// Like or un-like a forum chapter. `assumed` is "opened on the site": it
+    /// shows the chapter liked and asks the server to send nothing, and is
+    /// dropped outright when the chapter already shows a reaction. A like
+    /// still waiting is replaced, so only the newest tap is ever sent.
+    func setChapterLiked(bookID: String, chapterID: String, liked: Bool, assumed: Bool = false) throws {
+        guard let epoch = try epoch else { throw ReplicaError.needsBootstrap }
+        guard ULID.isValid(bookID), ULID.isValid(chapterID) else { throw ReplicaError.invalidEdit }
+        if assumed, try reactions(bookID: bookID)[chapterID]?.reaction != nil { return }
+        let waiting = try edits().filter {
+            $0.state == "pending" && $0.operation.collection == "fic_chapter_reactions" && $0.operation.recordId == chapterID
+        }
+        let server = try record(collection: "fic_chapter_reactions", id: chapterID)
+        let base = server ?? SyncChange(revision: 0, collection: "fic_chapter_reactions", id: chapterID, deleted: false,
+                                        data: ["id": .string(chapterID), "chapterId": .string(chapterID), "ficId": .string(bookID)])
+        let operation = ReplicaOperation(epoch: epoch, record: base, action: "update",
+                                         data: ["ficId": .string(bookID), "liked": .bool(liked), "assumed": .bool(assumed)])
+        try transaction {
+            for edit in waiting { try execute("DELETE FROM replica_outbox WHERE id=?", [edit.id]) }
+            try execute("INSERT INTO replica_outbox(id,operation,original) VALUES (?,?,?)",
+                        [operation.id, try json(operation), try json(base)])
+        }
     }
 
     /// Reaction proof per book, for the library list.
