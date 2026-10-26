@@ -359,7 +359,11 @@ private struct CaptureComposer: View {
         // Read now, as tapped: the words must not wait behind rendering the notes.
         let words = text, chosen = links
         guard let notes else {
-            if model.saveEntry(words, youtubeURLs: chosen) { cleared() }
+            // Save is the button under the thumb, pressed for a plate or a
+            // receipt as often as for a thought. When the draft could be
+            // either, the server reads it and files it where it belongs.
+            let couldBeElsewhere = chosen.isEmpty && (canSaveFood || canSaveSpending)
+            if model.saveEntry(words, youtubeURLs: chosen, autoFile: couldBeElsewhere) { cleared() }
             return
         }
         saving = true

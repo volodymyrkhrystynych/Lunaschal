@@ -893,6 +893,16 @@ CREATE TABLE IF NOT EXISTS recipe_media (
 
 CREATE INDEX IF NOT EXISTS idx_recipe_media_recipe ON recipe_media(recipe_id);
 
+-- A journal entry moved into the food log or the spending ledger by
+-- auto-filing (backend/journal/refile.py), under the same id. The journal row
+-- is gone; this is what lets a replayed upload from the phone, still addressed
+-- to the journal entry, be answered rather than recreate it.
+CREATE TABLE IF NOT EXISTS journal_refiles (
+    entry_id TEXT PRIMARY KEY,
+    target_collection TEXT NOT NULL CHECK (target_collection IN ('food_entries', 'spending_logs')),
+    refiled_at INTEGER NOT NULL
+);
+
 -- Food log: what was eaten, where, whether it was good, plus photos/videos.
 -- Shown in both the Food tab and the Journal feed; stored once here.
 CREATE TABLE IF NOT EXISTS food_entries (

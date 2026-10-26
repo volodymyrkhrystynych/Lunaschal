@@ -168,6 +168,7 @@ def init_db() -> None:
     _ensure_journal_raw_content(db)
     _ensure_journal_context_prompts(db)
     _ensure_journal_idea_id(db)
+    _ensure_journal_auto_file(db)
     _ensure_journal_screenshot_event_threshold(db)
     _ensure_journal_attachment_youtube(db)
     _migrate_flashcards_to_learning(db)
@@ -2257,6 +2258,17 @@ def _ensure_journal_raw_content(db: sqlite3.Connection) -> None:
     if 'raw_content' not in cols:
         db.execute('ALTER TABLE journal_entries ADD COLUMN raw_content TEXT')
         db.commit()
+
+
+def _ensure_journal_auto_file(db: sqlite3.Connection) -> None:
+    """Whether the phone saved this entry with the Capture tab's Save button
+    while it could also have been a meal or a purchase. Such an entry is read
+    once its attachments settle and may be moved into the food log or the
+    spending ledger (backend/journal/refile.py); 0 for everything else."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
+    if 'auto_file' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN auto_file INTEGER NOT NULL DEFAULT 0')
+    db.commit()
 
 
 def _ensure_journal_idea_id(db: sqlite3.Connection) -> None:

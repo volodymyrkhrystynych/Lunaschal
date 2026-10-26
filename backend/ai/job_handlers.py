@@ -32,6 +32,12 @@ def _journal_metadata(target_id, payload):
     _generate_metadata_bg(target_id, payload['content'], now=True)
 
 
+@jobs.handler('journal.autofile')
+def _journal_autofile(target_id, payload):
+    from backend.routes.journal import autofile_entry
+    autofile_entry(target_id)
+
+
 @jobs.handler('journal.transcribe_attachment')
 def _journal_transcribe(target_id, payload):
     from backend.routes.journal import _transcribe_attachment_bg
