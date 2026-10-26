@@ -897,6 +897,14 @@ extension JournalAPI {
         return destination
     }
 
+    /// Asks the server to fetch one issue from PressReader. It only queues the
+    /// download; the issue appears in `newspaperIssues()` once it has landed.
+    public func downloadIssue(date: String) async throws {
+        guard NewspaperIssue.isDate(date) else { throw NotebookError.invalidIssue }
+        let (data, response) = try await session.data(for: request("api/newspapers/issues/\(date)/download", method: "POST"))
+        try check(data, response)
+    }
+
     /// Tells the server the issue is being read, which moves its Journal card
     /// the same way opening it in the web reader does.
     public func markIssueOpened(date: String) async throws {

@@ -1,6 +1,8 @@
 """The app-wide day boundary: every "day" concept in Lunaschal runs 04:00 ->
-04:00 local time, except newspapers (an edition's date comes from the source
-site, not the user's day). A task completed, a workout logged, or a message
+04:00 local time. Newspapers follow it for "today's paper" (from midnight to
+04:00 it is still the previous date's, see `backend/newspapers/scheduler.py`),
+but file an archived issue under its edition date, which comes from the source
+site rather than the user's day. A task completed, a workout logged, or a message
 sent at 02:00 still belongs to the day that started the previous morning.
 """
 import time

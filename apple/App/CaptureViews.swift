@@ -103,7 +103,6 @@ private struct CaptureTab: View {
     @ObservedObject var model: CaptureModel
     @State private var page = Page.entry
     @State private var notebook: Notebook?
-    @State private var olderIssue: NewspaperIssue?
     @State private var fetchingPaper = false
 
     var body: some View {
@@ -149,11 +148,6 @@ private struct CaptureTab: View {
         .navigationDestination(item: $notebook) { NotebookEditor(owner: model, notebook: $0) }
         // Back from a notebook: the composer's notes row shows what was drawn.
         .onChange(of: notebook) { _, shown in if shown == nil { model.reloadCaptures() } }
-        .confirmationDialog("Today's paper isn't archived yet.", isPresented: Binding(get: { olderIssue != nil }, set: { if !$0 { olderIssue = nil } }),
-                            titleVisibility: .visible, presenting: olderIssue) { issue in
-            Button("Open \(issue.date)") { Task { await open(issue) } }
-            Button("Cancel", role: .cancel) {}
-        }
     }
 
     /// The entry draft's own notes, so Back and Notes again find them as left.
@@ -161,15 +155,17 @@ private struct CaptureTab: View {
         notebook = model.openDraftNotes()
     }
 
-    /// Today's paper by the 4am day; the newest one is offered if today's isn't in.
+    /// Today's paper by the 4am day, downloaded first if it isn't archived
+    /// yet. Before 4am the day is yesterday's, and a missing paper stays missing.
     private func openNewspaper() async {
         fetchingPaper = true
         defer { fetchingPaper = false }
         switch NewspaperIssue.choose(await model.newspaperIssues()) {
         case .today(let issue): await open(issue)
-        case .newest(let issue): olderIssue = issue
-        case .none: model.message = model.signedIn ? NotebookError.noIssue.localizedDescription
-            : "Sign in to your server to open the newspaper."
+        case .download(let date):
+            if let issue = await model.downloadNewspaper(date: date) { await open(issue) }
+        case .missing(let date):
+            model.message = "Today's paper (\(date)) doesn't exist. Downloads open at 4 am."
         }
     }
 

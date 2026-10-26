@@ -1,7 +1,12 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
-import { shiftDateISO, isFutureDate, todayISO } from '../lib/newspapers';
+import {
+  shiftDateISO,
+  isFutureDate,
+  paperDay,
+  downloadWindowOpen,
+} from '../lib/newspapers';
 import { ImageLightbox } from './ImageLightbox';
 const NewspaperReader = lazy(() =>
   import('./NewspaperReader').then(module => ({
@@ -20,7 +25,10 @@ function formatDisplayDate(date: string) {
 }
 
 export function Newspapers() {
-  const today = todayISO();
+  // Today's paper is the 4am day's; from midnight to 4am that is still the
+  // previous date, and today's download (and front-page sync) waits for 4am.
+  const today = paperDay();
+  const windowOpen = downloadWindowOpen();
   const [selectedDate, setSelectedDate] = useState(today);
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(
     null
@@ -48,6 +56,7 @@ export function Newspapers() {
   const queueDownload = download.mutate;
   useEffect(() => {
     if (
+      !windowOpen ||
       !subscriber.data?.sessionSaved ||
       !archive.data ||
       requestedToday.current === today
@@ -62,7 +71,7 @@ export function Newspapers() {
     ) {
       queueDownload(today);
     }
-  }, [subscriber.data, archive.data, today, queueDownload]);
+  }, [subscriber.data, archive.data, today, windowOpen, queueDownload]);
   useEffect(() => {
     if (job?.status === 'complete')
       void queryClient.invalidateQueries({ queryKey: ['newspaper-issues'] });
@@ -80,9 +89,10 @@ export function Newspapers() {
   });
 
   // Fires once when the tab is opened, and only for today — this is the
-  // "daily download" trigger. Browsing to a past date never re-syncs.
+  // "daily download" trigger. Browsing to a past date never re-syncs, and
+  // before 4am the site may already serve the next date's edition.
   useEffect(() => {
-    if (selectedDate === today) sync.mutate();
+    if (selectedDate === today && windowOpen) sync.mutate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -93,6 +103,7 @@ export function Newspapers() {
           className="p-2 border border-white/20 rounded disabled:opacity-50"
           disabled={
             !!issue ||
+            (selectedDate === today && !windowOpen) ||
             downloading ||
             download.isPending ||
             !subscriber.data?.sessionSaved
@@ -101,6 +112,9 @@ export function Newspapers() {
         >
           {downloading ? 'Downloading issue…' : 'Download Toronto Star issue'}
         </button>
+        {selectedDate === today && !windowOpen && !issue && (
+          <span>Today’s download opens at 4 am.</span>
+        )}
         {job?.error && !issue && <span role="status">{job.error}</span>}
         {(download.error || subscriber.error) && (
           <span role="alert">
