@@ -71,8 +71,8 @@ DECISION_NOTE = """Right now your only job is to decide which of your tools this
 message needs, if any — your reply comes afterwards, in a separate turn.
 
 Use the propose_ tools to record something the user asked you to record, and \
-fill in every detail they actually gave: the deadline, the time, how important \
-it is. Do not drop a detail because it was not the main point of the sentence.
+fill in every detail they actually gave: the deadline, the time, how long it \
+took, how important it is. Do not drop a detail because it was not the main point of the sentence.
 
 Act on the latest user message only. Earlier messages are context, not new \
 requests to execute again. Use add_todos only for newly requested items. \
