@@ -11,7 +11,13 @@ struct CaptureRoot: View {
     @StateObject private var todo: TodoModel
     @StateObject private var learning: LearningModel
     @StateObject private var context: JournalContextModel
+    @ObservedObject private var quickPhoto = QuickPhoto.shared
     @Environment(\.scenePhase) private var scenePhase
+    @State private var tab = Tab.capture
+    @State private var capturePage = CaptureTab.Page.entry
+    @State private var showQuickCamera = false
+
+    enum Tab: Hashable { case capture, journal, chat, todo, more, study, draw, library, jobs, writing, learning, settings }
     @Environment(\.horizontalSizeClass) private var widthClass
 
     /// Every destination gets a tab of its own only on an iPad window wide
@@ -33,44 +39,58 @@ struct CaptureRoot: View {
     }
 
     var body: some View {
-        TabView {
-            NavigationStack { CaptureTab(model: model) }
-                .tabItem { Label("Capture", systemImage: "square.and.pencil") }
+        TabView(selection: $tab) {
+            NavigationStack { CaptureTab(model: model, page: $capturePage) }
+                .tabItem { Label("Capture", systemImage: "square.and.pencil") }.tag(Tab.capture)
             NavigationStack { JournalTab(model: model, context: context, chat: chat) }
-                .tabItem { Label("Journal", systemImage: "book.closed") }
+                .tabItem { Label("Journal", systemImage: "book.closed") }.tag(Tab.journal)
             NavigationStack { ChatView(chat: chat, capture: model) }
-                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }.tag(Tab.chat)
             NavigationStack { TodoView(todo: todo) }
-                .tabItem { Label("Todo", systemImage: "checklist") }
+                .tabItem { Label("Todo", systemImage: "checklist") }.tag(Tab.todo)
                 // Red, like a notification: to-dos due today or overdue.
                 .badge(todo.dueCount)
             if everyDestinationIsATab {
                 NavigationStack { StudyLibraryView(model: model) }
-                    .tabItem { Label("Study", systemImage: "doc.text") }
+                    .tabItem { Label("Study", systemImage: "doc.text") }.tag(Tab.study)
                 NavigationStack { DrawingLibraryView(model: model) }
-                    .tabItem { Label("Draw", systemImage: "pencil.tip") }
+                    .tabItem { Label("Draw", systemImage: "pencil.tip") }.tag(Tab.draw)
                 NavigationStack { LibraryView(model: model) }
-                    .tabItem { Label("Library", systemImage: "books.vertical") }
+                    .tabItem { Label("Library", systemImage: "books.vertical") }.tag(Tab.library)
                 NavigationStack { JobsFeedView(capture: model) }
-                    .tabItem { Label("Jobs", systemImage: "briefcase") }
+                    .tabItem { Label("Jobs", systemImage: "briefcase") }.tag(Tab.jobs)
                 NavigationStack { WritingRootView(capture: model) }
-                    .tabItem { Label("Writing", systemImage: "text.book.closed") }
+                    .tabItem { Label("Writing", systemImage: "text.book.closed") }.tag(Tab.writing)
                 NavigationStack { LearningView(learning: learning) }
-                    .tabItem { Label("Learning", systemImage: "graduationcap") }
+                    .tabItem { Label("Learning", systemImage: "graduationcap") }.tag(Tab.learning)
                     .badge(learning.stats.due)
                 NavigationStack { ConnectionSettings(model: model) }
-                    .tabItem { Label("Settings", systemImage: "gear") }
+                    .tabItem { Label("Settings", systemImage: "gear") }.tag(Tab.settings)
             } else {
                 NavigationStack {
                     MoreMenu(model: model, learning: learning,
                              showsStudyAndDraw: UIDevice.current.userInterfaceIdiom == .pad)
                 }
-                    .tabItem { Label("More", systemImage: "line.3.horizontal") }
+                    .tabItem { Label("More", systemImage: "line.3.horizontal") }.tag(Tab.more)
             }
         }
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
+        // The Action Button's Take Photo: the camera over everything, the
+        // photo into the composer's draft, and the composer under it to land
+        // on. Presented here rather than from the composer, because a hidden
+        // KeptPage is out of the window and can't present anything.
+        .onReceive(quickPhoto.$requested) { requested in
+            guard requested else { return }
+            quickPhoto.requested = false
+            tab = .capture
+            capturePage = .entry
+            if UIImagePickerController.isSourceTypeAvailable(.camera) { showQuickCamera = true }
+        }
+        .fullScreenCover(isPresented: $showQuickCamera) {
+            CameraPicker { model.stageCameraPhoto($0) }.ignoresSafeArea()
+        }
         // The Todo badge stays current, but neither list is fetched again for a
         // pass that didn't touch it.
         .onChange(of: model.syncChanges) { _, changes in
@@ -101,7 +121,7 @@ private struct CaptureTab: View {
     }
 
     @ObservedObject var model: CaptureModel
-    @State private var page = Page.entry
+    @Binding var page: Page
     @State private var notebook: Notebook?
     @State private var olderIssue: NewspaperIssue?
     @State private var fetchingPaper = false
@@ -453,8 +473,7 @@ struct AttachmentButtons: View {
         }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { image in
-                guard let data = image.jpegData(compressionQuality: 0.9) else { return }
-                model.stage { try $0.stageFile(data: data, name: photoName("jpg"), contentType: "image/jpeg", into: entryID, capturedAt: Date()) }
+                model.stageCameraPhoto(image, into: entryID)
                 onUse()
             }.ignoresSafeArea()
         }
@@ -480,14 +499,10 @@ struct AttachmentButtons: View {
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else { return }
             let type = item.supportedContentTypes.first { $0.conforms(to: .image) }
-            model.stage { try $0.stageFile(data: data, name: photoName(type?.preferredFilenameExtension ?? "jpg"),
+            model.stage { try $0.stageFile(data: data, name: CaptureModel.photoName(type?.preferredFilenameExtension ?? "jpg"),
                                            contentType: type?.preferredMIMEType, into: entryID) }
             onUse()
         } catch { model.message = error.localizedDescription }
-    }
-
-    private func photoName(_ ext: String) -> String {
-        "Photo \(Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))).\(ext)"
     }
 }
 

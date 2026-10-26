@@ -1094,6 +1094,18 @@ final class CaptureModel: ObservableObject {
         reloadCaptures()
     }
 
+    /// A photo just taken with the camera, into the composer's draft (`entryID`
+    /// nil) or an edited entry's. Shared by the camera button and the Action Button.
+    func stageCameraPhoto(_ image: UIImage, into entryID: String? = nil) {
+        guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+        stage { try $0.stageFile(data: data, name: Self.photoName("jpg"), contentType: "image/jpeg",
+                                 into: entryID, capturedAt: Date()) }
+    }
+
+    static func photoName(_ ext: String) -> String {
+        "Photo \(Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))).\(ext)"
+    }
+
     func discard(_ file: CaptureFile) {
         do { try store.discardStaged(file) } catch { message = error.localizedDescription }
         reloadCaptures()

@@ -70,10 +70,9 @@ targets:
         NSHealthUpdateUsageDescription: Lunaschal doesn't write to Health; it only copies your Health data to your own Lunaschal server.
         UIBackgroundModes: [audio, processing, location]
         BGTaskSchedulerPermittedIdentifiers: [com.lunaschal.mobile.sync]
+        # The phone is portrait only; the iPad turns every way (the key below).
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown

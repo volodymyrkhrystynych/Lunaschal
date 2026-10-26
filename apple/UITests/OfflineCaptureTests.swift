@@ -251,6 +251,19 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
     }
 
+    func testThePhoneStaysPortraitWhenTurned() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone)
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(tab(app, "Capture").waitForExistence(timeout: 10))
+        XCUIDevice.shared.orientation = .landscapeLeft
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        sleep(1)
+        let window = app.windows.firstMatch.frame
+        XCTAssertGreaterThan(window.height, window.width, "the iPhone app does not rotate: \(window)")
+        XCTAssertTrue(tab(app, "Capture").isHittable)
+    }
+
     func testIPadDestinationsOpenWithoutAnAppMoreMenu() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad)
         let app = XCUIApplication()
