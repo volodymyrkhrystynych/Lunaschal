@@ -116,6 +116,20 @@ public enum RegionPlan {
     /// Below this iOS cannot reliably tell inside from outside; a smaller
     /// saved radius is widened for the geofence only.
     public static let minRadius: Double = 100
+    /// The `CLMonitor` the Home and Work geofences live in, reopened by name on
+    /// every launch. It must pass `isValidMonitorName`: CoreLocation asserts on
+    /// anything else, and "lunaschal-places" crashed every launch that had
+    /// Always permission, background relaunches included.
+    public static let monitorName = "lunaschalPlaces"
+
+    /// CoreLocation's rule for a monitor name ("Monitor Name contains
+    /// non-alphanumeric character" / "cannot begin with _"), checked here
+    /// because breaking it is an NSAssertion in `CLMonitor.init`, not an error.
+    public static func isValidMonitorName(_ name: String) -> Bool {
+        !name.isEmpty && name.unicodeScalars.allSatisfy {
+            $0.isASCII && CharacterSet.alphanumerics.contains($0)
+        }
+    }
 
     /// The current Home and every current Work.
     public static func regions(_ snapshot: PlacesSnapshot, today: String) -> [MonitoredRegion] {

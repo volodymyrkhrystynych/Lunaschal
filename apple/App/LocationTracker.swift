@@ -54,7 +54,6 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     private var ledger: RegionLedger
     private var regionsURL: URL { outbox.root.appendingPathComponent("regions.json") }
     private var ledgerURL: URL { outbox.root.appendingPathComponent("region-ledger.json") }
-    private static let monitorName = "lunaschal-places"
 
     init(outbox: TrailOutbox) {
         self.outbox = outbox
@@ -156,7 +155,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     private func startPlaceMonitor() {
         guard placeEvents == nil else { return }
         placeEvents = Task { [weak self] in
-            let monitor = await CLMonitor(Self.monitorName)
+            let monitor = await CLMonitor(RegionPlan.monitorName)
             guard let self else { return }
             placeMonitor = monitor
             await Self.apply(regions, to: monitor)
