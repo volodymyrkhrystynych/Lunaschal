@@ -375,7 +375,8 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
                        'draft_flashcard', 'propose_flashcards',
                        'create_note_to_self', 'ask_user', 'remember',
                        'search_conversations', 'search_journal', 'read_day',
-                       'wiki_read', 'wiki_search'}
+                       'wiki_read', 'wiki_search', 'create_goal', 'list_goals',
+                       'check_goal', 'update_goal'}
 
 
 def test_the_research_toolset_is_research_and_nothing_else(monkeypatch, answered):

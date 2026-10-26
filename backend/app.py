@@ -95,6 +95,8 @@ def create_app():
     from backend.routes import auth as auth_routes
     from backend.routes import mobile_sync
     app.register_blueprint(mobile_sync.bp)
+    from backend.routes import goals
+    app.register_blueprint(goals.bp)
     for bp in (auth_routes.bp, journal.bp, calendar.bp, learning.bp, settings.bp, chat.bp, files.bp, writing.bp, stt.bp, tasks.bp, curated_tags.bp, shortcuts.bp, transcriptions.bp, cookbook.bp, food.bp, spending.bp, fanfic.bp, newspapers.bp, meetings.bp, notebook.files_bp, notebook.bp, paper.bp, lifestyle.bp, ideas.bp, practice.bp, memory.bp, email.bp, notes.bp, weather.bp, jobs.bp, backup.bp, logs.bp, repos.bp, life_wiki.bp, piano.bp, torrent.bp, knowledge.bp, study.bp, apple_health.bp, location.bp):
         app.register_blueprint(bp)
 
@@ -181,4 +183,6 @@ def create_app():
         # no model, woken by each save (backend/weather/entry.py).
         from backend.weather.entry import start_entry_weather_scheduler
         start_entry_weather_scheduler()
+        from backend.goals.scheduler import start_scheduler as start_goal_scheduler
+        start_goal_scheduler()
     return app

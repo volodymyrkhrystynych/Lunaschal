@@ -13,6 +13,7 @@ _DB_PATH = os.environ.get('DATABASE_URL', './data/lunaschal.db')
 _conn: sqlite3.Connection | None = None
 
 TIMESTAMP_COLS = frozenset({
+    'earned_at', 'redeemed_at', 'checked_at',
     'created_at', 'updated_at', 'next_review', 'completed_at',
     'posted_at', 'last_checked_at', 'last_opened_at', 'edited_at', 'started_at', 'ended_at', 'due',
     'source_favorited_at', 'source_followed_at',
