@@ -22,6 +22,7 @@ from backend.ai import jobs
 from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
 from backend.journal import archive, context_prompts, playable, storage, voice_drafts, youtube_import
 from backend.journal import location as entry_location
+from backend.journal import refile
 from backend.learning.review_cards import carry_review_card, ensure_review_card
 from backend.study import youtube
 from backend.tags import tags_json
@@ -270,6 +271,7 @@ def create_journal_entry(
     polish: bool = False,
     pending_attachments: int = 0,
     coords: tuple[float, float] | None = None,
+    auto_file: bool = False,
 ) -> str | None:
     """Inserts a journal entry and kicks off background metadata generation
     (and, if `polish` and `raw_content` is set, background polish — the STT
@@ -287,6 +289,11 @@ def create_journal_entry(
     photo on it that carries no GPS EXIF of its own — which is every picture
     taken through the camera rather than picked from the library.
 
+    `auto_file` is the phone's Capture tab saying this could also have been a
+    meal or a purchase: once its attachments settle it is read, and it may be
+    moved out of the journal (see `autofile_entry`). An id that was already moved
+    is a replay of that capture's create, and must not bring the entry back.
+
     A composer mints its entry id at the first recorded chunk, so a clip can
     reach `create_recording_entry` *before* this does — the boot sweep after a
     crash sends only the clip, and an offline queue can replay in either order.
@@ -297,13 +304,16 @@ def create_journal_entry(
     """
     id = entry_id or str(ULID())
     db = get_db()
+    if entry_id and refile.refiled_to(db, entry_id):
+        return None
     latitude, longitude = coords if coords else (None, None)
     source = 'device' if coords else None
     cur = db.execute(
         'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags,'
-        ' latitude, longitude, location_source, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+        ' latitude, longitude, location_source, auto_file, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         (id, content, raw_content, title, tags_json(tags),
-         latitude, longitude, source, created_at, created_at),
+         latitude, longitude, source, int(auto_file), created_at, created_at),
     )
     # With no fix of its own, where the phone's trail was at that moment.
     if cur.rowcount and not coords:
@@ -320,9 +330,10 @@ def create_journal_entry(
         adopted = db.execute(
             "UPDATE journal_entries SET content=?, raw_content=?, updated_at=?,"
             " latitude=COALESCE(?, latitude), longitude=COALESCE(?, longitude),"
-            " location_source=COALESCE(?, location_source)"
+            " location_source=COALESCE(?, location_source), auto_file=?"
             " WHERE id=? AND content='' AND COALESCE(raw_content, '')=''",
-            (content, raw_content, created_at, latitude, longitude, source, id),
+            (content, raw_content, created_at, latitude, longitude, source,
+             int(auto_file), id),
         )
         if adopted.rowcount and not coords:
             entry_location.fill(db, id)
@@ -336,16 +347,24 @@ def create_journal_entry(
         entry_weather.nudge()
         if polish and raw_content:
             _polish_bg(id, raw_content)
-        if not title or not tags:
-            _generate_metadata_bg(id, content, expect_attachments=pending_attachments)
+        _after_create(id, content, title, tags, pending_attachments, auto_file)
         return id
     _notify_subscribers(id)
     entry_weather.nudge()
     if polish and raw_content:
         _polish_bg(id, raw_content)
-    if not title or not tags:
-        _generate_metadata_bg(id, content, expect_attachments=pending_attachments)
+    _after_create(id, content, title, tags, pending_attachments, auto_file)
     return id
+
+
+def _after_create(id: str, content: str, title, tags, pending_attachments: int,
+                  auto_file: bool) -> None:
+    """Title the entry — or, for a capture that may not be a journal entry at
+    all, decide that first."""
+    if title and tags:
+        return
+    _generate_metadata_bg(id, content, expect_attachments=pending_attachments,
+                          auto_file=auto_file)
 
 
 def _queue_todays_newspaper() -> None:
@@ -420,6 +439,8 @@ def create_entry():
         # device answered. `coord_pair` drops a half-sent pair rather than
         # storing a row that looks located and isn't.
         coords=coord_pair(body.get('latitude'), body.get('longitude')),
+        # The phone's body is all strings; only its Capture tab sends this.
+        auto_file=body.get('autoFile') in (True, '1', 'true'),
     )
     # A JSON true from the web, the string 'true' from the iPad, whose body is
     # all strings.
@@ -1027,6 +1048,9 @@ def upload_attachment(id):
             db.commit()
             return jsonify(_attachment_dict(existing)), 201
 
+    if refile.refiled_to(get_db(), id):
+        return _forward_upload(id, attachment_id, lambda: {'id': attachment_id, 'entryId': id})
+
     entry = get_db().execute(
         'SELECT id FROM journal_entries WHERE id=?', (id,)
     ).fetchone()
@@ -1047,6 +1071,30 @@ def upload_attachment(id):
     _close_screenshot_session(db, id)
     db.commit()
     return jsonify(attachment), 201
+
+
+def _forward_upload(entry_id: str, attachment_id: str | None, ack, *, audio: bool = False):
+    """An upload for a journal entry that auto-filing has moved to the food
+    log or the spending ledger. The phone sent it to the journal id because
+    that is what it saved; it is answered the way the journal route would, so
+    the capture is not failed for something the server did.
+
+    `ack` builds the response body once `attachment_id` is settled — the replay
+    of a part that was moved with the entry, or a part arriving late, which is
+    stored on the entry where it now is."""
+    db = get_db()
+    if attachment_id and refile.forwarded_media(db, entry_id, attachment_id):
+        return jsonify(ack()), 201
+    file = request.files.get('file')
+    if file is None:
+        return jsonify({'error': 'file is required'}), 400
+    if attachment_id is None:
+        return jsonify({'error': 'This entry was filed elsewhere; send the attachment id'}), 409
+    kind = 'audio' if audio and (file.mimetype or '').startswith('audio/') else None
+    if not refile.store_forwarded(db, entry_id, file, attachment_id, kind=kind):
+        return jsonify({'error': 'This entry was filed as a meal or a purchase,'
+                                 ' which cannot hold this file'}), 409
+    return jsonify(ack()), 201
 
 
 def _capture_local_parts(attachment) -> tuple[str, str]:
@@ -1370,6 +1418,14 @@ def create_recording_entry():
             return jsonify(
                 {'id': existing['entry_id'], 'attachment': _attachment_dict(existing)}
             ), 201
+
+    if entry_id and refile.refiled_to(db, entry_id):
+        # Before the INSERT OR IGNORE below, which would otherwise bring the
+        # moved entry back as an empty journal entry holding this clip.
+        return _forward_upload(
+            entry_id, attachment_id,
+            lambda: {'id': entry_id, 'attachment': {'id': attachment_id}}, audio=True,
+        )
 
     file = request.files.get('file')
     if file is None:
@@ -2345,6 +2401,46 @@ def _attachments_settled(entry_id: str, expected: int) -> bool:
     return True
 
 
+def _descriptions_settled(entry_id: str) -> bool:
+    """No clip on the entry is still being listened to.
+
+    The title does not wait for this (see `_attachments_settled`); auto-filing
+    does, because for a clip recorded without transcription the description is
+    the only account the classifier gets of what was said over the plate.
+    """
+    return get_db().execute(
+        "SELECT 1 FROM journal_attachments WHERE entry_id=? AND description_status='running'"
+        ' LIMIT 1', (entry_id,),
+    ).fetchone() is None
+
+
+def autofile_entry(entry_id: str) -> None:
+    """The `journal.autofile` job: read a settled phone capture and move it to
+    the food log or the spending ledger when that is what it is; otherwise
+    title it as the journal entry it stays.
+
+    A paused or preempted classification propagates, leaving the job pending
+    and the entry untitled until it can run. Anything else lands in the journal.
+    """
+    from backend.ai.autofile import classify_capture
+
+    db = get_db()
+    targets = refile.moveable_to(db, entry_id)
+    if targets:
+        has_video = db.execute(
+            "SELECT 1 FROM journal_attachments WHERE entry_id=? AND kind='video' LIMIT 1",
+            (entry_id,),
+        ).fetchone() is not None
+        readings = (_metadata_context(entry_id) or '').splitlines()
+        kind = classify_capture(_entry_raw_text(entry_id) or '', readings, has_video=has_video)
+        if kind in targets and refile.refile_entry(db, entry_id, kind):
+            return
+    row = db.execute('SELECT content, title, tags FROM journal_entries WHERE id=?',
+                     (entry_id,)).fetchone()
+    if row and (not row['title'] or not row['tags']):
+        jobs.enqueue('journal.metadata', entry_id, {'content': row['content']})
+
+
 def _entry_has_video(entry_id: str) -> bool:
     """Whether the entry has a watched video on it, and so gets the long cap.
 
@@ -2361,7 +2457,7 @@ def _entry_has_video(entry_id: str) -> bool:
 
 def _generate_metadata_bg(
     journal_id: str, content: str, *, expect_attachments: int = 0,
-    now: bool = False,
+    now: bool = False, auto_file: bool = False,
 ) -> None:
     def _run():
         try:
@@ -2395,8 +2491,11 @@ def _generate_metadata_bg(
     if now:
         _run()
         return
+    # A capture that may be a meal or a purchase is sorted before it is titled:
+    # titling one that then leaves the journal is a model call for nothing.
+    settled_kind = 'journal.autofile' if auto_file else 'journal.metadata'
     if expect_attachments <= 0:
-        jobs.enqueue('journal.metadata', journal_id, {'content': content})
+        jobs.enqueue(settled_kind, journal_id, {'content': content})
         return
 
     stop = threading.Event()
@@ -2405,9 +2504,13 @@ def _generate_metadata_bg(
         try:
             started = time.monotonic()
             deadline = started + _METADATA_WAIT_SECONDS
+            settled = False
             while time.monotonic() < deadline:
                 try:
-                    if _attachments_settled(journal_id, expect_attachments):
+                    if _attachments_settled(journal_id, expect_attachments) and (
+                        not auto_file or _descriptions_settled(journal_id)
+                    ):
+                        settled = True
                         break
                     if _entry_has_video(journal_id):
                         deadline = started + _METADATA_VIDEO_WAIT_SECONDS
@@ -2422,7 +2525,10 @@ def _generate_metadata_bg(
                     return
             if stop.is_set():
                 return
-            jobs.enqueue('journal.metadata', journal_id, {'content': content})
+            # Out of time is not settled: sorting a capture whose photo never
+            # arrived would move half of it, so it stays in the journal.
+            jobs.enqueue(settled_kind if settled else 'journal.metadata',
+                         journal_id, {'content': content})
         finally:
             with _metadata_waiters_lock:
                 _metadata_waiters.pop(waiter, None)

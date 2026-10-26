@@ -137,6 +137,8 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         if !capture.replaces.isEmpty { body["replaces"] = capture.replaces.joined(separator: ",") }
         // Saved For review: the server makes the entry's pages a learning card.
         if capture.forReview { body["forReview"] = "true" }
+        // The server may file it as a meal or a purchase once it has read it.
+        if capture.autoFile { body["autoFile"] = "1" }
         return body
     }
 

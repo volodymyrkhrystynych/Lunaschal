@@ -629,6 +629,12 @@ def seed_food(db, recipe_id):
         ('Ordered the pad tie again.', 'Ordered the pad thai again.',
          'Ordered the pad thai again.', entry_ids[-1]),
     )
+    # Saved with the Capture tab's Save button and auto-filed as a meal: the
+    # journal row is gone, this is what still answers the phone's replays.
+    db.execute(
+        "INSERT INTO journal_refiles (entry_id, target_collection, refiled_at) VALUES (?, 'food_entries', ?)",
+        (entry_ids[-1], ts(3)),
+    )
 
     # A meal that was talked over as well as photographed. 'done', never
     # 'running': an in-flight state is rewritten by init_db()'s orphan reset on

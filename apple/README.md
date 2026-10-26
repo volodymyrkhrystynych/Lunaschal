@@ -145,6 +145,16 @@ what each device can currently do and which work remains device-only.
   refused (the server keeps photos and voice only). Composer layout and an offline
   purchase reaching the feed passed in the iPhone simulator; camera capture of a real
   receipt and the server's reading of it have not been verified on device.
+  **Save, the rightmost button, may file the draft as a meal or a purchase.**
+  It is pressed for everything out of habit, so a draft that Food or Spent could
+  also take (no links, no notes, no non-media files) is sent with `autoFile`.
+  Once its photos are captioned and its clips transcribed, the server classifies
+  it, and if it is clearly a meal or a purchase moves it there under the same id
+  (`backend/journal/refile.py`); anything uncertain stays in the journal. Replayed
+  uploads after the move are still acknowledged, and Transfers does not report
+  the moved entry as removed. The flag, the request body and the tidy rule pass
+  the portable Swift tests, and the composer passed in the iPhone simulator; the
+  server's sorting of a real photo has not been verified on device.
 - **Workout** (the third Capture page) is the desktop's workout log: one set or
   activity per line ("bicep curls 20, 10" in lb, "squats 10" bodyweight, bare
   "20, 10" for the selected pill, "walking 30" minutes), recent-exercise pills,
