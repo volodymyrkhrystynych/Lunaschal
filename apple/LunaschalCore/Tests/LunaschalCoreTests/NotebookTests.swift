@@ -243,9 +243,12 @@ final class NotebookTests: XCTestCase {
         XCTAssertEqual(NewspaperIssue.choose(issues, now: at(5, 20), calendar: calendar), .today(issues[1]))
         // 01:30 on the 6th is still the 5th's day.
         XCTAssertEqual(NewspaperIssue.choose(issues, now: at(6, 1), calendar: calendar), .today(issues[1]))
-        // The 6th's paper isn't in; the newest not in the future is offered.
-        XCTAssertEqual(NewspaperIssue.choose(issues, now: at(6, 9), calendar: calendar), .newest(issues[1]))
-        XCTAssertEqual(NewspaperIssue.choose([], now: at(6, 9), calendar: calendar), .none)
+        // The 6th's paper isn't in, and it is past 4am: it is downloaded.
+        XCTAssertEqual(NewspaperIssue.choose(issues, now: at(6, 9), calendar: calendar), .download("2026-10-06"))
+        XCTAssertEqual(NewspaperIssue.choose(issues, now: at(6, 4), calendar: calendar), .download("2026-10-06"))
+        // 01:00 on the 7th is the 6th's day, still missing, and too early to fetch the 7th.
+        XCTAssertEqual(NewspaperIssue.choose(issues, now: at(7, 1), calendar: calendar), .missing("2026-10-06"))
+        XCTAssertEqual(NewspaperIssue.choose([], now: at(6, 3), calendar: calendar), .missing("2026-10-05"))
     }
 
     func testIssueFromReplicaRecord() {

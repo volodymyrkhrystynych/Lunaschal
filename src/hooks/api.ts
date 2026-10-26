@@ -3292,7 +3292,36 @@ export interface DistanceAnchor {
   longitude: number;
 }
 
+export interface Goal {
+  id: string;
+  title: string;
+  criteria: string;
+  reward: string;
+  startDate: string;
+  targetDays: number;
+  status: 'active' | 'earned' | 'redeemed' | 'cancelled' | 'needs_review';
+  earnedAt: string | null;
+  redeemedAt: string | null;
+  lastCheckedAt: string | null;
+  currentStreak: number;
+  bestStreak: number;
+  needsReview: boolean;
+  days: {
+    date: string;
+    verdict: 'met' | 'not_met' | 'uncertain';
+    evidence: { kind: 'journal' | 'workout'; id: string; text: string }[];
+    error: string | null;
+  }[];
+}
+
 export const api = {
+  goals: {
+    list: () => get<Goal[]>('/api/goals'),
+    check: (id: string) =>
+      post<Goal>(`/api/goals/${encodeURIComponent(id)}/check`, {}),
+    update: (id: string, action: 'cancel' | 'redeem') =>
+      post<Goal>(`/api/goals/${encodeURIComponent(id)}/${action}`, {}),
+  },
   auth: {
     status: () => get<AuthStatus>('/api/auth/status'),
     login: (password: string, code: string) =>
@@ -3503,6 +3532,8 @@ export const api = {
       opts: {
         id?: string;
         attachmentId?: string;
+        capturedAt?: string;
+        durationSeconds?: number;
         name?: string;
         transcribe?: boolean;
         /** Also open an idea for this clip — the Ideas tab's Record button. */
@@ -3525,6 +3556,9 @@ export const api = {
       if (opts.name?.trim()) form.append('name', opts.name.trim());
       if (opts.id) form.append('id', opts.id);
       if (opts.attachmentId) form.append('attachmentId', opts.attachmentId);
+      if (opts.capturedAt) form.append('capturedAt', opts.capturedAt);
+      if (opts.durationSeconds != null)
+        form.append('durationSeconds', String(opts.durationSeconds));
       if (opts.transcribe) form.append('transcribe', 'true');
       if (opts.ideaId) form.append('ideaId', opts.ideaId);
       if (opts.repoId) form.append('repoId', opts.repoId);

@@ -1,5 +1,11 @@
 # Lifestyle (`backend/routes/lifestyle.py`, `backend/lifestyle/`, `src/components/Lifestyle/`)
 
+Goals & Rewards sits below the workout log. Goals are created through Chat;
+the card can check them immediately, open cited journal entries, and mark a
+prize redeemed. The backend evaluator also runs every minute and counts the
+current day as soon as its criterion is met. Rules and correction behavior:
+[`docs/goals-and-rewards.md`](../../docs/goals-and-rewards.md).
+
 Workouts, activity heatmap, tasks, the weekly trends chart, progression charts, daily selfie, calories — one scrollable column. Design record and the decisions the build settled: [docs/lifestyle-tab.md](../../docs/lifestyle-tab.md). Things to know before touching it:
 
 - **The tab absorbed the Tasks view, and DOM order is the phone's stacking order.** `Lifestyle.tsx` orders the column by how often a thing is touched, not by topic: activity + momentum, tasks, workout log, calories | selfie, weight progression. Tasks (`src/components/Tasks/`, daily tasks + to-dos through `/api/tasks`) keeps shortcut scopes 1 and 2; nothing else in the Lifestyle tree registers one.

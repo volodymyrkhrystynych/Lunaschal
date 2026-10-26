@@ -145,6 +145,16 @@ what each device can currently do and which work remains device-only.
   refused (the server keeps photos and voice only). Composer layout and an offline
   purchase reaching the feed passed in the iPhone simulator; camera capture of a real
   receipt and the server's reading of it have not been verified on device.
+  **Save, the rightmost button, may file the draft as a meal or a purchase.**
+  It is pressed for everything out of habit, so a draft that Food or Spent could
+  also take (no links, no notes, no non-media files) is sent with `autoFile`.
+  Once its photos are captioned and its clips transcribed, the server classifies
+  it, and if it is clearly a meal or a purchase moves it there under the same id
+  (`backend/journal/refile.py`); anything uncertain stays in the journal. Replayed
+  uploads after the move are still acknowledged, and Transfers does not report
+  the moved entry as removed. The flag, the request body and the tidy rule pass
+  the portable Swift tests, and the composer passed in the iPhone simulator; the
+  server's sorting of a real photo has not been verified on device.
 - **Workout** (the third Capture page) is the desktop's workout log: one set or
   activity per line ("bicep curls 20, 10" in lb, "squats 10" bodyweight, bare
   "20, 10" for the selected pill, "walking 30" minutes), recent-exercise pills,
@@ -240,6 +250,16 @@ what each device can currently do and which work remains device-only.
   staged into the same draft and uploaded after the entry is
   created, each under its own client-minted attachment ID. Passed in
   simulator for the library picker; the camera needs a device.
+- **Take Photo from the Action Button** (iPhone): Settings → Action Button →
+  Shortcut → Lunaschal → Take Photo. A press opens the app on the camera, even
+  from a cold launch; the photo goes into the Capture draft exactly as the
+  composer's Take photo would, and closing the camera leaves you on Capture →
+  Entry to add words or press Save, Food or Spent. One photo per press. It is an
+  App Shortcut (`App/QuickPhoto.swift`), so it is in Shortcuts and Siri too. The
+  intent and the tab switch passed in simulator; the button itself and the
+  camera have not been verified on device.
+- **The iPhone is portrait only**; the iPad still turns every way. Passed in
+  simulator (both). Full-screen video on the phone no longer rotates either.
 - **Food** (bottom middle, between Discard and **Save**) files
   the same draft in the food log instead: text, photos/videos and clips, under
   client-minted meal and media IDs. A photo's original capture time dates the

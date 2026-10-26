@@ -41,7 +41,18 @@ public final class CaptureStore {
     }
 
     /// What the replica says about a synced capture's journal entry.
-    public enum EntryOnServer { case present, removed, unknown }
+    public enum EntryOnServer {
+        case present, removed, unknown
+
+        /// A journal capture's entry, from the replica. `filedElsewhere` is a
+        /// meal or a purchase holding its id: the server auto-filed it there,
+        /// which deletes the journal row, and that is not a removal.
+        public static func of(journalDeleted: Bool?, filedElsewhere: Bool) -> EntryOnServer {
+            if filedElsewhere { return .present }
+            guard let journalDeleted else { return .unknown }
+            return journalDeleted ? .removed : .present
+        }
+    }
 
     public static let removedOnServer = "Removed on server. This device still holds its original capture."
 
@@ -68,6 +79,13 @@ public final class CaptureStore {
                 try save(capture)
                 changed += 1
             case .present:
+                // Read as removed by a pass that saw the journal row go before
+                // the meal it was filed as arrived.
+                if capture.lastError == Self.removedOnServer {
+                    capture.lastError = nil
+                    try save(capture)
+                    changed += 1
+                }
                 let origin = root.appendingPathComponent(capture.id + ".watch-origin").path
                 let confirmed = root.appendingPathComponent(capture.id + ".watch-server-confirmed").path
                 guard now.timeIntervalSince(capture.createdAt) > olderThan,
@@ -324,6 +342,7 @@ public final class CaptureStore {
     /// staged; the notebook itself is let go with the rest of the draft.
     public func commitDraft(text: String, youtubeURLs: [String], kind: CaptureKind = .journal,
                             images: [(data: Data, name: String)] = [], forReview: Bool = false,
+                            autoFile: Bool = false,
                             location: (latitude: Double, longitude: Double)? = nil,
                             now: Date = Date()) throws -> Capture {
         let staged = try draft()
@@ -334,7 +353,7 @@ public final class CaptureStore {
             // A meal is never a review card, as it never takes the notebook.
             capture = try commit(text: text, youtubeURLs: youtubeURLs, kind: kind, files: staged.files + pages,
                                  clips: staged.clips, forReview: forReview && kind == .journal,
-                                 location: location, now: now)
+                                 autoFile: autoFile && kind == .journal, location: location, now: now)
         } catch {
             for file in pages { try? fm.removeItem(at: fileURL(file)) }
             throw error
@@ -443,6 +462,7 @@ public final class CaptureStore {
 
     private func commit(text: String, youtubeURLs: [String], kind: CaptureKind, files: [CaptureFile],
                         clips: [CaptureClip], replaces: [String] = [], forReview: Bool = false,
+                        autoFile: Bool = false,
                         location: (latitude: Double, longitude: Double)?, now: Date) throws -> Capture {
         let links = kind.isMediaLog ? [] : try youtubeURLs.map(YouTubeLink.canonical)
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -454,6 +474,7 @@ public final class CaptureStore {
         capture.longitude = location?.longitude
         capture.replaces = replaces
         capture.forReview = forReview
+        capture.autoFile = autoFile
         try save(capture)
         return capture
     }

@@ -62,6 +62,27 @@ def enable_auto_download():
     get_db().commit()
 
 
+def test_todays_paper_is_the_4am_days():
+    assert scheduler.paper_day(toronto('2026-09-06', 4 * 60 - 1)) == '2026-09-05'
+    assert scheduler.paper_day(toronto('2026-09-06', 4 * 60)) == '2026-09-06'
+    assert scheduler.paper_day(toronto('2026-09-06', 23 * 60 + 59)) == '2026-09-06'
+    assert not scheduler.download_window_open(toronto('2026-09-06', 0))
+    assert not scheduler.download_window_open(toronto('2026-09-06', 4 * 60 - 1))
+    assert scheduler.download_window_open(toronto('2026-09-06', 4 * 60))
+
+
+def test_after_midnight_the_new_date_cannot_be_downloaded(client, monkeypatch):
+    monkeypatch.setattr(scheduler.time, 'time', lambda: toronto('2026-09-06', 60))
+    assert client.post('/api/newspapers/issues/2026-09-06/download').status_code == 400
+    assert client.post('/api/newspapers/issues/2026-09-05/download').status_code == 202
+
+
+def test_from_4am_todays_date_can_be_downloaded(client, monkeypatch):
+    monkeypatch.setattr(scheduler.time, 'time', lambda: toronto('2026-09-06', 4 * 60))
+    assert client.post('/api/newspapers/issues/2026-09-06/download').status_code == 202
+    assert client.post('/api/newspapers/issues/2026-09-07/download').status_code == 400
+
+
 def test_morning_minute_is_stable_and_inside_five_to_seven_am():
     minutes = [scheduler.morning_minute(f'2026-09-{day:02d}') for day in range(1, 31)]
     assert all(5 * 60 <= m < 7 * 60 for m in minutes)
@@ -104,6 +125,13 @@ def test_first_journal_entry_queues_todays_issue(client, monkeypatch):
     assert job()['status'] == 'queued'
     assert client.post('/api/journal', json={'content': 'again'}).status_code == 201
     assert get_db().execute('SELECT count(*) FROM newspaper_downloads').fetchone()[0] == 1
+
+
+def test_a_journal_entry_after_midnight_queues_nothing(client, monkeypatch):
+    enable_auto_download()
+    monkeypatch.setattr(scheduler.time, 'time', lambda: toronto('2026-09-07', 60))
+    assert client.post('/api/journal', json={'content': 'late night'}).status_code == 201
+    assert get_db().execute('SELECT count(*) FROM newspaper_downloads').fetchone()[0] == 0
 
 
 def test_journal_entry_does_not_queue_without_auto_download(client):

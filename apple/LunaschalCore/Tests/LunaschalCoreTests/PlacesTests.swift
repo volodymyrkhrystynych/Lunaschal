@@ -77,6 +77,15 @@ final class PlacesTests: XCTestCase {
         XCTAssertEqual(regions.first?.radius, RegionPlan.minRadius)
     }
 
+    func testTheMonitorNamePassesCoreLocationsRule() {
+        // CLMonitor.init asserts (crashes, rather than throwing) on a bad name.
+        XCTAssertTrue(RegionPlan.isValidMonitorName(RegionPlan.monitorName))
+        XCTAssertFalse(RegionPlan.isValidMonitorName("lunaschal-places"))
+        XCTAssertFalse(RegionPlan.isValidMonitorName("_places"))
+        XCTAssertFalse(RegionPlan.isValidMonitorName("places é"))
+        XCTAssertFalse(RegionPlan.isValidMonitorName(""))
+    }
+
     func testAnEntryAndItsExitAreOneTrailPoint() throws {
         let office = MonitoredRegion(placeID: "01JOFFICEPLACEID0000000000", name: "Office", role: .work,
                                      latitude: 43.65, longitude: -79.38, radius: 150)

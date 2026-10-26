@@ -28,6 +28,36 @@ CREATE TABLE IF NOT EXISTS mobile_sync_operations (
     created_at INTEGER NOT NULL
 );
 
+-- Goal rules are immutable; corrections come from the original source records.
+CREATE TABLE IF NOT EXISTS goals (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    criteria TEXT NOT NULL,
+    reward TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    target_days INTEGER NOT NULL CHECK(target_days BETWEEN 1 AND 366),
+    exercise TEXT,
+    minimum_reps INTEGER,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','earned','redeemed','cancelled','needs_review')),
+    earned_at INTEGER,
+    redeemed_at INTEGER,
+    last_checked_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS goal_days (
+    id TEXT PRIMARY KEY,
+    goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK(verdict IN ('met','not_met','uncertain')),
+    evidence TEXT NOT NULL DEFAULT '[]',
+    error TEXT,
+    checked_at INTEGER NOT NULL,
+    UNIQUE(goal_id,date)
+);
+
 CREATE TABLE IF NOT EXISTS journal_entries (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
@@ -892,6 +922,16 @@ CREATE TABLE IF NOT EXISTS recipe_media (
 );
 
 CREATE INDEX IF NOT EXISTS idx_recipe_media_recipe ON recipe_media(recipe_id);
+
+-- A journal entry moved into the food log or the spending ledger by
+-- auto-filing (backend/journal/refile.py), under the same id. The journal row
+-- is gone; this is what lets a replayed upload from the phone, still addressed
+-- to the journal entry, be answered rather than recreate it.
+CREATE TABLE IF NOT EXISTS journal_refiles (
+    entry_id TEXT PRIMARY KEY,
+    target_collection TEXT NOT NULL CHECK (target_collection IN ('food_entries', 'spending_logs')),
+    refiled_at INTEGER NOT NULL
+);
 
 -- Food log: what was eaten, where, whether it was good, plus photos/videos.
 -- Shown in both the Food tab and the Journal feed; stored once here.

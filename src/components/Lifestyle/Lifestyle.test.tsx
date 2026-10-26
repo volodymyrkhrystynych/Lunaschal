@@ -30,6 +30,7 @@ vi.mock('./ActivityHeatmap', () => ({
 vi.mock('./TrendsChart', () => ({ TrendsChart: () => <div>Trends</div> }));
 vi.mock('./WorkoutLog', () => ({ WorkoutLog: () => <div>Workout</div> }));
 vi.mock('./FocusCard', () => ({ FocusCard: () => null }));
+vi.mock('./GoalsCard', () => ({ GoalsCard: () => null }));
 vi.mock('./SpendingCard', () => ({ SpendingCard: () => null }));
 vi.mock('./WeatherCard', () => ({ WeatherCard: () => <div>Weather</div> }));
 vi.mock('./HealthCard', () => ({ HealthCard: () => <div>Health</div> }));

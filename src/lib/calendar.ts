@@ -19,7 +19,7 @@ export interface MonthCell {
   inMonth: boolean;
 }
 
-// Local 'YYYY-MM-DD' for a Date. The counterpart of todayISO in ./newspapers.
+// Local 'YYYY-MM-DD' for a Date. The counterpart of localDayKey in ./dates, without the 4am shift.
 export function toLocalISO(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');

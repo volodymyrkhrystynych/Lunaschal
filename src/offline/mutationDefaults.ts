@@ -579,6 +579,13 @@ const journalRecordingCfg = (
         // entry and its attachment share one id and a replay a no-op.
         id: vars.entryId ?? vars.id,
         attachmentId: vars.id,
+        capturedAt: new Date(rec.startedAt).toISOString(),
+        // Recovery finalizes at restart, which may be hours after capture
+        // stopped. Let the server probe the actual audio in that case.
+        durationSeconds:
+          !rec.recovered && rec.endedAt != null && rec.endedAt > rec.startedAt
+            ? (rec.endedAt - rec.startedAt) / 1000
+            : undefined,
         name: vars.name,
         transcribe: rec.mode === 'transcribe',
         ideaId: vars.ideaId,

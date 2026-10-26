@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
-import { todayISO, hasMissingEditions } from '../lib/newspapers';
+import { paperDay, hasMissingEditions } from '../lib/newspapers';
 
 // Mounted once at the App level (not inside the Newspapers view) so the check
 // runs — and the sidebar can flag a gap — without the user ever opening the
@@ -11,7 +11,7 @@ import { todayISO, hasMissingEditions } from '../lib/newspapers';
 // active, so a reconnect after the Pocket 2 comes back on Tailscale re-checks
 // immediately rather than waiting for the next staleTime-driven refetch.
 export function useTodayNewspapersStatus(enabled: boolean): boolean {
-  const today = todayISO();
+  const today = paperDay();
   const { data } = useQuery({
     queryKey: ['newspapers', today],
     queryFn: () => api.newspapers.getByDate(today),

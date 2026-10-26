@@ -1,17 +1,21 @@
 // Pure date-math helpers for the Newspapers front-page archive view.
 // Dates are plain 'YYYY-MM-DD' strings. Once anchored, shifting by whole
 // days is parsed as UTC midnight so the math isn't skewed by the local
-// timezone offset — but the anchor itself ("today") must come from the
-// viewer's local calendar date, matching the backend's `date.today()`
-// (also local). Using `Date#toISOString()` for the anchor would read the
-// *UTC* calendar date instead, which drifts a day off local for several
-// hours around midnight depending on the timezone offset.
+// timezone offset. The anchor itself ("today's paper") is the 4am day, as
+// everywhere else in the app and as the backend's `scheduler.paper_day` has
+// it: from midnight to 4am it is still the previous date's paper.
+import { DAY_ROLLOVER_HOUR, localDayKey } from './dates';
 
-export function todayISO(now: Date = new Date()): string {
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+/** The date of today's paper: the 4am day containing `now`. */
+export function paperDay(now: Date = new Date()): string {
+  return localDayKey(now);
+}
+
+/** Whether today's paper may be downloaded. From midnight to 4am the 4am day
+ * is still yesterday's, and the new date's edition belongs to a day that
+ * hasn't started, so the server refuses it. */
+export function downloadWindowOpen(now: Date = new Date()): boolean {
+  return now.getHours() >= DAY_ROLLOVER_HOUR;
 }
 
 export function shiftDateISO(date: string, days: number): string {
@@ -21,7 +25,7 @@ export function shiftDateISO(date: string, days: number): string {
 }
 
 export function isFutureDate(date: string, now: Date = new Date()): boolean {
-  return date > todayISO(now);
+  return date > paperDay(now);
 }
 
 // Used to flag the sidebar when a day's front pages haven't all synced yet.

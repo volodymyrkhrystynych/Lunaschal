@@ -629,6 +629,12 @@ def seed_food(db, recipe_id):
         ('Ordered the pad tie again.', 'Ordered the pad thai again.',
          'Ordered the pad thai again.', entry_ids[-1]),
     )
+    # Saved with the Capture tab's Save button and auto-filed as a meal: the
+    # journal row is gone, this is what still answers the phone's replays.
+    db.execute(
+        "INSERT INTO journal_refiles (entry_id, target_collection, refiled_at) VALUES (?, 'food_entries', ?)",
+        (entry_ids[-1], ts(3)),
+    )
 
     # A meal that was talked over as well as photographed. 'done', never
     # 'running': an in-flight state is rewritten by init_db()'s orphan reset on
@@ -2530,6 +2536,18 @@ def seed_infra(db):
         )
 
 
+def seed_goals(db):
+    goal_id = new_id()
+    now = ts(0)
+    db.execute('INSERT INTO goals (id,title,criteria,reward,start_date,target_days,created_at,updated_at) '
+               'VALUES (?,?,?,?,?,?,?,?)',
+               (goal_id, 'A week of reading', 'Read for at least 20 minutes today.',
+                'A trip to the theater', today_key(), 7, now, now))
+    db.execute('INSERT INTO goal_days (id,goal_id,date,fingerprint,verdict,evidence,checked_at) '
+               'VALUES (?,?,?,?,?,?,?)',
+               (new_id(), goal_id, today_key(), 'demo', 'not_met', '[]', now))
+
+
 def main() -> None:
     print('Wiping scratch DB and media directories...')
     wipe_scratch()
@@ -2563,6 +2581,7 @@ def main() -> None:
     seed_piano(db)
     seed_practice(db)
     seed_notes(db)
+    seed_goals(db)
     seed_notebook(db, journal_ids)
     # After seed_notebook: a study source is bound to a note under the same
     # NOTEBOOK_ROOT, so it writes into the tree that one has just created.

@@ -171,6 +171,10 @@ public struct Capture: Codable, Identifiable, Equatable {
     /// A notebook saved with For review on: the server makes the entry a
     /// learning card whose front is these pages.
     public internal(set) var forReview = false
+    /// Saved with the Capture tab's Save button while it could also have been
+    /// a meal or a purchase: the server reads it once its photos and clips are
+    /// in, and may file it in the food log or the ledger under the same id.
+    public internal(set) var autoFile = false
 
     /// The entry everything here is filed under.
     public var targetID: String { entryID ?? id }
@@ -226,6 +230,7 @@ public struct Capture: Codable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, attachmentID, createdAt, mode, kind, text, links, files, clips, state, lastError, snapshot
         case latitude, longitude, weather, ficID, chapterID, entryID, mayBeOnServer, replaces, forReview
+        case autoFile
     }
 
     // Manifests written before an entry could hold several links stored one
@@ -253,6 +258,7 @@ public struct Capture: Codable, Identifiable, Equatable {
         mayBeOnServer = try c.decodeIfPresent(Bool.self, forKey: .mayBeOnServer)
         replaces = try c.decodeIfPresent([String].self, forKey: .replaces) ?? []
         forReview = try c.decodeIfPresent(Bool.self, forKey: .forReview) ?? false
+        autoFile = try c.decodeIfPresent(Bool.self, forKey: .autoFile) ?? false
         files = try c.decodeIfPresent([CaptureFile].self, forKey: .files) ?? []
         clips = try c.decodeIfPresent([CaptureClip].self, forKey: .clips) ?? []
         if let links = try c.decodeIfPresent([CaptureLink].self, forKey: .links) {

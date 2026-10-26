@@ -137,6 +137,8 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         if !capture.replaces.isEmpty { body["replaces"] = capture.replaces.joined(separator: ",") }
         // Saved For review: the server makes the entry's pages a learning card.
         if capture.forReview { body["forReview"] = "true" }
+        // The server may file it as a meal or a purchase once it has read it.
+        if capture.autoFile { body["autoFile"] = "1" }
         return body
     }
 
@@ -895,6 +897,14 @@ extension JournalAPI {
         let destination = directory.appendingPathComponent("\(ULID.make()).pdf")
         try FileManager.default.moveItem(at: file, to: destination)
         return destination
+    }
+
+    /// Asks the server to fetch one issue from PressReader. It only queues the
+    /// download; the issue appears in `newspaperIssues()` once it has landed.
+    public func downloadIssue(date: String) async throws {
+        guard NewspaperIssue.isDate(date) else { throw NotebookError.invalidIssue }
+        let (data, response) = try await session.data(for: request("api/newspapers/issues/\(date)/download", method: "POST"))
+        try check(data, response)
     }
 
     /// Tells the server the issue is being read, which moves its Journal card

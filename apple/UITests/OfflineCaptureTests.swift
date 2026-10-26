@@ -2,6 +2,83 @@ import XCTest
 import UIKit
 
 final class OfflineCaptureTests: XCTestCase {
+    func testMarkAllChaptersReadRequiresConfirmationAndIncludesOtherCategories() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+
+        let markAll = app.buttons["book-mark-all-read"]
+        XCTAssertTrue(markAll.waitForExistence(timeout: 10))
+        let initialProgress = app.staticTexts["2 of 5 chapters read · reacted on 1"]
+        XCTAssertTrue(initialProgress.exists)
+        markAll.tap()
+        let confirmation = app.alerts.buttons.matching(identifier: "confirm-book-mark-all-read").firstMatch
+        XCTAssertTrue(app.staticTexts["Are you sure?"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(initialProgress.exists, "Cancelling must leave reading progress unchanged")
+        XCTAssertTrue(markAll.isEnabled)
+
+        markAll.tap()
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        confirmation.tap()
+        XCTAssertTrue(app.staticTexts["5 of 5 chapters read · reacted on 1"].waitForExistence(timeout: 5))
+        XCTAssertFalse(markAll.isEnabled, "Every category is now read")
+
+        let sidestory = app.buttons["chapter-tab-Sidestory"]
+        for _ in 0..<6 where !sidestory.isHittable { app.swipeUp() }
+        XCTAssertTrue(sidestory.isHittable)
+        sidestory.tap()
+        let sideRow = app.buttons["chapter-row-01K8BBBBBBBBBBBBBBBBBB0105"]
+        XCTAssertTrue(sideRow.waitForExistence(timeout: 5))
+        XCTAssertEqual(sideRow.value as? String, "Read", "Mark all includes chapters outside the selected tab")
+    }
+
+    func testChapterOrganizationControlsHaveSeparateCompactRows() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+
+        let shelf = app.buttons["book-shelf-menu"]
+        let review = app.buttons["book-review"]
+        let folders = app.buttons["Folders"]
+        XCTAssertTrue(shelf.waitForExistence(timeout: 10))
+        XCTAssertTrue(review.exists)
+        XCTAssertLessThan(shelf.frame.height, 80, "Shelf must remain a single compact row")
+        XCTAssertLessThan(review.frame.height, 80, "An empty review must remain a single compact row")
+        XCTAssertLessThanOrEqual(shelf.frame.maxY, review.frame.minY)
+        XCTAssertLessThanOrEqual(review.frame.maxY, folders.frame.minY)
+        attach(app, "chapter organization rows")
+
+        shelf.tap()
+        let reading = app.buttons["shelf-reading"]
+        XCTAssertTrue(reading.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["fic-review-save"].exists)
+        reading.tap()
+        XCTAssertTrue(shelf.waitForExistence(timeout: 5))
+
+        review.tap()
+        XCTAssertTrue(app.buttons["fic-review-save"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["fic-folders-save"].exists)
+        app.buttons["Cancel"].tap()
+        folders.tap()
+        XCTAssertTrue(app.buttons["fic-folders-save"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["fic-review-save"].exists)
+    }
+
     func testJournalContextRecordingSurvivesRelaunchAndQueuesOffline() {
         let app = XCUIApplication()
         let entryID = "01K" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(23)
@@ -249,6 +326,19 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(app.buttons["more-Workout log"].exists)
         openMore(app, "Settings")
         XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
+    }
+
+    func testThePhoneStaysPortraitWhenTurned() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone)
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(tab(app, "Capture").waitForExistence(timeout: 10))
+        XCUIDevice.shared.orientation = .landscapeLeft
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        sleep(1)
+        let window = app.windows.firstMatch.frame
+        XCTAssertGreaterThan(window.height, window.width, "the iPhone app does not rotate: \(window)")
+        XCTAssertTrue(tab(app, "Capture").isHittable)
     }
 
     func testIPadDestinationsOpenWithoutAnAppMoreMenu() throws {

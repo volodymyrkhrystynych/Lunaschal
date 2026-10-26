@@ -447,29 +447,35 @@ public struct NewspaperIssue: Codable, Equatable {
 
     public enum Choice: Equatable {
         case today(NewspaperIssue)
-        /// Today's isn't archived yet; this is the newest that is.
-        case newest(NewspaperIssue)
-        case none
+        /// Today's isn't archived, and from 4am it may be fetched: download this date.
+        case download(String)
+        /// Today's isn't archived, and before 4am it may not be fetched.
+        case missing(String)
     }
 
-    /// Today's paper by the 4am day, so the paper read after midnight is
-    /// still that evening's; otherwise the newest one, for the caller to offer.
+    /// Today's paper by the 4am day, so the paper read after midnight is still
+    /// that evening's. If it isn't archived, it can be downloaded from 4am to
+    /// midnight; from midnight to 4am the day is yesterday's and downloading
+    /// waits, as the server's `scheduler.download_window_open` has it.
     public static func choose(_ issues: [NewspaperIssue], now: Date = Date(), calendar: Calendar = .current) -> Choice {
         let today = DayKey.of(now, calendar: calendar)
         if let issue = issues.first(where: { $0.date == today }) { return .today(issue) }
-        // ISO dates sort as strings; one dated in the future is not "newest".
-        if let issue = issues.filter({ $0.date <= today }).max(by: { $0.date < $1.date }) { return .newest(issue) }
-        return .none
+        return downloadWindowOpen(now: now, calendar: calendar) ? .download(today) : .missing(today)
+    }
+
+    /// From 04:00 to midnight: the 4am day is the calendar date, so its
+    /// edition is the one being published.
+    public static func downloadWindowOpen(now: Date = Date(), calendar: Calendar = .current) -> Bool {
+        calendar.component(.hour, from: now) >= DayKey.rolloverHour
     }
 }
 
 public enum NotebookError: LocalizedError {
-    case invalidIssue, notAPDF, noIssue
+    case invalidIssue, notAPDF
     public var errorDescription: String? {
         switch self {
         case .invalidIssue: return "That newspaper issue has no pages."
         case .notAPDF: return "The server didn't send a readable newspaper PDF."
-        case .noIssue: return "No newspaper issue is archived yet."
         }
     }
 }

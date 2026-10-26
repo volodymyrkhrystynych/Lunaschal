@@ -4,17 +4,22 @@ With auto-download on, a day's issue is queued by whichever comes first: the
 day's first journal entry (`queue_for_journal_entry`), or a time picked at
 random between 05:00 and 07:00 Toronto. Either way it gets `MAX_ATTEMPTS`
 tries an hour apart, and a later trigger on the same day does not reset them.
+
+"Today's" issue is the paper of the 4am day (`paper_day`), like every other day
+in the app: from midnight to 04:00 it is still the previous date's paper, and
+the new date cannot be fetched until the day turns over.
 """
 import logging
 import os
 import random
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ulid import ULID
 
+from backend.day_boundary import DAY_ROLLOVER_HOUR
 from backend.db.connection import get_db
 from backend.newspapers import issues, pressreader
 
@@ -27,6 +32,22 @@ TORONTO = ZoneInfo('America/Toronto')
 MAX_ATTEMPTS = 2
 MORNING_START_HOUR = 5
 MORNING_END_HOUR = 7
+
+
+def paper_day(now=None):
+    """The date of today's paper: the 4am day, on Toronto's clock (editions are
+    dated in Toronto)."""
+    now = time.time() if now is None else now
+    local = datetime.fromtimestamp(now, TORONTO) - timedelta(hours=DAY_ROLLOVER_HOUR)
+    return local.date().isoformat()
+
+
+def download_window_open(now=None):
+    """Whether today's paper may be fetched: false from midnight to 04:00, when
+    the 4am day is still yesterday's and the new date's edition belongs to a day
+    that hasn't started."""
+    now = time.time() if now is None else now
+    return datetime.fromtimestamp(now, TORONTO).hour >= DAY_ROLLOVER_HOUR
 
 
 def morning_minute(date):
@@ -49,9 +70,9 @@ def queue_for_journal_entry(now=None):
     Idempotent per day — `queue_issue` neither duplicates nor resets the row, so
     only the day's first entry has any effect."""
     now = int(time.time()) if now is None else now
-    if not _auto_download_enabled(get_db()):
+    if not download_window_open(now) or not _auto_download_enabled(get_db()):
         return None
-    return queue_issue(datetime.fromtimestamp(now, TORONTO).date().isoformat())
+    return queue_issue(paper_day(now))
 
 
 def queue_issue(date, *, retry=False, wake=True):
@@ -76,8 +97,8 @@ def tick(now=None):
     now = int(time.time()) if now is None else now
     local = datetime.fromtimestamp(now, TORONTO)
     db = get_db()
-    today = local.date().isoformat()
-    if _auto_download_enabled(db) and local.hour * 60 + local.minute >= morning_minute(today):
+    today = paper_day(now)
+    if download_window_open(now) and _auto_download_enabled(db) and local.hour * 60 + local.minute >= morning_minute(today):
         queue_issue(today, wake=False)
     with _lock:
         # A successful interactive reconnect wakes requests blocked by sign-in.

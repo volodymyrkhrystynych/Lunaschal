@@ -554,10 +554,13 @@ final class CaptureModel: ObservableObject {
     /// Synchronous on purpose: the composer's words are read the moment Save
     /// is tapped, so an async hop would let a last keystroke land after them.
     /// With notes in the draft a journal entry goes through `saveEntryWithNotes`.
-    func saveEntry(_ text: String, youtubeURLs: [String], kind: CaptureKind = .journal) -> Bool {
+    /// `autoFile` lets the server move it to the food log or the ledger.
+    func saveEntry(_ text: String, youtubeURLs: [String], kind: CaptureKind = .journal,
+                   autoFile: Bool = false) -> Bool {
         if recorder.activeID != nil { recorder.stop() }
         // A meal leaves the notes in the draft.
-        return commitComposer(text, youtubeURLs: youtubeURLs, kind: kind, notebook: nil, pages: [])
+        return commitComposer(text, youtubeURLs: youtubeURLs, kind: kind, notebook: nil, pages: [],
+                              autoFile: autoFile)
     }
 
     /// Save entry with the draft's notes: their pages are rendered from what
@@ -596,7 +599,7 @@ final class CaptureModel: ObservableObject {
     }
 
     private func commitComposer(_ text: String, youtubeURLs: [String], kind: CaptureKind, notebook: Notebook?,
-                                pages: [(data: Data, name: String)]) -> Bool {
+                                pages: [(data: Data, name: String)], autoFile: Bool = false) -> Bool {
         var links = youtubeURLs
         // The notes' own video goes with them.
         if let video = notebook?.youtubeURL, !links.contains(video) { links.append(video) }
@@ -605,7 +608,7 @@ final class CaptureModel: ObservableObject {
             // been flipped in the editor since the composer last looked.
             let forReview = notebook.map { (try? notebooks.notebook($0.id))?.isForReview ?? $0.isForReview } ?? false
             let capture = try store.commitDraft(text: text, youtubeURLs: links, kind: kind, images: pages,
-                                                forReview: forReview,
+                                                forReview: forReview, autoFile: autoFile,
                                                 location: location.recent)
             if let notebook {
                 do { try notebooks.markSaved(notebook.id, captureID: capture.id) }
@@ -727,6 +730,24 @@ final class CaptureModel: ObservableObject {
             markOpened(issue)
             return notebook
         } catch { message = error.localizedDescription; return nil }
+    }
+
+    /// Queues today's issue on the server and waits for it to be archived,
+    /// checking every few seconds. Nil (with a message) offline, on a refusal,
+    /// or if it hasn't landed after a few minutes — the download carries on.
+    func downloadNewspaper(date: String) async -> NewspaperIssue? {
+        guard let api = chatAPI() else {
+            message = "Connect to your server to download today's paper."
+            return nil
+        }
+        do { try await api.downloadIssue(date: date) } catch { message = error.localizedDescription; return nil }
+        for _ in 0..<36 {
+            if let issue = try? await api.newspaperIssues().first(where: { $0.date == date }) { return issue }
+            try? await Task.sleep(for: .seconds(5))
+            if Task.isCancelled { return nil }
+        }
+        message = "Today's paper (\(date)) is still downloading. Try again in a bit."
+        return nil
     }
 
     private func markOpened(_ issue: NewspaperIssue) {
@@ -1094,6 +1115,18 @@ final class CaptureModel: ObservableObject {
         reloadCaptures()
     }
 
+    /// A photo just taken with the camera, into the composer's draft (`entryID`
+    /// nil) or an edited entry's. Shared by the camera button and the Action Button.
+    func stageCameraPhoto(_ image: UIImage, into entryID: String? = nil) {
+        guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+        stage { try $0.stageFile(data: data, name: Self.photoName("jpg"), contentType: "image/jpeg",
+                                 into: entryID, capturedAt: Date()) }
+    }
+
+    static func photoName(_ ext: String) -> String {
+        "Photo \(Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))).\(ext)"
+    }
+
     func discard(_ file: CaptureFile) {
         do { try store.discardStaged(file) } catch { message = error.localizedDescription }
         reloadCaptures()
@@ -1400,8 +1433,11 @@ final class CaptureModel: ObservableObject {
     private func tidyCaptures() {
         do {
             if try store.tidySynced(entry: { [replica] id in
-                guard let record = try replica.record(collection: "journal_entries", id: id) else { return .unknown }
-                return record.deleted ? .removed : .present
+                let elsewhere = try ["food_entries", "spending_logs"].contains {
+                    try replica.record(collection: $0, id: id).map { !$0.deleted } ?? false
+                }
+                return .of(journalDeleted: try replica.record(collection: "journal_entries", id: id)?.deleted,
+                           filedElsewhere: elsewhere)
             }) > 0 { reloadCaptures() }
         } catch { /* Tidying only: the next pass tries again. */ }
     }
