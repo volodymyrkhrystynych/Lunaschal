@@ -340,7 +340,7 @@ def create_journal_entry(
 
 def _queue_todays_newspaper() -> None:
     """The day's first entry is one of the two triggers for downloading that
-    day's newspaper (the other is a random evening time — see
+    day's newspaper (the other is a random time between 5 and 7 am — see
     `backend/newspapers/scheduler.py`). Never allowed to fail the save."""
     try:
         from backend.newspapers import scheduler as newspaper_scheduler

@@ -1,6 +1,7 @@
 // The app-wide day boundary: every "day" concept in Lunaschal runs
-// 4am-to-4am local time, except newspapers (an edition's date comes from the
-// source site, not the user's day — see src/lib/newspapers.ts). A task
+// 4am-to-4am local time — newspapers included: "today's paper" is the 4am
+// day's (src/lib/newspapers.ts), though an archived issue keeps the edition
+// date the source site gave it. A task
 // completed, a workout logged, or a todo due "today" at 1am still belongs to
 // the day that started the previous morning. Mirrors backend/day_boundary.py.
 export const DAY_ROLLOVER_HOUR = 4;

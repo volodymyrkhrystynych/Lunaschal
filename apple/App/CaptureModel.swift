@@ -719,6 +719,24 @@ final class CaptureModel: ObservableObject {
         } catch { message = error.localizedDescription; return nil }
     }
 
+    /// Queues today's issue on the server and waits for it to be archived,
+    /// checking every few seconds. Nil (with a message) offline, on a refusal,
+    /// or if it hasn't landed after a few minutes — the download carries on.
+    func downloadNewspaper(date: String) async -> NewspaperIssue? {
+        guard let api = chatAPI() else {
+            message = "Connect to your server to download today's paper."
+            return nil
+        }
+        do { try await api.downloadIssue(date: date) } catch { message = error.localizedDescription; return nil }
+        for _ in 0..<36 {
+            if let issue = try? await api.newspaperIssues().first(where: { $0.date == date }) { return issue }
+            try? await Task.sleep(for: .seconds(5))
+            if Task.isCancelled { return nil }
+        }
+        message = "Today's paper (\(date)) is still downloading. Try again in a bit."
+        return nil
+    }
+
     private func markOpened(_ issue: NewspaperIssue) {
         guard let api = chatAPI() else { return }
         Task { try? await api.markIssueOpened(date: issue.date) }
