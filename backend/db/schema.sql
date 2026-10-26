@@ -28,6 +28,36 @@ CREATE TABLE IF NOT EXISTS mobile_sync_operations (
     created_at INTEGER NOT NULL
 );
 
+-- Goal rules are immutable; corrections come from the original source records.
+CREATE TABLE IF NOT EXISTS goals (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    criteria TEXT NOT NULL,
+    reward TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    target_days INTEGER NOT NULL CHECK(target_days BETWEEN 1 AND 366),
+    exercise TEXT,
+    minimum_reps INTEGER,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','earned','redeemed','cancelled','needs_review')),
+    earned_at INTEGER,
+    redeemed_at INTEGER,
+    last_checked_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS goal_days (
+    id TEXT PRIMARY KEY,
+    goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK(verdict IN ('met','not_met','uncertain')),
+    evidence TEXT NOT NULL DEFAULT '[]',
+    error TEXT,
+    checked_at INTEGER NOT NULL,
+    UNIQUE(goal_id,date)
+);
+
 CREATE TABLE IF NOT EXISTS journal_entries (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,

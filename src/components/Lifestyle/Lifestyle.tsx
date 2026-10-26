@@ -6,6 +6,7 @@ import { TasksSection } from '../Tasks';
 import { ActivityHeatmap } from './ActivityHeatmap';
 import { CaloriesCard } from './CaloriesCard';
 import { FocusCard } from './FocusCard';
+import { GoalsCard } from './GoalsCard';
 import { SpendingCard } from './SpendingCard';
 import { HealthCard } from './HealthCard';
 import { SleepCard } from './SleepCard';
@@ -35,7 +36,11 @@ import { CARD, CARD_DIVIDER } from './card';
  * it with a fixed-height card would either crop the card or leave it stranded
  * next to empty space. Everything else stacks vertically in the other column.
  */
-export function Lifestyle() {
+export function Lifestyle({
+  onOpenEntry,
+}: {
+  onOpenEntry?: (id: string) => void;
+}) {
   const [priorities, setPriorities] = useState<{
     needsSelfie: boolean;
     needsWeight: boolean;
@@ -114,6 +119,7 @@ export function Lifestyle() {
           <TasksSection />
           <div className="flex flex-col gap-4 min-w-0">
             <WorkoutLog />
+            <GoalsCard onOpenEntry={onOpenEntry} />
             <FocusCard />
             <HealthCard />
             <SleepCard />

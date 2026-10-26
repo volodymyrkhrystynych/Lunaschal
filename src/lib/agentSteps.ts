@@ -133,6 +133,22 @@ const PROPOSAL_LABELS: Record<string, string> = {
 export function stepLabel(step: AgentStep): string {
   const target = step.title || step.arg || '';
   switch (step.tool) {
+    case 'create_goal':
+      return step.ok
+        ? `Goal saved: ${target}`
+        : `Could not save goal: ${step.error ?? ''}`;
+    case 'list_goals':
+      return step.ok
+        ? 'Read goals and rewards'
+        : `Could not read goals: ${step.error ?? ''}`;
+    case 'check_goal':
+      return step.ok
+        ? `Checked goal: ${target}`
+        : `Could not check goal: ${step.error ?? ''}`;
+    case 'update_goal':
+      return step.ok
+        ? `Updated goal: ${target}`
+        : `Could not update goal: ${step.error ?? ''}`;
     case 'web_search':
       return step.ok
         ? `Searched the web for "${target}" — ${step.count ?? 0} results`

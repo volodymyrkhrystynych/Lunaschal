@@ -1,5 +1,12 @@
 # Chat delegate (`backend/delegate/`, `src/components/Chat/`)
 
+Daily goals and rewards are handled by `backend/goals/tools.py` on the main
+Chat turn: `create_goal`, `list_goals`, `check_goal`, `update_goal`. Creation
+is an immediate reversible write, like notes/to-dos. Checks include the partial
+current day and may award immediately. They share the evaluator with automatic
+checks and the Lifestyle card; the model never sets an award directly. See
+[`docs/goals-and-rewards.md`](../../docs/goals-and-rewards.md).
+
 The Chat tab is one conversation with one endpoint. The toolbox is split on one line: **local and personal-context tools run in the main chat's bounded gathering loop; raw web search/fetch stays behind `delegate({task, reason})`.** Things to know:
 
 - **The research half is shared, and it is the only way a _model_ in this app decides to reach the web.** Not the only way the app reaches it: `backend/jobs/company_research.py` and `backend/jobs/upskill.py` call `web.web_search`/`web_fetch` directly, and `backend/jobs/ingest.py` does its own guarded fetch — plus every ordinary scraper (newspapers, fanfic, Cookbook's URL paste, Study's importer, the Knowledge downloader, email sync). What those have in common, and what makes them a different thing rather than a hole in this gate, is that **their queries and URLs are built in Python or given by the user**; no model picks where to go. The gate below exists for the case where one does. `backend/delegate/research_tools.py` holds the three tools (`local_knowledge_search`, `local_knowledge_read`, `delegate`), the offline-first gate, and `RESEARCH_NOTE` — the one copy of the prompt text — and all three chat-shaped surfaces mount it: the Chat tab, the Ideas discussion (`backend/research/discuss.py`) and the Writing discussion. It used to live inline here, which is how the Ideas discussion ended up with raw `web_search`/`web_fetch` and no offline-first rule at all, and how the unattended nightly research pass ended up with web access nobody had decided to give it. **Web access exists where the user asked a question and is waiting for the answer, and nowhere else**; everything unattended reads the library and the wiki (`backend/research/agent.py`'s `offline_toolbox`). `ResearchTools` is instantiated per run, like `CodeTools`: `searched`/`hits`/`read` are per-run facts, and a shared instance would let one reply's library search unlock the web for the next.

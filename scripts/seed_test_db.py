@@ -2536,6 +2536,18 @@ def seed_infra(db):
         )
 
 
+def seed_goals(db):
+    goal_id = new_id()
+    now = ts(0)
+    db.execute('INSERT INTO goals (id,title,criteria,reward,start_date,target_days,created_at,updated_at) '
+               'VALUES (?,?,?,?,?,?,?,?)',
+               (goal_id, 'A week of reading', 'Read for at least 20 minutes today.',
+                'A trip to the theater', today_key(), 7, now, now))
+    db.execute('INSERT INTO goal_days (id,goal_id,date,fingerprint,verdict,evidence,checked_at) '
+               'VALUES (?,?,?,?,?,?,?)',
+               (new_id(), goal_id, today_key(), 'demo', 'not_met', '[]', now))
+
+
 def main() -> None:
     print('Wiping scratch DB and media directories...')
     wipe_scratch()
@@ -2569,6 +2581,7 @@ def main() -> None:
     seed_piano(db)
     seed_practice(db)
     seed_notes(db)
+    seed_goals(db)
     seed_notebook(db, journal_ids)
     # After seed_notebook: a study source is bound to a note under the same
     # NOTEBOOK_ROOT, so it writes into the tree that one has just created.

@@ -3292,7 +3292,36 @@ export interface DistanceAnchor {
   longitude: number;
 }
 
+export interface Goal {
+  id: string;
+  title: string;
+  criteria: string;
+  reward: string;
+  startDate: string;
+  targetDays: number;
+  status: 'active' | 'earned' | 'redeemed' | 'cancelled' | 'needs_review';
+  earnedAt: string | null;
+  redeemedAt: string | null;
+  lastCheckedAt: string | null;
+  currentStreak: number;
+  bestStreak: number;
+  needsReview: boolean;
+  days: {
+    date: string;
+    verdict: 'met' | 'not_met' | 'uncertain';
+    evidence: { kind: 'journal' | 'workout'; id: string; text: string }[];
+    error: string | null;
+  }[];
+}
+
 export const api = {
+  goals: {
+    list: () => get<Goal[]>('/api/goals'),
+    check: (id: string) =>
+      post<Goal>(`/api/goals/${encodeURIComponent(id)}/check`, {}),
+    update: (id: string, action: 'cancel' | 'redeem') =>
+      post<Goal>(`/api/goals/${encodeURIComponent(id)}/${action}`, {}),
+  },
   auth: {
     status: () => get<AuthStatus>('/api/auth/status'),
     login: (password: string, code: string) =>
