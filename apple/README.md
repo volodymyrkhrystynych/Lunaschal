@@ -240,6 +240,16 @@ what each device can currently do and which work remains device-only.
   staged into the same draft and uploaded after the entry is
   created, each under its own client-minted attachment ID. Passed in
   simulator for the library picker; the camera needs a device.
+- **Take Photo from the Action Button** (iPhone): Settings → Action Button →
+  Shortcut → Lunaschal → Take Photo. A press opens the app on the camera, even
+  from a cold launch; the photo goes into the Capture draft exactly as the
+  composer's Take photo would, and closing the camera leaves you on Capture →
+  Entry to add words or press Save, Food or Spent. One photo per press. It is an
+  App Shortcut (`App/QuickPhoto.swift`), so it is in Shortcuts and Siri too. The
+  intent and the tab switch passed in simulator; the button itself and the
+  camera have not been verified on device.
+- **The iPhone is portrait only**; the iPad still turns every way. Passed in
+  simulator (both). Full-screen video on the phone no longer rotates either.
 - **Food** (bottom middle, between Discard and **Save**) files
   the same draft in the food log instead: text, photos/videos and clips, under
   client-minted meal and media IDs. A photo's original capture time dates the
