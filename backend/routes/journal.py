@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict, search_journal_fts
@@ -1053,7 +1054,7 @@ def _capture_local_parts(attachment) -> tuple[str, str]:
 def _sync_screenshot_event(db, session) -> None:
     """Recompute capture bounds and keep an event only for two or more shots."""
     attachments = db.execute(
-        'SELECT id, name, created_at FROM journal_attachments WHERE entry_id=?'
+        "SELECT id, name, created_at FROM journal_attachments WHERE entry_id=? AND kind='image'"
         ' ORDER BY created_at, id',
         (session['entry_id'],),
     ).fetchall()
@@ -1063,7 +1064,11 @@ def _sync_screenshot_event(db, session) -> None:
                        (session['calendar_event_id'],))
         return
 
-    for position, attachment in enumerate(attachments):
+    ordered = db.execute(
+        'SELECT id FROM journal_attachments WHERE entry_id=? ORDER BY created_at, id',
+        (session['entry_id'],),
+    ).fetchall()
+    for position, attachment in enumerate(ordered):
         db.execute(
             'UPDATE journal_attachments SET position=? WHERE id=?',
             (position, attachment['id']),
@@ -1081,7 +1086,8 @@ def _sync_screenshot_event(db, session) -> None:
          last_date, last_time, int(time.time()), session['entry_id']),
     )
     db.execute(
-        'UPDATE journal_entries SET created_at=?, updated_at=? WHERE id=?',
+        'UPDATE journal_entries SET created_at=MIN(created_at, ?),'
+        ' updated_at=MAX(updated_at, ?) WHERE id=?',
         (first['created_at'], last['created_at'], session['entry_id']),
     )
 
@@ -1142,7 +1148,9 @@ def upload_screenshot():
                 # its connection before extending the event. Replay converges
                 # that last step too, even when the session has since closed.
                 _sync_screenshot_event(db, session)
+                _merge_overlapping_screenshots(existing['entry_id'])
                 db.commit()
+            existing = _load_attachment(attachment_id)
             return jsonify({
                 'id': existing['entry_id'],
                 'attachment': _attachment_dict(_load_attachment(attachment_id)),
@@ -1155,30 +1163,36 @@ def upload_screenshot():
             return jsonify({'error': 'file must be an image'}), 400
 
         db = get_db()
+        from backend.journal.overlap import recording_for_interval
+        captured_at = int(captured.timestamp())
+        recording_id = recording_for_interval(db, captured_at, captured_at)
         session = db.execute(
+            'SELECT * FROM journal_screenshot_sessions WHERE entry_id=?',
+            (recording_id,),
+        ).fetchone() if recording_id else db.execute(
             'SELECT * FROM journal_screenshot_sessions WHERE is_open=1'
             ' ORDER BY last_captured_at DESC LIMIT 1'
         ).fetchone()
         created_entry = False
-        captured_at = int(captured.timestamp())
         local_date = captured.date().isoformat()
         local_time = captured.strftime('%H:%M:%S')
         if session is None:
-            entry_id = str(ULID())
-            db.execute(
-                'INSERT INTO journal_entries(id, content, raw_content, title, tags,'
-                ' created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
-                (entry_id, '', None, 'Screenshots', None,
-                 captured_at, captured_at),
-            )
+            entry_id = recording_id or str(ULID())
+            if not recording_id:
+                db.execute(
+                    'INSERT INTO journal_entries(id, content, raw_content, title, tags,'
+                    ' created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+                    (entry_id, '', None, 'Screenshots', None,
+                     captured_at, captured_at),
+                )
             now = int(time.time())
             db.execute(
                 'INSERT INTO journal_screenshot_sessions('
                 ' entry_id, calendar_event_id, is_open, first_captured_at,'
                 ' last_captured_at, first_local_date, first_local_time,'
                 ' last_local_date, last_local_time, created_at, updated_at)'
-                ' VALUES (?,NULL,1,?,?,?,?,?,?,?,?)',
-                (entry_id, captured_at, captured_at, local_date,
+                ' VALUES (?,NULL,?,?,?,?,?,?,?,?,?)',
+                (entry_id, 0 if recording_id else 1, captured_at, captured_at, local_date,
                  local_time, local_date, local_time, now, now),
             )
             db.commit()
@@ -1186,7 +1200,7 @@ def upload_screenshot():
                 'SELECT * FROM journal_screenshot_sessions WHERE entry_id=?',
                 (entry_id,),
             ).fetchone()
-            created_entry = True
+            created_entry = not recording_id
 
         name = captured.strftime('%Y-%m-%d %H:%M:%S')
         try:
@@ -1215,9 +1229,53 @@ def upload_screenshot():
             return jsonify({'error': message}), status
 
         _sync_screenshot_event(db, session)
+        # A run may grow across a recording interval after the audio arrived.
+        target_id = _merge_overlapping_screenshots(session['entry_id'])
         db.commit()
-        _notify_subscribers(session['entry_id'])
-        return jsonify({'id': session['entry_id'], 'attachment': attachment}), 201
+        _notify_subscribers(target_id)
+        return jsonify({'id': target_id, 'attachment': _attachment_dict(
+            _load_attachment(attachment_id))}), 201
+
+
+def _merge_overlapping_screenshots(entry_id):
+    from backend.journal.overlap import merge_screenshot_runs, recording_for_interval
+    db = get_db()
+    session = db.execute('SELECT * FROM journal_screenshot_sessions WHERE entry_id=?',
+                         (entry_id,)).fetchone()
+    target_id = entry_id
+    if session:
+        target_id = recording_for_interval(db, session['first_captured_at'],
+                                           session['last_captured_at']) or entry_id
+    removed = merge_screenshot_runs(db, target_id)
+    if removed:
+        session = db.execute('SELECT * FROM journal_screenshot_sessions WHERE entry_id=?',
+                             (target_id,)).fetchone()
+        _sync_screenshot_event(db, session)
+        db.commit()
+        for source in removed:
+            _notify_subscribers(source)
+        _notify_subscribers(target_id)
+        _retitle_bg(target_id)
+    return target_id if entry_id in removed else entry_id
+
+
+def _finish_recording_overlap(attachment_id, captured_at, duration):
+    """Also run on replay, in case a process stopped just after saving audio."""
+    attachment = _load_attachment(attachment_id)
+    if captured_at is None or attachment['kind'] != 'audio':
+        return
+    if attachment['duration_seconds'] is None:
+        if duration is None:
+            from backend.ai.audio_description import _probe_duration
+            duration = _probe_duration(Path(attachment['path']))
+        if duration is None:
+            return
+    with _screenshot_lock:
+        db = get_db()
+        db.execute('UPDATE journal_attachments SET duration_seconds=COALESCE(duration_seconds, ?)'
+                   ' WHERE id=?', (duration, attachment_id))
+        db.commit()
+        _merge_overlapping_screenshots(attachment['entry_id'])
 
 
 _ULID_RE = re.compile(r'^[0-9A-HJKMNP-TV-Z]{26}$')
@@ -1321,6 +1379,8 @@ def create_recording_entry():
     replay loop along with the audio. See `_link_recording_fic`.
     """
     try:
+        from backend.journal.overlap import duration_seconds
+        duration = duration_seconds(request.form.get('durationSeconds'))
         captured_at = _optional_capture_time(request.form)
         entry_id = _client_id(request.form.get('id'))
         attachment_id = _client_id(request.form.get('attachmentId'))
@@ -1354,10 +1414,13 @@ def create_recording_entry():
             db = get_db()
             _close_screenshot_session(db, existing['entry_id'])
             db.commit()
+            if not idea_id and not fic_id:
+                _finish_recording_overlap(attachment_id, captured_at, duration)
             # Already stored. Answer as if we'd just saved it so the client
             # clears its local copy — the whole point of the retry loop.
             return jsonify(
-                {'id': existing['entry_id'], 'attachment': _attachment_dict(existing)}
+                {'id': existing['entry_id'], 'attachment': _attachment_dict(
+                    _load_attachment(attachment_id))}
             ), 201
 
     file = request.files.get('file')
@@ -1415,6 +1478,12 @@ def create_recording_entry():
         # After the file for the same reason: a fic ref to a rolled-back entry
         # would put a dead row in the reader's commentary history.
         _link_recording_fic(entry_id, fic_id, chapter_id)
+
+    # Only an explicit capture start makes a duration a real time interval.
+    # Old clients that send upload time implicitly must never match by accident.
+    if not idea_id and not fic_id:
+        _finish_recording_overlap(attachment['id'], captured_at, duration)
+        attachment = _attachment_dict(_load_attachment(attachment['id']))
 
     _notify_subscribers(entry_id)
     if transcribe:
@@ -1976,6 +2045,7 @@ def _transcribe_attachment_bg(
     *, into_entry: bool = False, now: bool = False,
 ) -> None:
     def _run():
+        nonlocal entry_id
         try:
             # Video takes the speech path, not the vision one: what is worth
             # keeping from a clip filmed to talk into is what was said.
@@ -2009,9 +2079,14 @@ def _transcribe_attachment_bg(
             # re-running Transcribe on a clip must not paste it into the entry
             # a second time.
             prior = db.execute(
-                'SELECT transcript FROM journal_attachments WHERE id=?',
+                'SELECT transcript, entry_id FROM journal_attachments WHERE id=?',
                 (attachment_id,),
             ).fetchone()
+            if prior is None:
+                return
+            # A late caption belongs to the entry the screenshot lives in now,
+            # including a merge performed while the model was running.
+            entry_id = prior['entry_id']
             first_time = not (prior and prior['transcript'])
 
             updates = {'transcript_status': status, 'transcript_error': error}
@@ -2056,6 +2131,11 @@ def _transcribe_attachment_bg(
             # reaches them. The merge branch above has already retitled, so this
             # is only for the case it skipped.
             if not merge and text and kind in ('audio', 'video'):
+                _retitle_bg(entry_id)
+            elif text and kind == 'image' and db.execute(
+                "SELECT 1 FROM journal_attachments WHERE entry_id=?"
+                " AND kind='audio' AND duration_seconds > 0 LIMIT 1", (entry_id,),
+            ).fetchone():
                 _retitle_bg(entry_id)
 
             # A watched video's words are not the entry's words (so `merge` is
