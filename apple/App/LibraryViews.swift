@@ -306,6 +306,7 @@ struct BookView: View {
     @State private var read: Set<String> = []
     @State private var reactions: [String: ChapterReaction] = [:]
     @State private var sheet: FicSheet?
+    @State private var confirmingMarkAllRead = false
     @Environment(\.openURL) private var openURL
 
     private var shown: SyncChange { latest ?? book }
@@ -386,6 +387,15 @@ struct BookView: View {
         }
         .navigationTitle(book.title)
         .ficSheets($sheet, model: model)
+        .alert("Are you sure?", isPresented: $confirmingMarkAllRead) {
+            Button("Mark all chapters read") {
+                model.markChapters(bookID: book.id, chapterIDs: chapters.map(\.id), read: true)
+            }
+            .accessibilityIdentifier("confirm-book-mark-all-read")
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Mark every chapter in this book as read, including all chapter categories?")
+        }
         .onChange(of: model.libraryRevision) { _, _ in Task { await refreshChapters() } }
         .navigationDestination(item: $resuming) { target in
             TextChapterReader(owner: model, chapter: target.chapter, initialFraction: target.fraction, book: book)
@@ -491,9 +501,19 @@ struct BookView: View {
             Menu {
                 ShelfButtons(current: shelf) { model.editFics([book.id], ["shelf": .string($0.rawValue)]) }
             } label: {
-                LabeledContent("Shelf") { Label(shelf.label, systemImage: shelf.systemImage) }
+                // LabeledContent expands vertically when used as a List menu
+                // label on iOS 26. Keep the entire label in one horizontal row.
+                HStack {
+                    Text("Shelf").foregroundStyle(.primary)
+                    Spacer()
+                    Label(shelf.label, systemImage: shelf.systemImage)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption)
+                        .accessibilityHidden(true)
+                }
             }
             .accessibilityIdentifier("book-shelf-menu")
+            .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
             Button { sheet = .review(shown, dropping: false) } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     if let rating = shown.data?["rating"]?.int, rating > 0 { RatingStars(rating: rating) }
@@ -505,6 +525,9 @@ struct BookView: View {
             }
             .accessibilityIdentifier("book-review")
             Button("Folders", systemImage: "folder") { sheet = .folders([shown]) }
+            Button("Mark all chapters read", systemImage: "checkmark.circle") { confirmingMarkAllRead = true }
+                .disabled(chapters.isEmpty || chapters.allSatisfy { read.contains($0.id) })
+                .accessibilityIdentifier("book-mark-all-read")
             let tags = shown.data?["tags"]?.strings ?? []
             if !tags.isEmpty { TagCloud(tags: tags) }
         } footer: {
