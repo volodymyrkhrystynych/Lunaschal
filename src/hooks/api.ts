@@ -3503,6 +3503,8 @@ export const api = {
       opts: {
         id?: string;
         attachmentId?: string;
+        capturedAt?: string;
+        durationSeconds?: number;
         name?: string;
         transcribe?: boolean;
         /** Also open an idea for this clip — the Ideas tab's Record button. */
@@ -3525,6 +3527,9 @@ export const api = {
       if (opts.name?.trim()) form.append('name', opts.name.trim());
       if (opts.id) form.append('id', opts.id);
       if (opts.attachmentId) form.append('attachmentId', opts.attachmentId);
+      if (opts.capturedAt) form.append('capturedAt', opts.capturedAt);
+      if (opts.durationSeconds != null)
+        form.append('durationSeconds', String(opts.durationSeconds));
       if (opts.transcribe) form.append('transcribe', 'true');
       if (opts.ideaId) form.append('ideaId', opts.ideaId);
       if (opts.repoId) form.append('repoId', opts.repoId);

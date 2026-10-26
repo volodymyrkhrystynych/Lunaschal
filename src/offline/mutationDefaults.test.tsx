@@ -484,6 +484,35 @@ describe('the capture surfaces that were online-only', () => {
   });
 });
 
+describe('recording capture timing', () => {
+  it('does not count the time until recovery as recorded audio', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ id: 'saved', attachment: {} }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const rec = await beginRecording('audio', 'audio/mp4');
+    await appendChunk(rec.id, new Blob(['audio']));
+    const clock = vi
+      .spyOn(Date, 'now')
+      .mockReturnValue(rec.startedAt + 3_600_000);
+    await finalizeRecording(rec.id, { recovered: true });
+    clock.mockRestore();
+    const { result } = renderHook(() => useJournalRecording(), {
+      wrapper: wrapperFor(makeClient()),
+    });
+    act(() => result.current.mutate({ id: rec.id }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [, init] = fetchMock.mock.calls.at(-1) as unknown as [
+      string,
+      RequestInit,
+    ];
+    const form = init.body as FormData;
+    expect(form.get('capturedAt')).toBe(new Date(rec.startedAt).toISOString());
+    expect(form.has('durationSeconds')).toBe(false);
+  });
+});
+
 describe('an idea recorded rather than typed', () => {
   it('shows up in the Ideas list before the upload, and carries the id to the server', async () => {
     // Stopping the recording is the save, so the row has to be there the
@@ -499,7 +528,9 @@ describe('an idea recorded rather than typed', () => {
       idea: { id: 'i9' },
     });
     await appendChunk(rec.id, new Blob(['spoken words']));
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(rec.startedAt + 12_000);
     await finalizeRecording(rec.id);
+    clock.mockRestore();
 
     const qc = makeClient();
     qc.setQueryData<IdeaSummary[]>(['ideas'], []);
@@ -522,6 +553,8 @@ describe('an idea recorded rather than typed', () => {
     ];
     const form = init.body as FormData;
     expect(form.get('ideaId')).toBe('i9');
+    expect(form.get('capturedAt')).toBe(new Date(rec.startedAt).toISOString());
+    expect(form.get('durationSeconds')).toBe('12');
     // One id for the entry and the attachment, as ever — that is what makes a
     // replay a no-op, and it is the same request that opens the idea.
     expect(form.get('id')).toBe(rec.id);
