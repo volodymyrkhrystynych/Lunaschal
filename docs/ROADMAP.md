@@ -2,6 +2,8 @@
 
 Future features and larger work items for Lunaschal. Roughly ordered within each section; nothing here is scheduled.
 
+**Status audited against `main` on 2026-10-27.** Every item carries a marker: ✅ built, 🟡 partly built (what's missing is said), ⬜ not started. Sections that are entirely built have moved to [Done](#done) at the bottom, with a pointer to where each one lives now.
+
 ## Apple apps and offline experience
 
 The active plan for native iPhone/iPad capture, multi-device synchronization,
@@ -14,158 +16,134 @@ tracks the hosted Mac/TestFlight build path and optional on-device AI.
 
 Basically mandatory — as email, journals, handwritten pages, and the book library accumulate, `data/lunaschal.db` becomes irreplaceable.
 
-- **Local backup**: scheduled snapshot of the SQLite DB (+ media files) to another directory/disk.
-- **Cloud backup**: push to **Dropbox or Google Drive** — but **zipped and encrypted** before upload; the cloud never sees plaintext.
-- **Key management**: random 256-bit key generated once when backups are enabled; archives encrypted with AES-256-GCM (or `age`). Key stored in `~/.config/lunaschal/backup.key` (chmod 600) — _never_ in the settings table (it's inside the DB being backed up — lockout after disk loss) and _never_ uploaded with the archive. On generation, show the key once so it can be saved in a password manager / printed; that off-machine copy is what makes restore after total machine loss possible.
-- Retention policy (keep N daily / weekly snapshots) and a tested restore path — a backup that's never been restored doesn't count.
-- Plain-format export (Markdown/EPUB) as a secondary escape hatch so nothing is locked into the DB.
+- ✅ **Local backup**: nightly `ops/backup.sh` (rsync snapshots of the DB + media to another disk), destination and retention set in Settings → Backup, watched by the age of the newest snapshot on the drive (`backend/ops/backup_status.py`).
+- ✅ Retention policy — `settings.backup_retention_days`.
+- 🟡 **Tested restore path** — a manual procedure is written up in [deployment.md](./deployment.md), but nothing exercises it automatically. A backup that's never been restored doesn't count.
+- ⬜ **Encryption** — snapshots are plaintext. Plan: random 256-bit key generated once when backups are enabled; archives encrypted with AES-256-GCM (or `age`). Key stored in `~/.config/lunaschal/backup.key` (chmod 600) — _never_ in the settings table (it's inside the DB being backed up — lockout after disk loss) and _never_ uploaded with the archive. On generation, show the key once so it can be saved in a password manager / printed; that off-machine copy is what makes restore after total machine loss possible.
+- ⬜ **Cloud backup**: push to **Dropbox or Google Drive** — zipped and encrypted before upload; the cloud never sees plaintext. Depends on encryption above.
+- ⬜ Plain-format export (Markdown/EPUB) as a secondary escape hatch so nothing is locked into the DB.
 
 ## Email ingestion
 
-Pull email out of cloud providers and into Lunaschal so it can be stored locally and processed by the AI layer.
+Mail is pulled off the cloud and stored locally (`backend/email/`); what's left is doing more with it.
 
-- Connect to **Gmail** and **Outlook** (OAuth), fetch messages, and save them locally — get the mail _off_ the cloud, not just read it there.
-- Store full messages (headers, body, attachments) in SQLite alongside the existing journal/RAG data.
-- AI processing on ingested mail:
-  - Summaries (per message and per thread)
-  - Auto-tagging (reuse the curated-tags classifier approach in `backend/ai/journal.py`)
-  - Routing / "figuring out what goes where" — classify mail into todos, calendar events, journal-worthy items, or archive, similar to the intent classifier in `backend/ai/classifier.py`
-- Feed ingested mail into RAG so chat can answer questions about it.
+- ✅ Connect to **Gmail**, **Outlook** and **IMAP**, fetch messages, and save them locally (headers, plain + HTML bodies, inline images).
+- 🟡 **Attachments** — inline (`cid:`) images are fetched; ordinary file attachments are not stored.
+- ✅ **Auto-tagging** — closed-vocabulary category classification (`backend/ai/email.py`), plus job-application status linkage (`backend/jobs/`).
+- ⬜ **Summaries** (per message and per thread).
+- ⬜ **Routing** — classify mail into todos, calendar events or journal-worthy items. Only the job-application linkage exists today.
+- 🟡 **Chat can answer questions about mail** — `emails_fts` exists and backs the Email view's search, but no chat/delegate tool reads it.
 
 ## Calendar sync
 
-- Import **Google Calendar** events and save them into the local `calendar` tables, so all dates live in Lunaschal.
-- Decide sync direction: start with one-way import; two-way sync (create in Lunaschal → push to Google) is a possible follow-up.
-- Handle recurring events and updates/deletions on re-sync.
+- ⬜ Import **Google Calendar** events and save them into the local `calendar` tables, so all dates live in Lunaschal.
+- ⬜ Decide sync direction: start with one-way import; two-way sync (create in Lunaschal → push to Google) is a possible follow-up.
+- ⬜ Handle recurring events and updates/deletions on re-sync.
 
 ## Todos
 
-Flesh out the todo section (`backend/routes/tasks.py`, currently basic CRUD + reorder/complete):
+The todo section (`backend/routes/tasks.py`, `src/components/Tasks/`, shown inside Lifestyle):
 
-- Due dates, priorities, and recurring todos
-- Subtasks / checklists
-- Better frontend view (grouping, filtering, overdue highlighting)
-- Tighter integration with voice commands and (eventually) email routing above
-
-## Library — saved books & fanfics
-
-A place to save books that have been read. Most are fanfics published as forum threads, so this needs a scraper/compiler:
-
-- Fetch a forum thread and extract the story posts — **each consecutive author post becomes a chapter** (e.g. threadmarked posts on SpaceBattles/Sufficient Velocity style forums).
-- Compile the chapters into a single local book (Markdown or EPUB) and store it in the library.
-- Library UI: list of saved books with title, author, source URL, read status, and maybe tags/notes.
-- Later: AI summaries per book, and reading-history stats.
+- ✅ Due dates, priorities, and recurring todos (`due`, `priority`, `repeat_interval`/`repeat_unit`; date math in `backend/todo_recurrence.py`).
+- ✅ Overdue highlighting and a priority flag in the list (`src/lib/todos.ts`).
+- ⬜ Subtasks / checklists.
+- ⬜ Grouping (Overdue / Today / Upcoming / Someday) and filtering in the frontend.
+- 🟡 Integration with voice and email — the chat delegate's `add_todos` tool creates todos from a spoken or typed chat message; email routing (above) does not exist.
 
 ## Flashcards — Anki parity review
 
-Compare the current flashcard system (SM-2 in `backend/routes/flashcard.py`) against **Anki** to figure out what's missing. Candidates to evaluate:
+Learning (`backend/learning/`) now schedules with FSRS. Still missing compared to Anki:
 
-- Scheduler: Anki's modern FSRS algorithm vs. plain SM-2; configurable learning steps, lapses, leech handling
-- Deck options: per-deck settings, daily new/review limits
-- Card types: cloze deletions, reversed cards, multiple fields per note
-- Media on cards (images, audio)
-- Import/export (`.apkg` compatibility would let existing Anki decks come over)
-
-## Flashcards — spoken answers
-
-An alternative to flip-and-self-grade flashcards: answer out loud and let the AI judge.
-
-- On showing a question, record the user's **spoken answer** (reuse the existing STT pipeline, `POST /api/transcribe`).
-- An LLM compares the transcribed answer against the card's actual answer and grades it — **bad / good / excellent**.
-- The grade maps onto the spaced-repetition rating (SM-2 quality score) instead of manual self-assessment.
-- Optionally show the judgment with a short explanation of what was missing or wrong.
+- ✅ Scheduler: FSRS (`backend/learning/scheduler.py`).
+- ⬜ Configurable learning steps, lapses, leech handling.
+- ⬜ Deck options: per-deck settings, daily new/review limits.
+- ⬜ Card types: cloze deletions, reversed cards, multiple fields per note.
+- ⬜ Media on cards (images, audio).
+- ⬜ Import/export (`.apkg` compatibility would let existing Anki decks come over).
 
 ## Journal — drawing / handwritten pages
 
-Support pen input in the journal, matching an iPad + stylus "pen on PDF planner" workflow:
+Pen input now exists as Paper (below), filed into the Journal feed at 4am.
 
-- A standard **PDF planner template** that gets copied for each day; the day's handwriting happens on top of it.
-- Multiple handwritten pages per day.
-- Drawing/ink layer usable from a tablet (Apple Pencil on iPad), saved locally with the journal entry.
-- Open questions: render/annotate PDF in-app vs. import annotated PDFs; whether to attempt handwriting OCR so entries become searchable/taggable.
+- ✅ Multiple handwritten pages per day; ink layer usable with an Apple Pencil on iPad (shared ink layer, `src/components/ink/`), plus native PencilKit pages from the Apple app.
+- ⬜ A standard **PDF planner template** copied for each day, with the handwriting on top of it.
+- ⬜ Handwriting OCR so entries become searchable/taggable.
 
 ## Paper — handwritten pages
 
-The Paper feature (`src/components/Paper/`, `backend/routes/paper.py`) works but is early. Ordered roughly by value.
+The Paper feature (`src/components/Paper/`, `backend/routes/paper.py`); the drawing itself lives in the shared ink layer (`src/components/ink/`).
 
 **Platform limit to know about:** Apple Pencil's **double-tap and squeeze are not exposed to web browsers** by any API — they're native-app only. Tool switching on iPad therefore relies on the toolbar, a **two-finger tap** on the page, or a keyboard. Styluses with real hardware buttons (Wacom / Surface Pen / XP-Pen) _do_ report an eraser tip (`button 5`) and barrel button (`button 2`), and those are wired up.
 
 ### Correctness / must-fix
 
-- **Real eraser.** The eraser currently paints white strokes rather than removing ink. Consequences: erasing _grows_ the saved payload, it bakes white pixels into the snapshot, and it blocks any non-white page background. Should delete or split intersecting strokes instead (pure logic in `src/lib/paper.ts` + tests).
-- **Stroke pruning / compaction.** Even with simplification, pages only ever get heavier. Consider a binary or delta encoding, or gzipping the strokes blob, and cap the per-page size with a clear user-facing warning.
-- **Save conflict handling.** Two devices editing the same page last-write-wins today. Needs at minimum a revision check server-side (the client already tracks a revision for its own in-flight guard).
-- **`list_papers` is N+1** — two extra queries per paper, 60 papers per page of the grid. Fold into a single aggregate query.
-- **No `MAX_CONTENT_LENGTH`** anywhere, so uploads are unbounded in network mode. Needs a per-route limit rather than a global one (meeting audio and book uploads are legitimately large).
-- **`onPointerLeave` ends the stroke**, so dragging past the canvas edge splits one line into two.
+- ✅ **Real eraser** — geometric; splits the strokes it crosses and lays down nothing.
+- ✅ **`onPointerLeave` ends the stroke** — now only ends it when pointer capture is not held.
+- ⬜ **Stroke compaction.** Erasing no longer grows the payload, but pages still only get heavier as they're written on. Consider a binary or delta encoding, or gzipping the strokes blob, and cap the per-page size with a clear user-facing warning.
+- ⬜ **Save conflict handling.** `PUT /api/paper/pages/<id>` is still last-write-wins for web ink (only native PencilKit pages compare revisions). Needs a server-side revision check like the newspaper markup's CAS.
+- ⬜ **`list_papers` is N+1** — still two extra queries per paper, 60 papers per page of the grid. Fold into a single aggregate query.
+- 🟡 **Upload size limits.** Some routes now set a per-route `request.max_content_length` (newspaper issues, mobile sync); Paper's routes and most others are still unbounded. The global `MAX_CONTENT_LENGTH` is deliberately left unset (`backend/app.py`).
 
 ### Features
 
-- **Ruled / grid / dot page backgrounds**, and a PDF planner template underlay — ties into the journal drawing section above.
-- **Zoom and pan** (pinch-zoom), plus a wrist-guard / drawing-area offset for comfortable writing on a small screen.
-- **Title editing** — `api.paper.updateTitle` exists and is wired to no UI; the grid shows untitled thumbnails only.
-- **Page management**: reorder, duplicate, and insert a page in the middle (only append exists).
-- **More ink**: colour selection, per-tool colour memory, straight-line/shape snapping, lasso select + move.
-- **Export** a paper to PDF or PNG.
-- **Handwriting OCR** so pages become searchable and taggable — feeds Global search and the journal's tagging.
+- 🟡 **More ink**: ✅ colour selection with per-tool colour memory (four swatches in `InkToolPanel`); ⬜ straight-line/shape snapping; ⬜ lasso select + move.
+- ⬜ **Ruled / grid / dot page backgrounds**, and a PDF planner template underlay.
+- ⬜ **Zoom and pan** (pinch-zoom) on a Paper page, plus a wrist-guard / drawing-area offset. (The newspaper reader pinch-zooms natively; Paper's `exclusive` touch policy does not.)
+- ⬜ **Title editing** — `PATCH /api/paper/<id>` accepts a title but no UI sets one.
+- 🟡 **Page management**: delete exists; ⬜ reorder, duplicate, insert in the middle.
+- ⬜ **Export** a paper to PDF or PNG.
+- ⬜ **Handwriting OCR** so pages become searchable and taggable.
 
 ### Recently fixed
 
 - Save payload exceeded Werkzeug 3.1's 500kB `max_form_memory_size` → `413`, which then made **every** navigation, the new-page button, and Back silently do nothing (the throw aborted them). Strokes now upload as a file part, `simplifyStroke` is actually applied (it was written but never called), save errors surface with a retry, and failures no longer block navigation.
 - Added debounced autosave, an explicit "+ Page" button, revision-guarded save completion, and stylus/keyboard eraser toggling.
+- The eraser became geometric and the stroke-splitting `onPointerLeave` was fixed when the ink layer was shared with the newspaper reader.
 
 ## Journal — views & tagging
 
-- View modes: **calendar view**, **list view**, and **day view**.
-- **"On this day last year"** — show past entries from the same date in previous years.
-- Better tag coverage: get good tags on _all_ journal entries (backfill with the curated-tags classifier, improve freeform AI tagging quality).
-
-## Mobile / tablet access
-
-**Decision: web-first (responsive UI / PWA), not a native app.** The React frontend and network mode already exist, so this is incremental; a native iPad app would mean a second codebase plus Mac/Xcode tooling. Apple Pencil works in Safari (pointer events with pressure/tilt, low-latency canvas), so browser drawing should be tried first — revisit native only if ink latency disappoints.
-
-- Make the frontend responsive and installable as a PWA over network mode.
-- Primary uses: iPad drawing/handwriting (see journal drawing section), quick capture of todos/journal entries from a phone, flashcard review away from the desk.
-- **Offline** — scope is capture-and-sync, not full sync: create new journal entries (and todos, ink) while offline, queue them locally (service worker + IndexedDB), and push them to the desktop server once back online. New-record-only upload means no conflict resolution needed. Full two-way sync of the dataset is explicitly out of scope.
+- ⬜ View modes: **calendar view**, **list view**, and **day view** — the Journal is still a single feed.
+- ⬜ **"On this day last year"** — show past entries from the same date in previous years.
+- 🟡 Better tag coverage: curated tags already scan every existing entry when created; freeform AI tagging quality hasn't been revisited.
 
 ## Global search
 
-One search box across everything: journal, emails, books, writing projects, files, todos.
-
-- Extend the existing FTS5 setup (currently `journal_fts`) to the other content types.
-- Blend keyword results with RAG semantic search for the "I don't remember the exact words" case.
+- ⬜ One search box across everything: journal, emails, books, writing projects, files, todos. FTS5 now covers six content types (`journal_fts`, `recipes_fts`, `fic_chapters_fts`, `wiki_fts`, `emails_fts`, `messages_fts`) but each is searched only from its own view.
+- ⬜ Blend keyword results with semantic search for the "I don't remember the exact words" case.
 
 ## AI reviews & check-in redo
 
-- **Weekly / monthly AI review**: summarize the period's journal entries, completed vs. slipped todos, and calendar; surface patterns. Pairs with "on this day last year."
-- **Redo morning check-ins** (`stt/morning_checkin.py`) — the current wake-detection flow needs a rework.
+- ⬜ **Weekly / monthly AI review**: summarize the period's journal entries, completed vs. slipped todos, and calendar; surface patterns. (The nightly briefing and the life wiki cover the day and long-term facts, not a period review.)
+- ⬜ **Redo morning check-ins** (`stt/morning_checkin.py`) — the wake-detection flow is unchanged.
 
 ## Habit tracking
 
-- Lightweight habit grid in the journal day view: define habits, check them off daily.
-- **Streaks** and simple stats over time.
-- Fits alongside the planner-style daily pages and calendar/day views.
+- ⬜ Habit grid: define habits, check them off daily. (Daily tasks — max 4, reset each day — are the nearest thing today.)
+- ⬜ **Streaks** and simple stats over time.
 
 ## Lifestyle tab
 
-New top-level tab: workout tracking (freeform text, AI-parsed, same pattern as recipes/journal),
-a GitHub-commits-style activity heatmap colored by workout location/type, body weight + per-exercise
-progression charts, chores promoted out of Tasks into their own section, daily selfie capture
-(archive now, timelapse export later), and a light manual calorie counter. Full design in
-[docs/lifestyle-tab.md](./lifestyle-tab.md).
+Built — workouts, the activity heatmap, weight and progression trends, chores folded into todos, daily selfies, calories, and the Apple Health mirror. See [docs/lifestyle-tab.md](./lifestyle-tab.md) and `backend/lifestyle/CLAUDE.md`.
+
+- ⬜ Selfie **timelapse export**.
 
 ## Study tab
 
-New top-level tab, gated to large screens: a reading desk with the source on the left (PDF, an
-archived web page, or a YouTube video downloaded via `yt-dlp`) and notes on the right. **Stage 1 is
-built** on `feat/study-tab` — the split view, all three import kinds, and the Notebook vim editor
-as the notes half. Remaining stages, in order: **resume position** (page / timestamp / scroll
-offset, the "save system" the original brief deferred), **paper-style handwriting pages** as an
-alternative to the text editor, and a **draggable divider**. Full plan, including the open
-questions and what Stage 1's tests do not prove, in [docs/study-tab.md](./study-tab.md).
+Stages 1–3 are built: the split view, all three import kinds, the Notebook editor, and paper-style handwriting pages in the right half. Plan in [docs/study-tab.md](./study-tab.md).
+
+- 🟡 **Resume position** — saved for PDFs (page) and YouTube (seconds); archived web pages store none, because the sandboxed iframe's scroll offset can't be read.
+- ⬜ **Draggable divider** — the split is still fixed at half.
 
 ## Bug fixing
 
 General stability pass — lots of small bugs to track down and fix. (Add specific known bugs here as they're identified.)
 
 -
+
+## Done
+
+Sections built in full, kept here so the history of the list stays readable.
+
+- **Library — saved books & fanfics.** XenForo threadmark scraping, epub/docx import, the library with folders and an in-app reader — `backend/fanfic/`, `src/components/Fanfic/`. Not built from the original list: AI summaries per book, reading-history stats.
+- **Flashcards — spoken answers.** Answer aloud, transcribed, graded by the model and mapped onto the FSRS rating — `backend/ai/learning_grading.py`, `backend/learning/CLAUDE.md`.
+- **Mobile / tablet access.** The web-first decision was reversed: there is now a native iPhone/iPad/Watch client in `apple/` with offline capture and sync (see the first section). The web app also has a manifest and queues recordings and paper pages in IndexedDB, but there is no service worker.

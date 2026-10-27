@@ -2,40 +2,38 @@
 
 The first three items to build, picked from [ROADMAP.md](./ROADMAP.md) as the best mix of _easiest_ and _most impactful_ right now. All three are self-contained (no OAuth, no external APIs, no new infrastructure), fully coverable by automated tests, and pay off daily.
 
-## 1. Local encrypted backups
+**Status audited against `main` on 2026-10-27:** #1 is half done, #2 is done apart from the frontend grouping, #3 has not started.
 
-**Why first:** the roadmap calls it mandatory, and the risk grows with every entry written. The local half is genuinely easy — the hard parts (Dropbox/Google upload, OAuth) can wait for phase 2 without reducing the protection much.
+## 1. Local encrypted backups — 🟡 backup built, encryption not
 
-- Snapshot `data/lunaschal.db` (via SQLite's backup API, safe under WAL) + media files into a zip.
+**Why first:** the roadmap calls it mandatory, and the risk grows with every entry written.
+
+Built differently from this plan: a nightly `ops/backup.sh` rsyncs the DB and media to another disk, with the destination and retention configured in Settings → Backup and the panel judging health by the newest snapshot's age. What's left:
+
 - Encrypt with AES-256-GCM using a one-time generated key at `~/.config/lunaschal/backup.key` (chmod 600); show the key once for the password manager (scheme in ROADMAP.md).
-- Trigger: on app startup once per day, plus a manual "Back up now" button in Settings.
-- Retention: keep last 7 daily + 4 weekly snapshots in a configurable backup directory (ideally another disk).
-- Tests: round-trip a backup → restore → verify DB contents; retention pruning; key-file permissions.
+- Tests: round-trip a backup → restore → verify DB contents; key-file permissions.
 - _Phase 2 (later):_ encrypted upload to Dropbox/Google Drive.
 
-## 2. Todos: due dates, priorities, overdue view
+## 2. Todos: due dates, priorities, overdue view — ✅ mostly done
 
-**Why:** the todo section is bare CRUD (`backend/routes/tasks.py`) and it's used every day — small schema additions produce a big usability jump. Also groundwork for email routing and voice commands creating "real" todos later.
+`due`, `priority` and recurrence (`repeat_interval`/`repeat_unit`) are columns on `todos`, overdue is computed and highlighted (`src/lib/todos.ts`), and the date rules live in `backend/todo_recurrence.py`. Remaining:
 
-- Add `due_date` and `priority` columns (ALTER TABLE migration in `backend/db/connection.py`, matching the existing `writing_project_id` pattern).
-- API: filter/sort by due date and priority; an "overdue" flag computed server-side.
-- Frontend: grouping (Overdue / Today / Upcoming / Someday), priority indicator, overdue highlighting.
-- Tests: route filters/sorting, overdue computation around date boundaries, parser date extraction.
-- _Phase 2 (later):_ recurring todos, subtasks.
+- Frontend grouping (Overdue / Today / Upcoming / Someday).
+- _Phase 2 (later):_ subtasks.
 
-## 3. Habit tracking with streaks
+## 3. Habit tracking with streaks — ⬜ not started
 
 **Why:** highest delight-per-line-of-code on the roadmap — one new table, simple queries, a small grid UI — and it makes opening the app every day the default, which feeds the journal and todos too.
 
-- New tables: `habits` (name, created, archived) and `habit_checks` (habit_id, date, unique together).
+- New tables: `habits` (name, created, archived) and `habit_checks` (habit_id, date, unique together). Seed both in `scripts/seed_test_db.py`.
 - API: CRUD for habits, toggle a check for a date, and a stats endpoint (current streak, longest streak, completion % over last 30 days).
-- Frontend: habit grid in the journal day view — one row per habit, tap to check off; streak counter per habit.
-- Streak logic is pure date math → perfect for exhaustive unit tests (gaps, today-unchecked, timezone/day boundaries).
+- Frontend: habit grid — one row per habit, tap to check off; streak counter per habit. The Lifestyle view, beside daily tasks, is the natural home now that the Journal is a feed.
+- Streak logic is pure date math → perfect for exhaustive unit tests (gaps, today-unchecked, the 4am day boundary in `backend/day_boundary.py`).
 
 ---
 
-**Next up after these** (in rough order): journal "on this day last year" + view modes, global search across content types, weekly AI review.
+**Next up after these** (in rough order, none started): journal "on this day last year" + view modes, global search across content types, weekly AI review.
 
 ## Parked
 
-- **Getting an iOS voice memo into a journal entry.** Attachments work everywhere else; paste and drag-and-drop both fail on iOS and the Files round-trip is the friction the feature was meant to remove. Dead ends and the next thing to try (iOS Shortcuts posting to the API) are written up in [learnings/ios-voice-memo-capture.md](./learnings/ios-voice-memo-capture.md) — read it before spending time on this again.
+- **Getting an iOS voice memo into a journal entry.** Largely sidestepped: the native app (`apple/`) records straight into the journal, so the Voice Memos round-trip is no longer the only way to capture audio on the phone. Importing an _existing_ Voice Memos recording still doesn't work — the share extension accepts URLs, text and images, not audio. Dead ends are in [learnings/ios-voice-memo-capture.md](./learnings/ios-voice-memo-capture.md); adding audio to the share extension's activation rule is now the obvious next thing to try.
