@@ -163,13 +163,25 @@ export interface JournalAttachment {
   exif: Record<string, unknown> | null;
   /** The canonical watch URL, `youtube` only. */
   sourceUrl?: string | null;
-  /** Runtime in seconds, `youtube` only. Known before the download finishes. */
+  /**
+   * Runtime in seconds, for `youtube` (known before the download finishes) and
+   * for an uploaded `video` when ffprobe could read it.
+   */
   durationSeconds?: number | null;
   /**
-   * The poster. Served from the SSD even though the video is on the archive
-   * drive, so the card still draws when the drive is unplugged.
+   * The poster: a `youtube` video's, or a frame of an uploaded `video`. Served
+   * from the SSD, so the card still draws when the archive drive is unplugged.
    */
   thumbnailUrl?: string;
+  /**
+   * When the photo or video was taken, as distinct from `createdAt` (when it
+   * was attached). Null when nothing said — read it as `createdAt`.
+   */
+  capturedAt?: string | null;
+  /** A Live Photo: an `image` whose short clip plays from `motionUrl`. */
+  hasMotion?: boolean;
+  motionUrl?: string;
+  motionMime?: string | null;
   /**
    * The download's own lifecycle, `youtube` only — separate from
    * `transcriptStatus`, which means "is a model reading this".

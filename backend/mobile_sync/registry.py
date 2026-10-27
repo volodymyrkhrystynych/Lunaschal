@@ -10,7 +10,9 @@ from backend.fanfic.source_lists import backlog_sql
 
 COLLECTIONS = {
     'journal_entries': 'id content raw_content title tags latitude longitude weather created_at updated_at',
-    'journal_attachments': 'id entry_id kind name mime size position source_url import_status transcript transcript_status description description_status created_at',
+    # `has_thumb`/`has_motion` are derived below: the phone needs to know a poster
+    # or a Live Photo clip exists without ever learning where it is stored.
+    'journal_attachments': 'id entry_id kind name mime size position source_url import_status transcript transcript_status description description_status duration_seconds captured_at motion_mime created_at',
     'fics': 'id title author source_type source_url site description word_count chapter_count download_status last_read_chapter_id rating review shelf shelved_at last_opened_at created_at updated_at',
     'fic_chapters': 'id fic_id position title category content_html content_text source_url word_count posted_at edited_at created_at updated_at',
     'fic_folders': 'id name position created_at',
@@ -72,6 +74,11 @@ def payload(table: str, prefix: str) -> str:
             'latest_activity',COALESCE(
                 (SELECT MAX(posted_at) FROM fic_chapters WHERE fic_id={prefix}.id),
                 (SELECT MAX(created_at) FROM fic_chapters WHERE fic_id={prefix}.id),{prefix}.created_at)
+        """
+    if table == 'journal_attachments':
+        fields += f""",
+            'has_thumb',({prefix}.thumb_path IS NOT NULL AND {prefix}.thumb_path != ''),
+            'has_motion',({prefix}.motion_path IS NOT NULL AND {prefix}.motion_path != '')
         """
     return f'json_object({fields})'
 

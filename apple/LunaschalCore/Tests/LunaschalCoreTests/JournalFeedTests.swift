@@ -43,6 +43,34 @@ final class JournalFeedTests: XCTestCase {
         XCTAssertEqual(grouped["e2"]?.last?.sourceURL, "https://youtu.be/x")
     }
 
+    func testALivePhotoAndAVideoCarryWhatTheFeedDrawsWith() {
+        let live = JournalAttachmentItem(record: SyncChange(revision: 1, collection: "journal_attachments", id: "l",
+            deleted: false, data: ["entryId": .string("e"), "kind": .string("image"), "hasMotion": .number(1),
+                                   "motionMime": .string("video/quicktime"),
+                                   "capturedAt": .string("2024-07-01T22:30:00+00:00")]))
+        XCTAssertEqual(live?.isLivePhoto, true)
+        XCTAssertEqual(live?.motionMIME, "video/quicktime")
+        XCTAssertEqual(live?.capturedAt, at("2024-07-01T22:30:00Z"))
+        let clip = JournalAttachmentItem(record: SyncChange(revision: 1, collection: "journal_attachments", id: "v",
+            deleted: false, data: ["entryId": .string("e"), "kind": .string("video"), "hasThumb": .number(1),
+                                   "durationSeconds": .number(14), "hasMotion": .number(0)]))
+        XCTAssertEqual(clip?.hasThumb, true)
+        XCTAssertEqual(clip?.durationSeconds, 14)
+        XCTAssertEqual(clip?.isLivePhoto, false)
+        XCTAssertNil(clip?.capturedAt)
+    }
+
+    func testTheTakenDateShowsOnlyWhenItIsAnotherDay() throws {
+        var calendar = utc
+        calendar.locale = Locale(identifier: "en_US")
+        var photo = JournalAttachmentItem(id: "p", entryID: "e", kind: "image")
+        photo.capturedAt = at("2024-07-01T22:30:00Z")
+        XCTAssertEqual(photo.takenLabel(entryDate: at("2026-10-05T12:00:00Z"), calendar: calendar), "taken Jul 1, 2024")
+        XCTAssertNil(photo.takenLabel(entryDate: at("2024-07-01T08:00:00Z"), calendar: calendar))
+        photo.capturedAt = nil
+        XCTAssertNil(photo.takenLabel(entryDate: at("2026-10-05T12:00:00Z"), calendar: calendar))
+    }
+
     func testABrowserClipIsKnownToNeedThePhonesCopy() {
         func clip(_ mime: String, _ name: String = "") -> JournalAttachmentItem {
             JournalAttachmentItem(id: "a", entryID: "e", kind: "audio", name: name, mime: mime)

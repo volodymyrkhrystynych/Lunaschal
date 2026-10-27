@@ -48,11 +48,16 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
     private let token: String?
     let session: CancellableSession
     private let uploads: RecordingUploadStore?
+    private let allowCellular: Bool
+    /// Where videos and Live Photos go instead of this session's 15-minute
+    /// foreground upload. Nil sends everything inline, as before.
+    public var background: (ledger: BackgroundUploads, uploader: BackgroundUploading)?
 
     public init(server: URL, token: String?, allowCellular: Bool, uploads: RecordingUploadStore? = nil) throws {
         self.server = try ServerAddress.parse(server.absoluteString)
         self.token = token
         self.uploads = uploads
+        self.allowCellular = allowCellular
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
@@ -92,6 +97,9 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         guard files.count == capture.files.count else { throw CaptureError.missingFile }
         guard clips.count == capture.clips.count else { throw CaptureError.missingAudio }
         if capture.kind.isMediaLog { return try await sendFood(capture, files: files, clips: clips) }
+        // Everything else in this capture landed before its video was handed
+        // off, so there is nothing to re-send until the system reports back.
+        if let background, try background.ledger.isWaiting(on: capture) { throw UploadDeferred() }
         if capture.entryID == nil {
             do { try await createEntry(capture, audioURL: audioURL) }
             catch let error as URLError where Self.neverConnected.contains(error.code) {
@@ -209,7 +217,24 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         }
         // Same replay contract as links: the server recognises a re-POSTed
         // attachment id and answers without storing it twice.
+        var handOff: [(CaptureFile, URL)] = []
         for (file, url) in zip(capture.files, files) {
+            if let background {
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                if BackgroundUploads.shouldHandOff(file, size: size) {
+                    switch try background.ledger.state(file.attachmentID) {
+                    case .landed(let data):
+                        try Self.validateFileAcknowledgement(data, for: capture, file: file)
+                    case .failed(let status):
+                        // Cleared so a retryable status is handed off again next time.
+                        try background.ledger.reset(file.attachmentID)
+                        throw HTTPFailure(status: status)
+                    case .inFlight, .none:
+                        handOff.append((file, url))
+                    }
+                    continue
+                }
+            }
             let body = try AttachmentMultipart(capture: capture, file: file, fileURL: url)
             defer { try? FileManager.default.removeItem(at: body.url) }
             var req = request("api/journal/\(capture.targetID)/attachments", method: "POST")
@@ -218,6 +243,27 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
             try check(fileData, fileResponse)
             try Self.validateFileAcknowledgement(fileData, for: capture, file: file)
         }
+        // Last, so a hand-off means everything else has landed.
+        if let background, !handOff.isEmpty {
+            for (file, url) in handOff where try background.ledger.state(file.attachmentID) == .none {
+                let prepared = try background.ledger.prepare(capture, file: file, fileURL: url)
+                try background.uploader.handOff(attachmentRequest(capture, boundary: prepared.boundary),
+                                                body: prepared.body, taskID: file.attachmentID)
+            }
+            throw UploadDeferred()
+        }
+    }
+
+    /// The request a background upload of one attachment is sent as.
+    public func attachmentRequest(_ capture: Capture, boundary: String) -> URLRequest {
+        var req = request("api/journal/\(capture.targetID)/attachments", method: "POST")
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        // The background session is shared; the cellular setting rides on each request.
+        req.allowsCellularAccess = allowCellular
+        #if !os(Linux)
+        req.allowsExpensiveNetworkAccess = allowCellular
+        #endif
+        return req
     }
 
     /// The meal and its photos go up in one request, each photo under the id
@@ -458,6 +504,17 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         guard playable, !thumbnail, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
         parts.queryItems = [URLQueryItem(name: "playable", value: "1")]
         return parts.url ?? url
+    }
+
+    /// A Live Photo's clip; its still is `journalAttachmentURL`.
+    public func journalMotionURL(_ id: String) throws -> URL {
+        guard ULID.isValid(id) else { throw CaptureError.invalidID }
+        return server.appendingPathComponent("api/journal/attachments/\(id)/motion")
+    }
+
+    /// Saves a Live Photo's clip to `destination`.
+    public func downloadJournalMotion(_ id: String, to destination: URL) async throws {
+        try await download(journalMotionURL(id), to: destination)
     }
 
     /// Where a feed attachment's bytes are: a journal attachment's routes, or
@@ -767,9 +824,21 @@ public struct AttachmentMultipart {
         guard (try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
             throw CaptureError.missingFile
         }
-        (url, boundary) = try writeMultipart(fields: [
-            ("attachmentId", file.attachmentID), ("name", file.name)
-        ], filename: file.name, contentType: file.contentType ?? "application/octet-stream", source: fileURL)
+        var fields = [("attachmentId", file.attachmentID), ("name", file.name)]
+        // When it was taken, so an old photo keeps its day on the server too.
+        if let taken = file.capturedAt {
+            fields.append(("capturedAt", ISO8601DateFormatter().string(from: taken)))
+        }
+        var parts = [MultipartFile(field: "file", filename: file.name,
+                                   contentType: file.contentType ?? "application/octet-stream", source: fileURL)]
+        if let motionType = file.motionContentType, file.isImage {
+            let motion = CaptureFile.motionURL(beside: fileURL)
+            guard (try motion.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
+                throw CaptureError.missingFile
+            }
+            parts.append(MultipartFile(field: "motion", filename: "motion.mov", contentType: motionType, source: motion))
+        }
+        (url, boundary) = try writeMultipart(fields: fields, files: parts)
     }
 }
 

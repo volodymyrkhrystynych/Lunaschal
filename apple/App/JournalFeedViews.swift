@@ -1,6 +1,9 @@
 import AVKit
+import Photos
+import PhotosUI
 import LunaschalCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The Journal page, read the way the desktop's feed is: one timeline, newest
 /// first, every entry's photos, clips and videos on its card, and a ring in an
@@ -349,9 +352,9 @@ private struct EntryCard: View {
             .accessibilityIdentifier("journal-entry")
 
             let photos = attachments.filter { $0.media == .image }
-            if !photos.isEmpty { PhotoStrip(model: model, photos: photos) }
+            if !photos.isEmpty { PhotoStrip(model: model, photos: photos, entryDate: created) }
             ForEach(attachments.filter { $0.media == .youtube || $0.media == .video }) { item in
-                VideoCard(model: model, item: item)
+                VideoCard(model: model, item: item, entryDate: created)
             }
             ForEach(attachments.filter { $0.media == .audio }) { item in
                 AudioRow(model: model, item: item)
@@ -717,20 +720,42 @@ private struct LocationDayCard: View {
 struct PhotoStrip: View {
     @ObservedObject var model: CaptureModel
     let photos: [JournalAttachmentItem]
+    /// The entry's own time, so a photo taken on another day can say so.
+    var entryDate: Date? = nil
     @State private var shown: JournalAttachmentItem?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(photos) { photo in
-                    Button { shown = photo } label: { RemoteThumbnail(model: model, item: photo, height: 120) }
+                    Button { shown = photo } label: {
+                        RemoteThumbnail(model: model, item: photo, height: 120)
+                            .overlay(alignment: .topLeading) { if photo.isLivePhoto { LiveBadge() } }
+                    }
                         .buttonStyle(.plain)
                         .accessibilityLabel(photo.description ?? (photo.name.isEmpty ? "Photo" : photo.name))
+                        .accessibilityValue(photo.isLivePhoto ? "Live Photo" : "")
                         .accessibilityIdentifier("journal-photo")
                 }
             }
         }
-        .fullScreenCover(item: $shown) { photo in PhotoViewer(model: model, item: photo) }
+        .fullScreenCover(item: $shown) { photo in PhotoViewer(model: model, item: photo, entryDate: entryDate) }
+    }
+}
+
+/// A Live Photo, played the way Photos plays one: press and hold.
+private struct LivePhotoPlayer: UIViewRepresentable {
+    let photo: PHLivePhoto
+
+    func makeUIView(context: Context) -> PHLivePhotoView {
+        let view = PHLivePhotoView()
+        view.contentMode = .scaleAspectFit
+        view.livePhoto = photo
+        return view
+    }
+
+    func updateUIView(_ view: PHLivePhotoView, context: Context) {
+        if view.livePhoto !== photo { view.livePhoto = photo }
     }
 }
 
@@ -769,8 +794,10 @@ private struct RemoteThumbnail: View {
 private struct PhotoViewer: View {
     @ObservedObject var model: CaptureModel
     let item: JournalAttachmentItem
+    var entryDate: Date? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var image: UIImage?
+    @State private var live: PHLivePhoto?
     @State private var missing = false
     @State private var zoom: CGFloat = 1
     @GestureState private var pinch: CGFloat = 1
@@ -779,7 +806,10 @@ private struct PhotoViewer: View {
         NavigationStack {
             ZStack {
                 Color.black.ignoresSafeArea()
-                if let image {
+                if let live {
+                    LivePhotoPlayer(photo: live)
+                        .accessibilityIdentifier("journal-live-photo")
+                } else if let image {
                     GeometryReader { space in
                         ScrollView([.horizontal, .vertical], showsIndicators: false) {
                             Image(uiImage: image).resizable().scaledToFit()
@@ -798,7 +828,10 @@ private struct PhotoViewer: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                if let text = item.description ?? item.transcript {
+                let taken = entryDate.flatMap { item.takenLabel(entryDate: $0) }
+                let text = [taken.map { $0.prefix(1).uppercased() + $0.dropFirst() }, item.description ?? item.transcript]
+                    .compactMap { $0 }.joined(separator: "\n")
+                if !text.isEmpty {
                     Text(text).font(.footnote).foregroundStyle(.white).padding()
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(.black.opacity(0.6))
@@ -816,6 +849,42 @@ private struct PhotoViewer: View {
                 image = await Task.detached { UIImage(contentsOfFile: file.path) }.value
             }
             missing = image == nil
+            // The still shows at once; the clip, when it arrives, turns it into
+            // a Live Photo. Offline with no clip fetched, the still is all there is.
+            if item.isLivePhoto, let still = await model.journalMediaFile(item),
+               let motion = await model.journalMotionFile(item) {
+                live = await Self.livePhoto(still: still, motion: motion, mime: item.mime)
+            }
+        }
+    }
+
+    /// PhotoKit pairs the two by their file extensions, which the cached
+    /// copies do not have, so they are linked under names that say what they are.
+    private static func livePhoto(still: URL, motion: URL, mime: String) async -> PHLivePhoto? {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("live-" + still.lastPathComponent,
+                                                                                    isDirectory: true)
+        let ext = UTType(mimeType: mime)?.preferredFilenameExtension ?? "jpg"
+        let named = (folder.appendingPathComponent("still").appendingPathExtension(ext),
+                     folder.appendingPathComponent("motion.mov"))
+        do {
+            try? FileManager.default.removeItem(at: folder)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for (source, name) in [(still, named.0), (motion, named.1)] {
+                if (try? FileManager.default.linkItem(at: source, to: name)) == nil {
+                    try FileManager.default.copyItem(at: source, to: name)
+                }
+            }
+        } catch { return nil }
+        return await withCheckedContinuation { done in
+            var resumed = false
+            PHLivePhoto.request(withResourceFileURLs: [named.0, named.1], placeholderImage: nil,
+                                targetSize: .zero, contentMode: .aspectFit) { photo, info in
+                // Called more than once: a degraded version first, then the full one.
+                let degraded = (info[PHLivePhotoInfoIsDegradedKey] as? Bool) == true
+                guard !resumed, photo == nil || !degraded else { return }
+                resumed = true
+                done.resume(returning: photo)
+            }
         }
     }
 }
@@ -923,6 +992,7 @@ struct AudioRow: View {
 private struct VideoCard: View {
     @ObservedObject var model: CaptureModel
     let item: JournalAttachmentItem
+    var entryDate: Date? = nil
     @State private var player: AVPlayer?
     @State private var opening = false
     @State private var failed = false
@@ -938,7 +1008,9 @@ private struct VideoCard: View {
             default:
                 Button(action: open) {
                     ZStack {
-                        if item.media == .youtube {
+                        // An uploaded video has a poster once ffmpeg has read
+                        // one off it; a YouTube video always does.
+                        if item.media == .youtube || item.hasThumb {
                             RemoteThumbnail(model: model, item: item, poster: true, height: 180)
                         } else {
                             Color.black.frame(height: 180).clipShape(RoundedRectangle(cornerRadius: 8))
@@ -948,16 +1020,28 @@ private struct VideoCard: View {
                             .padding(14).background(.black.opacity(0.6), in: Circle())
                     }
                     .frame(maxWidth: .infinity)
+                    .overlay(alignment: .bottomTrailing) {
+                        if item.media == .video, let seconds = item.durationSeconds, seconds > 0 {
+                            Text(String(format: "%d:%02d", seconds / 60, seconds % 60))
+                                .font(.caption2.monospacedDigit()).foregroundStyle(.white)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(.black.opacity(0.6), in: Capsule()).padding(8)
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
                 .disabled(opening)
                 .accessibilityLabel("Play \(item.name.isEmpty ? "video" : item.name)")
+                .accessibilityValue(item.durationSeconds.map { String(format: "%d:%02d", $0 / 60, $0 % 60) } ?? "")
                 .accessibilityIdentifier("journal-video")
                 if failed {
                     Text("This video needs the server.").font(.caption).foregroundStyle(.orange)
                 }
             }
             if !item.name.isEmpty { Text(item.name).font(.subheadline).lineLimit(2) }
+            if let entryDate, let taken = item.takenLabel(entryDate: entryDate) {
+                Text(taken).font(.caption).foregroundStyle(.secondary)
+            }
             if let source = item.sourceURL, let url = URL(string: source) {
                 Link("Open on YouTube", destination: url).font(.caption)
             }

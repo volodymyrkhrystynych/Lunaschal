@@ -1882,6 +1882,17 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(done.waitForExistence(timeout: 5), "a photo opens full screen")
         done.tap()
 
+        // The entry's own photo is a Live Photo taken long before it was attached.
+        let river = app.buttons.matching(identifier: "journal-photo")
+            .matching(NSPredicate(format: "label == %@", "River")).firstMatch
+        XCTAssertTrue(river.waitForExistence(timeout: 5))
+        XCTAssertEqual(river.value as? String, "Live Photo", "a Live Photo is marked as one")
+        river.tap()
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Taken ")).firstMatch
+            .waitForExistence(timeout: 5), "a photo taken on another day says when")
+        done.tap()
+
         // Short drags: a full swipe flings a lazily drawn row off the far edge.
         func nudge(until element: XCUIElement) {
             for _ in 0..<8 where !element.isHittable {
@@ -1903,7 +1914,16 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.links["Open on YouTube"].exists || app.buttons["Open on YouTube"].exists)
         XCTAssertTrue(app.staticTexts["A film about rivers."].exists, "the video's summary shows open")
 
-        for _ in 0..<8 where !later.isHittable {
+        // A video filmed on the phone: its poster, its length, and when it was filmed.
+        let filmed = app.buttons.matching(NSPredicate(format: "label == %@", "Play Ducks")).firstMatch
+        nudge(until: filmed)
+        XCTAssertTrue(filmed.waitForExistence(timeout: 5))
+        XCTAssertEqual(filmed.value as? String, "0:14", "an uploaded video shows its length")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "taken ")).firstMatch.exists,
+                      "and the day it was filmed")
+
+        // Further than the clip: the filmed video sits below it.
+        for _ in 0..<16 where !later.isHittable {
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
             start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 200)))
         }
@@ -2312,11 +2332,18 @@ final class OfflineCaptureTests: XCTestCase {
         done.tap()
         // ...and to hand the picked photo over (CI has stalled ~40 s on Add).
         XCTAssertTrue(app.staticTexts["Attachments"].waitForExistence(timeout: 60))
+        // Words, so the entry keeps the time it was written: a pictures-only
+        // entry is dated by when its picture was taken, and the simulator's
+        // sample photos are years old — far down a newest-first feed.
+        let words = "With a photo \(UUID().uuidString.prefix(8))"
+        let editor = app.textViews["Journal text"]
+        editor.tap()
+        editor.typeText(words)
         app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Attachments"].exists)
         tab(app, "Journal").tap()
-        let entry = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Photo '")).firstMatch
+        let entry = app.staticTexts[words]
         XCTAssertTrue(entry.waitForExistence(timeout: 10))
         entry.tap()
         XCTAssertTrue(app.staticTexts["Attachments"].waitForExistence(timeout: 5))

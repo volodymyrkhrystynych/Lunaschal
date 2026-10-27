@@ -89,7 +89,9 @@ struct CaptureRoot: View {
             if UIImagePickerController.isSourceTypeAvailable(.camera) { showQuickCamera = true }
         }
         .fullScreenCover(isPresented: $showQuickCamera) {
-            CameraPicker { model.stageCameraPhoto($0) }.ignoresSafeArea()
+            CameraPicker(allowsVideo: false) { shot in
+                if case .photo(let image, let metadata) = shot { model.stageCameraPhoto(image, metadata: metadata) }
+            }.ignoresSafeArea()
         }
         // The Todo badge stays current, but neither list is fetched again for a
         // pass that didn't touch it.
@@ -418,6 +420,16 @@ struct AttachmentButtons: View {
     @State private var showFiles = false
     @State private var photoItems: [PhotosPickerItem] = []
 
+    /// What Choose photo offers: a purchase keeps pictures only, a meal takes
+    /// videos too, and the journal takes Live Photos as well.
+    private var pickable: PHPickerFilter {
+        switch kind {
+        case .journal: return .any(of: [.images, .livePhotos, .videos])
+        case .food: return .any(of: [.images, .videos])
+        case .spending: return .images
+        }
+    }
+
     private var importable: [UTType] {
         switch kind {
         case .journal: return [.item]
@@ -446,7 +458,9 @@ struct AttachmentButtons: View {
                         Label("Attach file", systemImage: "paperclip")
                     }
                     Spacer()
-                    PhotosPicker(selection: $photoItems, matching: .images) {
+                    // `.current`: the original file, not a re-encoded copy, so a
+                    // photo keeps its EXIF and a video its creation date.
+                    PhotosPicker(selection: $photoItems, matching: pickable, preferredItemEncoding: .current) {
                         Label("Choose photo", systemImage: "photo.on.rectangle")
                     }
                     Spacer()
@@ -472,8 +486,12 @@ struct AttachmentButtons: View {
             }
         }
         .fullScreenCover(isPresented: $showCamera) {
-            CameraPicker { image in
-                model.stageCameraPhoto(image, into: entryID)
+            CameraPicker(allowsVideo: kind != .spending) { shot in
+                switch shot {
+                case .photo(let image, let metadata): model.stageCameraPhoto(image, metadata: metadata, into: entryID)
+                case .movie(let url): Task { await model.stageMovie(url, contentType: "video/quicktime", into: entryID,
+                                                                     capturedAt: Date()) }
+                }
                 onUse()
             }.ignoresSafeArea()
         }
@@ -497,6 +515,20 @@ struct AttachmentButtons: View {
 
     private func stagePhoto(_ item: PhotosPickerItem) async {
         do {
+            // A Live Photo first: loaded as a still it would lose its clip.
+            if kind == .journal, item.supportedContentTypes.contains(where: { $0.conforms(to: .livePhoto) }),
+               let live = try await item.loadTransferable(type: PHLivePhoto.self),
+               let files = try await MediaImport.export(live) {
+                model.stageLivePhoto(files, into: entryID)
+                onUse()
+                return
+            }
+            if let type = item.supportedContentTypes.first(where: { $0.conforms(to: .movie) }) {
+                guard let movie = try await item.loadTransferable(type: MediaImport.Movie.self) else { return }
+                await model.stageMovie(movie.url, contentType: type.preferredMIMEType, into: entryID)
+                onUse()
+                return
+            }
             guard let data = try await item.loadTransferable(type: Data.self) else { return }
             let type = item.supportedContentTypes.first { $0.conforms(to: .image) }
             model.stage { try $0.stageFile(data: data, name: CaptureModel.photoName(type?.preferredFilenameExtension ?? "jpg"),
@@ -689,28 +721,78 @@ private struct StagedFileRow: View {
     @ObservedObject var model: CaptureModel
     let file: CaptureFile
 
+    @State private var poster: UIImage?
+
     var body: some View {
         HStack {
             if file.isImage, let url = try? model.store.fileURL(file), let image = UIImage(contentsOfFile: url.path) {
                 Image(uiImage: image).resizable().scaledToFill()
                     .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(alignment: .topLeading) { if file.isLivePhoto { LiveBadge() } }
+            } else if file.isVideo {
+                ZStack {
+                    if let poster { Image(uiImage: poster).resizable().scaledToFill() } else { Color.black }
+                    Image(systemName: "play.fill").font(.caption).foregroundStyle(.white)
+                }
+                .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 6))
+                .task(id: file.id) {
+                    guard let url = try? model.store.fileURL(file) else { return }
+                    poster = await MediaImport.poster(of: url, mime: file.contentType, size: 88)
+                }
             } else {
                 Image(systemName: "doc").frame(width: 44, height: 44)
             }
-            Text(file.name).lineLimit(1).truncationMode(.middle)
+            VStack(alignment: .leading) {
+                Text(file.name).lineLimit(1).truncationMode(.middle)
+                if let taken = file.capturedAt, !Calendar.current.isDateInToday(taken) {
+                    Text("Taken \(taken.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
+    }
+}
+
+/// The Photos app's mark for a Live Photo, small enough for a thumbnail.
+struct LiveBadge: View {
+    var body: some View {
+        Image(systemName: "livephoto").font(.caption2.weight(.semibold)).foregroundStyle(.white)
+            .padding(3).background(.black.opacity(0.5), in: Circle()).padding(2)
+            .accessibilityLabel("Live Photo")
     }
 }
 
 /// The system camera. iOS has no SwiftUI camera, so this wraps UIKit's.
 struct CameraPicker: UIViewControllerRepresentable {
+    /// A photo with what the camera wrote about it, or a video it recorded
+    /// (a file of our own, since the camera's is deleted once it closes).
+    enum Shot {
+        case photo(UIImage, metadata: [String: Any]?)
+        case movie(URL)
+    }
+
     var front = false
-    let onImage: (UIImage) -> Void
+    var allowsVideo = false
+    let onShot: (Shot) -> Void
     @Environment(\.dismiss) private var dismiss
+
+    init(front: Bool = false, onImage: @escaping (UIImage) -> Void) {
+        self.front = front
+        onShot = { if case .photo(let image, _) = $0 { onImage(image) } }
+    }
+
+    init(allowsVideo: Bool, onShot: @escaping (Shot) -> Void) {
+        self.allowsVideo = allowsVideo
+        self.onShot = onShot
+    }
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
         picker.sourceType = .camera
+        if allowsVideo {
+            picker.mediaTypes = [UTType.image.identifier, UTType.movie.identifier]
+            picker.videoQuality = .typeHigh
+        }
         if front && UIImagePickerController.isCameraDeviceAvailable(.front) { picker.cameraDevice = .front }
         if front { picker.cameraFlashMode = .off }
         picker.delegate = context.coordinator
@@ -726,7 +808,13 @@ struct CameraPicker: UIViewControllerRepresentable {
 
         func imagePickerController(_ picker: UIImagePickerController,
                                    didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            if let image = info[.originalImage] as? UIImage { parent.onImage(image) }
+            if let movie = info[.mediaURL] as? URL {
+                let copy = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                    .appendingPathExtension(movie.pathExtension.isEmpty ? "mov" : movie.pathExtension)
+                if (try? FileManager.default.copyItem(at: movie, to: copy)) != nil { parent.onShot(.movie(copy)) }
+            } else if let image = info[.originalImage] as? UIImage {
+                parent.onShot(.photo(image, metadata: info[.mediaMetadata] as? [String: Any]))
+            }
             parent.dismiss()
         }
 

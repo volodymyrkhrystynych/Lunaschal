@@ -45,7 +45,9 @@ def validate_collection(collection):
 def active_path(collection, row):
     if collection == 'fics' and row['source_type'] != 'pdf':
         return None
-    if collection == 'journal_attachments' and row['kind'] == 'youtube':
+    # Videos stream on demand rather than ride the bulk sync: a phone's library
+    # of clips is gigabytes the replica would otherwise pull on every device.
+    if collection == 'journal_attachments' and row['kind'] in ('youtube', 'video'):
         return None
     if collection == 'study_sources' and row['kind'] in study.ARCHIVED_KINDS:
         return None

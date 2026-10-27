@@ -19,6 +19,23 @@ tests pass, including a second device's stale save receiving a conflict rather
 than silently discarding its draft. Physical-device microphone
 and background delivery have not been verified.
 
+Live Photos, videos and capture dates (2026-10-26, `feat/ios-journal-live-video`):
+
+- Journal Choose photo takes stills, Live Photos and videos; the camera records
+  video too. A Live Photo is one attachment (still + paired clip); videos and
+  Live Photos upload through a background `URLSession`, confirmed by the outbox
+  validating the server's answer (`BackgroundUploads`).
+- Every photo and video sends its original capture time (`capturedAt` on the
+  attachment upload); the camera's JPEG keeps the camera's metadata. A
+  pictures-only journal entry is dated by its earliest picture.
+- Server: `journal_attachments.captured_at` and `motion_*`, a `/motion` route,
+  HEIC stills re-encoded to JPEG with EXIF kept, and ffprobe/ffmpeg poster,
+  length, date and location for uploaded video (`backend/journal/video.py`).
+  Uploaded videos left out of the bulk media manifest.
+- Local verification: Swift core suite, iPhone app unit tests and the journal
+  feed UI test passed in simulator. Real Live Photo/video picking, camera video,
+  Live Photo playback and background completion are not verified on device.
+
 Capture follow-up (2026-10-11, `fix/capture-photo-tools`):
 
 - Capture actions are Food and Save; YouTube Paste validates and adds the link.

@@ -25,6 +25,8 @@ enum JournalFixture {
     /// and a button that brings a new entry in above them all, as a sync would.
     static let arrivalArgument = "-journalFeedArrival"
     static let arrival = "01K6ZZZZZZZZZZZZZZZZZZZZ09"
+    /// A clip filmed on the phone, with the poster and length the server read off it.
+    static let filmed = "01K6ZZZZZZZZZZZZZZZZZZZZ0A"
     static var arrivalEnabled: Bool { ProcessInfo.processInfo.arguments.contains(arrivalArgument) }
 
     /// The newest entry, as one delta page.
@@ -60,14 +62,22 @@ enum JournalFixture {
                                               "createdAt": iso.string(from: now.addingTimeInterval(-3600))]),
             change("journal_entries", quiet, ["title": "Fixture later", "content": "Home again.",
                                               "createdAt": iso.string(from: now.addingTimeInterval(-10 * 60))]),
+            // A Live Photo taken long before it was attached. Its clip is never
+            // fetched here (there is no server), so the still is what shows.
             change("journal_attachments", photo, ["entryId": entry, "kind": "image", "name": "River",
-                                                  "mime": "image/jpeg", "position": 0]),
+                                                  "mime": "image/jpeg", "position": 0, "hasMotion": 1,
+                                                  "motionMime": "video/quicktime",
+                                                  "capturedAt": iso.string(from: now.addingTimeInterval(-400 * 86_400))]),
             change("journal_attachments", clip, ["entryId": entry, "kind": "audio", "name": "Birdsong",
                                                  "mime": "audio/wav", "position": 1, "transcript": "Listen to that."]),
             change("journal_attachments", video, ["entryId": entry, "kind": "youtube", "name": "River documentary",
                                                   "position": 2, "importStatus": "done",
                                                   "sourceUrl": "https://www.youtube.com/watch?v=fixture",
                                                   "description": "A film about rivers."]),
+            change("journal_attachments", filmed, ["entryId": entry, "kind": "video", "name": "Ducks",
+                                                   "mime": "video/quicktime", "position": 3, "hasThumb": 1,
+                                                   "durationSeconds": 14, "hasMotion": 0,
+                                                   "capturedAt": iso.string(from: now.addingTimeInterval(-30 * 86_400))]),
             change("food_entries", meal, ["dish": "Fixture ramen", "place": "Kitchen", "notes": "Rich broth.",
                                           "createdAt": iso.string(from: now.addingTimeInterval(-30 * 60))]),
             change("food_media", mealPhoto, ["entryId": meal, "kind": "image", "mime": "image/jpeg", "position": 0]),
@@ -92,6 +102,7 @@ enum JournalFixture {
         try picture(.systemTeal).write(to: media.appendingPathComponent(photo))
         try picture(.systemOrange).write(to: media.appendingPathComponent(mealPhoto))
         try picture(.systemIndigo).write(to: media.appendingPathComponent(video + ".poster"))
+        try picture(.systemGreen).write(to: media.appendingPathComponent(filmed + ".poster"))
         try silence(seconds: 2).write(to: media.appendingPathComponent(clip))
     }
 

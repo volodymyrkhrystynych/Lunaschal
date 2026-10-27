@@ -147,6 +147,17 @@ CREATE TABLE IF NOT EXISTS journal_attachments (
     -- row predating this, reads as finished rather than as stuck importing.
     import_status TEXT NOT NULL DEFAULT 'ready',
     import_error TEXT,
+    -- When the photo or video was *taken*, as distinct from created_at (when it
+    -- was attached). The phone sends it (EXIF DateTimeOriginal with its offset,
+    -- or a movie's QuickTime creation date); failing that the server reads it
+    -- from the file. NULL means unknown — read it as created_at.
+    captured_at INTEGER,
+    -- A Live Photo is one image attachment plus the short clip that plays when
+    -- it is pressed. The still is `path` (and is what gets captioned); the clip
+    -- sits beside it at motion_path. NULL for everything that is not one.
+    motion_path TEXT,
+    motion_mime TEXT,
+    motion_size INTEGER,
     created_at INTEGER NOT NULL
 );
 

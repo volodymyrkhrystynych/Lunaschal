@@ -24,6 +24,8 @@ from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
 from backend.journal import archive, context_prompts, playable, storage, voice_drafts, youtube_import
 from backend.journal import location as entry_location
 from backend.journal import refile
+from backend.journal import video as journal_video
+from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.learning.review_cards import carry_review_card, ensure_review_card
 from backend.study import youtube
 from backend.tags import tags_json
@@ -795,6 +797,8 @@ def _polish_bg(journal_id: str, raw_content: str, *, now: bool = False) -> None:
 MAX_AUDIO_BYTES = 100 * 1024 * 1024
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_BYTES = 1024 * 1024 * 1024
+# A Live Photo's clip is three seconds; anything near this is not one.
+MAX_MOTION_BYTES = 100 * 1024 * 1024
 
 # A `file` attachment is anything the media tables didn't claim. The cap sits
 # between audio and video: generous enough for a PDF, a zip or a spreadsheet,
@@ -819,7 +823,8 @@ _ATTACHMENT_COLS = (
     ' transcript, transcript_status, transcript_error,'
     ' description, description_status, description_error,'
     ' latitude, longitude, exif, source_url, duration_seconds, thumb_path,'
-    ' import_status, import_error, created_at'
+    ' import_status, import_error, captured_at, motion_path, motion_mime,'
+    ' motion_size, created_at'
 )
 
 
@@ -829,6 +834,11 @@ def _attachment_dict(row) -> dict:
     # gets URLs instead.
     d.pop('path', None)
     thumb = d.pop('thumbPath', None)
+    # A Live Photo's clip is served by its own route, so the path never leaves.
+    d.pop('motionPath', None)
+    d['hasMotion'] = bool(row['motion_path'])
+    if row['motion_path']:
+        d['motionUrl'] = f'/api/journal/attachments/{row["id"]}/motion'
     # Only when there is something to serve. A youtube attachment exists from
     # the moment the link is pasted and has no file until the download lands —
     # handing the client a URL to it then is a broken <video> on every card.
@@ -889,6 +899,7 @@ def list_attachments(id):
 def _store_attachment(
     entry_id: str, file, name: str | None, attachment_id: str | None = None,
     *, media_only: bool = False, created_at: int | None = None,
+    captured_at: int | None = None, motion=None,
 ):
     """Save one uploaded file as an attachment of `entry_id`.
 
@@ -906,6 +917,10 @@ def _store_attachment(
     recording route does: a phone holds its audio until the upload is confirmed,
     so the same clip is re-POSTed until it lands, and a client-chosen id is what
     lets the replay be recognized (see `create_recording_entry`).
+
+    `captured_at` is when the photo or video was *taken*, as the phone read it
+    off the file; without it the file's own EXIF or QuickTime date is used.
+    `motion` is a Live Photo's paired clip, accepted only beside an image.
     """
     # NOT `or not file.filename`: a voice memo dragged out of the iOS Voice Memos
     # app arrives as a File with an empty name, and rejecting it here turned a
@@ -914,6 +929,16 @@ def _store_attachment(
     ext, kind = storage.resolve_upload(file.mimetype, file.filename)
     if media_only and kind == 'file':
         return None, (_UNSUPPORTED_TYPE + ' — audio, video or images only', 400)
+    motion_ext = None
+    if motion is not None:
+        motion_ext, motion_kind = storage.resolve_upload(motion.mimetype, motion.filename)
+        if kind != 'image' or motion_kind != 'video':
+            return None, ('motion is a Live Photo clip: a video beside an image', 400)
+    # iPhone stills arrive as HEIC, which only Safari can draw. Re-encoded once
+    # here, keeping the EXIF (date, GPS) — the food log's rule, for its reason.
+    heic = kind == 'image' and ext in HEIC_EXTS
+    if heic:
+        ext = 'jpg'
 
     # The user's label for the attachment. Falling back to the filename keeps a
     # list of attachments readable even when someone skips naming them.
@@ -928,7 +953,13 @@ def _store_attachment(
     path.parent.mkdir(parents=True, exist_ok=True)
     # Streamed to disk rather than read() into memory: a phone video is happily
     # several hundred MB, and this app also runs on a handheld with 8 GB of RAM.
-    file.save(path)
+    if heic:
+        if not transcode_to_jpeg(file, path):
+            storage.delete_attachment_dir(attachment_id)
+            return None, ('could not read this HEIC photo', 400)
+    else:
+        file.save(path)
+    mime = 'image/jpeg' if heic else (file.mimetype or None)
 
     size = path.stat().st_size
     if size == 0:
@@ -937,6 +968,18 @@ def _store_attachment(
     if size > _MAX_BYTES_BY_KIND[kind]:
         storage.delete_attachment_dir(attachment_id)
         return None, ('file is too large', 413)
+
+    motion_path = motion_size = None
+    if motion is not None:
+        motion_path = storage.motion_path(attachment_id, motion_ext)
+        if motion_path is None:
+            storage.delete_attachment_dir(attachment_id)
+            return None, (_UNSUPPORTED_TYPE, 400)
+        motion.save(motion_path)
+        motion_size = motion_path.stat().st_size
+        if motion_size == 0 or motion_size > MAX_MOTION_BYTES:
+            storage.delete_attachment_dir(attachment_id)
+            return None, ('motion clip is empty or too large', 413 if motion_size else 400)
 
     # A photo should be located by where it was taken, not where it was
     # uploaded from — same helper the food log uses (backend/food/exif.py).
@@ -953,12 +996,28 @@ def _store_attachment(
     # and is read back for display, never queried.
     latitude = longitude = None
     exif_block = None
+    duration = None
+    has_poster = False
     if kind == 'image':
         from backend.food.exif import extract_exif_block, extract_photo_meta
         meta = extract_photo_meta(path)
         latitude, longitude = meta['latitude'], meta['longitude']
         block = extract_exif_block(path)
         exif_block = json.dumps(block) if block else None
+        # The phone's date wins: it read OffsetTimeOriginal, and EXIF's bare
+        # wall-clock time is only as right as the server's own timezone.
+        if captured_at is None:
+            captured_at = meta['taken_at']
+    elif kind == 'video':
+        # A probe and one decoded frame — under a second for a local file, and
+        # no model involved, so done here rather than queued.
+        probed = journal_video.probe(path)
+        duration = probed['duration_seconds']
+        if captured_at is None:
+            captured_at = probed['captured_at']
+        latitude, longitude = probed['latitude'], probed['longitude']
+        poster = storage.thumb_path(attachment_id)
+        has_poster = poster is not None and journal_video.make_poster(path, poster)
     if latitude is None:
         latitude, longitude = _entry_coords(entry_id)
 
@@ -993,11 +1052,15 @@ def _store_attachment(
             'INSERT OR IGNORE INTO journal_attachments'
             '(id, entry_id, kind, name, path, mime, size, position,'
             ' transcript_status, description_status, latitude, longitude, exif,'
-            ' created_at)'
-            ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            (attachment_id, entry_id, kind, name, str(path), file.mimetype or None,
+            ' duration_seconds, thumb_path, captured_at, motion_path, motion_mime,'
+            ' motion_size, created_at)'
+            ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (attachment_id, entry_id, kind, name, str(path), mime,
              size, position, transcript_status, description_status,
              latitude, longitude, exif_block,
+             duration, str(storage.thumb_path(attachment_id)) if has_poster else None,
+             captured_at, str(motion_path) if motion_path else None,
+             (motion.mimetype or None) if motion is not None else None, motion_size,
              created_at if created_at is not None else int(time.time())),
         )
         db.commit()
@@ -1034,6 +1097,7 @@ def upload_attachment(id):
     """
     try:
         attachment_id = _client_id(request.form.get('attachmentId'))
+        captured_at = _optional_capture_time(request.form)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -1063,7 +1127,8 @@ def upload_attachment(id):
         return jsonify({'error': 'file is required'}), 400
 
     attachment, failure = _store_attachment(
-        id, file, request.form.get('name'), attachment_id
+        id, file, request.form.get('name'), attachment_id,
+        captured_at=captured_at, motion=request.files.get('motion'),
     )
     if failure is not None:
         message, status = failure
@@ -1652,6 +1717,22 @@ def get_attachment_file(attachment_id):
     # conditional=True so <audio> range requests work — seeking in a long voice
     # memo otherwise re-downloads the whole file on every scrub.
     return send_file(path, mimetype=row['mime'] or None, conditional=True)
+
+
+@bp.get('/attachments/<attachment_id>/motion')
+def get_attachment_motion(attachment_id):
+    """A Live Photo's clip — the still is `/file`. Range-served, since the
+    iPhone streams it into PHLivePhoto rather than downloading it first."""
+    row = get_db().execute(
+        'SELECT motion_path, motion_mime FROM journal_attachments WHERE id=?',
+        (attachment_id,),
+    ).fetchone()
+    if not row or not row['motion_path']:
+        return jsonify({'error': 'Not found'}), 404
+    path = storage.resolve_stored_path(row['motion_path'])
+    if path is None or not path.is_file():
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(path, mimetype=row['motion_mime'] or 'video/quicktime', conditional=True)
 
 
 @bp.post('/<entry_id>/attachments/link')

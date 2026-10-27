@@ -250,6 +250,36 @@ what each device can currently do and which work remains device-only.
   staged into the same draft and uploaded after the entry is
   created, each under its own client-minted attachment ID. Passed in
   simulator for the library picker; the camera needs a device.
+- **Live Photos and videos on a journal entry.** Choose photo offers Live
+  Photos and videos as well as stills (`preferredItemEncoding: .current`, so
+  the original file arrives rather than a re-encoded copy), and Take photo
+  can record video. A Live Photo is one attachment: its still and its clip
+  are exported from the picked object itself (`MediaImport.export`, no
+  photo-library permission) and staged side by side (`CaptureStore.stageLivePhoto`).
+  In the feed it carries a Live Photo mark and plays in a `PHLivePhotoView`
+  once its clip has been fetched from `/api/journal/attachments/<id>/motion`;
+  an uploaded video shows the poster and length the server read off it with
+  ffmpeg, and streams rather than riding the bulk media sync.
+- **Every photo and video keeps the date it was taken.** It is read on the
+  device (EXIF with its offset; a movie's QuickTime creation date) and sent as
+  the upload's `capturedAt`; the camera's photo is written with the metadata
+  the camera produced instead of through `jpegData`, which stripped it. An
+  entry with no words, clips or links — only pictures and videos — is dated by
+  the earliest of them (`CaptureStore.entryDate`), so an old photo lands on
+  the day it was taken; anything with words keeps the time it was written. The
+  feed says "taken …" when that is a different day from the entry's.
+- **Videos and Live Photos upload in the background.** Once everything else in
+  the capture has landed they are handed to a background `URLSession`
+  (`JournalBackgroundUploader`) that keeps sending after the app is closed;
+  `BackgroundUploads` records what the server answered, and the outbox only
+  marks the capture synced after validating that answer as it would an inline
+  one. A force-quit cancels the system's uploads, which the next launch
+  notices and hands off again. Core logic passed in `LiveVideoCaptureTests`;
+  the feed's Live Photo mark, taken date, poster and length passed in
+  simulator (`testJournalFeedShowsMediaInsideTheCalendarBorder`). Picking a
+  real Live Photo or video, the camera's video, Live Photo playback and a
+  background upload finishing with the app closed are not yet verified on
+  device.
 - **Take Photo from the Action Button** (iPhone): Settings → Action Button →
   Shortcut → Lunaschal → Take Photo. A press opens the app on the camera, even
   from a cold launch; the photo goes into the Capture draft exactly as the

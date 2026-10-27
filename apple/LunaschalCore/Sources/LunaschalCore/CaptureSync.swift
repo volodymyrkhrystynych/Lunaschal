@@ -6,6 +6,8 @@ public final class CaptureSync {
     private let store: CaptureStore
     private let uploads: RecordingUploadStore?
     private let transfers: TransferStore?
+    /// Dropped once a capture is synced, like the recording bodies.
+    public var backgroundUploads: BackgroundUploads?
     private let now: () -> Date
     /// When each meal's weather was last asked for, this launch.
     private var weatherAsked: [String: Date] = [:]
@@ -27,6 +29,7 @@ public final class CaptureSync {
         for capture in try store.list() where capture.state == .synced {
             try uploads?.discardAfterSync(capture)
             try transfers?.discardAfterSync(capture)
+            try backgroundUploads?.discardAfterSync(capture)
             try store.retireReplaced(by: capture)
         }
         if try transfers?.all().contains(where: { $0.state == .authentication }) == true {
@@ -59,6 +62,14 @@ public final class CaptureSync {
                 try store.save(capture)
             } catch {
                 if let attempt, try transfers?.isCurrent(attempt) != true { throw CancellationError() }
+                // Part of it is with the background session: not a failure, and
+                // not an attempt either — it is asked again on the next pass.
+                if error is UploadDeferred {
+                    capture.lastError = nil
+                    try store.save(capture)
+                    if let attempt { try transfers?.finish(attempt, outcome: .cancelled, now: now()) }
+                    continue
+                }
                 if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
                     if let attempt { try transfers?.finish(attempt, outcome: .cancelled, now: now()) }
                     throw error
@@ -78,6 +89,7 @@ public final class CaptureSync {
             }
             try uploads?.discardAfterSync(try store.load(capture.id))
             try transfers?.discardAfterSync(try store.load(capture.id))
+            try backgroundUploads?.discardAfterSync(try store.load(capture.id))
             try store.retireReplaced(by: try store.load(capture.id))
         }
         // A meal's weather arrives a moment after it is saved; ask until it has
