@@ -151,11 +151,15 @@ Open on site marks the chapter liked without sending anything, since you press
 Like there yourself. Long press and the reader menu also offer Re-get this
 chapter (the server rewrites it from its post, for an author's edit). Rechecking
 which chapters are liked is a server job, started from the web app's Settings →
-Fanfic site cookies. Folders mode lists a **Backlog**: books on none of your
-lists on their site (watched, bookmarked, followed, favorited, subscribed), shown
-once the server has walked that site's lists. Liking from the reader and the
-Backlog folder passed in simulator against the fixture; the like POST itself is
-unverified against a live forum.
+Fanfic site cookies. Folders mode lists a **Backlog**: books you don't follow
+on their site (not watched, followed, favorited, subscribed or AO3-bookmarked; a
+forum bookmark doesn't count, since its labels are folders), shown once the server
+has walked one of that site's lists that does count. It opens newest-added first,
+and the Library view's filter menu has a "Backlog only" toggle that does the same.
+Liking from the reader and the Backlog folder passed in simulator against the
+fixture; the like POST itself is unverified against a live forum. The Backlog
+sort and filter are covered by `LunaschalCore` tests and an app build, not yet a
+simulator UI test.
 Study owns Documents and other saved reference material, and is iPad-only.
 On iPad it provides Pencil annotations for downloaded PDFs
 and images without a Notebook editor. Ink autosaves locally and can be exported
