@@ -239,6 +239,32 @@ def seed_journal(db):
          }),
          ts(1)),
     )
+    # Taken the day before it was attached, and a Live Photo: the clip beside
+    # the still is placeholder bytes for the same reason the YouTube video below
+    # is — nothing in the demo decodes it.
+    motion = d / 'motion.mov'
+    motion.write_bytes(b'\x00\x00\x00 ftypqt  ')
+    db.execute(
+        "UPDATE journal_attachments SET captured_at=?, motion_path=?,"
+        " motion_mime='video/quicktime', motion_size=? WHERE id=?",
+        (ts(2), str(motion), motion.stat().st_size, attachment_id),
+    )
+
+    # A clip from the phone's camera roll on the same entry, with the poster and
+    # length the upload route reads off it with ffmpeg.
+    clip_id = new_id()
+    clip_path = attachment_path(clip_id, 'mov')
+    clip_path.parent.mkdir(parents=True, exist_ok=True)
+    clip_path.write_bytes(b'\x00\x00\x00 ftypqt  ')
+    clip_thumb = clip_path.parent / 'thumb.jpg'
+    placeholder_image(clip_thumb, 'drawer, open', size=(640, 360))
+    db.execute(
+        'INSERT INTO journal_attachments (id, entry_id, kind, name, path, mime, size,'
+        ' position, duration_seconds, thumb_path, captured_at, created_at)'
+        " VALUES (?, ?, 'video', 'drawer slides', ?, 'video/quicktime', ?, 1, 14, ?, ?, ?)",
+        (clip_id, entry_id, str(clip_path), clip_path.stat().st_size,
+         str(clip_thumb), ts(2), ts(1)),
+    )
 
     # The screenshot shortcut's main shape: several captures collected into
     # one text-free journal entry, ordered and named by their local capture

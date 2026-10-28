@@ -27,6 +27,7 @@ TIMESTAMP_COLS = frozenset({
     'applied_at', 'closed_at', 'purge_after', 'purged_at', 'fetched_at',
     'scanned_at', 'queued_at', 'last_run_at', 'triage_at', 'occurred_at',
     'added_at', 'archived_at', 'archive_restored_at', 'ready_at',
+    'captured_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -172,6 +173,7 @@ def init_db() -> None:
     _ensure_journal_auto_file(db)
     _ensure_journal_screenshot_event_threshold(db)
     _ensure_journal_attachment_youtube(db)
+    _ensure_journal_attachment_capture(db)
     _migrate_flashcards_to_learning(db)
     _ensure_prevent_sleep(db)
     _ensure_briefing_settings(db)
@@ -2327,6 +2329,24 @@ def _ensure_journal_attachment_youtube(db: sqlite3.Connection) -> None:
         )
     if 'import_error' not in cols:
         db.execute('ALTER TABLE journal_attachments ADD COLUMN import_error TEXT')
+    db.commit()
+
+
+def _ensure_journal_attachment_capture(db: sqlite3.Connection) -> None:
+    """The original capture time and a Live Photo's paired clip.
+
+    `captured_at` is NULL for every row predating it — those were never sent a
+    date, and guessing one from created_at would claim a precision they lack.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_attachments)')}
+    if 'captured_at' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN captured_at INTEGER')
+    if 'motion_path' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN motion_path TEXT')
+    if 'motion_mime' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN motion_mime TEXT')
+    if 'motion_size' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN motion_size INTEGER')
     db.commit()
 
 

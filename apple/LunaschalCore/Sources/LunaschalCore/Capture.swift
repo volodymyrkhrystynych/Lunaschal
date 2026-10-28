@@ -67,10 +67,18 @@ public struct CaptureFile: Codable, Equatable, Identifiable {
     public let attachmentID: String
     public let name: String
     public let contentType: String?
+    /// When the photo or video was taken, read off the file itself (EXIF, or a
+    /// movie's QuickTime date) — not when it was picked.
     public let capturedAt: Date?
+    /// A Live Photo is one attachment: this file is its still, and the short
+    /// clip of that type sits beside it (`CaptureStore.motionURL`). Nil for
+    /// everything else, and for every file staged before Live Photos.
+    public let motionContentType: String?
 
     public var id: String { attachmentID }
     public var isImage: Bool { contentType?.hasPrefix("image/") == true }
+    public var isVideo: Bool { contentType?.hasPrefix("video/") == true }
+    public var isLivePhoto: Bool { isImage && motionContentType != nil }
     /// The food log keeps pictures, videos and voice memos, nothing else.
     public var isFoodMedia: Bool {
         ["image/", "video/", "audio/"].contains { contentType?.hasPrefix($0) == true }
@@ -80,11 +88,19 @@ public struct CaptureFile: Codable, Equatable, Identifiable {
         ["image/", "audio/"].contains { contentType?.hasPrefix($0) == true }
     }
 
-    public init(name: String, contentType: String?, capturedAt: Date? = nil, now: Date = Date()) {
+    public init(name: String, contentType: String?, capturedAt: Date? = nil,
+                motionContentType: String? = nil, now: Date = Date()) {
         attachmentID = ULID.make(now: now)
         self.name = name
         self.contentType = contentType
         self.capturedAt = capturedAt
+        self.motionContentType = motionContentType
+    }
+
+    /// Where a Live Photo's clip lives, given where its still does: one name,
+    /// so the store, the uploader and cleanup cannot disagree about it.
+    public static func motionURL(beside still: URL) -> URL {
+        still.appendingPathExtension("motion")
     }
 }
 

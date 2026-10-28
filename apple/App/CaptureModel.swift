@@ -3,6 +3,7 @@ import SwiftUI
 import LunaschalCore
 import AVFoundation
 import UIKit
+import UniformTypeIdentifiers
 
 @MainActor
 final class CaptureModel: ObservableObject {
@@ -121,6 +122,10 @@ final class CaptureModel: ObservableObject {
     let notebooks: NotebookStore
     let uploads: RecordingUploadStore
     let transfers: TransferStore
+    /// Journal videos and Live Photos the system is uploading in the background.
+    let backgroundUploads: BackgroundUploads
+    let journalUploader: JournalBackgroundUploader
+    private var uploaderReconciled = false
     let media: MediaStore
     /// Pictures inside fic chapters; the library worker fills it too.
     let ficImages: FicImageStore
@@ -168,6 +173,8 @@ final class CaptureModel: ObservableObject {
         self.store = store
         uploads = try RecordingUploadStore(root: store.root.appendingPathComponent("recording-uploads", isDirectory: true))
         transfers = try TransferStore(root: store.root.appendingPathComponent("transfer-state", isDirectory: true))
+        backgroundUploads = try BackgroundUploads(root: store.root.appendingPathComponent("background-uploads", isDirectory: true))
+        journalUploader = JournalBackgroundUploader(ledger: backgroundUploads)
         drawings = try DrawingStore(root: store.root.appendingPathComponent("drawings", isDirectory: true))
         drawingPublications = try DrawingPublicationStore(root: store.root.appendingPathComponent("drawing-publications", isDirectory: true))
         notebooks = try NotebookStore(root: store.root.appendingPathComponent("notebooks", isDirectory: true))
@@ -208,6 +215,7 @@ final class CaptureModel: ObservableObject {
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store, pomodoros: pomodoros)
         syncer = CaptureSync(store: store, uploads: uploads, transfers: transfers)
+        syncer.backgroundUploads = backgroundUploads
         replicaSyncer = ReplicaSync(url: store.root.appendingPathComponent("replica.sqlite"))
         libraryWorker = LibraryDownload(replicaURL: store.root.appendingPathComponent("replica.sqlite"),
                                         mediaURL: media.root, imagesURL: ficImages.root)
@@ -798,6 +806,7 @@ final class CaptureModel: ObservableObject {
         }
         if let api = apis[cellular] { return api }
         guard let api = try? JournalAPI(server: server, token: token, allowCellular: cellular, uploads: uploads) else { return nil }
+        api.background = (backgroundUploads, journalUploader)
         apis[cellular] = api
         return api
     }
@@ -831,6 +840,26 @@ final class CaptureModel: ObservableObject {
         let fetch = Task<URL?, Never> {
             do {
                 try await api.downloadAttachment(item, thumbnail: thumbnail, playable: playable, to: file)
+                return file
+            } catch { return nil }
+        }
+        journalMediaFetches[name] = fetch
+        defer { journalMediaFetches[name] = nil }
+        return await fetch.value
+    }
+
+    /// A Live Photo's clip on this device, fetched once and kept with the
+    /// other feed media. Nil offline when it was never fetched.
+    func journalMotionFile(_ item: JournalAttachmentItem) async -> URL? {
+        guard item.isLivePhoto, item.collection == "journal_attachments" else { return nil }
+        let name = item.id + ".motion.mov"
+        let file = journalMediaRoot.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: file.path) { return file }
+        if let running = journalMediaFetches[name] { return await running.value }
+        guard let api = chatAPI() else { return nil }
+        let fetch = Task<URL?, Never> {
+            do {
+                try await api.downloadJournalMotion(item.id, to: file)
                 return file
             } catch { return nil }
         }
@@ -1117,10 +1146,35 @@ final class CaptureModel: ObservableObject {
 
     /// A photo just taken with the camera, into the composer's draft (`entryID`
     /// nil) or an edited entry's. Shared by the camera button and the Action Button.
-    func stageCameraPhoto(_ image: UIImage, into entryID: String? = nil) {
-        guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+    /// `metadata` is what the camera wrote about the shot; kept in the JPEG,
+    /// so the server reads the same EXIF a photo from the library carries.
+    func stageCameraPhoto(_ image: UIImage, metadata: [String: Any]? = nil, into entryID: String? = nil) {
+        guard let data = MediaImport.cameraJPEG(image, metadata: metadata) else { return }
         stage { try $0.stageFile(data: data, name: Self.photoName("jpg"), contentType: "image/jpeg",
                                  into: entryID, capturedAt: Date()) }
+    }
+
+    /// A video from the camera or the library, dated by its own metadata.
+    /// `source` is a temporary copy, removed once staged.
+    func stageMovie(_ source: URL, contentType: String?, name: String? = nil, into entryID: String? = nil,
+                    capturedAt: Date? = nil) async {
+        defer { try? FileManager.default.removeItem(at: source) }
+        let taken = await MediaImport.creationDate(of: source, mime: contentType)
+        stage { try $0.stageFile(from: source, name: name ?? Self.videoName(source.pathExtension),
+                                 contentType: contentType ?? "video/quicktime", into: entryID,
+                                 capturedAt: taken ?? capturedAt) }
+    }
+
+    /// A Live Photo: its still and its clip, as one staged file.
+    func stageLivePhoto(_ live: MediaImport.LivePhotoFiles, into entryID: String? = nil) {
+        defer { try? FileManager.default.removeItem(at: live.motion.deletingLastPathComponent()) }
+        let ext = UTType(mimeType: live.stillType)?.preferredFilenameExtension ?? "heic"
+        stage { try $0.stageLivePhoto(still: live.still, stillType: live.stillType, motion: live.motion,
+                                      motionType: live.motionType, name: Self.photoName(ext), into: entryID) }
+    }
+
+    static func videoName(_ ext: String) -> String {
+        "Video \(Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))).\(ext.isEmpty ? "mov" : ext.lowercased())"
     }
 
     static func photoName(_ ext: String) -> String {
@@ -1314,6 +1368,13 @@ final class CaptureModel: ObservableObject {
             try await timed("fic imports") { try await sendFicImports(using: api) }
             if try await timed("calendar changes", { try await sendCalendarEvents(using: api) }) {
                 changed.formUnion(CalendarSync.collections)
+            }
+            if !uploaderReconciled {
+                // Once per launch, before anything new can be handed off: a
+                // force-quit cancelled whatever the session was carrying.
+                uploaderReconciled = true
+                journalUploader.finished = { [weak self] in self?.requestSync() }
+                await journalUploader.reconcile()
             }
             try await timed("uploads") { try await syncer.run(using: api) }
             try await timed("screenshots") { try await screenshots.run(using: api) }

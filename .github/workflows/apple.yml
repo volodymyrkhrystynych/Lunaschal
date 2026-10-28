@@ -15,8 +15,11 @@ env:
   DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
 # The simulator work used to be one job of ~40 minutes. It is now split across
 # parallel macOS jobs, each building for itself (~5 min) and then running its
-# share: the device archive and Watch build, five shards of the iPhone UI
-# tests (app unit tests in the first), and the iPad-only tests. Simulator UI
+# share: the device archive and Watch build, four shards of the iPhone UI
+# tests (app unit tests in the first), and the iPad-only tests. Four, not
+# five: GitHub runs at most five macOS jobs at once, and with six ~20-minute
+# simulator jobs the sixth queued behind the first wave, doubling the wall
+# time to 40+ minutes. Simulator UI
 # tests flake on slow runners, so each failing test gets one retry, and a test
 # stuck for 5 minutes (one once hung 12 on a tap) is stopped and retried.
 jobs:
@@ -60,11 +63,12 @@ jobs:
 
   iphone:
     runs-on: macos-26
-    timeout-minutes: 30
+    # Each shard is ~8 min of build and ~16 of tests; room for a retried test.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - name: Generate Xcode project

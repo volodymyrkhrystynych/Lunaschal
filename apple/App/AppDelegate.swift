@@ -15,6 +15,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
     /// journal shows the new run.
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
                      completionHandler: @escaping () -> Void) {
+        // Journal videos and Live Photos: the model owns that session, since
+        // there may be only one per identifier.
+        if identifier == JournalBackgroundUploader.identifier {
+            guard case .success(let model) = startup else { return completionHandler() }
+            model.journalUploader.finished = { [weak model] in model?.requestSync() }
+            model.journalUploader.attach(completion: completionHandler)
+            return
+        }
         guard identifier == ScreenshotBackgroundUpload.identifier else { return completionHandler() }
         if screenshotUploads == nil {
             screenshotUploads = ScreenshotBackgroundReceiver { [weak self] in
