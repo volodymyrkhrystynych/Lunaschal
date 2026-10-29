@@ -666,6 +666,23 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
     }
 
+    func testReturningToCaptureAlwaysOpensEntryAndDailyShowsItsCount() {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        let daily = app.segmentedControls.buttons["Daily"]
+        XCTAssertTrue(daily.exists)
+        XCTAssertNotNil(daily.label.range(of: #"^Daily, [0-3] remaining$"#, options: .regularExpression))
+        daily.tap()
+        XCTAssertTrue(app.staticTexts["Weather"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["Journal"].tap()
+        app.tabBars.buttons["Capture"].tap()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.segmentedControls.buttons["Entry"].isSelected)
+        daily.tap()
+        XCTAssertTrue(app.staticTexts["Weather"].waitForExistence(timeout: 5))
+    }
+
     func testSleepWeekSelectsNightsAndSurvivesOfflineRelaunch() {
         let app = XCUIApplication()
         app.launchArguments = ["-sleepWeekFixture"]

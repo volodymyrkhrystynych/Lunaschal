@@ -41,6 +41,47 @@ final class DailyTests: XCTestCase {
         XCTAssertEqual(DayKey.of(at(4, 23, 30), calendar: calendar), "2026-10-04")
     }
 
+    func testDailyRemindersCountRequirementsAndStopAtTwoThousandCalories() throws {
+        let day = "2026-10-04"
+        func summary(_ server: DailyStatus? = nil) throws -> DailySummary {
+            DailySummary(day: day, server: server, local: try store.list())
+        }
+        XCTAssertEqual(try summary().remainingCount, 3)
+        _ = try store.logWeight(80, now: at(4, 9))
+        XCTAssertEqual(try summary().remainingCount, 2)
+        _ = try store.logSelfie(jpeg: Data("selfie".utf8), now: at(4, 9))
+        XCTAssertEqual(try summary().remainingCount, 1)
+        let meal = try store.logCalories(1999, description: "Meals", now: at(4, 9))
+        XCTAssertEqual(try summary().remainingCount, 1)
+        _ = try store.logCalories(1, description: "Last bite", now: at(4, 9))
+        XCTAssertEqual(try summary().remainingCount, 0)
+        // A server echo of a pending upload must not count the same meal twice.
+        XCTAssertEqual(try summary(DailyStatus(day: day, entries: [
+            .init(id: meal.id, description: "Meals", calories: 1999),
+        ])).total, 2000)
+        _ = try store.delete(id: meal.id, kind: .calories, day: day, now: at(4, 10))
+        XCTAssertEqual(try summary().remainingCount, 1)
+    }
+
+    func testDailyRemindersUseServerRecordsAndResetAtTheDayBoundary() {
+        let server = DailyStatus(day: "2026-10-04", weight: 80, selfie: .init(id: "selfie"),
+                                 entries: [.init(id: "meal", description: "Meals", calories: 2100)])
+        XCTAssertEqual(DailySummary(day: DayKey.of(at(5, 3, 59), calendar: calendar),
+                                    server: server, local: []).remainingCount, 0)
+        XCTAssertEqual(DailySummary(day: DayKey.of(at(5, 4), calendar: calendar),
+                                    server: server, local: []).remainingCount, 3)
+    }
+
+    func testRefusedUploadsDoNotQuietDailyReminders() throws {
+        var logs = [
+            try store.logWeight(80, now: at(4, 9)),
+            try store.logCalories(2000, description: "Meals", now: at(4, 9)),
+            try store.logSelfie(jpeg: Data("selfie".utf8), now: at(4, 9)),
+        ]
+        for index in logs.indices { logs[index].state = .failed }
+        XCTAssertEqual(DailySummary(day: "2026-10-04", server: nil, local: logs).remainingCount, 3)
+    }
+
     func testNewWeightsHaveExplicitUnitsAndLegacyQueuedWeightsUseTheCutoff() throws {
         var old = try store.logWeight(180, now: at(4, 9))
         XCTAssertEqual(old.weightUnit, "kg")

@@ -1,5 +1,13 @@
 # Apple apps and offline experience — implementation tracker
 
+Chat todos and daily reminders (`fix/chat-todos-daily-badges`): Capture returns
+to Entry when reselected; Capture and Daily count the three unmet daily health
+requirements using server records plus offline logs. Core tests cover the
+2,000-calorie threshold, deletion, deduplication, and 4am rollover. Chat expands
+new to-dos and reports refresh failures. Capture navigation and offline Daily
+logging passed in the iPhone simulator; live-model chat and physical-device
+camera use have not been verified.
+
 Server oddities (`feat/server-oddities-modal`): saved briefing reports open in
 a native sheet with expandable entries; the web uses a modal. Both extract the
 saved report without a new API or sync format, so existing cached briefings work.
