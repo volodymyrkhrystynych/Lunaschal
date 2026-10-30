@@ -450,7 +450,7 @@ def doc_facts(root: Path) -> list[dict]:
             # against what is already written down, not against a paraphrase.
             entry['items'] = [
                 m.group(1).strip()[:300]
-                for m in re.finditer(r'^- \*\*(.+?)\*\*', text, re.MULTILINE)
+                for m in re.finditer(r'^- (.+)$', text, re.MULTILINE)
             ]
         out.append(entry)
     return out
