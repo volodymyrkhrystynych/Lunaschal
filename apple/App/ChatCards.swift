@@ -283,6 +283,10 @@ struct ChatTodoBar: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("chat-todos")
+            if let problem = chat.todoProblem {
+                Text(problem).font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal)
+            }
             if expanded {
                 ScrollView {
                     VStack(spacing: 6) {
@@ -300,6 +304,9 @@ struct ChatTodoBar: View {
             }
         }
         .background(.bar)
+        .onChange(of: chat.todos.map(\.id)) { old, new in
+            if !Set(new).subtracting(old).isEmpty { expanded = true }
+        }
         .sheet(item: $promoting) { todo in PromoteTodo(chat: chat, todo: todo) }
     }
 }

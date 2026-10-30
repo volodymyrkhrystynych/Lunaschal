@@ -1,5 +1,10 @@
 # Supported experience and recovery
 
+Capture returns to Entry when selected from another tab. Capture and its Daily
+segment show the number of unmet daily requirements: 2,000 calories, a selfie,
+and a body weight. Local queued logs count immediately, using the 4am day.
+Chat opens its to-do bar when new items arrive and reports a failed list refresh.
+
 Chat's saved Server oddities reports open in a large sheet with expandable
 explanations and selectable log text, including from the offline message cache.
 The iOS sheet still needs simulator verification.

@@ -118,7 +118,10 @@ what each device can currently do and which work remains device-only.
   is iPhone-only); with no notebook open, its screenshot waits for the next one.
 
 - The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
-  default) is the composer below; **Daily** logs the day's selfie (front camera,
+  default on launch and when returning from another tab) is the composer below.
+  Capture and Daily show the same remaining count: one each for fewer than
+  2,000 calories, no selfie, and no body weight in the current 4am day.
+  Saved offline logs count immediately. **Daily** logs the day's selfie (front camera,
   flash initially off),
   body weight, calorie entries and voluntary spending. Each is saved on the device
   first, keyed by the
