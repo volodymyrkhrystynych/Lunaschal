@@ -219,10 +219,17 @@ bookmarks stay; the reaction is read too. Forum chapters only.
 `bookmarks`, `subscriptions`, `feed`). Only a pass that walked a list from page 1 to its
 last page without an error may take a fic off it, by dropping marks older than the
 pass's `pass_started_at` (persisted on the scan row, so a resumed pass keeps the start it
-had). A fic is Backlog when it is an online source, on no list, **and its site has had a
-complete pass** — before the first watched walk finishes, "on no list" only means "not
-looked yet". `GET /api/fanfic?folderId=backlog`; the phone reads the snapshot's
-`backlog` flag. Local uploads are never Backlog.
+had). A fic is Backlog when it is an online source the user doesn't follow, **and its site
+has had a complete pass over a list that counts** — before the first watched walk
+finishes, "on no list" only means "not looked yet". **A forum bookmark doesn't count**
+(`_follows`): its labels become folders, and a bookmark labelled "backlog" is the very
+thing this list is for, so it neither keeps a fic out nor vouches for the site by
+finishing a pass. AO3's `bookmarks` are its favourites and do count. `GET
+/api/fanfic?folderId=backlog` sorts **newest-added first** unless a `sort` is given
+(`sort=added` works anywhere); the phone reads the snapshot's `backlog` flag, opens
+the folder on the same order, and offers it as a Library filter. Local uploads are
+never Backlog. Changing this rule changes every snapshot's flag, which is why it bumped
+`mobile_sync/registry.py`'s projection tag.
 
 ## Reading spans (`fic_reading_spans`)
 

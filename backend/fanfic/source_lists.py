@@ -8,9 +8,11 @@ walked the list from its first page to its last without an error may take a fic
 *off* it, by dropping marks older than the moment that pass began. A failed or
 half-finished pass therefore never empties a list.
 
-**Backlog** is an online fic on none of its site's lists -- imported once from
-a link, an alert or a search and kept because it looked interesting. It only
-counts once that site has had at least one complete pass: before the first
+**Backlog** is an online fic the user doesn't follow on its site -- not
+watched, followed, favourited or subscribed to; imported once from a link, an
+alert or a search, or bookmarked to get around to. Forum bookmarks don't
+count as following (see `_follows`). It only counts once that site has had at
+least one complete pass over a list that does: before the first
 watched-threads walk finishes, "on no list" means "not looked yet", and every
 forum fic would land in the Backlog for no reason.
 
@@ -44,12 +46,25 @@ def complete_pass(db, site: str, list_name: str, started_at: int | None) -> None
         (site, list_name, int(time.time())))
 
 
+def _follows(prefix: str, alias: str) -> str:
+    """SQL: the list row `alias` is one that says the user follows the fic.
+
+    A forum bookmark is filing, not following -- its labels become folders,
+    and a "backlog" label is exactly the kind of thing it gets used for -- so
+    it neither keeps a fic out of the Backlog nor, by finishing a pass,
+    vouches for the watched list that does. AO3's bookmarks are its
+    favourites and still count."""
+    return f"NOT ({alias}.list='bookmarks' AND {prefix}.source_type='xenforo')"
+
+
 def backlog_sql(prefix: str) -> str:
     """SQL truth value: the fic aliased `prefix` is in the Backlog."""
     types = ','.join(f"'{t}'" for t in ONLINE_SOURCE_TYPES)
     return (f'({prefix}.source_type IN ({types})'
-            f' AND NOT EXISTS (SELECT 1 FROM fic_source_lists l WHERE l.fic_id={prefix}.id)'
-            f' AND EXISTS (SELECT 1 FROM fic_list_passes p WHERE p.site={prefix}.site))')
+            f' AND NOT EXISTS (SELECT 1 FROM fic_source_lists l'
+            f' WHERE l.fic_id={prefix}.id AND {_follows(prefix, "l")})'
+            f' AND EXISTS (SELECT 1 FROM fic_list_passes p'
+            f' WHERE p.site={prefix}.site AND {_follows(prefix, "p")}))')
 
 
 def lists_for(db, fic_ids: list[str]) -> dict[str, list[str]]:

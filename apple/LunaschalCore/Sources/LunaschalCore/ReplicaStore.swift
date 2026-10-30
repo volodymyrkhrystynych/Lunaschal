@@ -454,11 +454,12 @@ public final class ReplicaStore {
         let folders = FicLibrary.field("folderIds")
         if filter.folder == "unsorted" {
             clauses.append("NOT EXISTS (SELECT 1 FROM json_each(\(folders)))")
-        } else if filter.folder == FicLibrary.backlogFolder {
-            clauses.append("COALESCE(json_extract(payload,'$.backlog'),0)=1")
-        } else if !filter.folder.isEmpty {
+        } else if !filter.folder.isEmpty && filter.folder != FicLibrary.backlogFolder {
             clauses.append("EXISTS (SELECT 1 FROM json_each(\(folders)) WHERE value=?)")
             args.append(filter.folder)
+        }
+        if filter.folder == FicLibrary.backlogFolder || filter.backlogOnly {
+            clauses.append("COALESCE(json_extract(payload,'$.backlog'),0)=1")
         }
         let shelf = "COALESCE(\(FicLibrary.field("shelf")),'reading')"
         switch filter.shelf {
@@ -502,6 +503,7 @@ public final class ReplicaStore {
                     COALESCE(CAST(strftime('%s',json_extract(payload,'$.lastOpenedAt')) AS REAL),0)) DESC,
                 json_extract(payload,'$.updatedAt') DESC,id
                 """
+        case "added": order = "COALESCE(CAST(strftime('%s',json_extract(payload,'$.createdAt')) AS REAL),0) DESC,id DESC"
         case "title": order = "json_extract(payload,'$.title') COLLATE NOCASE,id"
         case "rating": order = "\(rating) DESC,json_extract(payload,'$.title') COLLATE NOCASE,id"
         default: order = "COALESCE(json_extract(payload,'$.latestActivity'),CAST(strftime('%s',json_extract(payload,'$.createdAt')) AS REAL),0) DESC,id"

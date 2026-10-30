@@ -49,6 +49,30 @@ def test_backlog_is_the_forum_fics_on_no_list_once_a_pass_finished(client, fake_
     assert watched['backlog'] is False and watched['sourceLists'] == ['watched']
 
 
+def test_a_forum_bookmark_does_not_keep_a_fic_out_of_the_backlog(client):
+    db = get_db()
+    for thread_id in ('1', '2', '3'):
+        _add_fic(thread_id)
+    _add_fic('4', source_type='ao3', site='archiveofourown.org')
+    ids = {t: f'01J0000000000000000000{t:0>4}' for t in ('1', '2', '3', '4')}
+    # 1: bookmarked with a "backlog" label; 2: bookmarked and watched;
+    # 3: watched; 4: an AO3 bookmark, which is AO3's favourite.
+    source_lists.mark(db, ids['1'], 'bookmarks')
+    source_lists.mark(db, ids['2'], 'bookmarks')
+    source_lists.mark(db, ids['2'], 'watched')
+    source_lists.mark(db, ids['3'], 'watched')
+    source_lists.mark(db, ids['4'], 'bookmarks')
+    db.execute('INSERT INTO fic_list_passes(site, list, completed_at) VALUES (?,?,1)', (SITE, 'bookmarks'))
+    db.execute("INSERT INTO fic_list_passes(site, list, completed_at) VALUES ('archiveofourown.org','bookmarks',1)")
+    db.commit()
+    # Only the forum's bookmarks have been walked: nothing is known about who
+    # is watched there yet.
+    assert _backlog(client) == set()
+    db.execute('INSERT INTO fic_list_passes(site, list, completed_at) VALUES (?,?,1)', (SITE, 'watched'))
+    db.commit()
+    assert _backlog(client) == {'1'}
+
+
 def test_local_uploads_are_never_backlog(client, fake_net):  # noqa: F811
     db = get_db()
     db.execute("INSERT INTO fics(id, title, source_type, site, created_at, updated_at)"
@@ -56,6 +80,28 @@ def test_local_uploads_are_never_backlog(client, fake_net):  # noqa: F811
     db.execute('INSERT INTO fic_list_passes(site, list, completed_at) VALUES (?,?,1)', (SITE, 'watched'))
     db.commit()
     assert _backlog(client) == set()
+
+
+def test_backlog_lists_newest_added_first_unless_a_sort_is_asked_for(client):
+    db = get_db()
+    # Chapters post in the opposite order, so activity and added disagree.
+    for thread_id, added, posted in (('1', 100, 900), ('2', 300, 100), ('3', 200, 500)):
+        _add_fic(thread_id)
+        fic_id = f'01J0000000000000000000{thread_id:0>4}'
+        db.execute('UPDATE fics SET created_at=? WHERE id=?', (added, fic_id))
+        db.execute('INSERT INTO fic_chapters(id, fic_id, position, title, content_html, content_text, posted_at, created_at)'
+                   ' VALUES (?,?,0,?,?,?,?,?)', (f'{fic_id}c', fic_id, 'Ch', '<p>text</p>', 'text', posted, added))
+    db.execute('INSERT INTO fic_list_passes(site, list, completed_at) VALUES (?,?,1)', (SITE, 'watched'))
+    db.commit()
+
+    def order(query=''):
+        return [f['title'] for f in client.get(f'/api/fanfic?folderId=backlog{query}').get_json()]
+
+    assert order() == ['Fic 2', 'Fic 3', 'Fic 1']
+    assert order('&sort=recent') != order()
+    # The default everywhere else is still the sites' latest activity.
+    assert [f['title'] for f in client.get('/api/fanfic').get_json()] == ['Fic 1', 'Fic 3', 'Fic 2']
+    assert [f['title'] for f in client.get('/api/fanfic?sort=added').get_json()] == ['Fic 2', 'Fic 3', 'Fic 1']
 
 
 def test_a_completed_pass_drops_a_thread_no_longer_watched(client, fake_net):  # noqa: F811

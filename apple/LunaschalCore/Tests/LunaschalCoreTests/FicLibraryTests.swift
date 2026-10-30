@@ -236,6 +236,43 @@ final class FicLibraryTests: XCTestCase {
         XCTAssertEqual(try store.folderCounts()[FicLibrary.backlogFolder], 1)
     }
 
+    func testTheBacklogOpensNewestAddedFirst() throws {
+        let (store, _) = try store()
+        // Site activity runs the other way, so the order can only come from createdAt.
+        let older = with(book(3), ["backlog": .number(1), "createdAt": .string("2026-01-02T00:00:00Z")])
+        let newer = with(book(1), ["backlog": .number(1), "createdAt": .string("2026-10-27T09:30:00Z")])
+        let middle = with(book(2), ["backlog": .number(1), "createdAt": .string("2026-05-01T12:00:00+00:00")])
+        try apply([older, newer, middle], to: store)
+        let opening = BookFilter(opening: FicLibrary.backlogFolder)
+        XCTAssertEqual(opening.sort, "added")
+        XCTAssertEqual(try ids(store) { $0 = opening; $0.folder = FicLibrary.backlogFolder },
+                       [newer.id, middle.id, older.id])
+        // Everywhere else still opens on the sites' latest activity.
+        XCTAssertEqual(BookFilter(opening: nil), BookFilter())
+        XCTAssertEqual(BookFilter(opening: "unsorted").sort, "activity")
+        XCTAssertEqual(try ids(store) { $0.folder = FicLibrary.backlogFolder }, [older.id, middle.id, newer.id])
+    }
+
+    func testTheLibraryCanFilterToTheBacklogAndSortsItByAdded() throws {
+        let (store, _) = try store()
+        let listed = with(book(4), ["backlog": .number(0), "createdAt": .string("2026-10-28T00:00:00Z")])
+        let older = with(book(3), ["backlog": .number(1), "createdAt": .string("2026-01-02T00:00:00Z")])
+        let newer = with(book(1), ["backlog": .number(1), "createdAt": .string("2026-10-27T09:30:00Z")])
+        try apply([listed, older, newer], to: store)
+        var filter = BookFilter()
+        filter.setBacklogOnly(true)
+        XCTAssertEqual(filter.sort, "added")
+        XCTAssertEqual(try store.books(filter: filter, limit: 100).records.map(\.id), [newer.id, older.id])
+        filter.setBacklogOnly(false)
+        XCTAssertEqual(filter, BookFilter())
+        // A sort the user chose survives switching the Backlog on and off.
+        filter.sort = "title"
+        filter.setBacklogOnly(true)
+        XCTAssertEqual(filter.sort, "title")
+        filter.setBacklogOnly(false)
+        XCTAssertEqual(filter.sort, "title")
+    }
+
     func testOnlyForumPostsAreLikeable() {
         let forum = with(book(1), ["sourceType": .string("xenforo")])
         let post = with(chapter(forum, position: 0), ["sourceUrl": .string("https://forums.example.com/threads/x.1/post-55")])
