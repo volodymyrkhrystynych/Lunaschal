@@ -208,6 +208,11 @@ def test_a_books_snapshot_says_whether_it_is_backlog(client):
         ' ORDER BY sequence DESC LIMIT 1', (fic,)).fetchone()[0]
     import json
     assert json.loads(snapshot())['backlog'] == 0
+    # A forum's bookmarks pass vouches for nothing; the watched pass after it
+    # is what makes the site's fics Backlog, and it must reach the phone.
+    db.execute("INSERT INTO fic_list_passes(site, list, completed_at) VALUES ('forums.spacebattles.com','bookmarks',1)")
+    db.commit()
+    assert json.loads(snapshot())['backlog'] == 0
     db.execute("INSERT INTO fic_list_passes(site, list, completed_at) VALUES ('forums.spacebattles.com','watched',1)")
     db.commit()
     assert json.loads(snapshot())['backlog'] == 1

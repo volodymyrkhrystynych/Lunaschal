@@ -51,7 +51,7 @@ KEYS = {'fic_chapter_reads': 'chapter_id', 'fic_chapter_reactions': 'chapter_id'
 
 def key(table: str) -> str:
     return KEYS.get(table, 'id')
-SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, KEYS, 'book-metadata-v3'], sort_keys=True).encode()).hexdigest()
+SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, KEYS, 'book-metadata-v4'], sort_keys=True).encode()).hexdigest()
 
 
 def payload(table: str, prefix: str) -> str:

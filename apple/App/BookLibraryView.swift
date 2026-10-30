@@ -36,7 +36,7 @@ struct BookListView: View {
     @ObservedObject var model: CaptureModel
     var folder: String? = nil
     var showsProviders = false
-    @State private var filter = BookFilter()
+    @State private var filter: BookFilter
     @State private var books: [SyncChange] = []
     @State private var limit = 50
     @State private var count = 0
@@ -49,6 +49,13 @@ struct BookListView: View {
     @State private var shelving: SyncChange?
     @State private var editMode: EditMode = .inactive
     @State private var selection: Set<String> = []
+
+    init(model: CaptureModel, folder: String? = nil, showsProviders: Bool = false) {
+        self.model = model
+        self.folder = folder
+        self.showsProviders = showsProviders
+        _filter = State(initialValue: BookFilter(opening: folder))
+    }
 
     /// What a pass has to touch for this list to read the library again.
     static let shows: Set<String> = ["fics", "fic_folders", "fic_bookmarks", "fic_chapters",
@@ -210,9 +217,16 @@ struct BookListView: View {
                     }
                     .pickerStyle(.menu)
                     Toggle("Unread chapters only", isOn: $filter.unreadOnly)
+                    // Inside the Backlog folder this would say nothing new.
+                    if folder != FicLibrary.backlogFolder {
+                        Toggle("Backlog only", isOn: Binding(
+                            get: { filter.backlogOnly }, set: { filter.setBacklogOnly($0) }))
+                            .accessibilityIdentifier("filter-backlog")
+                    }
                     Picker("Sort", selection: $filter.sort) {
                         Text("Latest update on the site").tag("activity")
                         Text("Recently read").tag("recent")
+                        Text("Added to library").tag("added")
                         Text("Title").tag("title")
                         Text("Rating").tag("rating")
                     }
@@ -241,7 +255,7 @@ struct BookListView: View {
         .onChange(of: model.ficDownload?.id) { _, _ in onDevice = model.ficsOnDevice(books) }
     }
 
-    private func fresh() -> BookFilter { BookFilter() }
+    private func fresh() -> BookFilter { BookFilter(opening: folder) }
 
     static let typingPause: UInt64 = 300_000_000
 

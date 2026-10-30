@@ -106,6 +106,30 @@ The Paper feature (`src/components/Paper/`, `backend/routes/paper.py`); the draw
 - ⬜ **"On this day last year"** — show past entries from the same date in previous years.
 - 🟡 Better tag coverage: curated tags already scan every existing entry when created; freeform AI tagging quality hasn't been revisited.
 
+## Journal — Day One migration
+
+Move every Day One journal into Lunaschal so Day One can be retired — one-time, lossless, and safe to re-run.
+
+- ⬜ **Importer for Day One's JSON export** (the `.zip` holding `Journal.json` plus `photos/`, `videos/`, `audios/`, `pdfs/`): each entry becomes a `journal_entries` row with its original `creationDate` (filed under its 4am day, with the entry's own `timeZone` honoured), markdown text as `raw_content`, and tags mapped through `backend/tags.py`.
+- ⬜ **Attachments**: resolve the `dayone-moment://<identifier>` references through the export's `md5` file names and copy the media into `journal/<attachment_id>/`. HEIC goes through `backend/imaging.py`; audio and photos go into the normal transcription/caption pipeline as background `llm_jobs`.
+- ⬜ **Metadata worth keeping**: location (lat/lng through `backend/geo.py`, place name), weather, starred/pinned, and which Day One journal it came from (as a curated tag or a source column).
+- ⬜ **Idempotent**: key each row on Day One's entry `uuid` so a second import of a newer export only adds what's missing and never duplicates.
+- ⬜ **Leave the user's words alone**: imported entries skip polish, so `content` stays what was written in Day One.
+- ⬜ Tests: a small fixture export (text, a photo, an audio clip, a located entry, a multi-journal zip), re-import as a no-op, timezone and 4am-boundary filing, and a seed row if this needs a new table.
+
+## Journal — photo calendar
+
+A month grid where each day shows **one photo** from that day, for browsing back through time: spot a picture of yourself somewhere outside and you can tell at a glance what that day was.
+
+- ⬜ **Month grid of day thumbnails**, using the 4am day. Days with no photo chosen stay plain.
+- ⬜ **Photo selector over the whole photo library**: the app gets access to all of the phone's photos (PhotoKit, full-library permission), not just the ones already in Lunaschal. Tapping a day shows every library photo taken that day (by capture date, 4am boundary) alongside the photos Lunaschal already holds for it (journal attachments, meals, selfies, chat photos, Day One media), and you pick the one that represents the day.
+- ⬜ **Only the picked photo is imported**: the selected photo is uploaded and stored as that day's photo; the rest of the library stays on the phone. The choice is stored per day, can be changed later, and nothing ever replaces it automatically.
+- ⬜ **Fast to walk through**: a "next unpicked day" flow so you can step day by day through a month or a year and choose quickly, rather than opening each day separately.
+- ⬜ **Tap a day to see what happened**: a quick peek with that day's photos, journal entries, location map card and calendar events, plus a link to the full day in the Journal feed.
+- ⬜ **Fast to scroll**: thumbnails are small cached renders, not the full images, so months of history stay quick, especially on the phone.
+- ⬜ Native iOS app first (per the iOS-first rule), then the web Journal. This overlaps the existing "calendar view" item in Journal — views & tagging and could replace it.
+- ⬜ Tests: grouping library photos into 4am days, storing and changing a day's pick, re-uploading the same photo as a no-op, and empty days.
+
 ## Global search
 
 - ⬜ One search box across everything: journal, emails, books, writing projects, files, todos. FTS5 now covers six content types (`journal_fts`, `recipes_fts`, `fic_chapters_fts`, `wiki_fts`, `emails_fts`, `messages_fts`) but each is searched only from its own view.

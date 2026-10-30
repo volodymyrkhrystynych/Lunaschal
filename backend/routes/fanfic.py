@@ -40,6 +40,8 @@ _LATEST_ACTIVITY_ORDER = (
 
 _OPENED_ORDER = 'fics.last_opened_at DESC NULLS LAST, fics.updated_at DESC'
 
+_ADDED_ORDER = 'fics.created_at DESC, fics.id DESC'
+
 
 def _attach_progress(dicts: list[dict]) -> list[dict]:
     for d in dicts:
@@ -122,9 +124,13 @@ def list_fics():
     where_sql = f" WHERE {' AND '.join(where)}" if where else ''
     # All and folder views follow chapter publication activity. Recent is
     # reading history, deliberately independent of forum publication dates.
-    sort = request.args.get('sort')
+    # The Backlog is triage of what was imported and never put on a list, so
+    # it reads newest-added first unless a sort is asked for.
+    sort = request.args.get('sort') or ('added' if folder_id == 'backlog' else None)
     if sort == 'recent':
         order = _OPENED_ORDER
+    elif sort == 'added':
+        order = _ADDED_ORDER
     elif folder_id:
         # Preserve the existing ordering inside Unsorted and named folders.
         order = _LATEST_ACTIVITY_ORDER

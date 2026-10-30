@@ -448,6 +448,8 @@ def doc_facts(root: Path) -> list[dict]:
         if rel in ('docs/ROADMAP.md', 'docs/TODO.md'):
             # Bullet text verbatim: the assessor needs to compare an idea
             # against what is already written down, not against a paraphrase.
+            # Keep status markers and descriptions too, including bullets
+            # without bold titles: planned and completed work must stay distinct.
             entry['items'] = [
                 m.group(1).strip()[:300]
                 for m in re.finditer(r'^- (.+)$', text, re.MULTILINE)
