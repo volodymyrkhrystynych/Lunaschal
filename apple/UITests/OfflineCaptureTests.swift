@@ -2321,6 +2321,16 @@ final class OfflineCaptureTests: XCTestCase {
     func testCaptureActionsShareOneLineAndAPhotoAttachesToTheEntry() {
         let app = XCUIApplication()
         app.launch()
+        // Drafts survive launches, including a failed CI attempt. This test
+        // owns its entry and must not append to another test's unfinished words.
+        let discard = app.buttons["Discard draft"]
+        XCTAssertTrue(discard.waitForExistence(timeout: 10))
+        if discard.isEnabled {
+            discard.tap()
+            let confirmation = app.alerts["Discard this draft?"]
+            XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+            confirmation.buttons["Discard"].tap()
+        }
         let names = ["Attach file", "Choose photo", "Take photo", "Record", "Transcribe"]
         let first = app.buttons[names[0]]
         XCTAssertTrue(first.waitForExistence(timeout: 10))
@@ -2354,14 +2364,26 @@ final class OfflineCaptureTests: XCTestCase {
         // sample photos are years old — far down a newest-first feed.
         let words = "With a photo \(UUID().uuidString.prefix(8))"
         let editor = app.textViews["Journal text"]
-        editor.tap()
+        focus(editor)
+        XCTAssertEqual(editor.value as? String, "")
         editor.typeText(words)
+        // Wait for the full text before Save: CI saved only "W" on one
+        // attempt and left the remaining words in the draft for its retry.
+        guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", words), object: editor)],
+            timeout: settle) == .completed else {
+            return XCTFail("The complete entry text did not reach the editor before Save")
+        }
         app.buttons["Save"].tap()
-        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
+        guard app.staticTexts["Saved on this device"].waitForExistence(timeout: settle) else {
+            return XCTFail("The photo entry was not saved")
+        }
         XCTAssertFalse(app.staticTexts["Attachments"].exists)
-        tab(app, "Journal").tap()
+        selectTab(app, "Journal")
         let entry = app.staticTexts[words]
-        XCTAssertTrue(entry.waitForExistence(timeout: 10))
+        guard entry.waitForExistence(timeout: settle) else {
+            return XCTFail("The saved photo entry did not appear in Journal")
+        }
         entry.tap()
         XCTAssertTrue(app.staticTexts["Attachments"].waitForExistence(timeout: 5))
     }
