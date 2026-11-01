@@ -77,6 +77,8 @@ took, how important it is. Do not drop a detail because it was not the main poin
 
 Act on the latest user message only. Earlier messages are context, not new \
 requests to execute again. Use add_todos only for newly requested items. \
+When asked to add to-dos, call add_todos with all the requested items. Writing \
+"added" in prose does not save anything. \
 Previously saved to-dos listed in assistant messages have already been \
 handled: do not recreate them, even with a different title, unless the user \
 explicitly asks to add them again. A follow-up may refer to earlier details; \
@@ -412,11 +414,31 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
                 yield ('step', payload)
             else:
                 gathered = payload
-        conversation = gathered.get('messages', conversation)
+        # The loop's closing prose is an unexecuted draft, not evidence of a
+        # write. Keeping "I've added them" here taught the answer to repeat a
+        # success even when the decision turn never called a tool.
+        gathered_messages = gathered.get('messages', [])
+        conversation += [
+            dict(message, content=None) if message.get('role') == 'assistant'
+            else message
+            for message in gathered_messages[len(conversation) + 1:]
+            if message.get('role') != 'assistant' or message.get('tool_calls')
+        ]
         sources = gathered.get('sources', [])
         evidence = gathered.get('evidence', [])
 
-    conversation.append({'role': 'user', 'content': ANSWER_INSTRUCTION})
+    answer_instruction = ANSWER_INSTRUCTION
+    if toolset == 'chat' and box:
+        receipts = [step.get('arg', '') for step in steps
+                    if step.get('tool') == 'add_todos' and step.get('ok') is True]
+        answer_instruction += (
+            '\n\nTo-dos saved in this turn: ' + json.dumps(receipts, ensure_ascii=False)
+            + '. Only these successful tool receipts establish that you added to-dos. '
+            'If this list is empty, no new to-dos were saved this turn. '
+            'If the user asked for them, explain that they were not added; never claim success. '
+            'Saved items appear in Chat → Today\'s to-dos.'
+        )
+    conversation.append({'role': 'user', 'content': answer_instruction})
     truncated = False
     for kind, delta in chat_stream_events(conversation):
         # Rides out on `done` rather than as its own live event: it is only

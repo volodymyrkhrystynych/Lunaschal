@@ -16,6 +16,11 @@ struct CaptureRoot: View {
     @State private var tab = Tab.capture
     @State private var capturePage = CaptureTab.Page.entry
     @State private var showQuickCamera = false
+    @State private var today = DayKey.of(Date())
+
+    private var dailyRemaining: Int {
+        DailySummary(day: today, server: model.dailyStatus, local: model.dailyLogs).remainingCount
+    }
 
     enum Tab: Hashable { case capture, journal, chat, todo, more, study, draw, library, jobs, writing, learning, settings }
     @Environment(\.horizontalSizeClass) private var widthClass
@@ -40,8 +45,9 @@ struct CaptureRoot: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            NavigationStack { CaptureTab(model: model, page: $capturePage) }
+            NavigationStack { CaptureTab(model: model, page: $capturePage, dailyRemaining: dailyRemaining) }
                 .tabItem { Label("Capture", systemImage: "square.and.pencil") }.tag(Tab.capture)
+                .badge(dailyRemaining)
             NavigationStack { JournalTab(model: model, context: context, chat: chat) }
                 .tabItem { Label("Journal", systemImage: "book.closed") }.tag(Tab.journal)
             NavigationStack { ChatView(chat: chat, capture: model) }
@@ -74,6 +80,9 @@ struct CaptureRoot: View {
                     .tabItem { Label("More", systemImage: "line.3.horizontal") }.tag(Tab.more)
             }
         }
+        .onChange(of: tab) { _, selected in
+            if selected == .capture { capturePage = .entry }
+        }
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
@@ -101,6 +110,7 @@ struct CaptureRoot: View {
         }
         .task(id: scenePhase) {
             guard scenePhase == .active else { model.leaveForeground(); return }
+            today = DayKey.of(Date())
             model.takeSharedLinks()
             model.resumeFicDownloads()
             // Everything once on the way in, then one small question every
@@ -108,6 +118,7 @@ struct CaptureRoot: View {
             model.syncOnForeground()
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                today = DayKey.of(Date())
                 model.checkIn()
             }
         }
@@ -124,6 +135,7 @@ private struct CaptureTab: View {
 
     @ObservedObject var model: CaptureModel
     @Binding var page: Page
+    let dailyRemaining: Int
     @State private var notebook: Notebook?
     @State private var fetchingPaper = false
 
@@ -149,7 +161,12 @@ private struct CaptureTab: View {
             ToolbarItem(placement: .topBarLeading) { CurrentWeatherButton(weather: model.weather) }
             ToolbarItem(placement: .principal) {
                 Picker("Capture page", selection: $page) {
-                    ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                    ForEach(Page.allCases) { item in
+                        Text(item == .daily && dailyRemaining > 0 ? "Daily (\(dailyRemaining))" : item.rawValue)
+                            .accessibilityLabel(item == .daily ? "Daily, \(dailyRemaining) remaining" : item.rawValue)
+                            .accessibilityIdentifier(item.rawValue)
+                            .tag(item)
+                    }
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()

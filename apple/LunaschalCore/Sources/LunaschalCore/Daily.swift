@@ -301,9 +301,16 @@ public struct DailySummary: Equatable {
     public var pendingSpending = 0
     public var hasSelfie: Bool { localSelfie != nil || serverSelfie != nil }
 
+    /// Each daily requirement contributes one reminder, including offline logs.
+    public var remainingCount: Int {
+        (total < 2000 ? 1 : 0) + (hasSelfie ? 0 : 1) + (weight == nil ? 1 : 0)
+    }
+
     public init(day: String, server: DailyStatus?, local: [DailyLog]) {
         self.day = day
-        let mine = local.filter { $0.day == day }
+        // A refused upload isn't a completed requirement; the Daily view
+        // reports it separately so it can be discarded or corrected.
+        let mine = local.filter { $0.day == day && $0.state != .failed }
         let status = server?.day == day ? server : nil
         weight = status?.weight
         serverSelfie = status?.selfie
