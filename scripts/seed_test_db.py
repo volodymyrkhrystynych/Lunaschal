@@ -1571,16 +1571,23 @@ def seed_pomodoro(db):
 
 def seed_lifestyle(db):
     today = today_key()
-    for i, (title, done) in enumerate([('Read 20 minutes', 1), ('Stretch', 0), ('Drink water', 1)]):
+    # Days ago each habit was ticked, so the streaks and history grid have
+    # something to show: an unbroken run, today still open after one, a gap.
+    habits = [
+        ('Read 20 minutes', [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 15]),
+        ('Stretch', [1, 2, 3, 7, 8]),
+        ('Drink water', [0, 2, 4, 5, 6, 12, 13, 14, 15, 16, 17, 18]),
+    ]
+    for i, (title, days_ago) in enumerate(habits):
         task_id = new_id()
         db.execute(
             'INSERT INTO daily_tasks (id, title, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
             (task_id, title, i, ts(20), ts(20)),
         )
-        if done:
+        for n in days_ago:
             db.execute(
                 'INSERT INTO daily_task_completions (id, task_id, date, created_at) VALUES (?, ?, ?, ?)',
-                (new_id(), task_id, today, ts(0)),
+                (new_id(), task_id, today_key(n), ts(n)),
             )
 
     for title, done, lst in [

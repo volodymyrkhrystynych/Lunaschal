@@ -144,13 +144,48 @@ def test_a_bad_date_is_refused(client):
 def test_a_client_id_makes_a_repeated_create_a_no_op(client):
     """An offline-created task carries its own id, so a replay of a create the
     server already took answers 201 again, even once the list is full."""
-    ids = [f'01JTASK{n}AAAAAAAAAAAAAAAAAA'[:26] for n in range(4)]
+    from backend.routes.tasks import MAX_TASKS
+    ids = [f'01JTASK{n:02d}AAAAAAAAAAAAAAAAAA'[:26] for n in range(MAX_TASKS)]
     for n, task_id in enumerate(ids):
         r = client.post('/api/tasks', json={'id': task_id, 'title': f'Task {n}'})
         assert r.status_code == 201
         assert r.get_json()['id'] == task_id
-    again = client.post('/api/tasks', json={'id': ids[3], 'title': 'Task 3'})
+    again = client.post('/api/tasks', json={'id': ids[-1], 'title': 'Last'})
     assert again.status_code == 201
-    assert len(client.get('/api/tasks').get_json()) == 4
-    assert client.post('/api/tasks', json={'title': 'Fifth'}).status_code == 400
+    assert len(client.get('/api/tasks').get_json()) == MAX_TASKS
+    assert client.post('/api/tasks', json={'title': 'One more'}).status_code == 400
     assert client.post('/api/tasks', json={'id': '../x', 'title': 'Bad'}).status_code == 400
+
+
+def test_list_reports_streaks_and_history(client, monkeypatch):
+    monkeypatch.setattr('backend.routes.tasks.day_key_for', lambda ts=None: '2026-11-02')
+    task_id = _create_task(client)
+    for day in ('2026-10-25', '2026-10-26', '2026-10-27', '2026-11-01'):
+        assert client.post(f'/api/tasks/{task_id}/complete?date={day}').status_code == 200
+
+    task = client.get('/api/tasks').get_json()[0]
+    assert task['done'] == 0
+    assert task['streak'] == 1  # yesterday; today is still open
+    assert task['longestStreak'] == 3
+    assert task['history'] == ['2026-10-25', '2026-10-26', '2026-10-27', '2026-11-01']
+
+    client.post(f'/api/tasks/{task_id}/complete')
+    task = client.get('/api/tasks').get_json()[0]
+    assert task['done'] == 1 and task['streak'] == 2
+    assert task['history'][-1] == '2026-11-02'
+
+
+def test_streaks_are_per_task(client, monkeypatch):
+    monkeypatch.setattr('backend.routes.tasks.day_key_for', lambda ts=None: '2026-11-02')
+    a, b = _create_task(client, 'A'), _create_task(client, 'B')
+    client.post(f'/api/tasks/{a}/complete')
+    tasks = {t['id']: t for t in client.get('/api/tasks').get_json()}
+    assert tasks[a]['streak'] == 1 and tasks[b]['streak'] == 0
+    assert tasks[b]['history'] == []
+
+
+def test_ten_daily_tasks_fit_and_an_eleventh_does_not(client):
+    for i in range(10):
+        _create_task(client, f'Habit {i}')
+    r = client.post('/api/tasks', json={'title': 'One too many'})
+    assert r.status_code == 400

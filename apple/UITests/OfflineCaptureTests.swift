@@ -2644,7 +2644,7 @@ final class OfflineCaptureTests: XCTestCase {
         daily.typeText(task)
         app.buttons["todo-daily-add"].tap()
         XCTAssertTrue(app.buttons[task].waitForExistence(timeout: 5))
-        XCTAssertEqual(daily.value as? String ?? "", "Add a daily task", "The field clears")
+        XCTAssertEqual(daily.value as? String ?? "", "Add a habit", "The field clears")
 
         // So does a to-do due today.
         let name = "Call the dentist \(Int.random(in: 1000...9999))"
@@ -2676,10 +2676,18 @@ final class OfflineCaptureTests: XCTestCase {
         check?.tap()
         XCTAssertTrue(row.waitForNonExistence(timeout: 5))
 
-        // Deleting leaves room for the next run under the four-task cap.
-        app.buttons[task].swipeLeft()
+        // Ticking the habit starts its streak at once, with no server to count it.
+        let habit = app.buttons.matching(NSPredicate(format: "identifier == 'todo-daily-row' AND label CONTAINS %@", task)).firstMatch
+        XCTAssertEqual(habit.value as? String ?? "", "", "No streak before the first tick")
+        habit.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.5)).tap()
+        let streak = NSPredicate(format: "value BEGINSWITH '1 day streak'")
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation(for: streak, evaluatedWith: habit)], timeout: 5), .completed,
+                       habit.value as? String ?? "")
+
+        // Deleting leaves room for the next run under the cap.
+        habit.swipeLeft()
         app.buttons["Delete"].tap()
-        XCTAssertTrue(app.buttons[task].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(habit.waitForNonExistence(timeout: 5))
     }
 
     func testChatKeepsAVoiceMessageForTheServerWithoutOne() {

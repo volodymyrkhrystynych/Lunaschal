@@ -252,7 +252,7 @@ Recipe collection. Paste text or a URL — the page is fetched and stripped, the
 
 #### Tasks & todos (`backend/routes/tasks.py`, `src/components/Tasks/`)
 
-Two lists: **daily tasks** (max 4, per-day completions in `daily_task_completions`, reset each day) and one-off **todos** (`todo` / `archive` — the third list, `chores`, was folded into `todo`). **There is no Tasks tab**: `TasksSection` renders inside the Lifestyle view, directly under the activity heatmap, and owns shortcut scopes 1 and 2 there.
+Two lists: **daily tasks**, shown as **Habits** (max 10, per-day completions in `daily_task_completions`, reset each day; `GET /api/tasks` adds each one's current and longest streak and twelve weeks of ticked days from the pure `backend/habit_streaks.py` — an unticked today doesn't break a streak, and the phone recomputes it from that history the moment a tick is queued) and one-off **todos** (`todo` / `archive` — the third list, `chores`, was folded into `todo`). **There is no Tasks tab**: `TasksSection` renders inside the Lifestyle view, directly under the activity heatmap, and owns shortcut scopes 1 and 2 there.
 
 #### Lifestyle — see [`backend/lifestyle/CLAUDE.md`](backend/lifestyle/CLAUDE.md).
 

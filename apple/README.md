@@ -360,8 +360,11 @@ what each device can currently do and which work remains device-only.
   is signed for push; delivery needs the server's APNs key (docs/code-agent.md).
   Passed in simulator with the `-codeFixture` demo data; notifications and a
   real agent are not yet verified.
-- Todo is the desktop Lifestyle tab's tasks card: up to four daily tasks (tick
-  for today, add, rename, reorder and delete under Edit) above the To-Do and
+- Todo is the desktop Lifestyle tab's tasks card: up to ten daily habits (tick
+  for today, add, rename, reorder and delete under Edit), each showing its
+  last seven days as dots and its running streak (Core's `HabitStreaks`, the
+  server's `backend/habit_streaks.py`, recomputed the moment a tick is queued;
+  an unticked today doesn't break it), above the To-Do and
   Archive lists, ordered and filtered as on the desktop (soonest due first,
   then priority; a repeating to-do hides until it's near due). A to-do opens
   in a form for title, notes, due date, repeat, priority and list; swipe to
@@ -371,9 +374,22 @@ what each device can currently do and which work remains device-only.
   the next pass. A daily-task tick carries the 4am day it was made on, so one
   sent after the rollover still counts for that day, and a daily task created
   offline carries its own id, so a resend can't add it twice. A change the
-  server turns down (a fifth daily task, say) is dropped and said in the tab.
-  Passed in simulator offline (including the badge and a relaunch with
-  changes waiting); not yet run against a server or verified on device.
+  server turns down (an eleventh habit, say) is dropped and said in the tab.
+  Passed in simulator offline (including the badge, a relaunch with changes
+  waiting, and a tick's streak); not yet run against a server or verified on
+  device.
+- Home Screen widgets (`Widgets/`, the `LunaschalWidgets` extension): **Habits**
+  ticks today's habits from the Home Screen with their streaks and week, and
+  **To-Do** completes open to-dos, due ones first, each in small, medium and
+  large. They read a snapshot the app keeps in the `group.com.lunaschal.mobile`
+  App Group and refresh it from the server with the app's shared sign-in; a tap
+  is queued there, shown at once, sent by the widget if it can be, and moved
+  into the app's own outbox on its next pass if not. Habits untick at 4am from
+  the snapshot's history, without waiting for a refresh. The rules
+  (`TodoWidget.swift`: merging the app's and widget's copies, folding a send in
+  once, the shared queue's locks) are covered by Core tests; the extension
+  builds in simulator, but an unsigned build has no App Group, so the widgets
+  there only say to open the app. Not yet verified on device.
 - More → Jobs is the desktop Jobs tab's triage feed: the same postings in the
   same order, grouped Worth a look / The rest, sortable Best match or Nearest,
   each card showing the model's two-sentence summary (or the start of the

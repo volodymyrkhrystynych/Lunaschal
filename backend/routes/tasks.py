@@ -8,6 +8,7 @@ from ulid import ULID
 from backend.capture_time import optional_capture_time
 from backend.db.connection import get_db, mapping_to_dict, row_to_dict
 from backend.day_boundary import day_bounds, day_key_for
+from backend.habit_streaks import summary as streak_summary
 from backend.todo_recurrence import (
     next_due, normalize_list, parse_priority as _parse_priority,
     parse_repeat as _parse_repeat,
@@ -15,7 +16,9 @@ from backend.todo_recurrence import (
 
 bp = Blueprint('tasks', __name__, url_prefix='/api/tasks')
 
-MAX_TASKS = 4
+# Daily tasks are the habits. Still capped: a list worth ticking every day
+# stays short, and the phone's largest Habits widget has room for this many.
+MAX_TASKS = 10
 
 
 def _today() -> str:
@@ -95,7 +98,15 @@ def list_tasks():
         ''',
         (today,),
     ).fetchall()
-    return jsonify([row_to_dict(r) for r in rows])
+    # Every completion, not just the window: the longest streak needs them all,
+    # and there are at most ten tasks with one row per day each.
+    done: dict[str, list[str]] = {}
+    for c in db.execute('SELECT task_id, date FROM daily_task_completions'):
+        done.setdefault(c['task_id'], []).append(c['date'])
+    return jsonify([
+        {**row_to_dict(r), **mapping_to_dict(streak_summary(done.get(r['id'], []), today))}
+        for r in rows
+    ])
 
 
 @bp.post('')

@@ -1,9 +1,10 @@
 import LunaschalCore
 import SwiftUI
 
-/// The Todo tab, as the desktop's TasksSection lays it out: up to four daily
-/// tasks above the To-Do and Archive lists. Edit reorders and deletes the
-/// daily tasks; a to-do opens in a form, and swipes to archive or delete.
+/// The Todo tab, as the desktop's TasksSection lays it out: up to ten daily
+/// habits, each with its streak and last seven days, above the To-Do and
+/// Archive lists. Edit reorders and deletes the habits; a to-do opens in a
+/// form, and swipes to archive or delete.
 /// Changes show at once and reach the server through the sync outbox.
 struct TodoView: View {
     @ObservedObject var todo: TodoModel
@@ -56,7 +57,7 @@ struct TodoView: View {
             TodoEditor(heading: "To-do", draft: TodoDraft(item), onSave: { todo.edit(item, $0) },
                        onDelete: { todo.delete(item) })
         }
-        .alert("Rename daily task", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
+        .alert("Rename habit", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
                presenting: renaming) { task in
             TextField("Title", text: $renameText)
             Button("Save") { todo.rename(task, to: renameText) }
@@ -96,7 +97,7 @@ struct TodoView: View {
     private var dailySection: some View {
         Section {
             ForEach(todo.tasks) { task in
-                DailyTaskRow(task: task) { todo.toggle(task) }
+                DailyTaskRow(task: task, today: DayKey.of(Date())) { todo.toggle(task) }
                     .contextMenu {
                         Button("Rename", systemImage: "pencil") { renameText = task.title; renaming = task }
                         Button("Delete", systemImage: "trash", role: .destructive) { todo.delete(task) }
@@ -108,7 +109,7 @@ struct TodoView: View {
             }
             if todo.tasks.count < DailyTask.limit {
                 HStack {
-                    TextField("Add a daily task", text: $newTask)
+                    TextField("Add a habit", text: $newTask)
                         .submitLabel(.done)
                         .onSubmit(addTask)
                         .accessibilityIdentifier("todo-daily-input")
@@ -118,7 +119,7 @@ struct TodoView: View {
                 }
             }
         } header: {
-            Text("Daily tasks")
+            Text("Habits")
         } footer: {
             if todo.tasks.isEmpty { Text("Up to \(DailyTask.limit), ordered by importance. They reset at 4am.") }
         }
@@ -165,19 +166,47 @@ struct TodoView: View {
 
 private struct DailyTaskRow: View {
     let task: DailyTask
+    let today: String
     let toggle: () -> Void
 
     var body: some View {
+        let streak = task.streak(today: today)
         HStack(spacing: 12) {
             CheckButton(done: task.done, id: "todo-daily-check", action: toggle)
             Text(task.title)
                 .strikethrough(task.done)
                 .foregroundStyle(task.done ? .secondary : .primary)
+            Spacer(minLength: 8)
+            HabitWeekDots(week: task.week(today: today))
+            if streak > 0 {
+                Label("\(streak)", systemImage: "flame.fill")
+                    .labelStyle(CompactLabel())
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("todo-daily-streak")
+            }
         }
         .accessibilityElement(children: .combine)
+        .accessibilityValue(streak > 0 ? "\(streak) day streak, best \(task.best(today: today))" : "")
         .accessibilityAddTraits(task.done ? .isSelected : [])
         .accessibilityAction(named: task.done ? "Not done" : "Done", toggle)
         .accessibilityIdentifier("todo-daily-row")
+    }
+}
+
+/// The last seven days, oldest first, today last.
+private struct HabitWeekDots: View {
+    let week: [Bool]
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(week.enumerated()), id: \.offset) { _, done in
+                Circle()
+                    .fill(done ? Color.accentColor : Color.secondary.opacity(0.25))
+                    .frame(width: 6, height: 6)
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 

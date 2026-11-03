@@ -90,6 +90,10 @@ struct CaptureRoot: View {
         .onChange(of: tab) { _, selected in
             if selected == .capture { capturePage = .entry }
         }
+        // A tap on a Home Screen widget, outside its check buttons.
+        .onOpenURL { url in
+            if url == TodoWidgetFiles.openURL { tab = .todo }
+        }
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
@@ -132,6 +136,7 @@ struct CaptureRoot: View {
             Task { await code.refresh() }
             today = DayKey.of(Date())
             model.takeSharedLinks()
+            await model.takeWidgetTodos()
             model.resumeFicDownloads()
             // Everything once on the way in, then one small question every
             // 30 seconds: has the server anything new? Only what it names is pulled.

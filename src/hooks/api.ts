@@ -1676,6 +1676,11 @@ export interface DailyTask {
   done: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Consecutive days ticked, alive through an unticked today. */
+  streak?: number;
+  longestStreak?: number;
+  /** Ticked 4am days in the last twelve weeks, oldest first. */
+  history?: string[];
 }
 
 export type TaskEventKind =

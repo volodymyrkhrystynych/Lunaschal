@@ -2,6 +2,7 @@ import Combine
 import Foundation
 import LunaschalCore
 import SwiftUI
+import WidgetKit
 
 /// The Todo tab: the desktop Lifestyle tab's daily tasks and to-do lists.
 /// Every change goes into the sync outbox and shows at once; the lists on
@@ -22,6 +23,8 @@ final class TodoModel: ObservableObject {
     /// started after they were sent comes back.
     private var sent: [(op: TodoOp, at: Date)] = []
     private var lastQueue: [TodoOp] = []
+    /// When `server` was fetched: the cache file's age until the first fetch.
+    private var fetchedAt: Date
     private var watching: AnyCancellable?
     private var refusalWatch: AnyCancellable?
 
@@ -29,6 +32,8 @@ final class TodoModel: ObservableObject {
         self.capture = capture
         cacheURL = capture.store.root.appendingPathComponent("todos.cache")
         server = (try? JSONDecoder().decode(TodoLists.self, from: Data(contentsOf: cacheURL))) ?? TodoLists()
+        fetchedAt = (try? cacheURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            ?? .distantPast
         lastQueue = capture.todoQueue
         watching = capture.$todoQueue.sink { [weak self] queue in self?.queueChanged(queue) }
         refusalWatch = capture.$todoRefusals.sink { [weak self] _ in self?.objectWillChange.send() }
@@ -54,6 +59,8 @@ final class TodoModel: ObservableObject {
         sent += lastQueue.filter { !left.contains($0.id) }.map { ($0, now) }
         lastQueue = queue
         objectWillChange.send()
+        // The publisher fires before `todoQueue` takes the new value.
+        publishToWidgets(pending: queue)
     }
 
     func refresh() async {
@@ -69,9 +76,11 @@ final class TodoModel: ObservableObject {
             async let fetchedTodos = api.todos()
             let (tasks, todos) = try await (fetchedTasks, fetchedTodos)
             server = TodoLists(tasks: tasks, todos: todos)
+            fetchedAt = started
             sent.removeAll { $0.at < started }
             loadProblem = nil
             if let data = try? JSONEncoder().encode(server) { try? data.write(to: cacheURL, options: .atomic) }
+            publishToWidgets()
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
             loadProblem = ("Offline", "Can't reach your server. Changes are saved on this phone and sent when it's back.")
@@ -79,6 +88,17 @@ final class TodoModel: ObservableObject {
     }
 
     private func queue(_ change: TodoChange) { capture.queueTodo(change) }
+
+    /// Hands the Home Screen widgets this view of the lists, and redraws
+    /// them if it changed what they show.
+    func publishToWidgets(pending: [TodoOp]? = nil) {
+        guard let container = SharedSignIn.container() else { return }
+        let (fetched, asOf, sentOps, pending) = (server, fetchedAt, sent.map(\.op), pending ?? capture.todoQueue)
+        let changed = (try? TodoWidgetSnapshot.update(at: TodoWidgetFiles.snapshot(in: container)) {
+            $0 = $0.merging(app: fetched, asOf: asOf, sent: sentOps, pending: pending, now: Date())
+        }) ?? false
+        if changed { WidgetCenter.shared.reloadAllTimelines() }
+    }
 
     // MARK: Daily tasks
 

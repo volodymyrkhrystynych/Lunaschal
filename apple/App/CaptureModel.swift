@@ -92,6 +92,9 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var todoQueue: [TodoOp] = []
     @Published var todoRefusals: [String] = []
     let todoOutbox: TodoOutbox
+    /// Ticks made on the Home Screen widgets that the widget couldn't send
+    /// itself; moved into `todoOutbox` on each pass. Nil without the App Group.
+    let widgetTodoOutbox: TodoOutbox?
     let ficImports: FicImportOutbox
     let screenshots: ScreenshotOutbox
     private let todoSyncer: TodoSync
@@ -200,6 +203,7 @@ final class CaptureModel: ObservableObject {
         chatRecordingSyncer = ChatRecordingSync(store: chatRecordings)
         todoOutbox = try TodoOutbox(root: store.root.appendingPathComponent("todo-outbox", isDirectory: true))
         todoSyncer = TodoSync(outbox: todoOutbox)
+        widgetTodoOutbox = SharedSignIn.container().flatMap { try? TodoWidgetFiles.outbox(in: $0) }
         jobStore = try JobStore(root: store.root.appendingPathComponent("jobs", isDirectory: true))
         jobSyncer = JobSync(store: jobStore)
         calendarOutbox = try CalendarOutbox(root: store.root.appendingPathComponent("calendar-outbox", isDirectory: true))
@@ -902,10 +906,23 @@ final class CaptureModel: ObservableObject {
         requestSync()
     }
 
+    /// Moves the widgets' leftover ticks into the app's queue, behind what
+    /// is already there. Skipped while the widget is sending them itself.
+    func takeWidgetTodos() async {
+        guard let widget = widgetTodoOutbox else { return }
+        do {
+            try await widget.whileSending {
+                for op in try widget.drain() { try todoOutbox.append(op) }
+            }
+            todoQueue = try todoOutbox.list()
+        } catch { message = error.localizedDescription }
+    }
+
     /// A to-do change the server can't take right now waits for the next
     /// pass without holding up the uploads after it.
     @discardableResult
     private func sendTodoChanges(using api: JournalAPI) async throws -> Bool {
+        await takeWidgetTodos()
         guard !todoQueue.isEmpty || !((try? todoOutbox.list()) ?? []).isEmpty else { return false }
         do {
             todoRefusals += try await todoSyncer.run(using: api)
@@ -1286,6 +1303,7 @@ final class CaptureModel: ObservableObject {
                 || drawingPublications.all().contains { $0.state == "pending" }
                 || !ficActivity.list().isEmpty
                 || !todoOutbox.list().isEmpty
+                || !(widgetTodoOutbox?.list().isEmpty ?? true)
                 || !jobStore.pending().isEmpty
                 || !screenshots.list().isEmpty
                 || TrailSync.isDue(trail.outbox)
