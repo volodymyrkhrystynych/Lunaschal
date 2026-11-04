@@ -831,6 +831,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         let save = app.navigationBars["New event"].buttons["Save"]
         XCTAssertFalse(save.isEnabled, "nothing to save without a title")
+        XCTAssertTrue(app.buttons["calendar-event-transcribe"].exists, "the description can be spoken")
         focus(title)
         title.typeText(name)
         saveForm(app, "New event")

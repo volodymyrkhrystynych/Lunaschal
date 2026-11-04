@@ -781,6 +781,8 @@ def _accept_calendar(db, data: dict, ctx: dict) -> dict:
          1 if all_day else 0, json.dumps(data.get('tags', [])),
          category_cols.get('category_tags'), category_cols.get('classified_at'), now),
     )
+    if 'classified_at' not in category_cols:
+        jobs.enqueue('calendar.classify', id, commit=False)
     return {'id': id}
 
 

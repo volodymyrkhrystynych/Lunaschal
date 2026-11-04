@@ -163,7 +163,7 @@ export function EventBlock({
         </button>
         <div className="min-w-0 leading-tight">
           <div className="text-xs font-medium text-[var(--color-text)] truncate">
-            {event.title}
+            {event.title || 'Untitled'}
           </div>
           {/* Takes the time row's place rather than sitting beside it: the
               label band is one line tall by design, and a second row here

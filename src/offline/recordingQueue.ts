@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import {
   MUTATION_KEYS,
+  type CalendarRecordingVars,
   type ChatRecordingVars,
   type FoodRecordingVars,
   type JournalRecordingVars,
@@ -82,6 +83,25 @@ export function enqueueFoodRecording(
 }
 
 /**
+ * A clip spoken into the event form, a `calendar_recordings` row. Same durability
+ * contract. `date` goes along only from the boot sweep: on the live path the
+ * event's own create is ahead of this in the queue.
+ */
+export function enqueueCalendarRecording(
+  qc: QueryClient,
+  id: string,
+  eventId: string,
+  date?: string
+): Promise<unknown> {
+  const mutation = qc
+    .getMutationCache()
+    .build<unknown, Error, CalendarRecordingVars, unknown>(qc, {
+      mutationKey: MUTATION_KEYS.calendarRecording,
+    });
+  return mutation.execute({ id, eventId, date });
+}
+
+/**
  * The Chat tab's spoken message, which goes through neither the journal nor the
  * food log.
  *
@@ -120,12 +140,18 @@ function alreadyQueued(qc: QueryClient, id: string): boolean {
       // Every recording mutation, because the boot sweep is what would
       // otherwise queue a food clip or a spoken chat message a second time
       // under the journal route.
-      if (group !== 'journal' && group !== 'food' && group !== 'chat')
+      if (
+        group !== 'journal' &&
+        group !== 'food' &&
+        group !== 'chat' &&
+        group !== 'calendar'
+      )
         return false;
       if (kind !== 'recording') return false;
       const vars = m.state.variables as
         | JournalRecordingVars
         | FoodRecordingVars
+        | CalendarRecordingVars
         | ChatRecordingVars
         | undefined;
       return vars?.id === id && m.state.status === 'pending';
@@ -175,6 +201,17 @@ export async function resumeStoredRecordings(qc: QueryClient): Promise<void> {
     // plate they were spoken over.
     if (rec.food) {
       void enqueueFoodRecording(qc, rec.id, rec.food.id).catch(() => undefined);
+      continue;
+    }
+    // The same for an event: filed as a journal entry, the words would never
+    // reach the event they were spoken for.
+    if (rec.calendar) {
+      void enqueueCalendarRecording(
+        qc,
+        rec.id,
+        rec.calendar.id,
+        rec.calendar.date
+      ).catch(() => undefined);
       continue;
     }
     // A spoken chat message goes to the chat route or nowhere, for the same

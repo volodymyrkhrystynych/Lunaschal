@@ -3,6 +3,7 @@ import {
   buildMonthGrid,
   parseEventTags,
   eventTimeLabel,
+  newEventSlot,
   repeatDraftFromEvent,
   repeatDraftToPayload,
   repeatLabel,
@@ -299,5 +300,41 @@ describe('repeatDraftToPayload', () => {
         until: '',
       }).repeatUntil
     ).toBeNull();
+  });
+});
+
+describe('newEventSlot', () => {
+  const at = (iso: string) => new Date(`${iso}:00`);
+
+  it('ends now, the default length long', () => {
+    expect(newEventSlot('2026-10-05', at('2026-10-05T14:10'))).toEqual({
+      date: '2026-10-05',
+      time: '13:40',
+      endTime: '14:10',
+    });
+  });
+
+  it('lands on the next date past midnight', () => {
+    expect(newEventSlot('2026-10-05', at('2026-10-06T01:20'))).toEqual({
+      date: '2026-10-06',
+      time: '00:50',
+      endTime: '01:20',
+    });
+  });
+
+  it('keeps the day when it started before midnight', () => {
+    expect(newEventSlot('2026-10-05', at('2026-10-06T00:10'))).toEqual({
+      date: '2026-10-05',
+      time: '23:40',
+      endTime: '00:10',
+    });
+  });
+
+  it('starts no earlier than the top of the day', () => {
+    expect(newEventSlot('2026-10-05', at('2026-10-05T04:10'))).toEqual({
+      date: '2026-10-05',
+      time: '04:00',
+      endTime: '04:10',
+    });
   });
 });

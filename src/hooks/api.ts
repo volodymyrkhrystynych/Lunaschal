@@ -4382,7 +4382,10 @@ export const api = {
       get<JournalEntry[]>(`/api/calendar/related-journals/${date}`),
     create: (
       data: {
+        // May be blank when `pendingClips` says recordings follow: the server
+        // writes it from what they say.
         title: string;
+        pendingClips?: number;
         date: string;
         description?: string;
         time?: string;
@@ -4399,6 +4402,20 @@ export const api = {
         id?: string;
       } & CalendarRepeat
     ) => post<{ id: string }>('/api/calendar', data),
+    // A clip spoken into the event form. `date` is only for a clip the boot
+    // sweep rescued from a composer that never reached Save: it lets the clip
+    // open the event it was recorded for.
+    createRecording: (
+      audio: Blob,
+      opts: { id: string; mediaId: string; date?: string }
+    ) => {
+      const form = new FormData();
+      form.append('audio', audio, recordingFilename(audio.type));
+      form.append('id', opts.id);
+      form.append('mediaId', opts.mediaId);
+      if (opts.date) form.append('date', opts.date);
+      return upload<{ id: string }>('/api/calendar/recordings', form);
+    },
     // Edits/erases every occurrence, past ones included.
     update: (id: string, data: Record<string, unknown>) =>
       patch<{ success: boolean }>(`/api/calendar/${id}`, data),

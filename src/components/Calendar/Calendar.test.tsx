@@ -464,6 +464,38 @@ describe('creating a recurring event', () => {
 
 // The `tags` column, `_SPLIT_COLUMNS` and the API type all shipped long before
 // anything could write one — the pills rendered on an event nobody could tag.
+describe('a new event on today', () => {
+  const openToday = async () => {
+    const { container } = renderCalendar();
+    const cells = await waitFor(() => {
+      const found = container.querySelectorAll('[data-testid="month-cell"]');
+      expect(found).toHaveLength(42);
+      return found;
+    });
+    fireEvent.click(cells[14]); // Sunday 2026-02-15, the mocked today
+    fireEvent.click(screen.getByText('+ Add'));
+  };
+
+  it('ends now, and moving the start leaves the end alone', async () => {
+    await openToday();
+    const start = screen.getByLabelText('Start time') as HTMLInputElement;
+    const end = screen.getByLabelText('End time') as HTMLInputElement;
+    expect(start.value).toBe('11:30');
+    expect(end.value).toBe('12:00');
+    fireEvent.change(start, { target: { value: '09:00' } });
+    expect(end.value).toBe('12:00');
+  });
+
+  it('offers a microphone but still wants a title with no clip', async () => {
+    await openToday();
+    expect(screen.getByTestId('calendar-event-transcribe')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+  });
+});
+
 describe('event tags', () => {
   it('sends the typed tags as a normalized array when creating an event', async () => {
     const { container } = renderCalendar();

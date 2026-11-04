@@ -28,7 +28,7 @@ from pathlib import Path
 
 REQUIRED_ENV_VARS = [
     'DATABASE_URL', 'FANFIC_ROOT', 'MEETINGS_ROOT', 'JOURNAL_ROOT',
-    'JOURNAL_DRAFTS_ROOT', 'LIFESTYLE_ROOT', 'FOOD_ROOT', 'SPENDING_ROOT', 'RECIPE_ROOT',
+    'JOURNAL_DRAFTS_ROOT', 'LIFESTYLE_ROOT', 'FOOD_ROOT', 'CALENDAR_ROOT', 'SPENDING_ROOT', 'RECIPE_ROOT',
     'CHAT_ROOT', 'PAPER_ROOT', 'JOBS_ROOT', 'NEWSPAPERS_ROOT', 'NEWSPAPERS_ARCHIVE_ROOT',
     'NOTEBOOK_ROOT', 'EMAIL_MEDIA_ROOT', 'PIANO_ROOT', 'PIANO_ARCHIVE_ROOT',
     'FILES_ROOT', 'TORRENT_ROOT', 'STUDY_ROOT', 'STUDY_ARCHIVE_ROOT',
@@ -431,6 +431,8 @@ def seed_journal(db):
 
 
 def seed_calendar(db, journal_ids):
+    from backend import calendar_media
+
     today = time.strftime('%Y-%m-%d')
     yesterday = time.strftime('%Y-%m-%d', time.localtime(time.time() - DAY))
     next_week = time.strftime('%Y-%m-%d', time.localtime(time.time() + 7 * DAY))
@@ -503,6 +505,23 @@ def seed_calendar(db, journal_ids):
         '(id, title, description, date, time, all_day, tags, created_at, repeat_freq, repeat_interval, repeat_byweekday) '
         'VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)',
         (gym_id, 'Gym', 'Leg day', today, '07:00', tags_json(['exercise']), ts(0), 'weekly', 1, '1,3,5'),
+    )
+    # An event spoken into its form: the title came from the transcript.
+    spoken_id = new_id()
+    db.execute(
+        'INSERT INTO calendar_events (id, title, description, date, time, end_time, created_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (spoken_id, 'Walk along the lake', 'Walked along the lake with Sam after lunch.',
+         yesterday, '13:00', '13:45', ts(1)),
+    )
+    clip_id = new_id()
+    clip_path = calendar_media.recording_path(spoken_id, clip_id, 'wav')
+    placeholder_audio(clip_path)
+    db.execute(
+        'INSERT INTO calendar_recordings (id, event_id, path, mime, transcript, transcript_status, created_at) '
+        "VALUES (?, ?, ?, ?, ?, 'done', ?)",
+        (clip_id, spoken_id, str(clip_path), 'audio/wav',
+         'Walked along the lake with Sam after lunch.', ts(1)),
     )
     # Both exception kinds on the recurring event, so the "this occurrence
     # only" edit paths have something to render.

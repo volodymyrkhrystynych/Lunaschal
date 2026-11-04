@@ -7,6 +7,7 @@ import {
   buildMonthGrid,
   EMPTY_REPEAT,
   eventTimeLabel,
+  newEventSlot,
   parseEventTags,
   repeatDraftToPayload,
   repeatLabel,
@@ -15,7 +16,9 @@ import {
   type RepeatDraft,
 } from '@/lib/calendar';
 import type { EventCategory } from '@/lib/calendarCategories';
-import { ulid } from '@/lib/ulid';
+import { useClipStage } from '@/hooks/useClipStage';
+import { ClipStrip } from '@/components/ClipRecorder';
+import { RecordingButton } from '@/components/RecordingButton';
 import { useCalendarCreate } from '@/offline/mutationDefaults';
 import { localDayKey } from '@/lib/dates';
 // The shared splitter — Food's two views each grew a private copy of this and
@@ -46,6 +49,10 @@ const instanceKey = (e: CalendarEvent) =>
   `${e.id}:${e.occurrenceDate ?? e.date}`;
 
 const EMPTY_NEW_EVENT = {
+  // Filled when the form opens on the current day past midnight, for the day it
+  // was opened on: `slotDate` is that time's own calendar date.
+  slotDay: '',
+  slotDate: '',
   title: '',
   description: '',
   time: '',
@@ -141,6 +148,7 @@ export function Calendar() {
   // on a brand-new event reaches the pill row) happens in the mutation's own
   // onSettled.
   const createEvent = useCalendarCreate();
+  const clips = useClipStage({ kind: 'calendar', date: selectedDate ?? '' });
 
   const navigate = (direction: number) => {
     if (viewMode === 'month') {
@@ -194,12 +202,43 @@ export function Calendar() {
     setViewMode('day');
   };
 
+  const toggleNewEvent = () => {
+    const opening = !showNewEvent;
+    setShowNewEvent(opening);
+    if (!opening || selectedDate !== todayISO) return;
+    if (newEvent.time || newEvent.endTime) return;
+    const slot = newEventSlot(todayISO, new Date());
+    setNewEvent({
+      ...newEvent,
+      slotDay: todayISO,
+      slotDate: slot.date,
+      time: slot.time,
+      endTime: slot.endTime,
+    });
+  };
+
+  const canSubmitNewEvent =
+    (newEvent.title.trim() !== '' || clips.clips.length > 0) &&
+    !clips.recording &&
+    !clips.busy &&
+    !createEvent.isPending;
+
+  // Discarded rather than left in the store, where the boot sweep would take
+  // them for a form that died and open an event for them.
+  const cancelNewEvent = () => {
+    clips.clips.forEach(clip => clips.remove(clip.id));
+    setShowNewEvent(false);
+  };
+
   const submitNewEvent = () => {
-    if (!selectedDate) return;
+    if (!selectedDate || !canSubmitNewEvent) return;
     createEvent.mutate({
-      id: ulid(),
+      // Whatever the clips were recorded under, so they land on this event.
+      id: clips.claimId(),
       title: newEvent.title,
-      date: selectedDate,
+      ...(clips.clips.length ? { pendingClips: clips.clips.length } : {}),
+      date:
+        newEvent.slotDay === selectedDate ? newEvent.slotDate : selectedDate,
       description: newEvent.description || undefined,
       time: newEvent.allDay ? undefined : newEvent.time || undefined,
       endTime: newEvent.allDay ? undefined : newEvent.endTime || undefined,
@@ -214,7 +253,10 @@ export function Calendar() {
     });
     // Closed here rather than on success: the write may be sitting in the
     // offline queue, and a form that stays open until the server answers is a
-    // form the user retypes into.
+    // form the user retypes into. The clips queue behind the create, so the
+    // event they belong to is there by the time they land.
+    void clips.commit();
+    clips.reset();
     setNewEvent(EMPTY_NEW_EVENT);
     setShowNewEvent(false);
   };
@@ -450,7 +492,7 @@ export function Calendar() {
                             {e.time && (
                               <span className="opacity-70">{e.time} </span>
                             )}
-                            {e.title}
+                            {e.title || 'Untitled'}
                           </button>
                         ))}
                       </div>
@@ -497,7 +539,7 @@ export function Calendar() {
                               {e.isRecurring && (
                                 <span className="opacity-70">↻ </span>
                               )}
-                              {e.title}
+                              {e.title || 'Untitled'}
                             </div>
                             {eventTimeLabel(e) && (
                               <div className="text-[var(--color-text-muted)]">
@@ -555,7 +597,7 @@ export function Calendar() {
                                 {e.time && (
                                   <span className="opacity-70">{e.time} </span>
                                 )}
-                                {e.title}
+                                {e.title || 'Untitled'}
                               </div>
                             ))
                           )}
@@ -583,7 +625,7 @@ export function Calendar() {
                       )}
                     </h3>
                     <button
-                      onClick={() => setShowNewEvent(!showNewEvent)}
+                      onClick={toggleNewEvent}
                       className="text-sm text-[var(--color-primary)] hover:underline"
                     >
                       + Add
@@ -598,7 +640,11 @@ export function Calendar() {
                         onChange={e =>
                           setNewEvent({ ...newEvent, title: e.target.value })
                         }
-                        placeholder="Event title"
+                        placeholder={
+                          clips.clips.length
+                            ? 'Event title (optional)'
+                            : 'Event title'
+                        }
                         className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border-b border-white/10 pb-2 mb-2 focus:outline-none"
                       />
                       <label className="flex items-center gap-2 mb-2 text-xs text-[var(--color-text-muted)]">
@@ -655,6 +701,21 @@ export function Calendar() {
                         rows={2}
                         className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none"
                       />
+                      <div className="mb-2">
+                        <RecordingButton
+                          status={clips.status}
+                          starting={clips.starting}
+                          onClick={clips.toggle}
+                          testId="calendar-event-transcribe"
+                        />
+                        <ClipStrip stage={clips} testId="calendar-event" />
+                        {clips.clips.length > 0 && (
+                          <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                            Transcribed into the description after saving. With
+                            no title, one is written from what you said.
+                          </p>
+                        )}
+                      </div>
                       <input
                         value={newEvent.tags}
                         onChange={e =>
@@ -682,16 +743,15 @@ export function Calendar() {
                       />
                       <div className="flex justify-end gap-2 mt-2">
                         <button
-                          onClick={() => setShowNewEvent(false)}
-                          className="px-2 py-1 text-sm text-[var(--color-text-muted)]"
+                          onClick={cancelNewEvent}
+                          disabled={clips.recording}
+                          className="px-2 py-1 text-sm text-[var(--color-text-muted)] disabled:opacity-50"
                         >
                           Cancel
                         </button>
                         <button
                           onClick={submitNewEvent}
-                          disabled={
-                            !newEvent.title.trim() || createEvent.isPending
-                          }
+                          disabled={!canSubmitNewEvent}
                           className="px-2 py-1 text-sm bg-[var(--color-primary)] text-white rounded disabled:opacity-50"
                         >
                           Save
@@ -708,7 +768,7 @@ export function Calendar() {
                         className="w-full text-left p-3 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
                       >
                         <div className="font-medium text-[var(--color-text)]">
-                          {event.title}
+                          {event.title || 'Untitled'}
                         </div>
                         {eventTimeLabel(event) && (
                           <div className="text-sm text-[var(--color-text-muted)]">

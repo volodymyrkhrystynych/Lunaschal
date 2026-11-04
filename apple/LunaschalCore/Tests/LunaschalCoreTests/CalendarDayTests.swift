@@ -65,13 +65,17 @@ final class CalendarDayTests: XCTestCase {
             return format.date(from: text)!
         }
         let morning = CalendarTimeline.newEventSlot(day: "2026-10-05", now: at("2026-10-05 14:10"), calendar: calendar)
-        XCTAssertEqual(morning.date, "2026-10-05"); XCTAssertEqual(morning.time, "14:00"); XCTAssertEqual(morning.endTime, "14:30")
+        // Ends now: an event is usually logged once it's over.
+        XCTAssertEqual(morning.date, "2026-10-05"); XCTAssertEqual(morning.time, "13:40"); XCTAssertEqual(morning.endTime, "14:10")
         // 01:20 is still the 5th's day, and lands on the 6th's date.
         let night = CalendarTimeline.newEventSlot(day: "2026-10-05", now: at("2026-10-06 01:20"), calendar: calendar)
-        XCTAssertEqual(night.date, "2026-10-06"); XCTAssertEqual(night.time, "01:30")
-        // Never past the bottom of the timeline.
-        let late = CalendarTimeline.newEventSlot(day: "2026-10-05", now: at("2026-10-06 03:55"), calendar: calendar)
-        XCTAssertEqual(late.time, "03:30"); XCTAssertEqual(late.endTime, "04:00")
+        XCTAssertEqual(night.date, "2026-10-06"); XCTAssertEqual(night.time, "00:50"); XCTAssertEqual(night.endTime, "01:20")
+        // Started before midnight, it keeps the day's own date.
+        let across = CalendarTimeline.newEventSlot(day: "2026-10-05", now: at("2026-10-06 00:10"), calendar: calendar)
+        XCTAssertEqual(across.date, "2026-10-05"); XCTAssertEqual(across.time, "23:40"); XCTAssertEqual(across.endTime, "00:10")
+        // Never above the top of the timeline.
+        let early = CalendarTimeline.newEventSlot(day: "2026-10-05", now: at("2026-10-05 04:10"), calendar: calendar)
+        XCTAssertEqual(early.time, "04:00"); XCTAssertEqual(early.endTime, "04:10")
         let other = CalendarTimeline.newEventSlot(day: "2026-10-09", now: at("2026-10-05 14:10"), calendar: calendar)
         XCTAssertEqual(other.date, "2026-10-09"); XCTAssertEqual(other.time, "08:00")
     }
@@ -98,6 +102,8 @@ final class CalendarDayTests: XCTestCase {
         XCTAssertNotNil(CalendarDraft(title: " ", date: "2026-10-05").problem)
         XCTAssertNotNil(CalendarDraft(title: "x", date: "2026-10-05", repeatFreq: "daily", repeatUntil: "2026-10-01").problem)
         XCTAssertNil(CalendarDraft(title: "x", date: "2026-10-05").problem)
+        // A spoken event gets its title from what was said.
+        XCTAssertNil(CalendarDraft(title: " ", date: "2026-10-05", clipIDs: ["a"]).problem)
     }
 
     func testEditingADraftRoundTripsTheEvent() {
@@ -169,7 +175,7 @@ final class CalendarDayTests: XCTestCase {
         final class Transport: CalendarTransport {
             var outcomes: [Error?]
             init(_ outcomes: [Error?]) { self.outcomes = outcomes }
-            func send(_ change: CalendarChange) async throws {
+            func send(_ change: CalendarChange, audio: URL?) async throws {
                 if let error = outcomes.removeFirst() { throw error }
             }
         }
@@ -188,6 +194,108 @@ final class CalendarDayTests: XCTestCase {
                                                             TodoRefusal(status: 404, message: "Not found")]))
         // A delete of something already gone is not worth reporting.
         XCTAssertEqual(refused, ["The server didn't take “D”: bad"])
+    }
+
+    func testEndsNextDayWhenTheEndIsNotAfterTheStart() {
+        func draft(_ start: String, _ end: String, allDay: Bool = false) -> CalendarDraft {
+            CalendarDraft(title: "x", date: "2026-10-05", time: start, endTime: end, allDay: allDay)
+        }
+        XCTAssertFalse(draft("13:00", "14:00").endsNextDay)
+        XCTAssertTrue(draft("15:00", "14:00").endsNextDay)
+        XCTAssertTrue(draft("23:30", "00:30").endsNextDay)
+        XCTAssertFalse(draft("15:00", "14:00", allDay: true).endsNextDay)
+    }
+
+    private func spokenOutbox() throws -> (CalendarOutbox, CalendarDraft) {
+        let outbox = try CalendarOutbox(root: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let recorded = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("clip".utf8).write(to: recorded)
+        let clip = try outbox.stageClip(from: recorded)
+        return (outbox, CalendarDraft(title: "", date: "2026-10-05", clipIDs: [clip]))
+    }
+
+    func testASpokenCreateTellsTheServerAClipFollowsAndKeepsItOnReplay() throws {
+        let (outbox, draft) = try spokenOutbox()
+        try outbox.append(.create(draft))
+        // What the queue reads back after a restart is what goes up.
+        guard case let .create(stored)? = try outbox.list().first?.change else { return XCTFail("no create") }
+        let body = try XCTUnwrap(JournalAPI.calendarRoute(.create(stored)).body)
+        let sent = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(sent["pendingClips"] as? Int, 1)
+        XCTAssertEqual(sent["title"] as? String, "")
+        XCTAssertNil(sent["clipIDs"])
+    }
+
+    func testATypedEventSaysNothingAboutClips() throws {
+        let body = try XCTUnwrap(JournalAPI.calendarRoute(.create(CalendarDraft(title: "x", date: "2026-10-05"))).body)
+        let sent = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertNil(sent["pendingClips"])
+    }
+
+    func testClipsAreQueuedBehindTheirEventAndLeaveWithTheirUpload() async throws {
+        final class Transport: CalendarTransport {
+            var sent: [(CalendarChange, URL?)] = []
+            func send(_ change: CalendarChange, audio: URL?) async throws { sent.append((change, audio)) }
+        }
+        let (outbox, draft) = try spokenOutbox()
+        let clip = draft.clipIDs[0]
+        try outbox.append(.create(draft))
+        XCTAssertEqual(try outbox.list().map(\.change.subject), ["“”", "a recording"])
+        XCTAssertEqual(CalendarOverlay(events: [], exceptions: [], pending: try outbox.list()).pendingIDs, [draft.id])
+
+        let transport = Transport()
+        let refused = try await CalendarSyncer(outbox: outbox).run(using: transport)
+        XCTAssertEqual(refused, [])
+        XCTAssertNil(transport.sent[0].1)
+        XCTAssertEqual(transport.sent[1].0, .recording(eventID: draft.id, clipID: clip))
+        XCTAssertEqual(transport.sent[1].1?.deletingPathExtension().lastPathComponent, clip)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outbox.clipURL(clip).path))
+    }
+
+    func testAClipForADeletedEventIsDroppedQuietly() async throws {
+        final class Gone: CalendarTransport {
+            func send(_ change: CalendarChange, audio: URL?) async throws {
+                throw TodoRefusal(status: 404, message: "Not found")
+            }
+        }
+        let (outbox, draft) = try spokenOutbox()
+        try outbox.append(.recording(eventID: draft.id, clipID: draft.clipIDs[0]))
+        let refused = try await CalendarSyncer(outbox: outbox).run(using: Gone())
+        XCTAssertEqual(refused, [])
+        XCTAssertEqual(try outbox.list(), [])
+    }
+
+    func testAMissingClipIsReportedInsteadOfBlockingTheQueue() async throws {
+        final class Fails: CalendarTransport {
+            func send(_ change: CalendarChange, audio: URL?) async throws { XCTFail("nothing to send") }
+        }
+        let (outbox, draft) = try spokenOutbox()
+        outbox.discardClip(draft.clipIDs[0])
+        try outbox.append(.recording(eventID: draft.id, clipID: draft.clipIDs[0]))
+        let refused = try await CalendarSyncer(outbox: outbox).run(using: Fails())
+        XCTAssertEqual(refused.count, 1)
+        XCTAssertEqual(try outbox.list(), [])
+    }
+
+    func testLaunchSweepKeepsOnlyQueuedClips() throws {
+        let (outbox, draft) = try spokenOutbox()
+        let queued = draft.clipIDs[0]
+        try outbox.append(.create(draft))
+        let recorded = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("clip".utf8).write(to: recorded)
+        let orphan = try outbox.stageClip(from: recorded)
+        try outbox.sweepClips()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outbox.clipURL(queued).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outbox.clipURL(orphan).path))
+    }
+
+    func testARecordingIsNotAnUpdateAndOnlyCreatesAndUpdatesCarryClips() throws {
+        let route = try JournalAPI.calendarRoute(.recording(eventID: "a", clipID: "b"))
+        XCTAssertEqual(route.path, "api/calendar/recordings")
+        XCTAssertEqual(route.method, "POST")
+        let draft = CalendarDraft(title: "x", date: "2026-10-05", clipIDs: ["c"])
+        XCTAssertEqual(CalendarChange.update(draft).clipUploads, [.recording(eventID: draft.id, clipID: "c")])
+        XCTAssertEqual(CalendarChange.delete(id: "a").clipUploads, [])
     }
 
     func testAnOutboxOfBareDraftsReadsAsCreates() throws {

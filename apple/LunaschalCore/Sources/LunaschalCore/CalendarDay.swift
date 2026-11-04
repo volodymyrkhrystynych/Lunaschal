@@ -83,20 +83,21 @@ public enum CalendarTimeline {
         }
     }
 
-    /// Where "+" drops a new event: the current time, snapped to the half hour,
-    /// when `day` is today (past midnight that is the *next* calendar date);
-    /// 8am on any other day.
+    /// Where "+" drops a new event. Today it ends now, since an event is usually
+    /// logged once it's over, and starts the default length earlier, no further
+    /// back than the top of the day (past midnight its date is the *next*
+    /// calendar date). Any other day it starts at 8am.
     public static func newEventSlot(day: String, now: Date = Date(), calendar: Calendar = .current)
         -> (date: String, time: String, endTime: String) {
         var start = offset(fromWall: defaultHour * 60)
+        var end = start + defaultDurationMinutes
         if day == DayKey.of(now, calendar: calendar) {
             let parts = calendar.dateComponents([.hour, .minute], from: now)
-            let current = offset(fromWall: (parts.hour ?? 0) * 60 + (parts.minute ?? 0))
-            start = min(minutesPerDay - defaultDurationMinutes, Int((Double(current) / 30).rounded()) * 30)
+            end = offset(fromWall: (parts.hour ?? 0) * 60 + (parts.minute ?? 0))
+            start = max(0, end - defaultDurationMinutes)
         }
         return (isAfterMidnight(start) ? addingDays(1, to: day) : day,
-                time(wall(fromOffset: start)),
-                time(wall(fromOffset: start + defaultDurationMinutes)))
+                time(wall(fromOffset: start)), time(wall(fromOffset: end)))
     }
 
     /// Nothing is dragged shorter than this: a zero-length event can't be grabbed again.

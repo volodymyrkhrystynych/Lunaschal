@@ -90,6 +90,7 @@ export const MUTATION_KEYS = {
   calorieLog: ['lifestyle', 'calories', 'create'] as const,
   foodCreate: ['food', 'create'] as const,
   foodRecording: ['food', 'recording'] as const,
+  calendarRecording: ['calendar', 'recording'] as const,
   chatRecording: ['chat', 'recording'] as const,
   selfieUpload: ['lifestyle', 'selfie', 'upload'] as const,
   paperCreate: ['paper', 'create'] as const,
@@ -201,6 +202,17 @@ export interface FoodRecordingVars {
   foodId: string;
   /** Record order, so the transcripts read in the order they were spoken. */
   position?: number;
+}
+
+/**
+ * A clip spoken into the event form. `id` plays the same double part as in
+ * `FoodRecordingVars`. `date` is sent only by the boot sweep, for a clip whose
+ * composer never reached Save.
+ */
+export interface CalendarRecordingVars {
+  id: string;
+  eventId: string;
+  date?: string;
 }
 
 /**
@@ -426,6 +438,7 @@ type Cfg<TData, TVars> = Pick<
   UseMutationOptions<TData, Error, TVars>,
   | 'networkMode'
   | 'mutationFn'
+  | 'scope'
   | 'onMutate'
   | 'onSuccess'
   | 'onSettled'
@@ -1069,6 +1082,49 @@ const foodRecordingCfg = (
 });
 
 /**
+ * One at a time, in the order they were saved. A clip that overtook its create
+ * would find no event, and one that opened a blank event would turn the create
+ * behind it into a no-op, losing the times the form was saved with.
+ */
+const CALENDAR_SCOPE = { id: 'calendar-create' };
+
+/** The event form's clip: `foodRecordingCfg`, on the calendar's route. */
+const calendarRecordingCfg = (
+  qc: QueryClient
+): Cfg<unknown, CalendarRecordingVars> => ({
+  ...ONLINE,
+  scope: CALENDAR_SCOPE,
+  retry: (failureCount, error) => !isTerminal(error) && failureCount < 5,
+  retryDelay: attempt => Math.min(30_000, 1000 * 2 ** attempt),
+  mutationFn: async vars => {
+    const rec = await getRecording(vars.id);
+    if (!rec) throw new Error('That recording is no longer on this device.');
+    const blob = await assembleBlob(vars.id);
+    if (!blob || blob.size === 0) {
+      await deleteRecording(vars.id);
+      throw new Error('That recording was empty.');
+    }
+    try {
+      const res = await api.calendar.createRecording(blob, {
+        id: vars.eventId,
+        mediaId: vars.id,
+        date: vars.date,
+      });
+      await deleteRecording(vars.id);
+      return res;
+    } catch (e) {
+      await markAttempt(
+        vars.id,
+        e instanceof Error ? e.message : 'Upload failed',
+        isTerminal(e)
+      );
+      throw e;
+    }
+  },
+  onSettled: () => qc.invalidateQueries({ queryKey: ['calendar'] }),
+});
+
+/**
  * The Chat tab's spoken message, which does not go through the journal either.
  *
  * Same durability contract as the two recording configs above — never let go of
@@ -1119,6 +1175,10 @@ export function registerOfflineMutationDefaults(qc: QueryClient): void {
   const pairs: Array<[readonly unknown[], Cfg<unknown, never>]> = [
     [MUTATION_KEYS.foodCreate, foodCreateCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.foodRecording, foodRecordingCfg(qc) as Cfg<unknown, never>],
+    [
+      MUTATION_KEYS.calendarRecording,
+      calendarRecordingCfg(qc) as Cfg<unknown, never>,
+    ],
     [MUTATION_KEYS.chatRecording, chatRecordingCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.paperCreate, paperCreateCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.paperPageAdd, paperPageAddCfg(qc) as Cfg<unknown, never>],
@@ -1214,6 +1274,7 @@ const calendarCreateCfg = (
   qc: QueryClient
 ): Cfg<{ id: string }, CalendarCreateVars> => ({
   ...ONLINE,
+  scope: CALENDAR_SCOPE,
   mutationFn: vars => api.calendar.create(vars),
   // No optimistic patch: the calendar's cache is keyed by the visible range and
   // recurrence is expanded server-side, so a plausible-looking local occurrence

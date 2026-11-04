@@ -206,3 +206,37 @@ export function repeatDraftToPayload(draft: RepeatDraft) {
     repeatUntil: draft.until || null,
   };
 }
+
+/** Minutes a new event runs by default, as on the phone. */
+const NEW_EVENT_MINUTES = 30;
+/** Where the app's day turns over, in minutes after midnight. */
+const DAY_START_MINUTES = 4 * 60;
+
+function hhmm(minutes: number): string {
+  const wall = ((minutes % 1440) + 1440) % 1440;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(Math.floor(wall / 60))}:${pad(wall % 60)}`;
+}
+
+/**
+ * Where a new event on the current 4am day starts out: ending now, since an
+ * event is usually logged once it is over, the default length long, and no
+ * earlier than the top of that day. Past midnight its date is the next calendar
+ * date, which is what `date` is for. Matches `CalendarTimeline.newEventSlot`.
+ */
+export function newEventSlot(
+  day: string,
+  now: Date
+): { date: string; time: string; endTime: string } {
+  const wall = now.getHours() * 60 + now.getMinutes();
+  const end = (wall - DAY_START_MINUTES + 1440) % 1440;
+  const start = Math.max(0, end - NEW_EVENT_MINUTES);
+  const pastMidnight = start >= 1440 - DAY_START_MINUTES;
+  const anchor = new Date(`${day}T12:00:00`);
+  if (pastMidnight) anchor.setDate(anchor.getDate() + 1);
+  return {
+    date: toLocalISO(anchor),
+    time: hhmm(start + DAY_START_MINUTES),
+    endTime: hhmm(end + DAY_START_MINUTES),
+  };
+}
