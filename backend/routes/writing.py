@@ -1,13 +1,42 @@
+import re
 import time
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 from backend.ai.provider import is_ai_configured
 from backend.ai.writing import summarize_discussion
+from backend.day_boundary import day_key_for
 from backend.db.connection import build_update, get_db, row_to_dict
-from backend.writing import canon_import, canon_tools
+from backend.writing import canon_import, canon_tools, revisioned
+from backend.writing import chapters as writing_chapters
 from backend.writing import notes as writing_notes
 
 bp = Blueprint('writing', __name__, url_prefix='/api/writing')
+
+_CLIENT_ID = re.compile(r'^[0-9A-HJKMNP-TV-Z]{26}$')
+MAX_STATS_DAYS = 366
+
+
+def _client_or_new_id(body: dict) -> str | None:
+    """The ULID a client minted, so a create can happen offline and be replayed,
+    or a fresh one. None when the client sent something else."""
+    value = body.get('id')
+    if value is None:
+        return str(ULID())
+    return value if isinstance(value, str) and _CLIENT_ID.match(value) else None
+
+
+def _captured_at(body: dict, now: int) -> int:
+    """When the words were written: a client's claim, never after now."""
+    value = body.get('capturedAt')
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return now
+    return min(value, now)
+
+
+def _touch_project(db, project_id: str | None, now: int) -> None:
+    """A project's `updated_at` is how a client learns the book changed."""
+    if project_id:
+        db.execute('UPDATE writing_projects SET updated_at=? WHERE id=?', (now, project_id))
 
 
 # --- Projects ---
@@ -52,9 +81,59 @@ def update_project(project_id):
         updates['title'] = body['title'].strip()
     if 'description' in body:
         updates['description'] = body['description']
+    if 'dailyWordGoal' in body:
+        goal = body['dailyWordGoal']
+        if goal is not None and (isinstance(goal, bool) or not isinstance(goal, int) or goal <= 0):
+            return jsonify({'error': 'dailyWordGoal must be a positive whole number or null'}), 400
+        updates['daily_word_goal'] = goal
     build_update(get_db(), 'writing_projects', updates, 'id=?', (project_id,))
     get_db().commit()
     return jsonify({'success': True})
+
+
+@bp.get('/projects/<project_id>/bundle')
+def project_bundle(project_id):
+    """A whole book, bodies included: what the phone keeps on disk to read and
+    edit it offline. Every revision is read in the one call, so the copy is
+    self-consistent."""
+    db = get_db()
+    project = db.execute('SELECT * FROM writing_projects WHERE id=?', (project_id,)).fetchone()
+    if not project:
+        return jsonify({'error': 'Not found'}), 404
+    chapters = db.execute(
+        'SELECT * FROM writing_chapters WHERE project_id=? ORDER BY position ASC', (project_id,)
+    ).fetchall()
+    notes = db.execute(
+        'SELECT * FROM writing_context_docs WHERE project_id=? ORDER BY created_at ASC', (project_id,)
+    ).fetchall()
+    return jsonify({
+        'project': row_to_dict(project),
+        'chapters': [row_to_dict(r) for r in chapters],
+        'notes': [row_to_dict(r) for r in notes],
+    })
+
+
+@bp.get('/projects/<project_id>/stats')
+def project_stats(project_id):
+    """Net words per 4am day, newest first, and the day's goal. Days with no
+    writing are simply absent, and a day that cut more than it added is
+    negative: rounding that up to zero is the reader's choice."""
+    db = get_db()
+    project = db.execute('SELECT daily_word_goal FROM writing_projects WHERE id=?', (project_id,)).fetchone()
+    if not project:
+        return jsonify({'error': 'Not found'}), 404
+    days = max(1, min(request.args.get('days', default=7, type=int), MAX_STATS_DAYS))
+    rows = db.execute(
+        'SELECT day, words FROM writing_daily_words WHERE project_id=? ORDER BY day DESC LIMIT ?',
+        (project_id, days),
+    ).fetchall()
+    today = day_key_for()
+    return jsonify({
+        'today': today,
+        'todayWords': next((r['words'] for r in rows if r['day'] == today), 0),
+        'dailyWordGoal': project['daily_word_goal'],
+        'days': [{'day': r['day'], 'words': r['words']} for r in rows],
+    })
 
 
 @bp.delete('/projects/<project_id>')
@@ -71,7 +150,7 @@ def delete_project(project_id):
 @bp.get('/projects/<project_id>/chapters')
 def list_chapters(project_id):
     rows = get_db().execute(
-        'SELECT id, project_id, title, position, created_at, updated_at FROM writing_chapters WHERE project_id=? ORDER BY position ASC',
+        'SELECT id, project_id, title, position, revision, created_at, updated_at FROM writing_chapters WHERE project_id=? ORDER BY position ASC',
         (project_id,),
     ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])
@@ -83,21 +162,47 @@ def create_chapter(project_id):
     title = body.get('title', '').strip()
     if not title:
         return jsonify({'error': 'title required'}), 400
+    id = _client_or_new_id(body)
+    if id is None:
+        return jsonify({'error': 'id must be a ULID'}), 400
     db = get_db()
+    if not db.execute('SELECT 1 FROM writing_projects WHERE id=?', (project_id,)).fetchone():
+        return jsonify({'error': 'Not found'}), 404
     row = db.execute(
         'SELECT COALESCE(MAX(position), -1) + 1 AS next_pos FROM writing_chapters WHERE project_id=?',
         (project_id,),
     ).fetchone()
     position = body.get('position', row['next_pos'])
     now = int(time.time())
-    id = str(ULID())
+    # A replay of a create the phone queued offline lands here and changes nothing.
     db.execute(
-        'INSERT INTO writing_chapters(id, project_id, title, content, position, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+        'INSERT OR IGNORE INTO writing_chapters(id, project_id, title, content, position, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
         (id, project_id, title, '', position, now, now),
     )
     db.execute('UPDATE writing_projects SET updated_at=? WHERE id=?', (now, project_id))
     db.commit()
     return jsonify({'id': id}), 201
+
+
+@bp.put('/projects/<project_id>/chapters/order')
+def order_chapters(project_id):
+    """Set the whole order at once. It must name exactly the project's chapters:
+    a list from before a chapter was added elsewhere would otherwise drop it to
+    an arbitrary place."""
+    ids = (request.json or {}).get('ids')
+    if not isinstance(ids, list):
+        return jsonify({'error': 'ids required'}), 400
+    db = get_db()
+    existing = {r['id'] for r in db.execute(
+        'SELECT id FROM writing_chapters WHERE project_id=?', (project_id,))}
+    if len(ids) != len(existing) or set(ids) != existing:
+        return jsonify({'error': 'the chapter list has changed; reload and try again'}), 409
+    now = int(time.time())
+    db.executemany('UPDATE writing_chapters SET position=? WHERE id=?',
+                   [(position, id) for position, id in enumerate(ids)])
+    _touch_project(db, project_id, now)
+    db.commit()
+    return jsonify({'success': True})
 
 
 @bp.get('/chapters/<chapter_id>')
@@ -108,30 +213,71 @@ def get_chapter(chapter_id):
     return jsonify(row_to_dict(row))
 
 
+def _conflict_response(conflict: revisioned.DocumentConflict):
+    return jsonify({'error': 'changed on another device', 'conflict': True,
+                    'current': row_to_dict(conflict.current)}), 409
+
+
 @bp.patch('/chapters/<chapter_id>')
 def update_chapter(chapter_id):
     body = request.json or {}
     now = int(time.time())
-    updates: dict = {'updated_at': now}
+    try:
+        base = revisioned.base_revision_of(body)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    text: dict = {}
     if 'title' in body:
-        updates['title'] = body['title'].strip()
+        text['title'] = body['title'].strip()
     if 'content' in body:
-        updates['content'] = body['content']
-    if 'position' in body:
-        updates['position'] = int(body['position'])
+        text['content'] = body['content']
+    extra = {'position': int(body['position'])} if 'position' in body else None
     db = get_db()
-    build_update(db, 'writing_chapters', updates, 'id=?', (chapter_id,))
-    row = db.execute('SELECT project_id FROM writing_chapters WHERE id=?', (chapter_id,)).fetchone()
-    if row:
-        db.execute('UPDATE writing_projects SET updated_at=? WHERE id=?', (now, row['project_id']))
+    with revisioned.LOCK:
+        try:
+            row, revision = revisioned.save(
+                db, 'writing_chapters', chapter_id, text, extra=extra, base_revision=base, now=now,
+                before_write=lambda db, id, at: writing_chapters.snapshot(db, id, source='edit', now=at))
+        except revisioned.DocumentMissing:
+            return jsonify({'error': 'Not found'}), 404
+        except revisioned.DocumentConflict as e:
+            return _conflict_response(e)
+        if 'content' in text:
+            writing_chapters.record_words(db, row['project_id'], row['content'], text['content'],
+                                          _captured_at(body, now))
+        _touch_project(db, row['project_id'], now)
+        db.commit()
+    return jsonify({'success': True, 'revision': revision})
+
+
+@bp.get('/chapters/<chapter_id>/revisions')
+def list_chapter_revisions(chapter_id):
+    rows = get_db().execute(
+        'SELECT id, chapter_id, title, content, source, message_id, created_at'
+        ' FROM writing_chapter_revisions WHERE chapter_id=?'
+        ' ORDER BY created_at DESC, id DESC',
+        (chapter_id,),
+    ).fetchall()
+    return jsonify([row_to_dict(r) for r in rows])
+
+
+@bp.post('/chapters/<chapter_id>/revisions/<rev_id>/restore')
+def restore_chapter_revision(chapter_id, rev_id):
+    db = get_db()
+    if not writing_chapters.restore(db, chapter_id, rev_id):
+        return jsonify({'error': 'Not found'}), 404
     db.commit()
-    return jsonify({'success': True})
+    row = db.execute('SELECT * FROM writing_chapters WHERE id=?', (chapter_id,)).fetchone()
+    return jsonify(row_to_dict(row))
 
 
 @bp.delete('/chapters/<chapter_id>')
 def delete_chapter(chapter_id):
-    get_db().execute('DELETE FROM writing_chapters WHERE id=?', (chapter_id,))
-    get_db().commit()
+    db = get_db()
+    row = db.execute('SELECT project_id FROM writing_chapters WHERE id=?', (chapter_id,)).fetchone()
+    db.execute('DELETE FROM writing_chapters WHERE id=?', (chapter_id,))
+    _touch_project(db, row['project_id'] if row else None, int(time.time()))
+    db.commit()
     return jsonify({'success': True})
 
 
@@ -140,7 +286,7 @@ def delete_chapter(chapter_id):
 @bp.get('/projects/<project_id>/notes')
 def list_notes(project_id):
     rows = get_db().execute(
-        'SELECT id, project_id, title, doc_type, pinned, created_at, updated_at FROM writing_context_docs WHERE project_id=? ORDER BY created_at ASC',
+        'SELECT id, project_id, title, doc_type, pinned, revision, created_at, updated_at FROM writing_context_docs WHERE project_id=? ORDER BY created_at ASC',
         (project_id,),
     ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])
@@ -152,13 +298,20 @@ def create_note(project_id):
     title = body.get('title', '').strip()
     if not title:
         return jsonify({'error': 'title required'}), 400
+    id = _client_or_new_id(body)
+    if id is None:
+        return jsonify({'error': 'id must be a ULID'}), 400
     now = int(time.time())
-    id = str(ULID())
-    get_db().execute(
-        'INSERT INTO writing_context_docs(id, project_id, title, content, doc_type, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
-        (id, project_id, title, body.get('content', ''), body.get('docType', 'note'), now, now),
+    db = get_db()
+    if not db.execute('SELECT 1 FROM writing_projects WHERE id=?', (project_id,)).fetchone():
+        return jsonify({'error': 'Not found'}), 404
+    # A replay of a create the phone queued offline lands here and changes nothing.
+    db.execute(
+        'INSERT OR IGNORE INTO writing_context_docs(id, project_id, title, content, doc_type, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+        (id, project_id, title, body.get('content', ''), writing_notes.normalize_doc_type(body.get('docType')), now, now),
     )
-    get_db().commit()
+    _touch_project(db, project_id, now)
+    db.commit()
     return jsonify({'id': id}), 201
 
 
@@ -174,27 +327,36 @@ def get_note(doc_id):
 def update_note(doc_id):
     body = request.json or {}
     now = int(time.time())
-    updates: dict = {}
+    try:
+        base = revisioned.base_revision_of(body)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    text: dict = {}
     if 'title' in body:
-        updates['title'] = body['title'].strip()
+        text['title'] = body['title'].strip()
     if 'content' in body:
-        updates['content'] = body['content']
+        text['content'] = body['content']
+    # Only text changes move updated_at and leave a revision: a pin is not an
+    # edit, and moving updated_at for one would make every pending update card
+    # for this note go stale for no reason.
+    extra: dict = {}
     if 'docType' in body:
-        updates['doc_type'] = writing_notes.normalize_doc_type(body['docType'])
+        extra['doc_type'] = writing_notes.normalize_doc_type(body['docType'])
     if 'pinned' in body:
-        updates['pinned'] = 1 if body['pinned'] else 0
-    if not updates:
-        return jsonify({'success': True})
+        extra['pinned'] = 1 if body['pinned'] else 0
     db = get_db()
-    if 'title' in updates or 'content' in updates:
-        # Only text changes move updated_at and leave a revision: a pin is not
-        # an edit, and moving updated_at for one would make every pending
-        # update card for this note go stale for no reason.
-        writing_notes.snapshot(db, doc_id, source='edit', now=now)
-        updates['updated_at'] = now
-    build_update(db, 'writing_context_docs', updates, 'id=?', (doc_id,))
-    db.commit()
-    return jsonify({'success': True})
+    with revisioned.LOCK:
+        try:
+            row, revision = revisioned.save(
+                db, 'writing_context_docs', doc_id, text, extra=extra, base_revision=base, now=now,
+                before_write=lambda db, id, at: writing_notes.snapshot(db, id, source='edit', now=at))
+        except revisioned.DocumentMissing:
+            return jsonify({'error': 'Not found'}), 404
+        except revisioned.DocumentConflict as e:
+            return _conflict_response(e)
+        _touch_project(db, row['project_id'], now)
+        db.commit()
+    return jsonify({'success': True, 'revision': revision})
 
 
 @bp.get('/notes/<doc_id>/revisions')
@@ -220,8 +382,11 @@ def restore_note_revision(doc_id, rev_id):
 
 @bp.delete('/notes/<doc_id>')
 def delete_note(doc_id):
-    get_db().execute('DELETE FROM writing_context_docs WHERE id=?', (doc_id,))
-    get_db().commit()
+    db = get_db()
+    row = db.execute('SELECT project_id FROM writing_context_docs WHERE id=?', (doc_id,)).fetchone()
+    db.execute('DELETE FROM writing_context_docs WHERE id=?', (doc_id,))
+    _touch_project(db, row['project_id'] if row else None, int(time.time()))
+    db.commit()
     return jsonify({'success': True})
 
 
@@ -241,11 +406,17 @@ def create_discussion(project_id):
     body = request.json or {}
     now = int(time.time())
     id = str(ULID())
-    get_db().execute(
-        'INSERT INTO conversations(id, title, writing_project_id, created_at, updated_at) VALUES (?,?,?,?,?)',
-        (id, body.get('title') or 'New Discussion', project_id, now, now),
+    db = get_db()
+    chapter_id = body.get('chapterId')
+    if chapter_id is not None and not db.execute(
+            'SELECT 1 FROM writing_chapters WHERE id=? AND project_id=?',
+            (chapter_id, project_id)).fetchone():
+        return jsonify({'error': 'that chapter is not in this project'}), 400
+    db.execute(
+        'INSERT INTO conversations(id, title, writing_project_id, writing_chapter_id, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+        (id, body.get('title') or 'New Discussion', project_id, chapter_id, now, now),
     )
-    get_db().commit()
+    db.commit()
     return jsonify({'id': id}), 201
 
 

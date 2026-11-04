@@ -3,8 +3,10 @@ import LunaschalCore
 
 /// Demo data for the Writing screens, since UI tests run with no server:
 /// launched with `-writingFixture`, the screens show two made-up books — one
-/// a fanfic with pinned notes, a note history and discussions holding pending
-/// and accepted note cards. Nothing is fetched and nothing is saved.
+/// a fanfic with chapters, pinned notes, a note history and discussions holding
+/// pending and accepted note cards. They go through a real WritingStore, so what
+/// is typed stays on the phone as it would offline. `-writingFixtureKeep` is for
+/// a relaunch that should find it there; otherwise each launch starts fresh.
 struct WritingFixture {
     static let argument = "-writingFixture"
 
@@ -15,6 +17,8 @@ struct WritingFixture {
         nil
         #endif
     }
+
+    static let keepArgument = "-writingFixtureKeep"
 
     private static let salt = "01K7WRITINGFIXTUREPROJECT1"
     private static let keeper = "01K7WRITINGFIXTUREPROJECT2"
@@ -61,8 +65,44 @@ struct WritingFixture {
                     content: "1. The storm.\n2. What the light found.\n3. The ledger is opened."),
     ]
 
+    let chapters = [
+        WritingChapter(id: "01K7WRITINGFIXTURECHAPTER1", projectId: salt, title: "The Wreck", position: 0, content: """
+            The guild boat had been down for nine years, and the reef had nearly finished with it.
+
+            Mara came up through the hatch with the ledger against her ribs and no air left to be frightened with.
+            """, revision: 2),
+        WritingChapter(id: "01K7WRITINGFIXTURECHAPTER2", projectId: salt, title: "The Favour", position: 1,
+                       content: "Quell did not look up from his desk when she came in.", revision: 1),
+        WritingChapter(id: "01K7WRITINGFIXTURECHAPTER3", projectId: keeper, title: "The Storm", position: 0,
+                       content: "The keeper climbs the same stairs every night, and every night they are different.",
+                       revision: 1),
+    ]
+
+    /// Clears the last run's writing, unless this launch is meant to find it.
+    func prepare(root: URL) throws {
+        guard !ProcessInfo.processInfo.arguments.contains(Self.keepArgument) else { return }
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func seed(_ store: WritingStore) throws {
+        guard store.projects().isEmpty else { return }
+        for project in projects {
+            try store.apply(WritingBundle(project: project, chapters: chapters.filter { $0.projectId == project.id },
+                                          notes: notes.filter { $0.projectId == project.id }))
+        }
+        try store.saveProjects(projects)
+        // The lighthouse piece has one chapter that changed on another device
+        // while it was being edited here, so the choice can be seen.
+        let storm = chapters[2]
+        let key = WritingDocumentKey(.chapter, storm.id)
+        try store.edit(key, project: storm.projectId, content: "Typed on the phone.")
+        try store.refresh(key, project: storm.projectId,
+                          server: WritingServerCopy(title: storm.title, content: "Typed on the desktop.", revision: 2))
+    }
+
     private let discussionsByProject = [
-        salt: [WritingDiscussion(id: "01K7WRITINGFIXTUREDISCUSS1", title: "Who is Mara?"),
+        salt: [WritingDiscussion(id: "01K7WRITINGFIXTUREDISCUSS1", title: "Who is Mara?",
+                                 writingChapterId: "01K7WRITINGFIXTURECHAPTER1"),
                WritingDiscussion(id: "01K7WRITINGFIXTUREDISCUSS2", title: "Quell vs. canon")],
         keeper: [WritingDiscussion(id: "01K7WRITINGFIXTUREDISCUSS3", title: "The storm night")],
     ]

@@ -63,4 +63,14 @@ final class WritingTests: XCTestCase {
         XCTAssertEqual(step(#"{"tool": "canon_read", "ok": true, "title": "Mara Vell"}"#).label,
                        "Read canon: Mara Vell")
     }
+
+    func testChapterCardsSayWhatTheyDo() {
+        let proposal = ChatMeta(#"""
+        {"proposals": [{"id": "p", "kind": "writing_chapter_update", "status": "accepted",
+                        "data": {"title": "The Storm"}}]}
+        """#).proposals[0]
+        XCTAssertEqual(proposal.headline, "Change this chapter?")
+        XCTAssertEqual(proposal.acceptLabel, "Update Chapter")
+        XCTAssertTrue(proposal.resolvedLabel.contains("The Storm"))
+    }
 }

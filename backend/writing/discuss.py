@@ -48,6 +48,12 @@ NOTEBOOK = (
     'not every idea that was floated.'
 )
 
+CHAPTERS = (
+    "The chapters are the author's own prose. You can read any of them, and "
+    'when asked you can propose adding to one or replacing a passage of it. '
+    'Do not rewrite their prose unprompted.'
+)
+
 CANON = (
     'This story is set in an existing work, and its source material is '
     'searchable with canon_search and canon_read. Canon is what the original '
@@ -68,11 +74,25 @@ def project_for_conversation(conversation_id: str | None) -> str | None:
     return row['pid'] if row else None
 
 
+def chapter_for_conversation(conversation_id: str | None) -> tuple | None:
+    """(position, title) of the chapter a discussion was opened from, or None.
+    Joined through the chapter, so a deleted one reads as none at all."""
+    if not conversation_id:
+        return None
+    row = get_db().execute(
+        'SELECT ch.position, ch.title FROM conversations c'
+        ' JOIN writing_chapters ch ON ch.id = c.writing_chapter_id'
+        ' AND ch.project_id = c.writing_project_id WHERE c.id = ?',
+        (conversation_id,),
+    ).fetchone()
+    return (row['position'], row['title']) if row else None
+
+
 def _has_canon(project_id: str) -> bool:
     return bool(canon_tools.ready_sources(project_id))
 
 
-def system_prompt(project_id: str) -> str:
+def system_prompt(project_id: str, chapter: tuple | None = None) -> str:
     db = get_db()
     project = db.execute(
         'SELECT title, description FROM writing_projects WHERE id=?', (project_id,)
@@ -109,7 +129,13 @@ def system_prompt(project_id: str) -> str:
         prompt += '\n\nOther notes in this project (read them with writing_read):\n' + \
             '\n'.join(f'- [{n["doc_type"]}] {n["title"]}' for n in others)
 
-    prompt += f'\n\n{BRIEF}\n\n{NOTEBOOK}'
+    if chapter:
+        position, name = chapter
+        prompt += (f'\n\nThe author opened this discussion from chapter {position + 1}, '
+                   f'"{name}", and "this chapter" means that one. Read it with '
+                   'writing_read before commenting on what it says.')
+
+    prompt += f'\n\n{BRIEF}\n\n{NOTEBOOK}\n\n{CHAPTERS}'
     if _has_canon(project_id):
         prompt += f'\n\n{CANON}'
     return prompt
@@ -125,4 +151,5 @@ def run_config(conversation_id: str | None) -> tuple[str, str, str] | None:
     project_id = project_for_conversation(conversation_id)
     if not project_id:
         return None
-    return 'writing', system_prompt(project_id), project_id
+    chapter = chapter_for_conversation(conversation_id)
+    return 'writing', system_prompt(project_id, chapter), project_id

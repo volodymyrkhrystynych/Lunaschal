@@ -158,6 +158,19 @@ private struct ProposalForm: View {
                 get: { replace }, set: { data["mode"] = .string($0 ? "replace" : "append") }))
                 .font(.caption)
         case "screenshot_titles": screenshotTitles
+        case "writing_chapter_update":
+            let replace = data["mode"]?.string == "replace_passage"
+            let reason = data["reason"]?.text ?? ""
+            Text("\(replace ? "Replaces a passage of" : "Adds to the end of") “\(data["title"]?.text ?? "")”"
+                 + (reason.isEmpty ? "" : " — \(reason)"))
+                .font(.caption).foregroundStyle(.secondary)
+            if replace {
+                Text(data["find"]?.text ?? "").font(.caption).foregroundStyle(.secondary).italic()
+                    .padding(.leading, 8)
+                    .accessibilityLabel("Replaces: \(data["find"]?.text ?? "")")
+            }
+            TextField("Content", text: text("content"), axis: .vertical).lineLimit(3...12).textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Content")
         default:
             EmptyView()
         }

@@ -1179,6 +1179,8 @@ final class OfflineCaptureTests: XCTestCase {
         let project = app.buttons["writing-project"].firstMatch
         XCTAssertTrue(project.waitForExistence(timeout: 5))
         project.tap()
+        XCTAssertTrue(app.staticTexts["The Wreck"].waitForExistence(timeout: 5))
+        app.buttons["Notes"].tap()
         XCTAssertTrue(app.staticTexts["Mara Vell"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.images["Pinned"].exists)
 
@@ -1231,6 +1233,115 @@ final class OfflineCaptureTests: XCTestCase {
             .firstMatch.waitForExistence(timeout: 5))
     }
 
+    private func openWritingChapter(_ app: XCUIApplication, _ title: String = "The Wreck") -> XCUIElement {
+        openMore(app, "Writing")
+        let project = app.buttons["writing-project"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        project.tap()
+        let chapter = app.staticTexts[title]
+        XCTAssertTrue(chapter.waitForExistence(timeout: 5))
+        chapter.tap()
+        let editor = app.textViews["writing-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        return editor
+    }
+
+    // The whole point of the store: words typed with no server are still there
+    // after the app is killed, and say they haven't reached the server.
+    func testWritingTextSurvivesARelaunchWithNoServer() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        let editor = openWritingChapter(app)
+        XCTAssertTrue(app.staticTexts["Saved"].waitForExistence(timeout: 5))
+        editor.tap()
+        editor.typeText("Written offline. ")
+        XCTAssertTrue(app.staticTexts["On this phone"].waitForExistence(timeout: 5))
+        // Well past the disk write, with no sign of leaving the screen.
+        sleep(1)
+        app.terminate()
+
+        let relaunched = XCUIApplication()
+        relaunched.launchArguments += ["-writingFixture", "-writingFixtureKeep"]
+        relaunched.launch()
+        let reopened = openWritingChapter(relaunched)
+        XCTAssertTrue((reopened.value as? String)?.contains("Written offline.") == true)
+        XCTAssertTrue(relaunched.staticTexts["On this phone"].waitForExistence(timeout: 5))
+    }
+
+    func testWritingShowsAWordCountThatFollowsTyping() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        let editor = openWritingChapter(app, "The Favour")
+        editor.tap()
+        XCTAssertTrue(app.staticTexts["writing-word-count"].waitForExistence(timeout: 5))
+        let before = app.staticTexts["writing-word-count"].label
+        editor.typeText("two more ")
+        let counted = NSPredicate(format: "label != %@", before)
+        expectation(for: counted, evaluatedWith: app.staticTexts["writing-word-count"])
+        waitForExpectations(timeout: 5)
+    }
+
+    func testWritingMakesAChapterOfflineAndOpensIt() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        openMore(app, "Writing")
+        let project = app.buttons["writing-project"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        project.tap()
+        let add = app.buttons["writing-add"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        add.tap()
+        let title = app.alerts.textFields.firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.typeText("The Reef Run")
+        app.alerts.buttons["Add"].tap()
+        XCTAssertTrue(app.textViews["writing-editor"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["On this phone"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts["The Reef Run"].waitForExistence(timeout: 5))
+    }
+
+    // The fixture's lighthouse chapter changed on the desktop while it was
+    // being edited here. Both versions are shown, and neither goes until a choice.
+    func testWritingConflictShowsBothVersionsAndCanKeepBoth() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        openMore(app, "Writing")
+        let book = app.staticTexts["Notes on lighthouse keeping"]
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+        book.tap()
+        let chapter = app.staticTexts["The Storm"]
+        XCTAssertTrue(chapter.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.images["Needs a decision"].exists)
+        chapter.tap()
+        let conflict = app.buttons["writing-conflict"]
+        XCTAssertTrue(conflict.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textViews["writing-editor"].value as? String, "Typed on the phone.")
+        conflict.tap()
+        XCTAssertTrue(app.staticTexts["Typed on the desktop."].waitForExistence(timeout: 5))
+        app.buttons["writing-conflict-copy"].tap()
+        XCTAssertTrue(conflict.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(app.textViews["writing-editor"].value as? String, "Typed on the desktop.")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts["The Storm (copy)"].waitForExistence(timeout: 5))
+    }
+
+    // On a phone the inspector is a sheet; the same view is a column on an iPad.
+    func testWritingSidePanelShowsTheNotesBesideAChapter() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        _ = openWritingChapter(app)
+        app.buttons["writing-panel"].tap()
+        XCTAssertTrue(app.staticTexts["Mara Vell"].waitForExistence(timeout: 5))
+        app.buttons["Discussion"].tap()
+        XCTAssertTrue(app.staticTexts["Update this note?"].waitForExistence(timeout: 5))
+    }
+
     func testWritingStartsANewBookAndOpensIt() {
         let app = XCUIApplication()
         app.launchArguments.append("-writingFixture")
@@ -1245,7 +1356,7 @@ final class OfflineCaptureTests: XCTestCase {
         title.typeText("Tide Charts")
         app.buttons["writing-new-create"].tap()
         XCTAssertTrue(app.navigationBars["Tide Charts"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["No notes yet"].exists)
+        XCTAssertTrue(app.staticTexts["No chapters yet — tap + to start one."].exists)
     }
 
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
