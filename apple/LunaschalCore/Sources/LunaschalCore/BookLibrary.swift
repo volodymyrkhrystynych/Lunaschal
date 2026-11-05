@@ -32,6 +32,16 @@ public struct BookFilter: Equatable {
         if on && sort == "activity" { sort = "added" }
         if !on && sort == "added" { sort = "activity" }
     }
+
+    /// The filter with its menu's choices undone, for a list whose sort isn't
+    /// in the menu. A sort only the Backlog toggle chose goes with the toggle.
+    public func clearedKeepingSort() -> BookFilter {
+        var current = self
+        current.setBacklogOnly(false)
+        var cleared = BookFilter()
+        cleared.sort = current.sort
+        return cleared
+    }
 }
 
 public extension JSONValue {

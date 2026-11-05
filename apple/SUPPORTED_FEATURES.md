@@ -104,11 +104,12 @@ Ink not yet reported by PaperKit survives an added page, a page turn and Save (A
 it passed in simulator (`testNotesComeBackFromTheEntryDraftAndSaveWithIt`). A newspaper
 re-save replacing its earlier entry is covered by core and server tests only; real Pencil
 timing and the replacement against a live server are unverified on device.
-Library is books-only and switches between two views. Library picks a provider
-(site or file type) and sorts by the site's latest chapter date. Folders lists
-the desktop's folders plus Unsorted, and each opens with a Back button. Both have
-title/tag search, bookmark filters and recent/title sorting (no tag filter: fics
-carry hundreds of user tags). The toolbar's refresh asks the server to read the
+Library is books-only and switches between two views. Library sorts from a row
+of pills (Latest, the site's latest chapter date, then Recent, Added, Title and
+Rating), and picks a provider (site or file type) from the filter menu. Folders
+lists the desktop's folders plus Unsorted, each opens with a Back button, and
+Sort is in the filter menu there. Both have title/tag search and bookmark filters
+(no tag filter: fics carry hundreds of user tags). The toolbar's refresh asks the server to read the
 forums' alerts and queue those fics; long-pressing a fic from a site queues it
 for an update, or a deep re-read of edited chapters. Both need the server, and
 the new chapters arrive with the next sync. A fic is imported by sharing its
@@ -131,7 +132,12 @@ first chapter), with the chapter list one Back away; the reader's Chapters
 button returns to that list rather than pushing another, so Back is always
 chapter → chapter list → Library however many chapters are picked (passed in
 simulator). The reader's bottom-left menu takes typed or spoken commentary
-(a journal entry linked to the chapter) and Continue/Favorite bookmarks. Scrolling
+(a journal entry linked to the chapter) and Continue/Favorite bookmarks. A
+Continue bookmark removes itself when its chapter is read to the end or Next is
+tapped, unless it was saved at the very end, where only Next clears it; it says
+so when it does, and it works before the bookmark has synced. A fast flick up
+shows a button at the bottom right that jumps to the top of the chapter. Both
+passed in simulator; the flick speed is not yet judged on a device. Scrolling
 is logged as reading spans, and the chapter is reported as last read; both are
 queued offline.
 Organizing works offline and syncs last-write-wins. A left swipe on a book offers

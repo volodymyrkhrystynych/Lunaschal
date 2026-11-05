@@ -162,6 +162,106 @@ final class BookLibraryTests: XCTestCase {
         XCTAssertEqual(try reopened.books(filter: favorites).count, 0)
     }
 
+    private func continuePoint(_ book: SyncChange, on chapter: SyncChange, at fraction: Double) -> SyncChange {
+        let id = ULID.make()
+        return SyncChange(revision: 105, collection: "fic_bookmarks", id: id, deleted: false,
+            data: ["id": .string(id), "ficId": .string(book.id), "chapterId": .string(chapter.id),
+                   "type": .string("continue"), "scrollPosition": .number(fraction)])
+    }
+
+    func testFinishingAChapterClearsASyncedContinuePoint() throws {
+        let (store, _) = try store()
+        let book = book(1), first = chapter(book, position: 0), second = chapter(book, position: 1)
+        let mark = continuePoint(book, on: first, at: 0.4)
+        try apply([book, first, second, mark], to: store)
+
+        XCTAssertTrue(try store.clearContinue(bookID: book.id, chapterID: first.id, reachedEnd: true))
+        XCTAssertTrue(try store.bookmarks(bookID: book.id).isEmpty)
+        XCTAssertEqual(try store.resumePoint(bookID: book.id)?.fraction, nil)
+        let edit = try XCTUnwrap(store.bookmarkEdits(bookID: book.id).first)
+        XCTAssertEqual(edit.operation.action, "delete")
+        XCTAssertEqual(edit.operation.recordId, mark.id)
+        XCTAssertEqual(edit.operation.baseRevision, 105)
+
+        XCTAssertFalse(try store.clearContinue(bookID: book.id, chapterID: first.id, reachedEnd: true), "already gone")
+        XCTAssertEqual(try store.bookmarkEdits(bookID: book.id).count, 1)
+    }
+
+    func testAnUnsentContinuePointIsDroppedWithTheOneItReplaced() throws {
+        let (store, _) = try store()
+        let book = book(1), first = chapter(book, position: 0), second = chapter(book, position: 1)
+        let older = continuePoint(book, on: first, at: 0.2)
+        try apply([book, first, second, older], to: store)
+        try store.queueBookmark(chapter: second, type: "continue", fraction: 0.5)
+
+        XCTAssertTrue(try store.clearContinue(bookID: book.id, chapterID: second.id, reachedEnd: false))
+        XCTAssertTrue(try store.bookmarks(bookID: book.id).isEmpty, "the older point doesn't come back")
+        XCTAssertEqual(try store.bookmarkEdits(bookID: book.id).map(\.operation.action), ["delete"])
+        XCTAssertEqual(try store.bookmarkEdits(bookID: book.id).first?.operation.recordId, older.id)
+    }
+
+    func testAContinuePointThatNeverSyncedLeavesNothingToSend() throws {
+        let (store, _) = try store()
+        let book = book(1), first = chapter(book, position: 0)
+        try apply([book, first], to: store)
+        try store.queueBookmark(chapter: first, type: "continue", fraction: 0.5)
+        XCTAssertTrue(try store.clearContinue(bookID: book.id, chapterID: first.id, reachedEnd: true))
+        XCTAssertTrue(try store.bookmarks(bookID: book.id).isEmpty)
+        XCTAssertTrue(try store.bookmarkEdits(bookID: book.id).isEmpty)
+    }
+
+    func testOnlyTheContinuePointInThisChapterIsCleared() throws {
+        let (store, _) = try store()
+        let book = book(1), first = chapter(book, position: 0), second = chapter(book, position: 1)
+        try apply([book, first, second, continuePoint(book, on: second, at: 0.4)], to: store)
+        try store.queueBookmark(chapter: first, type: "favorite", fraction: 0.5)
+
+        XCTAssertFalse(try store.clearContinue(bookID: book.id, chapterID: first.id, reachedEnd: true),
+                       "re-reading an earlier chapter leaves the place alone")
+        XCTAssertEqual(try store.bookmarks(bookID: book.id).count, 2)
+        XCTAssertTrue(try store.clearContinue(bookID: book.id, chapterID: second.id, reachedEnd: false))
+        XCTAssertEqual(try store.bookmarks(bookID: book.id).map { $0.data?["type"]?.string }, ["favorite"])
+    }
+
+    func testAContinuePointSavedAtTheEndWaitsForTheNextChapter() throws {
+        let (store, _) = try store()
+        let book = book(1), first = chapter(book, position: 0)
+        try apply([book, first, continuePoint(book, on: first, at: FicLibrary.autoReadFraction)], to: store)
+        XCTAssertFalse(try store.clearContinue(bookID: book.id, chapterID: first.id, reachedEnd: true))
+        XCTAssertEqual(try store.bookmarks(bookID: book.id).count, 1)
+        XCTAssertTrue(try store.clearContinue(bookID: book.id, chapterID: first.id, reachedEnd: false))
+        XCTAssertTrue(try store.bookmarks(bookID: book.id).isEmpty)
+    }
+
+    func testAContinuePointHeldAsAConflictIsLeftAlone() throws {
+        let (store, _) = try store()
+        let book = book(1), first = chapter(book, position: 0)
+        let saved = continuePoint(book, on: first, at: 0.2)
+        try apply([book, first, saved], to: store)
+        try store.queueBookmark(chapter: first, type: "continue", fraction: 0.5)
+        let edit = try XCTUnwrap(store.bookmarkEdits(bookID: book.id).first)
+        try store.hold(edit.operation, reply: OperationReply(operationId: nil, change: nil, conflict: true,
+            current: saved, error: "Changed elsewhere", resetRequired: nil))
+
+        XCTAssertFalse(try store.clearContinue(bookID: book.id, chapterID: first.id, reachedEnd: false))
+        XCTAssertEqual(try store.bookmarkEdits(bookID: book.id).map(\.state), ["conflict"])
+    }
+
+    func testClearingTheMenuKeepsAPickedSort() {
+        var filter = BookFilter()
+        filter.sort = "title"; filter.source = "ao3"; filter.minRating = 4; filter.setBacklogOnly(true)
+        var expected = BookFilter()
+        expected.sort = "title"
+        XCTAssertEqual(filter.clearedKeepingSort(), expected)
+    }
+
+    func testClearingTheMenuUndoesASortOnlyTheBacklogChose() {
+        var filter = BookFilter()
+        filter.setBacklogOnly(true)
+        XCTAssertEqual(filter.sort, "added")
+        XCTAssertEqual(filter.clearedKeepingSort(), BookFilter())
+    }
+
     func testContinueReplacementCarriesRevisionAndANewerOneReplacesItBeforeSync() throws {
         let (store, _) = try store()
         let book = book(1), current = chapter(book), later = chapter(book)

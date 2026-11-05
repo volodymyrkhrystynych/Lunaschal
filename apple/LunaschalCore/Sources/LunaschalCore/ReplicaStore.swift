@@ -649,6 +649,33 @@ public final class ReplicaStore {
                     [operation.id, try json(operation), try json(bookmark)])
     }
 
+    /// Removes a book's continue point once it has been read past, if that
+    /// point is in `chapterID`; returns whether it did. Unlike `deleteBookmark`
+    /// this works on a point that hasn't synced: the unsent one is dropped,
+    /// along with the server's older one it would have replaced, which would
+    /// otherwise come back. A point saved at the very end was put there on
+    /// purpose, so `reachedEnd` leaves it for the next chapter to clear, and
+    /// one held as a conflict stays the user's to resolve.
+    @discardableResult
+    public func clearContinue(bookID: String, chapterID: String, reachedEnd: Bool) throws -> Bool {
+        guard let epoch = try epoch else { throw ReplicaError.invalidEdit }
+        guard let mark = try bookmarks(bookID: bookID).first(where: { $0.data?["type"]?.string == "continue" }),
+              mark.data?["chapterId"]?.string == chapterID,
+              !reachedEnd || (mark.data?["scrollPosition"]?.number ?? 0) < FicLibrary.autoReadFraction else { return false }
+        let waiting = try bookmarkEdits(bookID: bookID).filter { $0.original.data?["type"]?.string == "continue" }
+        guard waiting.allSatisfy({ $0.state == "pending" && $0.operation.action == "create" }) else { return false }
+        let saved = try serverBookmarks(bookID: bookID).first { $0.data?["type"]?.string == "continue" }
+        let operation = saved.map { ReplicaOperation(epoch: epoch, record: $0, action: "delete", data: [:]) }
+        try transaction {
+            for edit in waiting { try execute("DELETE FROM replica_outbox WHERE id=?", [edit.id]) }
+            if let operation, let saved {
+                try execute("INSERT INTO replica_outbox(id,operation,original) VALUES (?,?,?)",
+                            [operation.id, try json(operation), try json(saved)])
+            }
+        }
+        return true
+    }
+
     public func queue(record: SyncChange, data: [String: JSONValue], delete: Bool = false) throws -> ReplicaOperation {
         guard let epoch = try epoch else { throw ReplicaError.needsBootstrap }
         let editable: Set<String>

@@ -1226,16 +1226,16 @@ final class OfflineCaptureTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         openMore(app, "Library")
-        // Library mode: the providers, filtered by site.
-        XCTAssertTrue(app.buttons["SpaceBattles"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["AO3"].exists)
+        // Library mode: the sort pills.
+        XCTAssertTrue(app.buttons["Latest"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Title"].exists)
         let mode = app.segmentedControls["library-mode"]
         XCTAssertTrue(mode.exists)
         mode.buttons["Folders"].tap()
-        // Folders mode is a list of folders, with no provider pills.
+        // Folders mode is a list of folders, with no sort pills.
         let unsorted = app.buttons["folder-unsorted"]
         XCTAssertTrue(unsorted.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["SpaceBattles"].exists)
+        XCTAssertFalse(app.buttons["Latest"].exists)
         unsorted.tap()
         XCTAssertTrue(app.navigationBars["Unsorted"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.searchFields.firstMatch.exists)
@@ -1243,7 +1243,130 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(unsorted.waitForExistence(timeout: 5))
         // The choice is remembered: back to Library mode for the next test.
         app.segmentedControls["library-mode"].buttons["Library"].tap()
-        XCTAssertTrue(app.buttons["SpaceBattles"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Latest"].waitForExistence(timeout: 5))
+    }
+
+    /// The pills sort the whole library, and picking one isn't a filter to
+    /// reset. The source lives in the filter menu, where a folder has Sort.
+    func testLibrarySortsFromThePillsAndFiltersBySourceFromTheMenu() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let reset = app.buttons["Reset filters"]
+        XCTAssertTrue(app.staticTexts["The Long Way Round"].waitForExistence(timeout: 10))
+        let filter = app.buttons["Filter books"]
+        let unfiltered = filter.screenshot().pngRepresentation
+
+        app.buttons["Title"].tap()
+        XCTAssertTrue(app.buttons["Title"].isSelected)
+        XCTAssertEqual(filter.screenshot().pngRepresentation, unfiltered, "a sort is not a filter")
+
+        filter.tap()
+        XCTAssertFalse(app.buttons["Recently read"].exists)
+        let source = app.buttons["Source"]
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        source.tap()
+        XCTAssertTrue(app.buttons["AO3"].waitForExistence(timeout: 5))
+        app.buttons["AO3"].tap()
+        let reading = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(reading.waitForNonExistence(timeout: 5), "only AO3 books remain")
+        XCTAssertTrue(app.staticTexts["Quiet Hours"].waitForExistence(timeout: 5))
+
+        filter.tap()
+        XCTAssertTrue(reset.waitForExistence(timeout: 5))
+        reset.tap()
+        XCTAssertTrue(app.buttons["Title"].isSelected, "Reset leaves the sort alone")
+        app.buttons["Latest"].tap()
+        XCTAssertTrue(reading.waitForExistence(timeout: 5), "and the source is gone")
+
+        // A folder has no pills, so its sort stays in the menu.
+        app.segmentedControls["library-mode"].buttons["Folders"].tap()
+        let unsorted = app.buttons["folder-unsorted"]
+        XCTAssertTrue(unsorted.waitForExistence(timeout: 5))
+        unsorted.tap()
+        XCTAssertTrue(filter.waitForExistence(timeout: 5))
+        filter.tap()
+        XCTAssertTrue(app.buttons["Recently read"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Source"].exists)
+        app.tap()
+        app.navigationBars["Unsorted"].buttons.firstMatch.tap()
+        app.segmentedControls["library-mode"].buttons["Library"].tap()
+    }
+
+    /// A fast flick towards the top offers the jump there, and using it lands
+    /// on the top of the chapter. Scrolling down never offers it.
+    func testAFastFlickUpOffersTheTopOfTheChapter() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-libraryFixture", "-libraryLongBook"]
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["A Very Long Road"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        XCTAssertTrue(app.buttons["reader-menu"].waitForExistence(timeout: 10))
+        let jump = app.buttons["reader-to-top"]
+
+        for _ in 0..<3 { app.swipeUp(velocity: 6000) }
+        XCTAssertFalse(jump.waitForExistence(timeout: 1))
+        app.swipeDown(velocity: .slow)
+        XCTAssertFalse(jump.waitForExistence(timeout: 1), "scrolling back to re-read isn't a flick")
+        app.swipeDown(velocity: 6000)
+        XCTAssertTrue(jump.waitForExistence(timeout: 3))
+        jump.tap()
+        XCTAssertTrue(app.buttons["chapter-next-top"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["chapter-next-top"].isHittable)
+        XCTAssertFalse(jump.exists)
+    }
+
+    /// Going on to the next chapter takes the continue point away, and the
+    /// chapter list agrees.
+    func testNextChapterRemovesTheContinuePoint() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        // It opens at the continue point, in chapter 4.
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        // The resume link and the bookmark under it read the same.
+        let rows = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Continue: "))
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(rows.count, 2)
+        rows.firstMatch.tap()
+
+        let next = app.buttons["chapter-next-top"]
+        // All the way up: part-way, it can count as hittable under the bar.
+        for _ in 0..<5 { app.swipeDown() }
+        // A tap while the swipe is still settling only stops the scroll.
+        let removed = app.staticTexts["Continue point removed"]
+        for _ in 0..<3 where !removed.exists {
+            next.tap()
+            _ = removed.waitForExistence(timeout: 2)
+        }
+        XCTAssertTrue(removed.exists)
+        chapters.tap()
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(rows.count, 1, "only the resume link is left")
+    }
+
+    /// Reading to the end of the chapter removes it too.
+    func testFinishingAChapterRemovesTheContinuePoint() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        XCTAssertTrue(app.buttons["reader-menu"].waitForExistence(timeout: 10))
+        let removed = app.staticTexts.containing(NSPredicate(format: "label ENDSWITH %@", "Continue point removed")).firstMatch
+        for _ in 0..<8 where !removed.exists { app.swipeUp() }
+        XCTAssertTrue(removed.waitForExistence(timeout: 5))
     }
 
     /// The filter menu has no tag picker (fics bring hundreds of user tags),
