@@ -358,6 +358,37 @@ def seed_journal(db):
             ),
         )
 
+    # Two shared web pages (backend/journal/web_archive.py): one the browser
+    # printed, one it found behind a login. Never 'queued' — that is a page
+    # still waiting for the extension, and the demo has no browser coming.
+    from weasyprint import HTML
+
+    page_id = new_id()
+    page_pdf = attachment_path(page_id, 'pdf')
+    page_pdf.parent.mkdir(parents=True, exist_ok=True)
+    page_text = ('How bridges stand. An arch carries its load as compression, '
+                 'pushing outward into its abutments rather than bending.')
+    page_pdf.write_bytes(HTML(string=f'<h1>How bridges stand</h1><p>{page_text}</p>').write_pdf())
+    page_thumb = attachment_path(page_id, 'jpg')
+    placeholder_image(page_thumb, 'How bridges stand', size=(640, 360))
+    db.execute(
+        'INSERT INTO journal_attachments (id, entry_id, kind, name, path, mime,'
+        ' size, position, transcript, transcript_status, source_url, thumb_path,'
+        ' import_status, created_at)'
+        " VALUES (?,?,'webpage',?,?,'application/pdf',?,2,?,'done',?,?,'ready',?)",
+        (page_id, entries[0][0], 'How bridges stand', str(page_pdf),
+         page_pdf.stat().st_size, page_text,
+         'https://example.com/articles/how-bridges-stand', str(page_thumb), ts(6)),
+    )
+    db.execute(
+        'INSERT INTO journal_attachments (id, entry_id, kind, name, path, position,'
+        ' source_url, import_status, import_error, created_at)'
+        " VALUES (?,?,'webpage',?,'',3,?,'login_required',?,?)",
+        (new_id(), entries[0][0], 'https://example.com/members/annual-report',
+         'https://example.com/members/annual-report',
+         'This page needs a login, even in your browser — not archived.', ts(6)),
+    )
+
     # Curated tags: user-defined in Settings → Tags, applied to entries by a
     # background classifier. Seed the tag plus one match so the Journal filter
     # pills have something to filter by without the scan ever running.

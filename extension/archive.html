@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Lunaschal — journal link archive</title>
+    <link rel="stylesheet" href="ffn.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Journal link archive</h1>
+      <p>
+        Links you attach to a journal entry are printed to PDF here, in this
+        browser, using its signed-in sessions. Leave this tab open; each page
+        opens briefly in a background tab and closes again.
+      </p>
+      <p>
+        Chrome shows a “started debugging this browser” bar while a page is
+        being printed — that is this extension reading the page it opened.
+        A page that is a sign-in form or a paywall even here is not printed;
+        the journal shows it as needing a login. Sign in to the site in this
+        browser, then press Retry on the card.
+      </p>
+      <button id="settings">Settings</button>
+      <button id="connect">Connect browser</button>
+      <button id="disconnect" disabled>Disconnect</button>
+      <p id="status" role="status">Not connected.</p>
+      <p id="last"></p>
+      <p id="error" role="alert"></p>
+    </main>
+    <script type="module" src="archive.js"></script>
+  </body>
+</html>

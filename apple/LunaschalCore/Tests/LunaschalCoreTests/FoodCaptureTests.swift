@@ -26,7 +26,7 @@ final class FoodCaptureTests: XCTestCase {
     func testSaveFoodTakesTheDraftButNotTheLinks() throws {
         let photo = try store.stageFile(data: Data("jpeg".utf8), name: "Meal.jpg", contentType: "image/jpeg")
         let spoken = try clip("aac")
-        let capture = try store.commitDraft(text: " Ramen ", youtubeURLs: ["https://youtu.be/aircAruvnKk"], kind: .food)
+        let capture = try store.commitDraft(text: " Ramen ", linkURLs: ["https://youtu.be/aircAruvnKk"], kind: .food)
         XCTAssertEqual(capture.kind, .food)
         XCTAssertEqual(capture.text, "Ramen")
         XCTAssertEqual(capture.files, [photo])
@@ -38,8 +38,8 @@ final class FoodCaptureTests: XCTestCase {
 
     func testAPhotoOrClipAloneIsAMeal() throws {
         _ = try store.stageFile(data: Data("jpeg".utf8), name: "Meal.jpg", contentType: "image/jpeg")
-        XCTAssertEqual(try store.commitDraft(text: "", youtubeURLs: [], kind: .food).text, "")
-        XCTAssertThrowsError(try store.commitDraft(text: " ", youtubeURLs: [], kind: .food)) {
+        XCTAssertEqual(try store.commitDraft(text: "", linkURLs: [], kind: .food).text, "")
+        XCTAssertThrowsError(try store.commitDraft(text: " ", linkURLs: [], kind: .food)) {
             XCTAssertEqual($0 as? CaptureError, .emptyText)
         }
     }
@@ -48,7 +48,7 @@ final class FoodCaptureTests: XCTestCase {
         let taken = Date(timeIntervalSince1970: 1_700_000_000)
         _ = try store.stageFile(data: Data("jpeg".utf8), name: "Meal.jpg", contentType: "image/jpeg", capturedAt: taken)
         let reopened = try CaptureStore(root: root)
-        let meal = try reopened.commitDraft(text: "Lunch", youtubeURLs: [], kind: .food)
+        let meal = try reopened.commitDraft(text: "Lunch", linkURLs: [], kind: .food)
         XCTAssertEqual(meal.createdAt, taken)
         XCTAssertEqual(try reopened.load(meal.id).files.first?.capturedAt, taken)
     }
@@ -69,7 +69,7 @@ final class FoodCaptureTests: XCTestCase {
         ]] as CFDictionary)
         XCTAssertTrue(CGImageDestinationFinalize(destination))
         _ = try store.stageFile(data: bytes as Data, name: "Meal.jpg", contentType: "image/jpeg")
-        let meal = try store.commitDraft(text: "Dinner", youtubeURLs: [], kind: .food)
+        let meal = try store.commitDraft(text: "Dinner", linkURLs: [], kind: .food)
         XCTAssertEqual(meal.createdAt, Date(timeIntervalSince1970: 1_700_000_000))
     }
     #endif
@@ -80,22 +80,22 @@ final class FoodCaptureTests: XCTestCase {
         _ = try store.stageFile(data: Data("jpeg".utf8), name: "Meal.jpg", contentType: "image/jpeg",
                                 capturedAt: Date(timeIntervalSince1970: 1_700_000_000))
         let saved = Date(timeIntervalSince1970: 1_790_000_000)
-        XCTAssertEqual(try store.commitDraft(text: "Journal", youtubeURLs: [], now: saved).createdAt, saved)
+        XCTAssertEqual(try store.commitDraft(text: "Journal", linkURLs: [], now: saved).createdAt, saved)
     }
 
     func testAFileTheFoodLogCannotKeepStaysInTheDraft() throws {
         let pdf = try store.stageFile(data: Data("%PDF".utf8), name: "Menu.pdf", contentType: "application/pdf")
-        XCTAssertThrowsError(try store.commitDraft(text: "Dinner", youtubeURLs: [], kind: .food)) {
+        XCTAssertThrowsError(try store.commitDraft(text: "Dinner", linkURLs: [], kind: .food)) {
             XCTAssertEqual($0 as? CaptureError, .notFoodMedia)
         }
         XCTAssertEqual(try store.draft().files, [pdf])
         XCTAssertEqual(try store.list(), [])
         // The same draft is still a perfectly good journal entry.
-        XCTAssertEqual(try store.commitDraft(text: "Dinner", youtubeURLs: []).files, [pdf])
+        XCTAssertEqual(try store.commitDraft(text: "Dinner", linkURLs: []).files, [pdf])
     }
 
     func testOlderManifestsAreJournalEntries() throws {
-        let saved = try store.commitDraft(text: "Before food existed", youtubeURLs: [])
+        let saved = try store.commitDraft(text: "Before food existed", linkURLs: [])
         var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as! [String: Any]
         json.removeValue(forKey: "kind")
         let decoded = try JSONDecoder().decode(Capture.self, from: JSONSerialization.data(withJSONObject: json))
@@ -106,7 +106,7 @@ final class FoodCaptureTests: XCTestCase {
         let first = try store.stageFile(data: Data("JPEGDATA".utf8), name: "Bo\"wl\r\n.jpg", contentType: "image/jpeg")
         let second = try store.stageFile(data: Data("HEICDATA".utf8), name: "Side.heic", contentType: "image/heic")
         _ = try clip("aac")
-        let capture = try store.commitDraft(text: "Ramen", youtubeURLs: [], kind: .food,
+        let capture = try store.commitDraft(text: "Ramen", linkURLs: [], kind: .food,
                                             now: Date(timeIntervalSince1970: 1_790_000_000))
         let body = try FoodMultipart(capture: capture, files: capture.files.map(store.fileURL))
         defer { try? FileManager.default.removeItem(at: body.url) }
@@ -122,7 +122,7 @@ final class FoodCaptureTests: XCTestCase {
 
     func testFoodRecordingMultipartNamesTheMealAndClip() throws {
         let spoken = try clip("AACDATA")
-        let capture = try store.commitDraft(text: "", youtubeURLs: [], kind: .food)
+        let capture = try store.commitDraft(text: "", linkURLs: [], kind: .food)
         let body = try FoodRecordingMultipart(capture: capture, clip: spoken, position: 2,
                                               audioURL: store.clipURL(spoken))
         defer { try? FileManager.default.removeItem(at: body.url) }
@@ -135,7 +135,7 @@ final class FoodCaptureTests: XCTestCase {
 
     func testAMealCountsAsSavedOnlyWhenEveryPhotoCameBack() throws {
         let photo = try store.stageFile(data: Data("jpeg".utf8), name: "Meal.jpg", contentType: "image/jpeg")
-        let capture = try store.commitDraft(text: "Ramen", youtubeURLs: [], kind: .food)
+        let capture = try store.commitDraft(text: "Ramen", linkURLs: [], kind: .food)
         func ack(_ id: String, _ media: [String]) -> Data {
             Data("{\"id\":\"\(id)\",\"media\":[\(media.map { "{\"id\":\"\($0)\",\"kind\":\"image\"}" }.joined(separator: ","))]}".utf8)
         }
@@ -146,7 +146,7 @@ final class FoodCaptureTests: XCTestCase {
 
     func testClipAcknowledgementMustNameTheMealAndClip() throws {
         let spoken = try clip("aac")
-        let capture = try store.commitDraft(text: "", youtubeURLs: [], kind: .food)
+        let capture = try store.commitDraft(text: "", linkURLs: [], kind: .food)
         let good = Data("{\"id\":\"\(capture.id)\",\"media\":{\"id\":\"\(spoken.attachmentID)\",\"kind\":\"audio\"}}".utf8)
         XCTAssertNoThrow(try JournalAPI.validateFoodClipAcknowledgement(good, for: capture, clip: spoken))
         let wrong = Data("{\"id\":\"\(capture.id)\",\"media\":{\"id\":\"\(ULID.make())\"}}".utf8)
@@ -155,8 +155,8 @@ final class FoodCaptureTests: XCTestCase {
 
     @MainActor
     func testASyncedMealIsNotMistakenForADeletedJournalEntry() async throws {
-        let meal = try store.commitDraft(text: "Ramen", youtubeURLs: [], kind: .food)
-        let entry = try store.commitDraft(text: "A thought", youtubeURLs: [])
+        let meal = try store.commitDraft(text: "Ramen", linkURLs: [], kind: .food)
+        let entry = try store.commitDraft(text: "A thought", linkURLs: [])
         let server = JournalOnlyServer()
         try await CaptureSync(store: store).run(using: server)
         XCTAssertEqual(Set(server.sent), [meal.id, entry.id])

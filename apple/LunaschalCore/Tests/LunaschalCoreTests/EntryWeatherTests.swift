@@ -57,10 +57,10 @@ final class EntryWeatherTests: XCTestCase {
     }
 
     func testTheSaveLocationGoesToTheServerWithTheEntry() throws {
-        let capture = try store.commitDraft(text: "By the lake", youtubeURLs: [], location: (44.25, -78.5))
+        let capture = try store.commitDraft(text: "By the lake", linkURLs: [], location: (44.25, -78.5))
         XCTAssertEqual(try store.load(capture.id).latitude, 44.25)
         _ = try store.stageFile(data: Data("jpeg".utf8), name: "Meal.jpg", contentType: "image/jpeg")
-        let meal = try store.commitDraft(text: "Ramen", youtubeURLs: [], kind: .food, location: (45.5, -73.6))
+        let meal = try store.commitDraft(text: "Ramen", linkURLs: [], kind: .food, location: (45.5, -73.6))
         let body = try FoodMultipart(capture: meal, files: meal.files.map(store.fileURL))
         defer { try? FileManager.default.removeItem(at: body.url) }
         let text = String(decoding: try Data(contentsOf: body.url), as: UTF8.self)
@@ -69,7 +69,7 @@ final class EntryWeatherTests: XCTestCase {
     }
 
     func testAnUnlocatedSaveSendsNoCoordinates() throws {
-        let meal = try store.commitDraft(text: "Toast", youtubeURLs: [], kind: .food)
+        let meal = try store.commitDraft(text: "Toast", linkURLs: [], kind: .food)
         XCTAssertNil(meal.latitude)
         let body = try FoodMultipart(capture: meal, files: [])
         defer { try? FileManager.default.removeItem(at: body.url) }
@@ -77,7 +77,7 @@ final class EntryWeatherTests: XCTestCase {
     }
 
     func testOlderManifestsHaveNoLocationOrWeather() throws {
-        let saved = try store.commitDraft(text: "Before weather", youtubeURLs: [])
+        let saved = try store.commitDraft(text: "Before weather", linkURLs: [])
         var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as! [String: Any]
         for key in ["latitude", "longitude", "weather"] { json.removeValue(forKey: key) }
         let decoded = try JSONDecoder().decode(Capture.self, from: JSONSerialization.data(withJSONObject: json))
@@ -87,7 +87,7 @@ final class EntryWeatherTests: XCTestCase {
 
     @MainActor
     func testAMealsWeatherIsReadBackUntilTheServerHasIt() async throws {
-        let meal = try store.commitDraft(text: "Ramen", youtubeURLs: [], kind: .food)
+        let meal = try store.commitDraft(text: "Ramen", linkURLs: [], kind: .food)
         let server = MealServer()
         var clock = meal.createdAt
         let sync = CaptureSync(store: store, now: { clock })
@@ -107,7 +107,7 @@ final class EntryWeatherTests: XCTestCase {
 
     @MainActor
     func testAMealWithoutWeatherAfterADayIsNoLongerAskedAbout() async throws {
-        let meal = try store.commitDraft(text: "Toast", youtubeURLs: [], kind: .food)
+        let meal = try store.commitDraft(text: "Toast", linkURLs: [], kind: .food)
         let server = MealServer()
         let sync = CaptureSync(store: store, now: { meal.createdAt + 86_400 + 1 })
         try await sync.run(using: server)

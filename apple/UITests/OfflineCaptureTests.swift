@@ -1952,10 +1952,10 @@ final class OfflineCaptureTests: XCTestCase {
                       || app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Saved to journal'")).firstMatch.waitForExistence(timeout: 5))
 
         tab(app, "Journal").tap()
-        let video = app.staticTexts["1 YouTube video"].firstMatch
+        let video = app.staticTexts["1 link"].firstMatch
         XCTAssertTrue(video.waitForExistence(timeout: settle))
         video.tap()
-        XCTAssertTrue(app.staticTexts["Saved YouTube link"].firstMatch.waitForExistence(timeout: settle))
+        XCTAssertTrue(app.staticTexts["Saved link"].firstMatch.waitForExistence(timeout: settle))
     }
 
     func testNotesComeBackFromTheEntryDraftAndSaveWithIt() {
@@ -2167,7 +2167,7 @@ final class OfflineCaptureTests: XCTestCase {
         for (left, right) in zip(names, names.dropFirst()) {
             XCTAssertLessThan(app.buttons[left].frame.midX, app.buttons[right].frame.midX, "\(left) sits left of \(right)")
         }
-        XCTAssertTrue(app.textFields["YouTube video URL"].exists)
+        XCTAssertTrue(app.textFields["Web or YouTube link"].exists)
         let save = app.buttons["Save edit on this device"]
         XCTAssertFalse(save.isEnabled, "nothing changed yet")
 
@@ -2199,7 +2199,7 @@ final class OfflineCaptureTests: XCTestCase {
         app.navigationBars["Fixture ramen"].buttons["Edit"].tap()
         XCTAssertTrue(app.textFields["Dish"].waitForExistence(timeout: 5))
         for name in names { XCTAssertTrue(app.buttons[name].exists, "meal: \(name)") }
-        XCTAssertFalse(app.textFields["YouTube video URL"].exists, "a meal takes no links")
+        XCTAssertFalse(app.textFields["Web or YouTube link"].exists, "a meal takes no links")
         app.buttons["Cancel"].tap()
         XCTAssertTrue(app.navigationBars["Fixture ramen"].buttons["Edit"].waitForExistence(timeout: 5))
 
@@ -2293,7 +2293,7 @@ final class OfflineCaptureTests: XCTestCase {
         let editor = app.textViews["Journal text"]
         editor.tap()
         editor.typeText(text)
-        let field = app.textFields["YouTube video URL"]
+        let field = app.textFields["Web or YouTube link"]
         field.tap()
         field.typeText("https://youtu.be/aircAruvnKk")
         app.buttons["Add link"].tap()
@@ -2308,7 +2308,7 @@ final class OfflineCaptureTests: XCTestCase {
         tab(app, "Journal").tap()
         XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 10))
         app.staticTexts[text].tap()
-        XCTAssertTrue(app.staticTexts["Saved YouTube links"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Saved links"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.links["https://www.youtube.com/watch?v=aircAruvnKk"].exists
                       || app.buttons["https://www.youtube.com/watch?v=aircAruvnKk"].exists)
         XCTAssertTrue(app.links["https://www.youtube.com/watch?v=dQw4w9WgXcQ"].exists
@@ -2361,8 +2361,40 @@ final class OfflineCaptureTests: XCTestCase {
         let allow = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Allow Paste'")).firstMatch
         if allow.waitForExistence(timeout: 2) { allow.tap() }
         XCTAssertTrue(app.staticTexts["https://www.youtube.com/watch?v=aircAruvnKk"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.textFields["YouTube video URL"].value as? String, "YouTube video URL")
+        XCTAssertEqual(app.textFields["Web or YouTube link"].value as? String, "Web or YouTube link")
         XCTAssertTrue(app.buttons["Save"].isEnabled)
+    }
+
+    /// Any web page goes onto an entry the way a video does; the server and
+    /// the archiving browser decide what becomes of it.
+    func testAWebPageLinkIsAddedLikeAVideo() {
+        let app = XCUIApplication()
+        app.launch()
+        let field = app.textFields["Web or YouTube link"]
+        XCTAssertTrue(field.waitForExistence(timeout: settle))
+        field.tap()
+        field.typeText("https://example.com/articles/bridges")
+        app.buttons["Add link"].tap()
+        XCTAssertTrue(app.staticTexts["https://example.com/articles/bridges"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Save"].isEnabled)
+    }
+
+    /// A printed page is a poster that opens the PDF; a login-walled one
+    /// keeps its link and offers Retry.
+    func testJournalFeedShowsSharedPages() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-journalFeedFixture")
+        app.launch()
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        pages.buttons["Journal"].tap()
+
+        XCTAssertTrue(app.buttons["journal-webpage"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["How bridges stand"].exists)
+        XCTAssertTrue(app.staticTexts["Needs login — not archived"].exists)
+        XCTAssertTrue(app.buttons["journal-webpage-retry"].exists)
+        XCTAssertTrue(app.links["example.com"].firstMatch.exists || app.buttons["example.com"].firstMatch.exists)
     }
 
     func testYouTubeOnlyEntryHasAttachmentsWithoutOriginalText() {
@@ -2370,7 +2402,7 @@ final class OfflineCaptureTests: XCTestCase {
         app.launch()
         let save = app.buttons["Save"]
         XCTAssertTrue(save.waitForExistence(timeout: settle))
-        let field = app.textFields["YouTube video URL"]
+        let field = app.textFields["Web or YouTube link"]
         field.tap()
         field.typeText("https://youtu.be/aircAruvnKk")
         // Saving also attaches a URL still in its field, without commentary.
@@ -2378,10 +2410,10 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: settle))
 
         selectTab(app, "Journal")
-        let video = app.staticTexts["1 YouTube video"].firstMatch
+        let video = app.staticTexts["1 link"].firstMatch
         XCTAssertTrue(video.waitForExistence(timeout: settle))
         video.tap()
-        XCTAssertTrue(app.staticTexts["Saved YouTube link"].waitForExistence(timeout: settle))
+        XCTAssertTrue(app.staticTexts["Saved link"].waitForExistence(timeout: settle))
         XCTAssertFalse(app.staticTexts["Original text"].exists)
         app.buttons["Edit"].tap()
         let editor = app.textViews["Entry text"]
@@ -2399,7 +2431,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
         editor.typeText(words)
-        let field = app.textFields["YouTube video URL"]
+        let field = app.textFields["Web or YouTube link"]
         field.tap()
         field.typeText("https://youtu.be/aircAruvnKk")
         app.buttons["Add link"].tap()
@@ -2449,7 +2481,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(food.isEnabled)
 
         let link = "https://www.youtube.com/watch?v=aircAruvnKk"
-        let field = app.textFields["YouTube video URL"]
+        let field = app.textFields["Web or YouTube link"]
         field.tap()
         field.typeText("https://youtu.be/aircAruvnKk")
         app.buttons["Add link"].tap()
@@ -2471,7 +2503,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts[meal].waitForExistence(timeout: 10))
         app.staticTexts[meal].tap()
         XCTAssertTrue(app.staticTexts["Food log entry"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["Saved YouTube link"].exists)
+        XCTAssertFalse(app.staticTexts["Saved link"].exists)
 
         // Leave the draft empty for the next test: the link goes in a journal entry.
         selectTab(app, "Capture")

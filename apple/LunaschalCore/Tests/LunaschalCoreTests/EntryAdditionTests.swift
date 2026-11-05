@@ -43,7 +43,7 @@ final class EntryAdditionTests: XCTestCase {
         let photo = try store.stageFile(data: Data("b".utf8), name: "Edit.jpg", contentType: "image/jpeg", into: entry)
         let spoken = try clip(into: entry)
         let addition = try XCTUnwrap(store.commitAdditions(to: entry, kind: .journal,
-                                                           youtubeURLs: ["https://youtu.be/aircAruvnKk"]))
+                                                           linkURLs: ["https://youtu.be/aircAruvnKk"]))
         XCTAssertEqual(addition.entryID, entry)
         XCTAssertEqual(addition.targetID, entry)
         XCTAssertNotEqual(addition.id, entry)
@@ -60,7 +60,7 @@ final class EntryAdditionTests: XCTestCase {
 
     func testNothingStagedIsNoAddition() throws {
         XCTAssertNil(try store.commitAdditions(to: entry, kind: .journal))
-        XCTAssertNil(try store.commitAdditions(to: entry, kind: .food, youtubeURLs: ["https://youtu.be/aircAruvnKk"]))
+        XCTAssertNil(try store.commitAdditions(to: entry, kind: .food, linkURLs: ["https://youtu.be/aircAruvnKk"]))
         XCTAssertEqual(try store.list(), [])
     }
 
@@ -75,7 +75,7 @@ final class EntryAdditionTests: XCTestCase {
         XCTAssertEqual(try store.entryDrafts(), [:])
         _ = try clip(into: entry)
         let addition = try XCTUnwrap(store.commitAdditions(to: entry, kind: .food,
-                                                           youtubeURLs: ["https://youtu.be/aircAruvnKk"]))
+                                                           linkURLs: ["https://youtu.be/aircAruvnKk"]))
         XCTAssertEqual(addition.kind, .food)
         XCTAssertEqual(addition.links, [])
     }
@@ -136,7 +136,7 @@ final class EntryAdditionTests: XCTestCase {
     func testAJournalAdditionUploadsUnderTheEntry() throws {
         let photo = try store.stageFile(data: Data("b".utf8), name: "Edit.jpg", contentType: "image/jpeg", into: entry)
         let spoken = try clip(into: entry)
-        let addition = try XCTUnwrap(store.commitAdditions(to: entry, kind: .journal, youtubeURLs: ["https://youtu.be/aircAruvnKk"]))
+        let addition = try XCTUnwrap(store.commitAdditions(to: entry, kind: .journal, linkURLs: ["https://youtu.be/aircAruvnKk"]))
         let file = Data("{\"id\":\"\(photo.attachmentID)\",\"entryId\":\"\(entry)\"}".utf8)
         XCTAssertNoThrow(try JournalAPI.validateFileAcknowledgement(file, for: addition, file: photo))
         let elsewhere = Data("{\"id\":\"\(photo.attachmentID)\",\"entryId\":\"\(addition.id)\"}".utf8)

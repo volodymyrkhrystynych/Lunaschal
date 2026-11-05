@@ -274,8 +274,8 @@ private struct LocalCaptureCard: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             if !capture.links.isEmpty {
-                Label(capture.links.count == 1 ? "1 YouTube video" : "\(capture.links.count) YouTube videos",
-                      systemImage: "play.rectangle")
+                Label(capture.links.count == 1 ? "1 link" : "\(capture.links.count) links",
+                      systemImage: "link")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Text(capture.createdAt, format: .dateTime.month().day().hour().minute())
@@ -355,6 +355,9 @@ private struct EntryCard: View {
             if !photos.isEmpty { PhotoStrip(model: model, photos: photos, entryDate: created) }
             ForEach(attachments.filter { $0.media == .youtube || $0.media == .video }) { item in
                 VideoCard(model: model, item: item, entryDate: created)
+            }
+            ForEach(attachments.filter { $0.media == .webpage }) { item in
+                WebPageCard(model: model, item: item)
             }
             ForEach(attachments.filter { $0.media == .audio }) { item in
                 AudioRow(model: model, item: item)
@@ -989,6 +992,60 @@ struct AudioRow: View {
 /// A video's poster, opened full screen on a tap rather than played inline:
 /// an entry can carry several, as on the web. A watched YouTube video plays
 /// the server's archived copy and links to where it came from.
+/// A web page shared into the entry, printed to PDF by the archiving browser
+/// (the extension's archive tab). Archived, it opens in PDFKit like any other
+/// downloaded PDF; refused, it keeps the link and offers Retry, which is the
+/// fix for a login wall once the site has been signed in to on that browser.
+private struct WebPageCard: View {
+    @ObservedObject var model: CaptureModel
+    let item: JournalAttachmentItem
+    @State private var retrying = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            switch item.pageState {
+            case .waiting:
+                Label("Waiting for the browser to archive this page…", systemImage: "hourglass")
+                    .font(.caption).foregroundStyle(.secondary)
+            case .needsLogin, .failed:
+                HStack {
+                    Label(item.pageState == .needsLogin ? "Needs login — not archived" : "Could not archive this page.",
+                          systemImage: item.pageState == .needsLogin ? "lock" : "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                    Spacer()
+                    Button(retrying ? "Retrying…" : "Retry") {
+                        retrying = true
+                        Task { _ = await model.retryLink(item); retrying = false }
+                    }
+                    .font(.caption).disabled(retrying)
+                    .accessibilityIdentifier("journal-webpage-retry")
+                }
+            default:
+                NavigationLink {
+                    DownloadedMediaView(model: model, collection: "journal_attachments", id: item.id,
+                                        mime: "application/pdf", title: item.name.isEmpty ? "Web page" : item.name)
+                } label: {
+                    RemoteThumbnail(model: model, item: item, poster: true, height: 180)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Read \(item.name.isEmpty ? "web page" : item.name)")
+                .accessibilityIdentifier("journal-webpage")
+            }
+            if !item.name.isEmpty, item.name != item.sourceURL {
+                Text(item.name).font(.subheadline).lineLimit(2)
+            }
+            if let source = item.sourceURL, let url = URL(string: source) {
+                Link(item.sourceHost ?? source, destination: url).font(.caption).lineLimit(1)
+            }
+            if let transcript = item.transcript {
+                DisclosureGroup("Page text") { Text(transcript).font(.subheadline).textSelection(.enabled) }
+                    .font(.caption)
+            }
+        }
+    }
+}
+
 private struct VideoCard: View {
     @ObservedObject var model: CaptureModel
     let item: JournalAttachmentItem

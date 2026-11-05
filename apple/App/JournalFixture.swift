@@ -21,6 +21,9 @@ enum JournalFixture {
     static let event = "01K6ZZZZZZZZZZZZZZZZZZZZ06"
     static let meal = "01K6ZZZZZZZZZZZZZZZZZZZZ07"
     static let mealPhoto = "01K6ZZZZZZZZZZZZZZZZZZZZ08"
+    /// A shared web page the browser printed, and one it found behind a login.
+    static let webPage = "01K6ZZZZZZZZZZZZZZZZZZZZ10"
+    static let walledPage = "01K6ZZZZZZZZZZZZZZZZZZZZ11"
     /// With `-journalFeedArrival` too: thirty older entries to scroll through,
     /// and a button that brings a new entry in above them all, as a sync would.
     static let arrivalArgument = "-journalFeedArrival"
@@ -78,6 +81,14 @@ enum JournalFixture {
                                                    "mime": "video/quicktime", "position": 3, "hasThumb": 1,
                                                    "durationSeconds": 14, "hasMotion": 0,
                                                    "capturedAt": iso.string(from: now.addingTimeInterval(-30 * 86_400))]),
+            change("journal_attachments", webPage, ["entryId": quiet, "kind": "webpage", "name": "How bridges stand",
+                                                 "mime": "application/pdf", "position": 0, "importStatus": "ready",
+                                                 "sourceUrl": "https://www.example.com/articles/bridges",
+                                                 "transcript": "An arch carries its load as compression."]),
+            change("journal_attachments", walledPage, ["entryId": quiet, "kind": "webpage",
+                                                       "name": "https://example.com/members/report",
+                                                       "position": 1, "importStatus": "login_required",
+                                                       "sourceUrl": "https://example.com/members/report"]),
             change("food_entries", meal, ["dish": "Fixture ramen", "place": "Kitchen", "notes": "Rich broth.",
                                           "createdAt": iso.string(from: now.addingTimeInterval(-30 * 60))]),
             change("food_media", mealPhoto, ["entryId": meal, "kind": "image", "mime": "image/jpeg", "position": 0]),
@@ -103,6 +114,7 @@ enum JournalFixture {
         try picture(.systemOrange).write(to: media.appendingPathComponent(mealPhoto))
         try picture(.systemIndigo).write(to: media.appendingPathComponent(video + ".poster"))
         try picture(.systemGreen).write(to: media.appendingPathComponent(filmed + ".poster"))
+        try picture(.systemGray).write(to: media.appendingPathComponent(webPage + ".poster"))
         try silence(seconds: 2).write(to: media.appendingPathComponent(clip))
     }
 

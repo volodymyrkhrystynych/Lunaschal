@@ -348,7 +348,7 @@ private struct CaptureComposer: View {
                     StagedAttachmentRows(model: model, recorder: recorder, draft: model.draft)
                 }
             }
-            YouTubeLinksSection(model: model, links: linkList, typed: $youtubeURL, typing: $typing) { saved = false }
+            LinksSection(model: model, links: linkList, typed: $youtubeURL, typing: $typing) { saved = false }
         }
         // Pinned rather than inside a section, so it stays in the same place
         // however far the form has scrolled.
@@ -403,7 +403,7 @@ private struct CaptureComposer: View {
 
     private func save() {
         // A URL typed but not yet added still belongs to this entry.
-        guard YouTubeLinksSection.add(typed: $youtubeURL, to: linkList, model: model) else { return }
+        guard LinksSection.add(typed: $youtubeURL, to: linkList, model: model) else { return }
         // Read now, as tapped: the words must not wait behind rendering the notes.
         let words = text, chosen = links
         guard let notes else {
@@ -411,13 +411,13 @@ private struct CaptureComposer: View {
             // receipt as often as for a thought. When the draft could be
             // either, the server reads it and files it where it belongs.
             let couldBeElsewhere = chosen.isEmpty && (canSaveFood || canSaveSpending)
-            if model.saveEntry(words, youtubeURLs: chosen, autoFile: couldBeElsewhere) { cleared() }
+            if model.saveEntry(words, linkURLs: chosen, autoFile: couldBeElsewhere) { cleared() }
             return
         }
         saving = true
         Task {
             defer { saving = false }
-            guard await model.saveEntryWithNotes(words, youtubeURLs: chosen, notebook: notes) else { return }
+            guard await model.saveEntryWithNotes(words, linkURLs: chosen, notebook: notes) else { return }
             // Anything typed while the pages rendered is the next entry's.
             let more = text == words ? "" : text
             cleared()
@@ -431,7 +431,7 @@ private struct CaptureComposer: View {
 
     private func saveFood() {
         // Links, a half-typed URL and the notes are left where they are, for the next entry.
-        if model.saveEntry(text, youtubeURLs: [], kind: .food) {
+        if model.saveEntry(text, linkURLs: [], kind: .food) {
             text = ""; saved = true; typing = false; typingText = false
         }
     }
@@ -439,7 +439,7 @@ private struct CaptureComposer: View {
     /// The same as a meal, filed as a purchase: the server reads the amount,
     /// the merchant and the category out of the receipt and what was said.
     private func saveSpending() {
-        if model.saveEntry(text, youtubeURLs: [], kind: .spending) {
+        if model.saveEntry(text, linkURLs: [], kind: .spending) {
             text = ""; saved = true; typing = false; typingText = false
         }
     }
@@ -688,8 +688,10 @@ final class CaptureEntryTextView: UITextView {
     }
 }
 
-/// The YouTube links going onto an entry, and the field a new one is typed in.
-struct YouTubeLinksSection: View {
+/// The links going onto an entry, and the field a new one is typed in. A
+/// YouTube video is downloaded by the server; any other page is printed to PDF
+/// by the browser extension's archive tab.
+struct LinksSection: View {
     @ObservedObject var model: CaptureModel
     @Binding var links: [String]
     @Binding var typed: String
@@ -697,13 +699,14 @@ struct YouTubeLinksSection: View {
     var onChange: () -> Void = {}
 
     var body: some View {
-        Section("YouTube") {
+        Section("Links") {
             ForEach(links, id: \.self) { link in
-                Label(link, systemImage: "play.rectangle").lineLimit(1).truncationMode(.middle)
+                Label(link, systemImage: JournalLink.isYouTube(link) ? "play.rectangle" : "globe")
+                    .lineLimit(1).truncationMode(.middle)
             }
             .onDelete { offsets in links.remove(atOffsets: offsets) }
             HStack {
-                TextField("YouTube video URL", text: $typed)
+                TextField("Web or YouTube link", text: $typed)
                     .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                     .focused(typing)
                     .onSubmit { if Self.add(typed: $typed, to: $links, model: model) { onChange() } }
@@ -713,7 +716,7 @@ struct YouTubeLinksSection: View {
                     if Self.add(typed: $typed, to: $links, model: model) { onChange() }
                 }
                 .labelStyle(.iconOnly)
-                .accessibilityLabel("Paste and add YouTube link")
+                .accessibilityLabel("Paste and add link")
                 .accessibilityIdentifier("youtube-paste")
                 Button("Add link") { if Self.add(typed: $typed, to: $links, model: model) { onChange() } }
                     .disabled(typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -722,13 +725,13 @@ struct YouTubeLinksSection: View {
     }
 
     /// Validates the typed URL and moves it into the link list. False, with
-    /// the reason shown, when it is not a YouTube video link.
+    /// the reason shown, when it is not a web link.
     @MainActor
     static func add(typed: Binding<String>, to links: Binding<[String]>, model: CaptureModel) -> Bool {
         let value = typed.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return true }
         do {
-            let link = try YouTubeLink.canonical(value)
+            let link = try JournalLink.canonical(value)
             if !links.wrappedValue.contains(link) { links.wrappedValue.append(link) }
             typed.wrappedValue = ""
             return true
@@ -1012,7 +1015,7 @@ struct CaptureDetail: View {
             }
         }
         if !capture.links.isEmpty {
-            Section(capture.links.count == 1 ? "Saved YouTube link" : "Saved YouTube links") {
+            Section(capture.links.count == 1 ? "Saved link" : "Saved links") {
                 ForEach(capture.links, id: \.attachmentID) { link in
                     if let url = URL(string: link.url) { Link(link.url, destination: url) }
                 }

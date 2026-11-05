@@ -46,7 +46,7 @@ final class SpendingCaptureTests: XCTestCase {
         let receipt = try store.stageFile(data: Data("jpeg".utf8), name: "Receipt.jpg", contentType: "image/jpeg",
                                           capturedAt: Date(timeIntervalSince1970: 1_700_000_000))
         let spoken = try clip("aac")
-        let capture = try store.commitDraft(text: "", youtubeURLs: ["https://youtu.be/aircAruvnKk"], kind: .spending)
+        let capture = try store.commitDraft(text: "", linkURLs: ["https://youtu.be/aircAruvnKk"], kind: .spending)
         XCTAssertEqual(capture.kind, .spending)
         XCTAssertEqual(capture.files, [receipt])
         XCTAssertEqual(capture.clips.map(\.attachmentID), [spoken.attachmentID])
@@ -59,18 +59,18 @@ final class SpendingCaptureTests: XCTestCase {
 
     func testAVideoStaysInTheDraftForSomewhereThatKeepsIt() throws {
         let video = try store.stageFile(data: Data("mov".utf8), name: "Till.mov", contentType: "video/quicktime")
-        XCTAssertThrowsError(try store.commitDraft(text: "Lunch", youtubeURLs: [], kind: .spending)) {
+        XCTAssertThrowsError(try store.commitDraft(text: "Lunch", linkURLs: [], kind: .spending)) {
             XCTAssertEqual($0 as? CaptureError, .notSpendingMedia)
         }
         XCTAssertEqual(try store.draft().files, [video])
         XCTAssertEqual(try store.list(), [])
-        XCTAssertEqual(try store.commitDraft(text: "Lunch", youtubeURLs: [], kind: .food).files, [video])
+        XCTAssertEqual(try store.commitDraft(text: "Lunch", linkURLs: [], kind: .food).files, [video])
     }
 
     func testTheMultipartIsTheMealsShapeUnderTheReceiptsIds() throws {
         let receipt = try store.stageFile(data: Data("JPEGDATA".utf8), name: "Receipt.jpg", contentType: "image/jpeg")
         _ = try clip("aac")
-        let capture = try store.commitDraft(text: "Groceries", youtubeURLs: [], kind: .spending)
+        let capture = try store.commitDraft(text: "Groceries", linkURLs: [], kind: .spending)
         let body = try FoodMultipart(capture: capture, files: capture.files.map(store.fileURL))
         defer { try? FileManager.default.removeItem(at: body.url) }
         let text = try XCTUnwrap(String(data: Data(contentsOf: body.url), encoding: .utf8))

@@ -567,18 +567,18 @@ final class CaptureModel: ObservableObject {
     /// is tapped, so an async hop would let a last keystroke land after them.
     /// With notes in the draft a journal entry goes through `saveEntryWithNotes`.
     /// `autoFile` lets the server move it to the food log or the ledger.
-    func saveEntry(_ text: String, youtubeURLs: [String], kind: CaptureKind = .journal,
+    func saveEntry(_ text: String, linkURLs: [String], kind: CaptureKind = .journal,
                    autoFile: Bool = false) -> Bool {
         if recorder.activeID != nil { recorder.stop() }
         // A meal leaves the notes in the draft.
-        return commitComposer(text, youtubeURLs: youtubeURLs, kind: kind, notebook: nil, pages: [],
+        return commitComposer(text, linkURLs: linkURLs, kind: kind, notebook: nil, pages: [],
                               autoFile: autoFile)
     }
 
     /// Save entry with the draft's notes: their pages are rendered from what
     /// is saved on the device (Back checkpoints them on the way out) and filed
     /// with everything else as one entry.
-    func saveEntryWithNotes(_ text: String, youtubeURLs: [String], notebook: Notebook) async -> Bool {
+    func saveEntryWithNotes(_ text: String, linkURLs: [String], notebook: Notebook) async -> Bool {
         if recorder.activeID != nil { recorder.stop() }
         // The editor left with Back may still be saving; it has the pages.
         let pages = NotebookEditorModel.open(store: notebooks, notebook: notebook)
@@ -586,7 +586,7 @@ final class CaptureModel: ObservableObject {
             message = pages.error ?? "Couldn't open the notes for this entry."
             return false
         }
-        return commitComposer(text, youtubeURLs: youtubeURLs, kind: .journal, notebook: notebook,
+        return commitComposer(text, linkURLs: linkURLs, kind: .journal, notebook: notebook,
                               pages: await pages.renderForSave())
     }
 
@@ -601,25 +601,25 @@ final class CaptureModel: ObservableObject {
         let typed = (defaults.string(forKey: Self.draftURLKey) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !typed.isEmpty {
             do {
-                let link = try YouTubeLink.canonical(typed)
+                let link = try JournalLink.canonical(typed)
                 if !links.contains(link) { links.append(link) }
             } catch { message = error.localizedDescription; return nil }
         }
-        guard commitComposer(text, youtubeURLs: links, kind: .journal, notebook: notebook, pages: pages) else { return nil }
+        guard commitComposer(text, linkURLs: links, kind: .journal, notebook: notebook, pages: pages) else { return nil }
         for key in [Self.draftTextKey, Self.draftLinksKey, Self.draftURLKey] { defaults.removeObject(forKey: key) }
         return try? notebooks.notebook(notebook.id)
     }
 
-    private func commitComposer(_ text: String, youtubeURLs: [String], kind: CaptureKind, notebook: Notebook?,
+    private func commitComposer(_ text: String, linkURLs: [String], kind: CaptureKind, notebook: Notebook?,
                                 pages: [(data: Data, name: String)], autoFile: Bool = false) -> Bool {
-        var links = youtubeURLs
+        var links = linkURLs
         // The notes' own video goes with them.
         if let video = notebook?.youtubeURL, !links.contains(video) { links.append(video) }
         do {
             // Read from the store, not the copy passed in: the switch may have
             // been flipped in the editor since the composer last looked.
             let forReview = notebook.map { (try? notebooks.notebook($0.id))?.isForReview ?? $0.isForReview } ?? false
-            let capture = try store.commitDraft(text: text, youtubeURLs: links, kind: kind, images: pages,
+            let capture = try store.commitDraft(text: text, linkURLs: links, kind: kind, images: pages,
                                                 forReview: forReview, autoFile: autoFile,
                                                 location: location.recent)
             if let notebook {
@@ -706,7 +706,7 @@ final class CaptureModel: ObservableObject {
     /// page written on.
     func saveNotebook(_ notebook: Notebook, text: String, pages: [(data: Data, name: String)]) -> Notebook? {
         do {
-            let capture = try store.commitImages(text: text, youtubeURLs: notebook.youtubeURL.map { [$0] } ?? [],
+            let capture = try store.commitImages(text: text, linkURLs: notebook.youtubeURL.map { [$0] } ?? [],
                                                  images: pages,
                                                  replaces: notebook.newspaperDate == nil ? [] : notebook.savedCaptureIDs,
                                                  forReview: notebook.isForReview,
@@ -895,6 +895,23 @@ final class CaptureModel: ObservableObject {
                                                    .domain: server.host ?? "", .path: "/"]) else { return nil }
         return player(url, mime: item.playerMIME,
                       options: [AVURLAssetHTTPCookiesKey: [cookie]])
+    }
+
+    /// Asks the server to try a shared page (or video) again, then syncs so
+    /// the card shows it waiting. Needs the server; there is nothing to queue.
+    func retryLink(_ item: JournalAttachmentItem) async -> Bool {
+        guard let api = chatAPI() else {
+            message = "Sign in to your server to retry."
+            return false
+        }
+        do {
+            try await api.retryAttachmentImport(item.id)
+            syncOnForeground()
+            return true
+        } catch {
+            message = error.localizedDescription
+            return false
+        }
     }
 
     /// Queues a Todo tab change and starts sending it.
@@ -1823,7 +1840,7 @@ final class CaptureModel: ObservableObject {
     /// recorded, photographed or attached goes up under the entry. `changes`
     /// holds only the fields that differ from the record. A recording still
     /// running is stopped into the entry's draft first.
-    func saveEdit(_ record: SyncChange, changes: [String: JSONValue], youtubeURLs: [String] = []) -> Bool {
+    func saveEdit(_ record: SyncChange, changes: [String: JSONValue], linkURLs: [String] = []) -> Bool {
         if recorder.activeID != nil { recorder.stop() }
         let kind: CaptureKind = record.collection == "food_entries" ? .food
             : record.collection == "spending_logs" ? .spending : .journal
@@ -1836,7 +1853,7 @@ final class CaptureModel: ObservableObject {
             if kind.isMediaLog, try !store.draft(for: record.id).files.allSatisfy(kind.accepts) {
                 throw kind == .spending ? CaptureError.notSpendingMedia : CaptureError.notFoodMedia
             }
-            try store.commitAdditions(to: record.id, kind: kind, youtubeURLs: youtubeURLs)
+            try store.commitAdditions(to: record.id, kind: kind, linkURLs: linkURLs)
             if !changes.isEmpty { _ = try replica.queue(record: record, data: changes) }
             reload(); requestSync(); return true
         } catch { message = error.localizedDescription; reload(); return false }

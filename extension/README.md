@@ -37,6 +37,17 @@ Answers are recorded against the application as they are filled, so they are
 still there a year later when someone asks what you told them. Nothing is ever
 submitted for you — the extension fills, you press the button.
 
+## Archiving journal links
+
+Toolbar → **Journal link archive** opens a control tab that prints every
+non-YouTube link attached to a journal entry to PDF, in this browser, with its
+signed-in sessions. Leave the tab open (it reconnects on load). Each page
+opens in a background tab, is checked for a login wall or paywall
+(`lib/archive.js`'s `classify`), printed through `chrome.debugger`, and
+closed. Chrome shows a "started debugging this browser" bar while that
+happens. A page that is a wall even here is not printed: the journal shows
+it as needing a login, and Retry on the card re-queues it after you sign in.
+
 ## How it is put together
 
 | file                      | role                                                         |
@@ -45,6 +56,8 @@ submitted for you — the extension fills, you press the button.
 | `content.js`              | injected on demand; reads and fills the page                 |
 | `lib/fields.js`           | pure: label derivation, field classification. Vitest-covered |
 | `lib/filename.js`         | pure: mirrors `backend/jobs/render.py`'s sanitizer           |
+| `lib/archive.js`          | journal link archive: wall classifier + print runner, tested |
+| `archive.html` / `.js`    | the archive control tab that owns the poll timer             |
 | `popup.js` / `options.js` | extension pages                                              |
 
 Three constraints shaped all of it:

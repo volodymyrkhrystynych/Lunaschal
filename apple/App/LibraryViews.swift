@@ -667,7 +667,7 @@ struct JournalRecordView: View {
                 if !staged.isEmpty {
                     Section("Adding") { StagedAttachmentRows(model: model, recorder: model.recorder, draft: staged) }
                 }
-                YouTubeLinksSection(model: model, links: $links, typed: $typedLink, typing: $typing)
+                LinksSection(model: model, links: $links, typed: $typedLink, typing: $typing)
                 Section {
                     Button("Save edit on this device") { save() }.disabled(!canSave)
                     Button("Cancel", role: .cancel) { cancel() }
@@ -726,8 +726,8 @@ struct JournalRecordView: View {
 
     private func save() {
         // A URL typed but not yet added still belongs to this edit.
-        guard YouTubeLinksSection.add(typed: $typedLink, to: $links, model: model) else { return }
-        if model.saveEdit(record, changes: changes, youtubeURLs: links) { dismiss() }
+        guard LinksSection.add(typed: $typedLink, to: $links, model: model) else { return }
+        if model.saveEdit(record, changes: changes, linkURLs: links) { dismiss() }
     }
 
     private func cancel() {

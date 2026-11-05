@@ -32,7 +32,7 @@ final class CaptureEntryTests: XCTestCase {
         editor.paste(nil)
         XCTAssertTrue(failures.isEmpty)
         XCTAssertEqual(editor.text, "Lunch with friends")
-        let capture = try store.commitDraft(text: editor.text, youtubeURLs: [])
+        let capture = try store.commitDraft(text: editor.text, linkURLs: [])
         XCTAssertEqual(capture.files.count, 2)
         XCTAssertTrue(capture.files.allSatisfy(\.isImage))
         XCTAssertEqual(try CaptureStore(root: root).load(capture.id).files, capture.files)

@@ -563,6 +563,17 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return req
     }
 
+    /// Put a shared page back in the archive queue — after signing in to the
+    /// site in the archiving browser — or re-download a failed video.
+    public func retryAttachmentImport(_ id: String) async throws {
+        guard ULID.isValid(id) else { throw CaptureError.invalidID }
+        var req = request("api/journal/attachments/\(id)/retry", method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = Data("{}".utf8)
+        let (data, response) = try await session.data(for: req)
+        try check(data, response)
+    }
+
     func check(_ data: Data, _ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { throw CaptureError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw HTTPFailure(status: http.statusCode) }

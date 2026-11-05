@@ -35,7 +35,7 @@ final class LiveVideoCaptureTests: XCTestCase {
         XCTAssertTrue(file.isImage)
         XCTAssertEqual(try store.draft().files, [file])
         XCTAssertEqual(try Data(contentsOf: store.motionURL(file)), Data("mov bytes".utf8))
-        let capture = try store.commitDraft(text: "", youtubeURLs: [])
+        let capture = try store.commitDraft(text: "", linkURLs: [])
         XCTAssertEqual(try CaptureStore(root: root).load(capture.id).files, [file])
     }
 
@@ -100,7 +100,7 @@ final class LiveVideoCaptureTests: XCTestCase {
         let newer = Date(timeIntervalSince1970: 1_750_000_000)
         _ = try store.stageFile(from: movie(), name: "clip.mov", contentType: "video/quicktime", capturedAt: newer)
         _ = try store.stageFile(from: movie("p"), name: "a.jpg", contentType: "image/jpeg", capturedAt: older)
-        let capture = try store.commitDraft(text: "  ", youtubeURLs: [], now: now)
+        let capture = try store.commitDraft(text: "  ", linkURLs: [], now: now)
         XCTAssertEqual(capture.createdAt, older)
     }
 

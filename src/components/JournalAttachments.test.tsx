@@ -27,6 +27,7 @@ vi.mock('../hooks/api', () => ({
         describeAudio: vi.fn(),
         link: vi.fn(),
         importStatus: vi.fn().mockResolvedValue({ done: true }),
+        retry: vi.fn(),
       },
     },
   },
@@ -910,5 +911,95 @@ describe('JournalAttachments — a watched YouTube video', () => {
     // "1 video, 1 video".
     renderIt([video(), attachment({ id: 'a9', kind: 'video' })], false);
     expect(screen.getByText(/1 video, 1 YouTube video/)).toBeTruthy();
+  });
+});
+
+// pdf.js does not run under jsdom; the overlay only needs to mount something.
+vi.mock('./Study/PdfViewer', () => ({
+  PdfViewer: ({ fileUrl }: { fileUrl: string }) => (
+    <div data-testid="pdf-viewer">{fileUrl}</div>
+  ),
+}));
+
+/** A shared web page, printed to PDF by the browser extension. */
+function page(over: Partial<JournalAttachment> = {}): JournalAttachment {
+  return attachment({
+    id: 'w1',
+    kind: 'webpage',
+    name: 'How bridges stand',
+    mime: 'application/pdf',
+    url: '/api/journal/attachments/w1/file',
+    thumbnailUrl: '/api/journal/attachments/w1/thumbnail',
+    sourceUrl: 'https://www.example.com/articles/how-bridges-stand',
+    importStatus: 'ready',
+    ...over,
+  });
+}
+
+describe('JournalAttachments — a shared web page', () => {
+  it('opens the archived PDF in place and still links to the original', async () => {
+    renderIt([page()], false);
+    expect(screen.getByText('example.com')).toBeTruthy();
+    fireEvent.click(screen.getByTitle('Read the archived copy'));
+    expect((await screen.findByTestId('pdf-viewer')).textContent).toBe(
+      '/api/journal/attachments/w1/file'
+    );
+    expect(
+      screen.getByText('Open original').getAttribute('href')
+    ).toBe('https://www.example.com/articles/how-bridges-stand');
+  });
+
+  it('offers no Transcribe button — the page text comes with the PDF', () => {
+    renderIt([page({ transcript: 'An arch carries its load.' })], false);
+    expect(screen.queryByText('Transcribe')).toBeNull();
+    expect(screen.queryByText('Describe')).toBeNull();
+    expect(screen.getByText('Page text')).toBeTruthy();
+  });
+
+  it('says when no browser is connected to archive it', async () => {
+    vi.mocked(api.journal.attachments.importStatus).mockResolvedValueOnce({
+      done: false,
+      phase: 'queued',
+      archiverOnline: false,
+    });
+    renderIt(
+      [page({ importStatus: 'queued', url: undefined, thumbnailUrl: undefined })],
+      false
+    );
+    expect(screen.getByText(/Waiting for the browser/)).toBeTruthy();
+    expect(await screen.findByText(/Archiver offline/)).toBeTruthy();
+    expect(screen.queryByText('Download')).toBeNull();
+  });
+
+  it('keeps the link of a login-walled page and offers a retry', async () => {
+    vi.mocked(api.journal.attachments.retry).mockResolvedValue(
+      page({ importStatus: 'queued' })
+    );
+    renderIt(
+      [page({ importStatus: 'login_required', url: undefined, thumbnailUrl: undefined })],
+      false
+    );
+    expect(screen.getByText('Needs login — not archived')).toBeTruthy();
+    expect(screen.getByText('example.com').getAttribute('href')).toBe(
+      'https://www.example.com/articles/how-bridges-stand'
+    );
+    fireEvent.click(screen.getByText('Retry'));
+    await waitFor(() =>
+      expect(api.journal.attachments.retry).toHaveBeenCalledWith('w1')
+    );
+  });
+
+  it('offers a retry on a failed video download too', async () => {
+    vi.mocked(api.journal.attachments.retry).mockResolvedValue(video());
+    renderIt([video({ importStatus: 'error', importError: 'boom', url: undefined })], false);
+    fireEvent.click(screen.getByText('Retry'));
+    await waitFor(() =>
+      expect(api.journal.attachments.retry).toHaveBeenCalledWith('v1')
+    );
+  });
+
+  it('counts a page apart from the rest', () => {
+    renderIt([page(), video()], false);
+    expect(screen.getByText(/1 YouTube video, 1 web page/)).toBeTruthy();
   });
 });

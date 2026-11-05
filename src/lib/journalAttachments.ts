@@ -172,6 +172,8 @@ export function transcribeLabel(a: JournalAttachment): string {
  */
 export function canTranscribe(a: JournalAttachment): boolean {
   if (a.kind === 'youtube' && a.importStatus !== 'ready') return false;
+  // A page's text is read out of its PDF when it lands; there is nothing to run.
+  if (a.kind === 'webpage') return false;
   return a.transcriptStatus !== 'running';
 }
 
@@ -207,6 +209,7 @@ const KIND_NOUNS: Record<JournalAttachment['kind'], [string, string]> = {
   // Distinct from `video`, which is a clip the user filmed. An entry can hold
   // both, and "1 video, 1 video" is not a summary.
   youtube: ['YouTube video', 'YouTube videos'],
+  webpage: ['web page', 'web pages'],
 };
 
 /**
@@ -220,7 +223,14 @@ export function summarizeAttachments(
   const list = attachments ?? [];
   if (list.length === 0) return 'No attachments';
   const parts: string[] = [];
-  for (const kind of ['audio', 'video', 'youtube', 'image', 'file'] as const) {
+  for (const kind of [
+    'audio',
+    'video',
+    'youtube',
+    'webpage',
+    'image',
+    'file',
+  ] as const) {
     const n = list.filter(a => a.kind === kind).length;
     if (n) parts.push(`${n} ${KIND_NOUNS[kind][n === 1 ? 0 : 1]}`);
   }

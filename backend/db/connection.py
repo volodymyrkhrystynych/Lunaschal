@@ -174,6 +174,7 @@ def init_db() -> None:
     _ensure_journal_screenshot_event_threshold(db)
     _ensure_journal_attachment_youtube(db)
     _ensure_journal_attachment_capture(db)
+    _ensure_journal_attachment_webpage(db)
     _migrate_flashcards_to_learning(db)
     _ensure_prevent_sleep(db)
     _ensure_briefing_settings(db)
@@ -2512,6 +2513,23 @@ def _ensure_journal_attachment_capture(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE journal_attachments ADD COLUMN motion_mime TEXT')
     if 'motion_size' not in cols:
         db.execute('ALTER TABLE journal_attachments ADD COLUMN motion_size INTEGER')
+    db.commit()
+
+
+def _ensure_journal_attachment_webpage(db: sqlite3.Connection) -> None:
+    """The lease a browser holds on a `kind='webpage'` row while it prints it.
+
+    The row is the queue (backend/journal/web_archive.py), so the claim has to
+    live on it: a browser that closes mid-page leaves a lease that expires, and
+    the next poll — from it or any other — takes the page again.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_attachments)')}
+    if 'archive_client' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN archive_client TEXT')
+    if 'archive_lease_until' not in cols:
+        db.execute(
+            'ALTER TABLE journal_attachments ADD COLUMN archive_lease_until INTEGER'
+        )
     db.commit()
 
 

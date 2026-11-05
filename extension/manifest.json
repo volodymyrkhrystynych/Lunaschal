@@ -2,10 +2,11 @@
   "manifest_version": 3,
   "name": "Lunaschal Apply",
   "version": "0.2.0",
-  "description": "Fill job applications from Lunaschal and download FF.net stories through your browser session.",
+  "description": "Fill job applications from Lunaschal, download FF.net stories and archive journal links through your browser session.",
   "permissions": [
     "activeTab",
     "contextMenus",
+    "debugger",
     "scripting",
     "storage",
     "webRequest"

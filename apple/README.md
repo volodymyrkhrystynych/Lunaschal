@@ -490,6 +490,12 @@ what each device can currently do and which work remains device-only.
   per-link attachment IDs are preserved. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
+- Any other web link attaches the same way and is sent as a `webpage` attachment.
+  The user's logged-in Chrome prints it to PDF through the browser extension, so
+  the feed shows a waiting state, then the archived PDF, or a "Needs login" or
+  failed card with Retry. Unit tests and the composer's UI test passed in
+  simulator; the feed's UI test is not yet confirmed (its only run was on an
+  overloaded simulator) and nothing here is verified on device.
 - Native Capture / Journal / Chat / Todo / More tabs on iPhone. iPad has
   Capture, Journal, Chat, Todo, Study, Draw, Library, Jobs, Learning and Settings
   as individual tabs when the window is wide. A compact window (Split View,

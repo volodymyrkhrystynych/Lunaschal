@@ -1,6 +1,6 @@
 import Foundation
 
-/// A YouTube link shared into Lunaschal from another app.
+/// A link shared into Lunaschal from another app — a YouTube video or any web page.
 public struct SharedLink: Codable, Equatable, Identifiable {
     public let id: String
     public let url: String
@@ -11,7 +11,7 @@ public struct SharedLink: Codable, Equatable, Identifiable {
     }
 }
 
-/// YouTube links shared from the share sheet, waiting for the app. The share
+/// Links shared from the share sheet, waiting for the app. The share
 /// extension cannot reach the app's own storage, so they wait in the App Group
 /// folder the two share; the app moves them into the Capture composer's draft
 /// the next time it opens. Nothing here needs the server.
@@ -29,11 +29,11 @@ public final class SharedLinkInbox {
         return try JSONDecoder().decode([SharedLink].self, from: Data(contentsOf: file))
     }
 
-    /// Canonicalises `url`; sharing the same video twice before the app opens
+    /// Canonicalises `url`; sharing the same link twice before the app opens
     /// keeps it once.
     @discardableResult
     public func append(_ url: String, now: Date = Date()) throws -> SharedLink {
-        let canonical = try YouTubeLink.canonical(url)
+        let canonical = try JournalLink.canonical(url)
         let waiting = try list()
         if let existing = waiting.first(where: { $0.url == canonical }) { return existing }
         let link = SharedLink(url: canonical, createdAt: now)
@@ -52,7 +52,7 @@ public final class SharedLinkInbox {
     }
 }
 
-/// The Capture composer's YouTube links, as it stores them: one per line.
+/// The Capture composer's links, as it stores them: one per line.
 public enum DraftLinks {
     /// `stored` with `adding` after it, each link once, in order.
     public static func merge(_ stored: String, _ adding: [String]) -> String {

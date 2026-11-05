@@ -17,21 +17,21 @@ final class AutoFileCaptureTests: XCTestCase {
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
     func testTheFlagTravelsWithTheCaptureAndReachesTheCreate() throws {
-        let saved = try store.commitDraft(text: "had pho for lunch", youtubeURLs: [], autoFile: true)
+        let saved = try store.commitDraft(text: "had pho for lunch", linkURLs: [], autoFile: true)
         let reloaded = try CaptureStore(root: root).load(saved.id)
         XCTAssertTrue(reloaded.autoFile)
         XCTAssertEqual(JournalAPI.entryBody(reloaded)["autoFile"], "1")
     }
 
     func testWithoutItNothingIsSent() throws {
-        let plain = try store.commitDraft(text: "a thought", youtubeURLs: [])
+        let plain = try store.commitDraft(text: "a thought", linkURLs: [])
         XCTAssertFalse(plain.autoFile)
         XCTAssertNil(JournalAPI.entryBody(plain)["autoFile"], "Off sends nothing, as before")
     }
 
     func testAMealIsNeverAutoFiled() throws {
         // Food and Spent already chose; only a journal save is left to the server.
-        let meal = try store.commitDraft(text: "pho", youtubeURLs: [], kind: .food, autoFile: true)
+        let meal = try store.commitDraft(text: "pho", linkURLs: [], kind: .food, autoFile: true)
         XCTAssertFalse(meal.autoFile)
     }
 
