@@ -290,8 +290,8 @@ CREATE TABLE IF NOT EXISTS health_samples (
 CREATE INDEX IF NOT EXISTS idx_health_samples_type_start ON health_samples(type, start_ts);
 
 -- Workouts recorded on the Watch (or anything else that writes HKWorkout).
--- Kept apart from workout_sessions on purpose: those are what the user logged
--- and rated by hand, and the heatmap's five hues are full.
+-- Raw Health workouts; backend/apple_health/lifestyle.py projects each into
+-- workout_sessions once, linked by health_workout_links. The source stays intact.
 CREATE TABLE IF NOT EXISTS health_workouts (
     id TEXT PRIMARY KEY,
     activity_type INTEGER NOT NULL,
@@ -1234,6 +1234,12 @@ CREATE TABLE IF NOT EXISTS workout_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_workout_sessions_date ON workout_sessions(date DESC);
 
+-- NULL session_id remembers a user-deleted import across sync replay/restart.
+CREATE TABLE IF NOT EXISTS health_workout_links (
+    health_id TEXT PRIMARY KEY,
+    session_id TEXT REFERENCES workout_sessions(id) ON DELETE SET NULL
+);
+
 -- `name_raw` is what the user wrote ("curls"); `name_canonical` is what it was
 -- folded onto ("bicep curl") so the progression chart can group across spellings.
 CREATE TABLE IF NOT EXISTS workout_exercises (
@@ -1259,11 +1265,14 @@ CREATE TABLE IF NOT EXISTS workout_sets (
 
 CREATE INDEX IF NOT EXISTS idx_workout_sets_exercise ON workout_sets(exercise_id, set_order);
 
--- Manual weigh-ins, at most one per day (re-logging the same day overwrites).
+-- Kilograms, at most one per 4am day. Manual corrections clear health_sample_id.
+-- NULL weight_unit identifies old mixed-unit rows awaiting the cutoff migration.
 CREATE TABLE IF NOT EXISTS body_weight_logs (
     id TEXT PRIMARY KEY,
     date TEXT NOT NULL UNIQUE,
     weight REAL NOT NULL,
+    weight_unit TEXT,
+    health_sample_id TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );

@@ -18,6 +18,7 @@ import re
 import time
 
 from backend.db.connection import get_db
+from backend.apple_health import lifestyle
 
 MAX_SAMPLES = 5000
 MAX_WORKOUTS = 1000
@@ -201,6 +202,7 @@ def ingest(body) -> dict:
             workout_rows,
         )
         # A deleted UUID can name either kind of object; HealthKit doesn't say.
+        lifestyle.delete_workouts(db, deleted_ids)
         db.executemany('DELETE FROM health_samples WHERE id = ?', deleted_ids)
         db.executemany('DELETE FROM health_workouts WHERE id = ?', deleted_ids)
         db.executemany(
@@ -209,6 +211,7 @@ def ingest(body) -> dict:
             ' updated_at=excluded.updated_at',
             daily_rows,
         )
+        lifestyle.reconcile(db)
 
     return {
         'samples': len(sample_rows),

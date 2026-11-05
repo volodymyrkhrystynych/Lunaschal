@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { api, type ProgressionPoint } from '@/hooks/api';
-import { Progression } from './Progression';
+import { BodyWeightCard, Progression } from './Progression';
 
 vi.mock('@/hooks/api', () => ({
   api: {
@@ -19,6 +19,28 @@ vi.mock('@/hooks/api', () => ({
 
 const exercises = vi.mocked(api.lifestyle.exercises.list);
 const progression = vi.mocked(api.lifestyle.exercises.progression);
+
+it('sends an explicit kilogram unit with new weigh-ins', async () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <BodyWeightCard />
+    </QueryClientProvider>
+  );
+  fireEvent.change(
+    screen.getByRole('spinbutton', { name: 'Body weight in kg' }),
+    { target: { value: '80' } }
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Log' }));
+  await waitFor(() =>
+    expect(api.lifestyle.weight.log).toHaveBeenCalledWith({
+      weight: 80,
+      unit: 'kg',
+    })
+  );
+});
 
 const point = (
   date: string,

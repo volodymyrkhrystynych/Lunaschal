@@ -111,12 +111,26 @@ def _ensure_workout_quick_entry(db):
     db.commit()
 
 
+def _ensure_health_lifestyle(db):
+    from backend.apple_health.lifestyle import KG_PER_LB, reconcile
+    cols = {r[1] for r in db.execute('PRAGMA table_info(body_weight_logs)')}
+    for name in ('weight_unit', 'health_sample_id'):
+        if name not in cols:
+            db.execute(f'ALTER TABLE body_weight_logs ADD COLUMN {name} TEXT')
+    # Row-level latch: a normalized value must never pass the cutoff twice.
+    db.execute("UPDATE body_weight_logs SET weight=CASE WHEN weight>=140 THEN weight*? ELSE weight END,"
+               " weight_unit='kg' WHERE weight_unit IS NULL", (KG_PER_LB,))
+    reconcile(db)
+    db.commit()
+
+
 def init_db() -> None:
     db = get_db()
     schema = (Path(__file__).parent / 'schema.sql').read_text()
     db.executescript(schema)
     db.commit()
     _ensure_workout_quick_entry(db)
+    _ensure_health_lifestyle(db)
     # Drop password_hash if it exists from an older schema
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'password_hash' in cols:

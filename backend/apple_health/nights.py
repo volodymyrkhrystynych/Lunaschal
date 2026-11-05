@@ -75,8 +75,7 @@ def pick_night(samples: list[tuple[float, float, int]], boundary: float) -> tupl
     return (best[0], best[1]) if best else None
 
 
-def night_for_day(day_key: str) -> tuple[int, int] | None:
-    """The night that ended as day `day_key` began, as whole unix seconds."""
+def samples_for_day(day_key: str) -> list[tuple[float, float, int]]:
     boundary = day_bounds(day_key)[0]
     rows = get_db().execute(
         'SELECT start_ts, end_ts, value FROM health_samples'
@@ -85,6 +84,53 @@ def night_for_day(day_key: str) -> tuple[int, int] | None:
         ' WHERE type = ? AND start_ts > ? AND start_ts < ? AND end_ts > ?',
         (SLEEP_TYPE, boundary - READ_MARGIN - 86400, boundary + READ_MARGIN, boundary - READ_MARGIN),
     ).fetchall()
-    samples = [(r['start_ts'], r['end_ts'], int(r['value'])) for r in rows if r['value'] is not None]
+    return [(r['start_ts'], r['end_ts'], int(r['value'])) for r in rows if r['value'] is not None]
+
+
+def night_for_day(day_key: str) -> tuple[int, int] | None:
+    """The night that ended as day `day_key` began, as whole unix seconds."""
+    samples = samples_for_day(day_key)
+    boundary = day_bounds(day_key)[0]
     night = pick_night(samples, boundary)
     return (int(night[0]), int(night[1])) if night else None
+
+
+def sleep_summary(day_key: str, samples: list[tuple[float, float, int]]) -> dict:
+    """Union sources before counting; explicit awake beats broad asleep spans.
+
+    Interruptions are recorded awake intervals *inside* the night, never gaps
+    where the device may not have been worn. Efficiency is withheld for in-bed
+    only nights and incomplete coverage (>1 minute unobserved).
+    """
+    result = dict(date=day_key, start=None, end=None, asleepMinutes=None,
+                  awakeMinutes=None, interruptions=None, efficiency=None, unobservedMinutes=None)
+    night = pick_night(samples, day_bounds(day_key)[0])
+    if night is None:
+        return result
+    start, end = night
+    result.update(start=start, end=end)
+
+    def intervals(values):
+        return merge([(max(s, start), min(e, end)) for s, e, v in samples
+                      if v in values and e > s and e > start and s < end], gap=0)
+
+    asleep, awake = intervals(ASLEEP), intervals({AWAKE})
+    if not asleep:
+        return result
+    # A phone's broad asleep sample can overlap the Watch's awake stages.
+    overlap = sum(max(0, min(e, ae) - max(s, a))
+                  for s, e, _ in asleep for a, ae, _ in awake)
+    slept = max(0, sum(t for _, _, t in asleep) - overlap)
+    woken = sum(t for _, _, t in awake)
+    unknown = max(0, end - start - slept - woken)
+    result.update(asleepMinutes=round(slept / 60, 1), awakeMinutes=round(woken / 60, 1),
+                  interruptions=len(awake), unobservedMinutes=round(unknown / 60, 1),
+                  efficiency=round(100 * slept / (end - start), 1) if unknown <= 60 else None)
+    return result
+
+
+def sleep_week(last_day: str) -> dict:
+    from datetime import date, timedelta
+    last = date.fromisoformat(last_day)
+    days = [(last - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+    return {'days': [sleep_summary(day, samples_for_day(day)) for day in days]}

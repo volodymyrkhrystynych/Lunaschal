@@ -129,6 +129,15 @@ final class WorkoutTests: XCTestCase {
         XCTAssertEqual(WorkoutLabels.sets(sessions[0].exercises[0].sets), "10 bodyweight")
         XCTAssertEqual(WorkoutLabels.location(sessions[0].locationType), "Location not set")
     }
+
+    func testHealthWorkoutDisplaysItsSourceAndSportWithoutInventedSets() throws {
+        let json = #"[{"id":"H","date":"2026-10-05","locationType":"unassigned","captureKind":"health","notes":"Apple Health · Walking","durationMinutes":30,"intensityRating":null,"exercises":[]}]"#
+        let session = try XCTUnwrap(JSONDecoder().decode([WorkoutSession].self, from: Data(json.utf8)).first)
+        XCTAssertEqual(session.notes, "Apple Health · Walking")
+        XCTAssertEqual(session.captureKind, "health")
+        XCTAssertNil(session.intensityRating)
+        XCTAssertTrue(session.exercises.isEmpty)
+    }
 }
 
 private final class FakeGym: WorkoutTransport {

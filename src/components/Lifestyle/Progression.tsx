@@ -29,7 +29,8 @@ function BodyWeightChart({ showHeading = true }: { showHeading?: boolean }) {
   });
 
   const log = useMutation({
-    mutationFn: (weight: number) => api.lifestyle.weight.log({ weight }),
+    mutationFn: (weight: number) =>
+      api.lifestyle.weight.log({ weight, unit: 'kg' }),
     onSuccess: () => {
       setValue('');
       setError(null);
@@ -64,7 +65,7 @@ function BodyWeightChart({ showHeading = true }: { showHeading?: boolean }) {
         series={series}
         color={ACTIVITY_COLORS.building}
         title="Body weight"
-        formatValue={v => v.toFixed(1)}
+        formatValue={v => `${v.toFixed(1)} kg`}
         empty="No weigh-ins yet"
       />
       <div className="mt-2 flex gap-2">
@@ -72,12 +73,17 @@ function BodyWeightChart({ showHeading = true }: { showHeading?: boolean }) {
           type="number"
           inputMode="decimal"
           step="0.1"
+          aria-label="Body weight in kg"
           value={value}
           onChange={e => setValue(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter') submit();
           }}
-          placeholder={today ? `Today: ${today.weight}` : "Log today's weight"}
+          placeholder={
+            today
+              ? `Today: ${today.weight.toFixed(1)} kg`
+              : "Today's weight (kg)"
+          }
           className="flex-1 min-w-0 px-3 py-2 rounded bg-[var(--color-bg)] border border-white/10 text-[var(--color-text)] text-sm focus:outline-none focus:border-[var(--color-primary)]"
         />
         <button

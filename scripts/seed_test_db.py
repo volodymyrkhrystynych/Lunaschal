@@ -1378,8 +1378,8 @@ def seed_lifestyle(db):
         )
 
     db.execute(
-        'INSERT INTO body_weight_logs (id, date, weight, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-        (new_id(), today, 172.4, ts(0), ts(0)),
+        'INSERT INTO body_weight_logs (id, date, weight, weight_unit, created_at, updated_at) VALUES (?, ?, ?, \'kg\', ?, ?)',
+        (new_id(), today, 78.2, ts(0), ts(0)),
     )
 
     # Daily selfie, one per date (the column is UNIQUE).
@@ -1409,10 +1409,9 @@ def seed_lifestyle(db):
 def seed_apple_health(db):
     """What the iPhone app uploads from HealthKit (backend/apple_health/).
 
-    Nights are seeded for 3-6 days ago only: seed_lifestyle puts a manual
-    sleep_logs row on the last three days, and a manual row outranks the Watch,
-    so seeding the same nights would show nothing new. These older days are the
-    ones where the day view says "from Apple Watch".
+    Leave one missing night so the weekly sleep graph demonstrates unknown
+    readings. Calendar manual times still outrank these independent sensor
+    metrics. Include both historical kg and mislabelled pound weigh-ins.
     """
     import uuid
     from datetime import datetime, timedelta
@@ -1422,7 +1421,7 @@ def seed_apple_health(db):
 
     received = ts(0)
     rows = []
-    for days_ago in range(3, 7):
+    for days_ago in (0, 1, 3, 4, 5, 6):
         day = datetime.fromisoformat(today_key(days_ago))
         # Asleep from 23:40 the night before to 07:15, with a short wake.
         start = (day - timedelta(minutes=20)).timestamp()
@@ -1436,6 +1435,9 @@ def seed_apple_health(db):
     for hours_ago, bpm in ((1, 64), (3, 71), (6, 88), (10, 58)):
         moment = ts(0, hours_ago)
         rows.append((hk_id(), 'HKQuantityTypeIdentifierHeartRate', 'quantity', moment, moment, bpm, 'count/min'))
+    for days_ago, value in ((1, 172.4), (2, 78.5)):
+        moment = datetime.fromisoformat(today_key(days_ago)).replace(hour=9).timestamp()
+        rows.append((hk_id(), 'HKQuantityTypeIdentifierBodyMass', 'quantity', moment, moment, value, 'kg'))
     db.executemany(
         'INSERT INTO health_samples (id, type, kind, start_ts, end_ts, value, unit, source_name,'
         ' source_bundle, device, metadata, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -1468,6 +1470,10 @@ def seed_apple_health(db):
             (hk_id(), activity, name, start, start + minutes * 60, minutes * 60, kcal, meters,
              'Apple Watch', 'com.apple.health.demo', '{"HKIndoorWorkout":false}', received),
         )
+
+
+    from backend.apple_health.lifestyle import reconcile
+    reconcile(db)
 
 
 def _seed_weather(db):

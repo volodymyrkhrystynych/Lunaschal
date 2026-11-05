@@ -25,6 +25,8 @@ public struct DailyLog: Codable, Equatable, Identifiable {
     public let day: String
     public let createdAt: Date
     public var weight: Double?
+    // Absent in old queued captures, which use the server's historical cutoff.
+    public var weightUnit: String?
     public var calories: Int?
     public var description: String?
     public var amountCents: Int?
@@ -132,6 +134,7 @@ public final class DailyStore {
         guard weight.isFinite, (1...1000).contains(weight) else { throw DailyError.invalidWeight }
         var log = DailyLog(kind: .weight, now: now, calendar: calendar)
         log.weight = weight
+        log.weightUnit = "kg"
         try supersede(.weight, day: log.day)
         try save(log)
         return log
@@ -302,7 +305,7 @@ public struct DailySummary: Equatable {
             if status != nil && !waiting { continue }
             switch log.kind {
             case .weight:
-                weight = log.weight
+                weight = log.weight.map { log.weightUnit == nil && $0 >= 140 ? $0 * 0.45359237 : $0 }
                 weightWaiting = waiting
             case .selfie:
                 localSelfie = log

@@ -41,6 +41,16 @@ final class DailyTests: XCTestCase {
         XCTAssertEqual(DayKey.of(at(4, 23, 30), calendar: calendar), "2026-10-04")
     }
 
+    func testNewWeightsHaveExplicitUnitsAndLegacyQueuedWeightsUseTheCutoff() throws {
+        var old = try store.logWeight(180, now: at(4, 9))
+        XCTAssertEqual(old.weightUnit, "kg")
+        XCTAssertEqual(DailySummary(day: old.day, server: nil, local: [old]).weight, 180)
+        old.weightUnit = nil
+        let restored = try JSONDecoder().decode(DailyLog.self, from: JSONEncoder().encode(old))
+        XCTAssertNil(restored.weightUnit)
+        XCTAssertEqual(try XCTUnwrap(DailySummary(day: old.day, server: nil, local: [restored]).weight), 81.6466266, accuracy: 0.000001)
+    }
+
     func testTheDayIsFixedWhenLoggedNotWhenUploaded() throws {
         let log = try store.logWeight(80.5, now: at(5, 1, 30))
         XCTAssertEqual(log.day, "2026-10-04")

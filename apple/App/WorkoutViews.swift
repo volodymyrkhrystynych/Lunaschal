@@ -113,6 +113,9 @@ private struct SessionRow: View {
                         session.intensityRating.map { "\(String(repeating: "★", count: $0)) \(WorkoutLabels.intensity[$0] ?? "")" }]
                 .compactMap { $0 }
             if !meta.isEmpty { Text(meta.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
+            if let notes = session.notes, !notes.isEmpty {
+                Text(notes).font(.callout)
+            }
             ForEach(session.exercises) { exercise in
                 Text("\(exercise.displayName)  ").font(.callout)
                     + Text(WorkoutLabels.sets(exercise.sets)).font(.caption).foregroundStyle(.secondary)
