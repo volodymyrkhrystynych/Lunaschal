@@ -784,14 +784,14 @@ def browser_result(request_id):
         return jsonify({'error': 'Browser response is too large'}), 413
     try:
         body = _browser_body()
-        browser.submit(request_id, body.get('clientId'), body)
+        accepted = browser.submit(request_id, body.get('clientId'), body)
     except browser.BrowserConflict as exc:
         return jsonify({'error': str(exc)}), 409
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
     collections.start_scans()
     download.start_drain()
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'accepted': bool(accepted)})
 
 
 @bp.post('/browser/<request_id>/retry')

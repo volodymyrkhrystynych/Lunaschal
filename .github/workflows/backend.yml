@@ -31,7 +31,7 @@ jobs:
           cache: pip
           cache-dependency-path: requirements*.txt
       - name: System libraries (WeasyPrint)
-        run: sudo apt-get update -q && sudo apt-get install -yq libpango-1.0-0 libpangoft2-1.0-0
+        run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0
       # openai-whisper pulls torch, and PyPI's default torch wheel is the
       # multi-gigabyte CUDA build. Nothing here needs a GPU.
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -41,7 +41,9 @@ jobs:
 
   pytest:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Slow Ubuntu mirrors can consume most of an hour before pytest starts.
+    # Leave room for the full suite as well as dependency installation.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,7 +55,7 @@ jobs:
         # The EGL/X/NSS libraries are QtWebEngine's: test_main_entrypoint
         # builds the desktop window's profile, which imports it for real.
         run: >-
-          sudo apt-get update -q && sudo apt-get install -yq
+          sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends
           libpango-1.0-0 libpangoft2-1.0-0 ffmpeg ripgrep libsndfile1
           libegl1 libgl1 libopengl0 libxkbcommon0 libxkbcommon-x11-0 libnss3 libxcomposite1
           libxdamage1 libxrandr2 libxtst6 libxshmfence1 libasound2t64 libfontconfig1 libdbus-1-3

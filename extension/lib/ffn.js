@@ -66,6 +66,10 @@ export const RECHECK_MS = 15000;
 // A blocked tab that is not a challenge or sign-in wall is re-navigated after
 // these delays, then left for the user. Each retry is still paced by the server.
 export const AUTO_RETRY_DELAYS_MS = [60000, 300000, 900000];
+// Rejected FF.net HTML gets another chance indefinitely, roughly every ten
+// minutes (9–11). The server still owns navigation pacing and cooldowns.
+export const PAGE_RETRY_MS = 600000;
+export const PAGE_RETRY_JITTER_MS = 60000;
 
 // Dependency injection keeps navigation, retries and challenge handling testable
 // without opening FF.net. `save` checkpoints control state before navigation.
@@ -77,6 +81,7 @@ export function createRunner({
   save,
   state,
   now = Date.now,
+  random = Math.random,
 }) {
   let busy = false;
   const persist = () => save(state);
@@ -113,18 +118,20 @@ export function createRunner({
     } catch {
       result = { kind: 'error' };
     }
+    // A loading subresource must not turn a known wall into a retryable error.
+    if (result.kind === 'challenge')
+      return grace && elapsed < CHALLENGE_GRACE_MS ? null : result;
+    if (result.kind === 'login') return result;
     if (tab.status !== 'complete') {
       // Ads and trackers can keep FF.net "loading" long after the chapter is
       // there; a fully parsed document is good enough.
       if (result.kind === 'page' && result.ready) return result;
       return elapsed < LOAD_TIMEOUT_MS ? null : { kind: 'error' };
     }
-    if (result.kind === 'challenge' && grace && elapsed < CHALLENGE_GRACE_MS)
-      return null;
     return result;
   }
   async function report(job, result) {
-    await send('ffnResult', {
+    const reply = await send('ffnResult', {
       clientId: state.clientId,
       requestId: job.id,
       result: { ...result, attemptId: job.attemptId },
@@ -135,6 +142,7 @@ export function createRunner({
       state.requestId = null;
       persist();
     }
+    return reply;
   }
   const owns = job =>
     state.requestId === job.id &&
@@ -171,9 +179,20 @@ export function createRunner({
         ? state.autoRetry
         : { requestId: job.id, count: 0, nextAt: null };
     state.autoRetry = auto;
-    if (result.kind === 'page' || result.kind === 'rate_limit') {
+    if (result.kind === 'rate_limit') {
       await report(job, result);
       return;
+    }
+    const pageError = result.kind === 'page';
+    if (pageError) {
+      // Receipt alone does not mean the parser accepted the HTML. Re-read and
+      // submit first, including when the timer expires, so recovery wins.
+      const reply = await report(job, result);
+      if (reply.accepted !== false) {
+        auto.nextAt = null;
+        persist();
+        return;
+      }
     }
     if (result.kind === 'challenge' || result.kind === 'login') {
       // Reloading into a real wall is how a session gets escalated.
@@ -183,9 +202,16 @@ export function createRunner({
       }
       return;
     }
-    if (auto.count >= AUTO_RETRY_DELAYS_MS.length) return;
+    if (auto.pageError !== pageError) {
+      auto.pageError = pageError;
+      auto.nextAt = null;
+    }
+    if (!pageError && auto.count >= AUTO_RETRY_DELAYS_MS.length) return;
     if (auto.nextAt == null) {
-      auto.nextAt = now() + AUTO_RETRY_DELAYS_MS[auto.count];
+      const delay = pageError
+        ? PAGE_RETRY_MS + (random() * 2 - 1) * PAGE_RETRY_JITTER_MS
+        : AUTO_RETRY_DELAYS_MS[auto.count];
+      auto.nextAt = now() + delay;
       persist();
       return;
     }

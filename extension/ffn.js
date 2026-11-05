@@ -31,9 +31,11 @@ function recoveryNote(request) {
   const auto =
     state.autoRetry?.requestId === request.id ? state.autoRetry : null;
   const max = AUTO_RETRY_DELAYS_MS.length;
+  if (auto?.pageError && auto.nextAt)
+    return `Refreshing automatically at ${new Date(auto.nextAt).toLocaleTimeString()}; retrying about every 10 minutes.`;
   if (auto?.nextAt)
     return `Retrying automatically at ${new Date(auto.nextAt).toLocaleTimeString()} (${auto.count + 1}/${max}).`;
-  if (auto && auto.count >= max)
+  if (auto && !auto.pageError && auto.count >= max)
     return 'Automatic retries are used up; this one needs you.';
   return 'Checking the tab automatically…';
 }

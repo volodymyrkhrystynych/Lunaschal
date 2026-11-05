@@ -104,8 +104,11 @@ Lunaschal continues to own parsing, saved chapters, the queue, and pacing.
    before it counts as blocking, and a blocked page is re-read every 15 seconds
    and taken as soon as it is readable. A tab that is unusable for any other
    reason (wrong page, closed, never loaded) is re-navigated automatically
-   after 1, 5 and then 15 minutes, still paced by the server. A real challenge
-   or sign-in is never reloaded automatically: complete it in the FF.net tab
+   after 1, 5 and then 15 minutes, still paced by the server.
+   Ordinary FF.net pages that the server cannot parse are
+   refreshed repeatedly after a newly randomized 9–11 minute wait each time,
+   with no retry limit and with the server's pacing and cooldowns still applied.
+   A challenge or sign-in is never reloaded automatically: complete it in the FF.net tab
    and it is picked up on the next check, or choose **Continue after
    verification / sign-in**. If sign-in redirected you elsewhere, use **Retry
    page after interval**. The control tab's status line says which of these it

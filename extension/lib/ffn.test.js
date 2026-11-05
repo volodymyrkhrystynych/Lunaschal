@@ -8,6 +8,9 @@ import {
   AUTO_RETRY_DELAYS_MS,
   CHALLENGE_GRACE_MS,
   RECHECK_MS,
+  LOAD_TIMEOUT_MS,
+  PAGE_RETRY_MS,
+  PAGE_RETRY_JITTER_MS,
 } from './ffn.js';
 
 const url = 'https://www.fanfiction.net/s/123/1/';
@@ -98,6 +101,7 @@ function setup() {
     storage,
     save,
     now: () => clock.t,
+    random: vi.fn(() => 0.5),
   };
   return {
     ...options,
@@ -247,6 +251,109 @@ it('re-navigates an unusable blocked tab after backoff, a bounded number of time
   expect(retries()).toBe(AUTO_RETRY_DELAYS_MS.length);
   expect(results(s)).toHaveLength(0);
 });
+
+it('refreshes rejected FF.net HTML indefinitely with fresh 9–11 minute delays', async () => {
+  const s = setup();
+  await s.runner.tick();
+  s.send.mockImplementation(async type =>
+    type === 'ffnPoll'
+      ? {
+          request: {
+            id: 'page1',
+            attemptId: s.state.attemptId,
+            url,
+            needsAttention: true,
+          },
+        }
+      : { success: true, accepted: false }
+  );
+  const retries = () =>
+    s.send.mock.calls.filter(([type]) => type === 'ffnRetry').length;
+  for (const [index, sample] of [0, 0.5, 1, 0.25, 0.75].entries()) {
+    // Each server-paced navigation creates a new attempt for the same request.
+    s.state.requestId = 'page1';
+    s.state.attemptId = `attempt${index}`;
+    s.random.mockReturnValue(sample);
+    await s.runner.tick();
+    const delay = PAGE_RETRY_MS + (sample * 2 - 1) * PAGE_RETRY_JITTER_MS;
+    expect(s.state.autoRetry.nextAt).toBe(s.now() + delay);
+    // Rereads do not redraw the jitter or move the scheduled refresh.
+    s.advance(delay - RECHECK_MS);
+    await s.runner.tick();
+    expect(retries()).toBe(index);
+    s.advance(RECHECK_MS);
+    await s.runner.tick();
+    expect(retries()).toBe(index + 1);
+    expect(s.tabs.update).toHaveBeenCalledOnce(); // Only the server may permit navigation.
+    s.advance(RECHECK_MS);
+  }
+  expect(s.random).toHaveBeenCalledTimes(5);
+});
+
+it('submits a recovered page before refreshing at the deadline', async () => {
+  const s = setup();
+  await s.runner.tick();
+  s.setJob({ id: 'page1', url, needsAttention: true });
+  s.send.mockImplementation(async type =>
+    type === 'ffnPoll'
+      ? {
+          request: {
+            id: 'page1',
+            attemptId: 'attempt1',
+            url,
+            needsAttention: true,
+          },
+        }
+      : { success: true, accepted: false }
+  );
+  await s.runner.tick();
+  s.advance(PAGE_RETRY_MS);
+  s.send.mockImplementation(async type =>
+    type === 'ffnPoll'
+      ? {
+          request: {
+            id: 'page1',
+            attemptId: 'attempt1',
+            url,
+            needsAttention: true,
+          },
+        }
+      : { success: true, accepted: true }
+  );
+  await s.runner.tick();
+  expect(s.state.autoRetry.nextAt).toBeNull();
+  expect(s.send).not.toHaveBeenCalledWith('ffnRetry', expect.anything());
+});
+
+it.each(['challenge', 'login'])(
+  'cancels a pending refresh for a loading %s wall',
+  async kind => {
+    const s = setup();
+    await s.runner.tick();
+    s.setJob({ id: 'page1', url, needsAttention: true });
+    s.state.autoRetry = {
+      requestId: 'page1',
+      count: 0,
+      pageError: true,
+      nextAt: s.now() + PAGE_RETRY_MS,
+    };
+    s.tabs.get.mockResolvedValue({ id: 7, url, status: 'loading' });
+    s.scripting.executeScript.mockResolvedValue([{ result: { kind, url } }]);
+    s.advance(LOAD_TIMEOUT_MS + PAGE_RETRY_MS);
+    await s.runner.tick();
+    expect(s.state.autoRetry.nextAt).toBeNull();
+    s.advance(PAGE_RETRY_MS * 2);
+    await s.runner.tick();
+    expect(s.send).not.toHaveBeenCalledWith('ffnRetry', expect.anything());
+    // When the wall disappears, the page still gets picked up without a click.
+    s.scripting.executeScript.mockResolvedValue([
+      { result: { kind: 'page', url, html: 'recovered', ready: true } },
+    ]);
+    s.advance(RECHECK_MS);
+    await s.runner.tick();
+    expect(results(s).at(-1)[1].result.kind).toBe('page');
+  }
+);
 
 it('reopening the controller resumes capture without reloading the page', async () => {
   const s = setup();
