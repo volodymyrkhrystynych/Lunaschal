@@ -833,6 +833,12 @@ publicly to make CI work: simulator capture tests never contact it.
   survive restarts, and older imports can request server status without resending audio.
   Watch and iPhone simulator compilation passed in the hosted Xcode 26.6 run.
   Recording lifecycle and paired-device transfers remain unverified.
+  A clip that ends under 5 seconds is deleted, whether Stop, a call or a recorder
+  failure ended it, with a haptic, a banner and a line on the Log page, and a
+  notification if the app is out of sight. A clip the OS killed outright is still
+  kept as interrupted, since nothing was running to measure it. The discard on
+  Stop, a kept clip and the banner passed in the watchOS simulator; the haptic,
+  the notification and a real call interruption need a device.
   WatchConnectivity transfer validation requires paired devices
   ([Apple's transferFile documentation](<https://developer.apple.com/documentation/watchconnectivity/wcsession/transferfile(_:metadata:)>)).
 - The Watch has a pomodoro timer: Focus (25 minutes, then Continue, a 5-minute

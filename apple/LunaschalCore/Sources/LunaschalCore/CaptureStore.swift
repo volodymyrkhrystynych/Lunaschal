@@ -549,6 +549,17 @@ public final class CaptureStore {
         try save(capture)
     }
 
+    /// Throws away a clip that is still being recorded, which is the only
+    /// kind nothing else can have seen: a finished one may already be on its
+    /// way to the phone. The manifest stays until the audio has gone.
+    public func discardRecording(_ id: String) throws {
+        let capture = try load(id)
+        guard capture.state == .recording else { throw CaptureError.invalidResponse }
+        let audio = try audioURL(capture)
+        if fm.fileExists(atPath: audio.path) { try fm.removeItem(at: audio) }
+        try fm.removeItem(at: manifest(id))
+    }
+
     /// Do not automatically upload an unfinalized container after an OS kill.
     /// The UI offers playback/export and an explicit recovery action.
     public func recoverInterruptedRecordings() throws {
