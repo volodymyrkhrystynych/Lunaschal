@@ -7,7 +7,7 @@ google-generativeai>=0.8
 python-ulid>=3.0
 requests>=2.31
 pypdf>=6.0
-PyJWT>=2.8
+PyJWT[crypto]>=2.8
 soundfile>=0.12.1
 numpy>=2.0.0
 openai-whisper>=20240930
@@ -42,7 +42,7 @@ python-docx>=1.1
 # rather than deleting them; Fandom serves the dumps as .7z, which py7zr reads.
 mwparserfromhell>=0.6
 py7zr>=0.21
-# APNs push for the Code tab (backend/push/apns.py). Apple's push API is HTTP/2
+# APNs push (backend/push/apns.py). Apple's push API is HTTP/2
 # only; the [http2] extra pulls in h2.
 httpx[http2]>=0.27
 # ES256 signing for the APNs provider token; PyJWT needs it for EC keys.

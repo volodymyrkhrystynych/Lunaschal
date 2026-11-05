@@ -9,6 +9,7 @@ import { ShortcutsSection } from './ShortcutsSection';
 import { WeatherSection } from './WeatherSection';
 import { PlacesSection } from './PlacesSection';
 import { BriefingSection } from './BriefingSection';
+import { CoachSection } from './CoachSection';
 import { ReposSection } from './ReposSection';
 import { ResearchSection } from './ResearchSection';
 import { VRAMSection } from './VRAMSection';
@@ -151,6 +152,10 @@ export function Settings() {
 
           <CollapsibleSection title="Overnight Briefing">
             <BriefingSection />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Coach">
+            <CoachSection />
           </CollapsibleSection>
 
           <CollapsibleSection title="Saved Places">

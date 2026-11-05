@@ -201,19 +201,24 @@ struct HabitRowView: View {
             if showsWeek {
                 HStack(spacing: 2) {
                     // Today is the last dot, and the check button already says it.
-                    ForEach(Array(row.week.dropLast().enumerated()), id: \.offset) { _, done in
-                        Circle()
-                            .fill(done ? Color.accentColor : Color.secondary.opacity(0.25))
-                            .frame(width: 5, height: 5)
+                    ForEach(Array(row.week.dropLast().enumerated()), id: \.offset) { index, done in
+                        // An excused day is a ring: it neither counted nor broke the streak.
+                        if !done, row.excused.indices.contains(index), row.excused[index] {
+                            Circle().strokeBorder(Color.secondary.opacity(0.6), lineWidth: 1).frame(width: 5, height: 5)
+                        } else {
+                            Circle()
+                                .fill(done ? Color.accentColor : Color.secondary.opacity(0.25))
+                                .frame(width: 5, height: 5)
+                        }
                     }
                 }
                 .accessibilityHidden(true)
             }
             if row.streak > 0 {
-                Label("\(row.streak)", systemImage: "flame.fill")
+                Label("\(row.streak)", systemImage: row.atRisk ? "flame" : "flame.fill")
                     .labelStyle(.titleAndIcon)
                     .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(row.atRisk ? .red : .orange)
                     .accessibilityLabel("\(row.streak) day streak")
             }
         }

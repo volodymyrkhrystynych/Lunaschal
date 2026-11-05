@@ -119,6 +119,36 @@ record in App Store Connect before uploading a build. Apple describes the
 [app-record setup](https://developer.apple.com/help/app-store-connect/create-an-app-record/add-a-new-app/)
 and [Watch companion identifier](https://developer.apple.com/documentation/bundleresources/information-property-list/wkcompanionappbundleidentifier).
 
+## Push notifications (the coach's reminders, the Code page)
+
+The app registers for remote notifications (`aps-environment: production` in
+`project.yml`, since every signed build is an App Store one), so its App ID
+needs the capability and **its profile must include it**. `tools/release.py` refuses an App Store profile for `com.lunaschal.mobile`
+without `aps-environment: production`, rather than letting a build ship that
+can never receive a reminder. Steps, all in the developer account:
+
+1. Certificates, Identifiers & Profiles → Identifiers → `com.lunaschal.mobile`
+   → enable **Push Notifications**. No certificate is needed; token auth is used.
+2. Regenerate the App Store profile for `com.lunaschal.mobile` (it now carries
+   the push entitlement) and update the `APPLE_IOS_PROFILE_BASE64` secret.
+3. Keys → create a key with **Apple Push Notifications service (APNs)**.
+   Download the `.p8` once (Apple won't offer it again) and note its Key ID.
+4. On the server, put the key somewhere only the service user can read, and
+   add to the production `.env` (read by `ops/run-prod.sh`):
+
+   ```sh
+   APNS_KEY_PATH=/home/volodya/.config/lunaschal/AuthKey_XXXXXXXXXX.p8
+   APNS_KEY_ID=XXXXXXXXXX
+   # APNS_TEAM_ID defaults to 4AG98Q33RQ, APNS_TOPIC to com.lunaschal.mobile
+   ```
+
+5. Restart the server, install the TestFlight build, turn on Settings → Coach
+   reminders on the phone, and use **Send test** in the web's Settings → Coach.
+
+The key never leaves the server's environment: no route returns it or its path
+(`backend/push/apns.py`). A simulator can't receive APNs at all; handling is
+checked there with the payloads in `tools/push-fixtures/`.
+
 ## Hosted signing setup
 
 The [release workflow](../.github/workflows/apple-release.yml) accepts a unique

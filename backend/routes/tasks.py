@@ -90,7 +90,7 @@ def list_tasks():
     db = get_db()
     rows = db.execute(
         '''
-        SELECT t.id, t.title, t.position, t.created_at, t.updated_at,
+        SELECT t.id, t.title, t.position, t.cue, t.created_at, t.updated_at,
                CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END AS done
         FROM daily_tasks t
         LEFT JOIN daily_task_completions c ON c.task_id = t.id AND c.date = ?
@@ -103,10 +103,26 @@ def list_tasks():
     done: dict[str, list[str]] = {}
     for c in db.execute('SELECT task_id, date FROM daily_task_completions'):
         done.setdefault(c['task_id'], []).append(c['date'])
+    excused = excused_habit_days(db)
     return jsonify([
-        {**row_to_dict(r), **mapping_to_dict(streak_summary(done.get(r['id'], []), today))}
+        {**row_to_dict(r), **mapping_to_dict(streak_summary(
+            done.get(r['id'], []), today, excused.get(r['id'], set()) | excused.get(None, set())))}
         for r in rows
     ])
+
+
+def excused_habit_days(db) -> dict[str | None, set[str]]:
+    """Days each habit was excused on, keyed by task id; `None` holds the
+    days excused whole, which count for every habit. Only an external or
+    one-off reason excuses — an internal one is an obstacle, not a pass."""
+    days: dict[str | None, set[str]] = {}
+    for r in db.execute(
+        "SELECT day, target_kind, target_id FROM day_excuses "
+        "WHERE kind IN ('external','one_off') AND target_kind IN ('habit','day')"
+    ):
+        key = r['target_id'] if r['target_kind'] == 'habit' else None
+        days.setdefault(key, set()).add(r['day'])
+    return days
 
 
 @bp.post('')
@@ -116,41 +132,57 @@ def create_task():
     if not title:
         return jsonify({'error': 'title required'}), 400
 
-    db = get_db()
     # Accept a client-supplied ULID so an offline-queued create replays
     # idempotently: a repeat answers as the first one did, before the cap is
     # checked, since the first one may be what filled it.
     task_id = body.get('id') or str(ULID())
     if not isinstance(task_id, str) or not re.fullmatch(r'[0-9A-Za-z]{1,64}', task_id):
         return jsonify({'error': 'id must be a ULID'}), 400
+    try:
+        insert_daily_task(get_db(), title, task_id=task_id)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify({'id': task_id}), 201
+
+
+def insert_daily_task(db, title: str, *, task_id: str | None = None, cue: str | None = None) -> str:
+    """Add a habit at the end of the list; the one place the cap is kept.
+    An existing id is a replay and is answered as the first create was."""
+    task_id = task_id or str(ULID())
     if db.execute('SELECT 1 FROM daily_tasks WHERE id=?', (task_id,)).fetchone():
-        return jsonify({'id': task_id}), 201
+        return task_id
     count = db.execute('SELECT COUNT(*) FROM daily_tasks').fetchone()[0]
     if count >= MAX_TASKS:
-        return jsonify({'error': f'max {MAX_TASKS} tasks allowed'}), 400
-
-    position = count + 1
+        raise ValueError(f'max {MAX_TASKS} tasks allowed')
     now = int(time.time())
     db.execute(
-        'INSERT INTO daily_tasks(id, title, position, created_at, updated_at) VALUES (?,?,?,?,?)',
-        (task_id, title, position, now, now),
+        'INSERT INTO daily_tasks(id, title, position, cue, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+        (task_id, title, count + 1, (cue or '').strip()[:200] or None, now, now),
     )
     db.commit()
-    return jsonify({'id': task_id}), 201
+    return task_id
 
 
 @bp.patch('/<task_id>')
 def update_task(task_id):
+    """Rename a habit and/or set its cue — the "after coffee" of "weigh in
+    after coffee". Either field may come alone; an empty cue clears it."""
     body = request.json or {}
-    title = (body.get('title') or '').strip()
-    if not title:
+    if 'title' not in body and 'cue' not in body:
         return jsonify({'error': 'title required'}), 400
-
     db = get_db()
-    db.execute(
-        'UPDATE daily_tasks SET title=?, updated_at=? WHERE id=?',
-        (title, int(time.time()), task_id),
-    )
+    now = int(time.time())
+    if 'title' in body:
+        title = (body.get('title') or '').strip()
+        if not title:
+            return jsonify({'error': 'title required'}), 400
+        db.execute('UPDATE daily_tasks SET title=?, updated_at=? WHERE id=?', (title, now, task_id))
+    if 'cue' in body:
+        cue = body.get('cue')
+        if cue is not None and not isinstance(cue, str):
+            return jsonify({'error': 'cue must be text'}), 400
+        cue = (cue or '').strip()[:200] or None
+        db.execute('UPDATE daily_tasks SET cue=?, updated_at=? WHERE id=?', (cue, now, task_id))
     db.commit()
     return jsonify({'success': True})
 

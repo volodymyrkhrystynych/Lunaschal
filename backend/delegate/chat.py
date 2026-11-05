@@ -40,6 +40,7 @@ from backend.delegate import limits, research_tools, tools as proposal_tools
 from backend.lifewiki import tools as life_tools
 from backend.lifewiki.tools import LifeTools
 from backend.goals import tools as goal_tools
+from backend.coach import tools as coach_tools
 from backend.research import agent as tool_loop
 from backend.research import wiki as wiki_tools
 from backend.writing import canon_tools
@@ -66,7 +67,7 @@ _LIFE_WIKI_TOOLS = [t for t in wiki_tools.TOOLS
 _LIFE_WIKI_NAMES = {t['function']['name'] for t in _LIFE_WIKI_TOOLS}
 
 TOOLS = (research_tools.TOOLS + proposal_tools.TOOLS + life_tools.TOOLS
-         + _LIFE_WIKI_TOOLS + goal_tools.TOOLS)
+         + _LIFE_WIKI_TOOLS + goal_tools.TOOLS + coach_tools.TOOLS)
 
 DECISION_NOTE = """Right now your only job is to decide which of your tools this \
 message needs, if any — your reply comes afterwards, in a separate turn.
@@ -111,12 +112,14 @@ this turn is discarded."""
 # discussions: this turn's wording is the only thing that decides whether the
 # library gets searched before the web, and three hand-kept copies drift.
 DECISION_NOTE = DECISION_NOTE.format(research_note=research_tools.RESEARCH_NOTE)
-DECISION_NOTE += '\n\nFor daily goals and prizes use create_goal, list_goals, check_goal and update_goal. '
+DECISION_NOTE += ('\n\nFor goals use list_goals, create_goal (week/month/quarter/year), edit_goal, '
+                  'set_overarching_goal, check_goal and update_goal. ')
 DECISION_NOTE += ('Save only goals the user asks to track. Check saved goals before recreating one. '
                   'When asked about progress or whether a prize is earned, call check_goal: '
                   'it includes today and can award immediately, even early in the day. '
                   'Never calculate an award from memory. Uncertain evidence is unresolved, not a missed day. '
                   'Only mark a reward redeemed when the user says they used it.')
+DECISION_NOTE += coach_tools.DECISION_NOTE
 
 # The Writing discussion's decision turn. Same research rule, none of the Chat
 # tab's paragraphs about staging, asking or remembering — it has no confirm
@@ -259,6 +262,7 @@ def _main_dispatch(*, life: LifeTools, life_wiki, checkpoint, deadline):
     dispatch.update({name: life_wiki for name in _LIFE_WIKI_NAMES})
     dispatch.update({name: life for name in life_tools.TOOL_NAMES})
     dispatch.update({name: goal_tools for name in goal_tools.TOOL_NAMES})
+    dispatch.update({name: coach_tools for name in coach_tools.TOOL_NAMES})
     proposal_dispatch = SimpleNamespace(run_tool=run_proposal)
     dispatch.update({
         tool['function']['name']: proposal_dispatch for tool in proposal_tools.TOOLS

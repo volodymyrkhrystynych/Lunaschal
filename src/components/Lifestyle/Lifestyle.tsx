@@ -115,11 +115,12 @@ export function Lifestyle({
           </div>
         </section>
 
+        <GoalsCard onOpenEntry={onOpenEntry} />
+
         <div className="grid gap-4 lg:grid-cols-2 items-start">
           <TasksSection />
           <div className="flex flex-col gap-4 min-w-0">
             <WorkoutLog />
-            <GoalsCard onOpenEntry={onOpenEntry} />
             <FocusCard />
             <HealthCard />
             <SleepCard />

@@ -91,8 +91,12 @@ struct CaptureRoot: View {
             if selected == .capture { capturePage = .entry }
         }
         // A tap on a Home Screen widget, outside its check buttons.
+        // And a coach notification's tap (CoachReminders): chat, or Daily
+        // for a weigh-in or calorie reminder.
         .onOpenURL { url in
             if url == TodoWidgetFiles.openURL { tab = .todo }
+            else if url.scheme == "lunaschal" && url.host == "chat" { tab = .chat }
+            else if url.scheme == "lunaschal" && url.host == "daily" { tab = .capture; capturePage = .daily }
         }
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
@@ -1168,6 +1172,7 @@ private struct ConnectionSettings: View {
                 Text("Your Home and Works are watched as geofences while the trail is on, so the calendar's workday follows when you actually arrive and leave.")
             }
             if model.healthAvailable { HealthSettings(model: model) }
+            CoachReminderSettings()
             IntelligenceAvailabilityView()
         }
         .navigationTitle("Settings")

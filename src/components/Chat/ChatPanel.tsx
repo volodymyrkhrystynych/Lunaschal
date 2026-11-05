@@ -5,6 +5,7 @@ import { api, type ChatAttachment, type DraftCard } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { BriefingContent } from './BriefingContent';
+import { CoachCards } from './CoachCards';
 import { AgentSteps } from './AgentSteps';
 import { DelegateProposals } from './DelegateProposals';
 import { JournalContextPrompts } from './JournalContextPrompts';
@@ -886,6 +887,9 @@ export function ChatPanel() {
                     "N steps so far ·" pulse as a tab that never left — the
                     backend now checkpoints steps into metadata as they happen
                     (backend/delegate/runs.py), not just once the run ends. */}
+                {message.role === 'assistant' && (
+                  <CoachCards metadata={message.metadata} onReply={setInput} />
+                )}
                 <AgentSteps
                   steps={steps}
                   thinking={thinking}

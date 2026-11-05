@@ -220,7 +220,7 @@ def test_tool_and_route_check_use_same_immediate_evaluator(client):
     assert client.get('/api/goals').json[0]['id'] == goal['id']
     assert client.post('/api/goals/missing/check').status_code == 404
     assert client.post('/api/goals',json=[]).status_code == 400
-    assert client.post('/api/goals',json={'title':'x'}).status_code == 400
+    assert client.post('/api/goals',json={'criteria':'x'}).status_code == 400
 
 
 def test_goals_are_only_available_in_chat():

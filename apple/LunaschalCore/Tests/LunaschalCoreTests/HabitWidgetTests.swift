@@ -25,11 +25,58 @@ final class HabitWidgetTests: XCTestCase {
     func testStreaksMatchTheServersRules() {
         XCTAssertEqual(HabitStreaks.current([], today: "2026-11-02"), 0)
         XCTAssertEqual(HabitStreaks.current(["2026-10-31", "2026-11-01", "2026-11-02"], today: "2026-11-02"), 3)
-        // Today unticked keeps yesterday's run; a whole missed day ends it.
+        // Today unticked keeps yesterday's run; one missed day is grace, two end it.
         XCTAssertEqual(HabitStreaks.current(["2026-10-31", "2026-11-01"], today: "2026-11-02"), 2)
-        XCTAssertEqual(HabitStreaks.current(["2026-10-30", "2026-10-31"], today: "2026-11-02"), 0)
+        XCTAssertEqual(HabitStreaks.current(["2026-10-30", "2026-10-31"], today: "2026-11-02"), 2)
+        XCTAssertEqual(HabitStreaks.current(["2026-10-29", "2026-10-30"], today: "2026-11-02"), 0)
         XCTAssertEqual(HabitStreaks.current(["2026-02-28", "2026-03-01"], today: "2026-03-01"), 2)
         XCTAssertEqual(HabitStreaks.longest(["2025-12-30", "2025-12-31", "2026-01-01", "2026-01-05", "2026-01-01"]), 3)
+    }
+
+    struct StreakCase: Decodable {
+        let name: String, done: [String], excused: [String], today: String
+        let current: Int, longest: Int, atRisk: Bool
+    }
+
+    /// The server's own cases, read from the backend's fixture, so the phone
+    /// and `backend/habit_streaks.py` can't drift apart.
+    func testSharedStreakCases() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("backend/tests/fixtures/habit_streaks.json")
+        struct File: Decodable { let cases: [StreakCase] }
+        let cases = try JSONDecoder().decode(File.self, from: Data(contentsOf: fixture)).cases
+        XCTAssertGreaterThan(cases.count, 5)
+        for c in cases {
+            XCTAssertEqual(HabitStreaks.current(c.done, today: c.today, excused: c.excused), c.current, c.name)
+            XCTAssertEqual(HabitStreaks.longest(c.done, excused: c.excused), c.longest, c.name)
+            XCTAssertEqual(HabitStreaks.atRisk(c.done, today: c.today, excused: c.excused), c.atRisk, c.name)
+        }
+    }
+
+    func testTheWidgetRowShowsExcusedDaysAndRisk() {
+        let task = DailyTask(id: "T", title: "Stretch", position: 1, done: false,
+                             history: ["2026-10-29", "2026-10-30"], excused: ["2026-11-01"])
+        let row = TodoWidgetContent.habits(TodoLists(tasks: [task]),
+                                           at: DayKeyTests_noon("2026-11-02")).first
+        XCTAssertEqual(row?.excused, [false, false, false, false, false, true, false])
+        XCTAssertEqual(row?.atRisk, false, "the missed day was excused")
+        let missed = DailyTask(id: "U", title: "Read", position: 2, done: false, history: ["2026-10-31"])
+        XCTAssertEqual(TodoWidgetContent.habits(TodoLists(tasks: [missed]), at: DayKeyTests_noon("2026-11-02")).first?.atRisk,
+                       true)
+    }
+
+    func testATaskCarriesItsCueAndExcusedDays() throws {
+        let json = #"[{"id":"T","title":"Weigh in","position":1,"done":0,"history":["2026-10-30"],"#
+            + #""excused":["2026-11-01"],"cue":"after coffee","streak":1}]"#
+        let task = try XCTUnwrap(JSONDecoder().decode([DailyTask].self, from: Data(json.utf8)).first)
+        XCTAssertEqual(task.cue, "after coffee")
+        XCTAssertTrue(task.isExcused(on: "2026-11-01"))
+        XCTAssertEqual(task.streak(today: "2026-11-02"), 1)
+        XCTAssertFalse(task.atRisk(today: "2026-11-02"))
+        let cued = TodoLists(tasks: [task]).applying([TodoOp(change: .setTaskCue(id: "T", cue: nil))], today: "2026-11-02")
+        XCTAssertNil(cued.tasks[0].cue)
     }
 
     func testDayArithmeticCrossesMonthsAndYears() {
@@ -70,11 +117,12 @@ final class HabitWidgetTests: XCTestCase {
         XCTAssertEqual(ticked.tasks[0].streak(today: "2026-11-02"), 3)
         XCTAssertEqual(ticked.tasks[0].best(today: "2026-11-02"), 3)
 
-        // An untick for an earlier day breaks the run but leaves today alone.
+        // An untick for an earlier day stops it counting but leaves today
+        // alone; one missed day is grace, so the run survives it.
         let past = ticked.applying([TodoOp(change: .tickTask(id: "T", day: "2026-11-01", done: false))],
                                    today: "2026-11-02")
         XCTAssertTrue(past.tasks[0].done)
-        XCTAssertEqual(past.tasks[0].streak(today: "2026-11-02"), 1)
+        XCTAssertEqual(past.tasks[0].streak(today: "2026-11-02"), 2)
         XCTAssertEqual(past.tasks[0].week(today: "2026-11-02", count: 3), [true, false, true])
     }
 
@@ -290,4 +338,10 @@ final class TodoWidgetStoreTests: XCTestCase {
         _ = await store.sync(using: server, now: Date().addingTimeInterval(120))
         XCTAssertEqual(server.fetches, 2)
     }
+}
+
+/// Noon local time on a day key: well inside that 4am day.
+func DayKeyTests_noon(_ day: String) -> Date {
+    let parts = day.split(separator: "-").compactMap { Int($0) }
+    return Calendar.current.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12))!
 }

@@ -118,6 +118,10 @@ public struct HabitWidgetRow: Equatable, Identifiable {
     public let streak: Int
     /// The last seven days, oldest first; the last one is today.
     public let week: [Bool]
+    /// Which of those days were excused: they neither counted nor broke the streak.
+    public var excused: [Bool] = []
+    /// Yesterday was missed: today is the one that can't be.
+    public var atRisk = false
 }
 
 /// What each widget shows, for a moment that may be after the 4am rollover
@@ -128,7 +132,9 @@ public enum TodoWidgetContent {
         let today = DayKey.of(now, calendar: calendar)
         return lists.tasks.map {
             HabitWidgetRow(id: $0.id, title: $0.title, done: $0.isDone(on: today),
-                           streak: $0.streak(today: today), week: $0.week(today: today))
+                           streak: $0.streak(today: today), week: $0.week(today: today),
+                           excused: HabitStreaks.days(endingAt: today, count: 7).map($0.isExcused(on:)),
+                           atRisk: $0.atRisk(today: today))
         }
     }
 

@@ -848,6 +848,42 @@ def _accept_todo(db, data: dict, ctx: dict) -> dict:
     return {'id': id}
 
 
+def _accept_habit_plan(db, data: dict, ctx: dict) -> dict:
+    """An if-then plan from the morning review, for an obstacle that keeps
+    coming back: accepting it makes the plan that habit's cue. The card is
+    editable, so the cue is whatever the user left in it."""
+    task_id = data.get('taskId')
+    cue = data.get('cue')
+    if not isinstance(task_id, str) or not task_id:
+        raise _AcceptRejected('taskId required')
+    if not isinstance(cue, str) or not cue.strip():
+        raise _AcceptRejected('cue required')
+    if len(cue) > 200:
+        raise _AcceptRejected('cue is too long')
+    if not db.execute('UPDATE daily_tasks SET cue=?, updated_at=? WHERE id=?',
+                      (cue.strip(), int(time.time()), task_id)).rowcount:
+        raise _AcceptRejected('that habit no longer exists')
+    return {'id': task_id}
+
+
+def _accept_habit(db, data: dict, ctx: dict) -> dict:
+    """A habit the morning briefing suggested, with its if-then cue. Goes
+    through the same cap as one typed in; a full list is a refusal the card
+    shows rather than an eleventh habit."""
+    from backend.routes.tasks import insert_daily_task
+    title = (data.get('title') or '').strip()
+    if not title or len(title) > 200:
+        raise _AcceptRejected('title must be 1–200 characters')
+    cue = data.get('cue') if isinstance(data.get('cue'), str) else None
+    for row in db.execute('SELECT id, title FROM daily_tasks'):
+        if row['title'].strip().lower() == title.lower():
+            return {'id': row['id']}
+    try:
+        return {'id': insert_daily_task(db, title, cue=cue)}
+    except ValueError as exc:
+        raise _AcceptRejected(str(exc))
+
+
 def _accept_calorie(db, data: dict, ctx: dict) -> dict:
     description = (data.get('description') or '').strip()
     if not description:
@@ -1169,6 +1205,8 @@ _ACCEPT_HANDLERS = {
     'recipe_link': _accept_recipe_link,
     'flashcards': _accept_flashcards,
     'todo': _accept_todo,
+    'habit_plan': _accept_habit_plan,
+    'habit': _accept_habit,
 }
 
 

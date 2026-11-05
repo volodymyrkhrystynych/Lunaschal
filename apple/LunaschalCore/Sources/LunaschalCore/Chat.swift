@@ -264,14 +264,17 @@ public struct ChatProposal: Equatable, Identifiable {
         return ["calendar": "Save as calendar event?", "calorie": "Log calories?", "food": "Add to your food log?",
                 "recipe": "Save this recipe?", "recipe_link": "Link this meal to that recipe?",
                 "flashcards": "Generate flashcards?", "todo": "Keep this for today?", "writing_note": "Add to the notes?",
-                "writing_note_update": "Update this note?", "screenshot_titles": "Rename these screenshots?"][kind] ?? "Save this?"
+                "writing_note_update": "Update this note?", "screenshot_titles": "Rename these screenshots?",
+                "habit": "Start a new habit?",
+                "habit_plan": "Make this the plan for “\(data["habitTitle"]?.string ?? "this habit")”?"][kind] ?? "Save this?"
     }
 
     public var acceptLabel: String {
         if reconstructionDay != nil { return "Approve event" }
         return ["calendar": "Save", "calorie": "Log", "food": "Log Meal", "recipe": "Save", "recipe_link": "Link",
                 "flashcards": "Queue Cards", "todo": "Add to today", "writing_note": "Add Note",
-                "writing_note_update": "Update Note", "screenshot_titles": "Rename"][kind] ?? "Save"
+                "writing_note_update": "Update Note", "screenshot_titles": "Rename",
+                "habit_plan": "Use as cue", "habit": "Add habit"][kind] ?? "Save"
     }
 
     public var resolvedLabel: String {
@@ -284,6 +287,8 @@ public struct ChatProposal: Equatable, Identifiable {
         case "recipe": return "Saved to your recipes"
         case "recipe_link": return "Linked to your recipe"
         case "todo": return "Added to today: \(data["title"]?.string ?? "")"
+        case "habit": return "Added habit: \(data["title"]?.string ?? "")"
+        case "habit_plan": return "Cue set for \(data["habitTitle"]?.string ?? "the habit"): \(data["cue"]?.string ?? "")"
         case "flashcards":
             let count = result["count"]?.int ?? 0
             return "Queued \(count) card\(count == 1 ? "" : "s") for review in Learning"

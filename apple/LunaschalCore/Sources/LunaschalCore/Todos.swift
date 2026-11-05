@@ -18,18 +18,24 @@ public struct DailyTask: Codable, Equatable, Identifiable {
     /// to show; these only cover what `history`'s window cannot.
     public var serverStreak: Int
     public var longestStreak: Int
+    /// Days the user told the agent were out of their hands: they neither
+    /// count toward a streak nor break it.
+    public var excused: [String]
+    /// The if-then half of the habit: "after coffee" for "weigh in".
+    public var cue: String?
 
     /// Mirrors MAX_TASKS in backend/routes/tasks.py.
     public static let limit = 10
 
     public init(id: String, title: String, position: Int, done: Bool, history: [String] = [],
-                serverStreak: Int = 0, longestStreak: Int = 0) {
+                serverStreak: Int = 0, longestStreak: Int = 0, excused: [String] = [], cue: String? = nil) {
         self.id = id; self.title = title; self.position = position; self.done = done
         self.history = history; self.serverStreak = serverStreak; self.longestStreak = longestStreak
+        self.excused = excused; self.cue = cue
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, position, done, history, longestStreak
+        case id, title, position, done, history, longestStreak, excused, cue
         case serverStreak = "streak"
     }
 
@@ -45,6 +51,8 @@ public struct DailyTask: Codable, Equatable, Identifiable {
         history = try c.decodeIfPresent([String].self, forKey: .history) ?? []
         serverStreak = try c.decodeIfPresent(Int.self, forKey: .serverStreak) ?? 0
         longestStreak = try c.decodeIfPresent(Int.self, forKey: .longestStreak) ?? 0
+        excused = try c.decodeIfPresent([String].self, forKey: .excused) ?? []
+        cue = try c.decodeIfPresent(String.self, forKey: .cue)
     }
 
     /// Whether it was ticked on a 4am day.
@@ -52,13 +60,19 @@ public struct DailyTask: Codable, Equatable, Identifiable {
 
     /// The running streak as of `today`, alive through an unticked today.
     public func streak(today: String) -> Int {
-        let local = HabitStreaks.current(history, today: today)
+        let local = HabitStreaks.current(history, today: today, excused: excused)
         // A run reaching the start of the window may go back further than
         // the window shows; the server counted all of it.
         return local >= HabitStreaks.historyDays - 1 ? max(local, serverStreak) : local
     }
 
     public func best(today: String) -> Int { max(longestStreak, streak(today: today)) }
+
+    /// Yesterday was missed, so today can't be: the run's grace day is spent.
+    public func atRisk(today: String) -> Bool { HabitStreaks.atRisk(history, today: today, excused: excused) }
+
+    /// Whether a past day was excused, for the week dots.
+    public func isExcused(on day: String) -> Bool { excused.contains(day) }
 
     /// The last `count` days ending today, oldest first.
     public func week(today: String, count: Int = 7) -> [Bool] {
@@ -74,10 +88,15 @@ public struct DailyTask: Codable, Equatable, Identifiable {
 }
 
 /// `backend/habit_streaks.py`, for streaks that move the moment a tick is
-/// queued rather than when the server is next asked.
+/// queued rather than when the server is next asked. Both run the cases in
+/// `backend/tests/fixtures/habit_streaks.json`. Never miss twice: one missed
+/// day is grace, two in a row end the run; an excused day neither counts
+/// nor breaks it.
 public enum HabitStreaks {
     /// The server's history window, in days.
     public static let historyDays = 84
+    /// Missed days in a row a run survives.
+    public static let grace = 1
 
     private static var utc: Calendar {
         var calendar = Calendar(identifier: .gregorian)
@@ -107,25 +126,44 @@ public enum HabitStreaks {
         (0..<max(count, 0)).map { adding($0 - (count - 1), to: day) }
     }
 
-    /// Consecutive done days ending today, or yesterday while today is open.
-    public static func current(_ done: [String], today: String) -> Int {
-        let days = Set(done)
+    /// Done days in the run reaching today, or yesterday while today is open.
+    public static func current(_ done: [String], today: String, excused: [String] = []) -> Int {
+        let days = Set(done.filter { $0 <= today })
+        guard let floor = days.min() else { return 0 }
+        let off = Set(excused)
         var day = days.contains(today) ? today : adding(-1, to: today)
-        var count = 0
-        while days.contains(day) {
-            count += 1
+        var count = 0, misses = 0
+        while day >= floor {
+            if days.contains(day) {
+                count += 1; misses = 0
+            } else if !off.contains(day) {
+                misses += 1
+                if misses > grace { break }
+            }
             day = adding(-1, to: day)
         }
         return count
     }
 
-    public static func longest(_ done: [String]) -> Int {
-        var best = 0, run = 0
-        var previous: String?
-        for day in Set(done).sorted() {
-            run = previous.map { adding(1, to: $0) == day } == true ? run + 1 : 1
-            best = max(best, run)
-            previous = day
+    /// A live run whose grace day is spent.
+    public static func atRisk(_ done: [String], today: String, excused: [String] = []) -> Bool {
+        let yesterday = adding(-1, to: today)
+        if done.contains(today) || done.contains(yesterday) || excused.contains(yesterday) { return false }
+        return current(done, today: today, excused: excused) > 0
+    }
+
+    public static func longest(_ done: [String], excused: [String] = []) -> Int {
+        let days = Set(done), off = Set(excused)
+        guard var day = days.min(), let last = days.max() else { return 0 }
+        var best = 0, run = 0, misses = 0
+        while day <= last {
+            if days.contains(day) {
+                run += 1; misses = 0; best = max(best, run)
+            } else if !off.contains(day) {
+                misses += 1
+                if misses > grace { run = 0 }
+            }
+            day = adding(1, to: day)
         }
         return best
     }

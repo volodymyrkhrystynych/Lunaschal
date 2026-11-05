@@ -214,15 +214,13 @@ def test_build_prompt_is_pure_and_mentions_data(client):
 
 
 def test_goals_flow_into_context_and_prompt(client):
-    db = connection.get_db()
-    db.execute(
-        'UPDATE settings SET briefing_goals=? WHERE id=1',
-        ('Ship the overnight agent; get back into running.',),
-    )
-    db.commit()
+    from backend.goals import service as goals
+    goals.set_overarching('Ship the overnight agent; get back into running.')
+    goals.create({'horizon': 'week', 'title': 'Run three times', 'startDate': TODAY})
 
     ctx = briefing_mod.gather_briefing_context(NOW)
-    assert ctx['goals'] == 'Ship the overnight agent; get back into running.'
+    assert 'get back into running' in ctx['goals']
+    assert 'Run three times' in ctx['goals']
 
     prompt = briefing_mod.build_briefing_prompt(ctx)
     assert 'get back into running' in prompt

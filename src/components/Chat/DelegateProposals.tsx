@@ -31,6 +31,10 @@ function resolvedLabel(p: DelegateProposalRecord): string {
       return 'Linked to your recipe';
     case 'todo':
       return `Added to today: ${str(p.data, 'title')}`;
+    case 'habit':
+      return `Added habit: ${str(p.data, 'title')}`;
+    case 'habit_plan':
+      return `Cue set for ${str(p.data, 'habitTitle')}: ${str(p.data, 'cue')}`;
     case 'flashcards':
       return `Queued ${p.result?.count ?? 0} card${p.result?.count === 1 ? '' : 's'} for review in Learning`;
     case 'writing_note':
@@ -55,6 +59,8 @@ const HEADLINE: Record<string, string> = {
   recipe_link: 'Link this meal to that recipe?',
   flashcards: 'Generate flashcards?',
   todo: 'Keep this for today?',
+  habit_plan: 'Make this the plan for that habit?',
+  habit: 'Start a new habit?',
   writing_note: 'Add to the notes?',
   writing_note_update: 'Update this note?',
   screenshot_titles: 'Rename these screenshots?',
@@ -68,6 +74,8 @@ const ACCEPT_LABEL: Record<string, string> = {
   recipe_link: 'Link',
   flashcards: 'Queue Cards',
   todo: 'Add to today',
+  habit_plan: 'Use as cue',
+  habit: 'Add habit',
   writing_note: 'Add Note',
   writing_note_update: 'Update Note',
   screenshot_titles: 'Rename',
@@ -274,6 +282,48 @@ function ProposalForm({
         </div>
       );
     }
+
+    // A habit the morning briefing suggests, with an if-then cue.
+    case 'habit':
+      return (
+        <div className="space-y-1.5">
+          <input
+            aria-label="Habit"
+            value={str(data, 'title')}
+            onChange={e => set({ title: e.target.value })}
+            className={`${fieldClass} w-full`}
+          />
+          <input
+            aria-label="Cue"
+            value={str(data, 'cue')}
+            onChange={e => set({ cue: e.target.value })}
+            className={`${fieldClass} w-full`}
+          />
+          {str(data, 'why') && (
+            <p className="text-xs text-[var(--color-text-muted)]">
+              {str(data, 'why')}
+            </p>
+          )}
+        </div>
+      );
+
+    // An if-then plan for an obstacle that keeps coming back; it becomes
+    // the habit's cue.
+    case 'habit_plan':
+      return (
+        <div className="space-y-1.5">
+          <p className="text-xs text-[var(--color-text-muted)]">
+            {str(data, 'habitTitle')} — keeps getting in the way:{' '}
+            {str(data, 'obstacle')}
+          </p>
+          <input
+            aria-label="Cue"
+            value={str(data, 'cue')}
+            onChange={e => set({ cue: e.target.value })}
+            className={`${fieldClass} w-full`}
+          />
+        </div>
+      );
 
     // Yesterday's unfinished bar item, carried over by the morning briefing.
     case 'todo':

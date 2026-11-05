@@ -42,6 +42,11 @@ final class TodoModel: ObservableObject {
     /// What the tab shows.
     var lists: TodoLists { server.applying(sent.map(\.op) + capture.todoQueue, today: DayKey.of(Date())) }
     var tasks: [DailyTask] { lists.tasks }
+    var goals: CurrentGoals? { lists.goals }
+    /// Yesterday's review, once it has been written.
+    var yesterday: DayReview? {
+        lists.review.flatMap { $0.day == HabitStreaks.adding(-1, to: DayKey.of(Date())) ? $0 : nil }
+    }
     var todos: [TodoItem] { lists.todos }
     var waiting: Int { capture.todoQueue.count }
     var refusals: [String] { capture.todoRefusals }
@@ -74,8 +79,13 @@ final class TodoModel: ObservableObject {
         do {
             async let fetchedTasks = api.dailyTasks()
             async let fetchedTodos = api.todos()
+            // A server from before goals answers 404; the lists still load.
+            async let fetchedGoals = try? api.currentGoals()
+            async let fetchedReviews = try? api.coachReviews(days: 1)
             let (tasks, todos) = try await (fetchedTasks, fetchedTodos)
-            server = TodoLists(tasks: tasks, todos: todos)
+            let yesterday = HabitStreaks.adding(-1, to: DayKey.of(Date()))
+            server = TodoLists(tasks: tasks, todos: todos, goals: await fetchedGoals ?? server.goals,
+                               review: await fetchedReviews?.review(of: yesterday))
             fetchedAt = started
             sent.removeAll { $0.at < started }
             loadProblem = nil
@@ -119,6 +129,14 @@ final class TodoModel: ObservableObject {
         queue(.renameTask(id: task.id, title: trimmed))
     }
 
+    /// "After coffee": the if-then half of the habit. Empty clears it.
+    func setCue(_ task: DailyTask, _ cue: String) {
+        let trimmed = cue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = trimmed.isEmpty ? nil : trimmed
+        guard value != task.cue else { return }
+        queue(.setTaskCue(id: task.id, cue: value))
+    }
+
     func moveTasks(from source: IndexSet, to destination: Int) {
         var order = tasks
         order.move(fromOffsets: source, toOffset: destination)
@@ -126,6 +144,36 @@ final class TodoModel: ObservableObject {
     }
 
     func delete(_ task: DailyTask) { queue(.deleteTask(id: task.id)) }
+
+    // MARK: Goals
+
+    /// Replacing the overarching goal leaves a journal entry on the server
+    /// quoting the old one, so an unchanged save sends nothing.
+    func setOverarching(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != goals?.overarching?.text else { return }
+        queue(.setOverarching(id: ULID.make(), text: trimmed))
+    }
+
+    func addGoal(_ horizon: GoalHorizon, title: String, details: String? = nil) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        queue(.createGoal(id: ULID.make(), horizon: horizon, title: trimmed, details: Self.clean(details)))
+    }
+
+    func edit(_ goal: Goal, title: String, details: String?) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notes = Self.clean(details)
+        guard !trimmed.isEmpty, trimmed != goal.title || notes != goal.details else { return }
+        queue(.editGoal(id: goal.id, title: trimmed, details: notes))
+    }
+
+    func end(_ goal: Goal) { queue(.setGoalStatus(id: goal.id, action: "end")) }
+
+    private static func clean(_ text: String?) -> String? {
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     // MARK: To-dos
 

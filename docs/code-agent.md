@@ -143,8 +143,8 @@ A one-off check, also on the server: `python -m backend.codeagent.run --repo lun
    use, or build it by hand: `docker build -t lunaschal-agent -f agent/Dockerfile .`
 4. **Push notifications**: the App ID has Push enabled and the app is signed with
    `aps-environment: production`. What remains is the server's side: create an APNs auth key (team
-   4AG98Q33RQ) and set `APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID` (`4AG98Q33RQ`) and `APNS_TOPIC`
-   (`com.lunaschal.mobile`) in the server's environment. Until then the phone registers its token, the
+   4AG98Q33RQ) and set `APNS_KEY_PATH` and `APNS_KEY_ID` in the server's environment (`APNS_TEAM_ID` defaults to
+   `4AG98Q33RQ`, `APNS_TOPIC` to `com.lunaschal.mobile`). Until then the phone registers its token, the
    server sends nothing, and the Code tab works without push.
 
 ## Files

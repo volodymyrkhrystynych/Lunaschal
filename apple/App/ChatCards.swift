@@ -114,6 +114,19 @@ private struct ProposalForm: View {
             TextField("Tags (comma, separated)", text: tags).textFieldStyle(.roundedBorder).font(.caption)
         case "recipe_link":
             Text("\(data["dish"]?.text ?? "") → \(data["recipeTitle"]?.text ?? "")").font(.subheadline.weight(.medium))
+        case "habit":
+            // A habit the morning briefing suggests, with an if-then cue.
+            field("Habit", "title")
+            field("Cue", "cue")
+            if let why = data["why"]?.string, !why.isEmpty {
+                Text(why).font(.caption).foregroundStyle(.secondary)
+            }
+        case "habit_plan":
+            // An if-then plan for an obstacle that keeps coming back; it becomes the habit's cue.
+            if let obstacle = data["obstacle"]?.string, !obstacle.isEmpty {
+                Text("Keeps getting in the way: \(obstacle)").font(.caption).foregroundStyle(.secondary)
+            }
+            TextField("Cue", text: text("cue"), axis: .vertical).lineLimit(1...3).textFieldStyle(.roundedBorder)
         case "todo":
             // Yesterday's unfinished bar item, carried over by the morning briefing.
             field("Title", "title")
@@ -456,6 +469,97 @@ private struct PromoteTodo: View {
                 notes = todo.notes ?? ""
                 priority = todo.priority
                 if let iso = todo.due, let date = ISO8601DateFormatter().date(from: iso) { hasDue = true; due = date }
+            }
+        }
+    }
+}
+
+// MARK: Coach
+
+/// Yesterday, item by item, under the briefing's review line. "Explain" starts
+/// a message naming what was missed; the agent records the reason and the
+/// review and streaks are re-scored.
+struct ReviewCard: View {
+    let review: DayReview
+    let explain: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Yesterday").font(.subheadline.bold())
+                if !review.stars.isEmpty { Text(review.stars).foregroundStyle(.orange) }
+                Spacer()
+                Text(review.tally).font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(review.items, id: \.identity) { item in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: Self.symbol(item)).foregroundStyle(Self.tint(item))
+                        .accessibilityLabel(item.status)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.title).font(.subheadline)
+                        if let excuse = item.excuse {
+                            Text(excuse).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            if let reason = review.overrideReason, review.rating != review.computedRating {
+                Text("Adjusted from \(review.computedRating ?? 0)★: \(reason)").font(.caption).foregroundStyle(.secondary)
+            }
+            if review.items.contains(where: { $0.done == false && !$0.excused }) {
+                Button("Explain", systemImage: "text.bubble", action: explain)
+                    .font(.subheadline)
+                    .accessibilityIdentifier("review-explain")
+            }
+        }
+        .padding(12)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityIdentifier("review-card")
+    }
+
+    static func symbol(_ item: DayReview.Item) -> String {
+        switch item.status {
+        case "done": return "checkmark.circle.fill"
+        case "excused": return "moon.circle"
+        case "unknown": return "questionmark.circle"
+        default: return "xmark.circle"
+        }
+    }
+
+    static func tint(_ item: DayReview.Item) -> Color {
+        switch item.status {
+        case "done": return .green
+        case "missed": return .red
+        default: return .secondary
+        }
+    }
+}
+
+/// The evening check-in and a goal period closing: a nudge to answer, and
+/// for a rollover a way to the Todo tab to set the next goals.
+struct CoachCard: View {
+    let message: CoachMessage
+    let reply: (String) -> Void
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        switch message {
+        case let .checkin(_, open):
+            if !open.isEmpty {
+                Button("Tell me about today", systemImage: "text.bubble") {
+                    reply("About today — \(open.map(\.title).joined(separator: ", ")): ")
+                }
+                .font(.subheadline)
+                .accessibilityIdentifier("coach-checkin-reply")
+            }
+        case let .rollover(_, horizons, _):
+            if !horizons.isEmpty {
+                Button("Set \(horizons.map { "this \($0.rawValue)'s" }.joined(separator: " and ")) goals",
+                       systemImage: "scope") {
+                    openURL(TodoWidgetFiles.openURL)
+                }
+                .font(.subheadline)
+                .accessibilityIdentifier("coach-set-goals")
             }
         }
     }

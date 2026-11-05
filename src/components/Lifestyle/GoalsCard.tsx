@@ -1,42 +1,60 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type Goal } from '@/hooks/api';
+import { api, type Goal, type GoalPeriod } from '@/hooks/api';
+import { horizonHeading, streakLine, unsetPrompt } from '@/lib/goals';
 import { CARD } from './card';
 
-const statusLabel: Record<Goal['status'], string> = {
-  active: 'In progress',
-  earned: 'Reward earned',
-  redeemed: 'Reward redeemed',
-  cancelled: 'Cancelled',
-  needs_review: 'Evidence needs review',
-};
+const INPUT =
+  'w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]';
 
-function GoalRow({
+function useInvalidateGoals() {
+  const client = useQueryClient();
+  return () => client.invalidateQueries({ queryKey: ['goals'] });
+}
+
+/** Every change a goal went through is a journal entry; this lists them. */
+function GoalHistory({ goal }: { goal: Goal }) {
+  const [open, setOpen] = useState(false);
+  const { data } = useQuery({
+    queryKey: ['goals', goal.id, 'history'],
+    queryFn: () => api.goals.history(goal.id),
+    enabled: open,
+  });
+  return (
+    <details
+      className="mt-2 text-sm"
+      onToggle={e => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer">History</summary>
+      <ul className="space-y-2 mt-2">
+        {data?.map(entry => (
+          <li key={entry.id}>
+            <span className="text-xs text-[var(--color-text-muted)]">
+              {new Date(entry.createdAt).toLocaleString()}
+            </span>
+            <p className="whitespace-pre-wrap">{entry.content}</p>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function RuleEvidence({
   goal,
   onOpenEntry,
 }: {
   goal: Goal;
   onOpenEntry?: (id: string) => void;
 }) {
-  const client = useQueryClient();
-  const action = useMutation({
-    mutationFn: (kind: 'check' | 'redeem' | 'cancel') =>
-      kind === 'check'
-        ? api.goals.check(goal.id)
-        : api.goals.update(goal.id, kind),
-    onSuccess: () => client.invalidateQueries({ queryKey: ['goals'] }),
-  });
   const unresolved = goal.days.filter(
     day => day.verdict === 'uncertain'
   ).length;
   return (
-    <article className="border-t border-[var(--color-border)] pt-3 mt-3">
-      <h3 className="font-medium">{goal.title}</h3>
+    <>
       <p className="text-sm">{goal.criteria}</p>
-      <p className="text-sm mt-1">
-        {goal.currentStreak}/{goal.targetDays} consecutive days ·{' '}
-        {statusLabel[goal.status]}
-      </p>
-      <p className="text-sm">Prize: {goal.reward}</p>
+      <p className="text-sm mt-1">{streakLine(goal)}</p>
+      {goal.reward && <p className="text-sm">Prize: {goal.reward}</p>}
       <p className="text-xs text-[var(--color-text-muted)]">
         Starting {goal.startDate} · Best streak: {goal.bestStreak} days
         {goal.lastCheckedAt
@@ -52,39 +70,6 @@ function GoalRow({
         <p role="status" className="text-sm">
           The source records no longer verify the earned streak. Review the
           evidence.
-        </p>
-      )}
-      <div className="flex gap-3 mt-2 text-sm">
-        {goal.status !== 'cancelled' && (
-          <button
-            disabled={action.isPending}
-            onClick={() => action.mutate('check')}
-          >
-            {action.isPending && action.variables === 'check'
-              ? 'Checking…'
-              : 'Check now'}
-          </button>
-        )}
-        {goal.status === 'earned' && !goal.needsReview && (
-          <button
-            disabled={action.isPending}
-            onClick={() => action.mutate('redeem')}
-          >
-            Mark prize redeemed
-          </button>
-        )}
-        {goal.status !== 'redeemed' && goal.status !== 'cancelled' && (
-          <button
-            disabled={action.isPending}
-            onClick={() => action.mutate('cancel')}
-          >
-            Cancel goal
-          </button>
-        )}
-      </div>
-      {action.error && (
-        <p role="alert" className="text-sm">
-          {action.error.message}
         </p>
       )}
       {goal.days.length > 0 && (
@@ -122,7 +107,164 @@ function GoalRow({
           </ul>
         </details>
       )}
+    </>
+  );
+}
+
+function GoalRow({
+  goal,
+  onOpenEntry,
+}: {
+  goal: Goal;
+  onOpenEntry?: (id: string) => void;
+}) {
+  const invalidate = useInvalidateGoals();
+  const action = useMutation({
+    mutationFn: (kind: 'check' | 'redeem' | 'end') =>
+      kind === 'check'
+        ? api.goals.check(goal.id)
+        : api.goals.update(goal.id, kind),
+    onSuccess: invalidate,
+  });
+  return (
+    <article className="border-t border-[var(--color-border)] pt-3 mt-3">
+      <h4 className="font-medium">{goal.title}</h4>
+      {goal.details && (
+        <p className="text-sm whitespace-pre-wrap">{goal.details}</p>
+      )}
+      {goal.overdue && (
+        <p className="text-xs text-[var(--color-text-muted)]">
+          {goal.periodLabel} is over — the review will grade it.
+        </p>
+      )}
+      {goal.hasRule && <RuleEvidence goal={goal} onOpenEntry={onOpenEntry} />}
+      <div className="flex gap-3 mt-2 text-sm">
+        {goal.hasRule && (
+          <button
+            disabled={action.isPending}
+            onClick={() => action.mutate('check')}
+          >
+            {action.isPending && action.variables === 'check'
+              ? 'Checking…'
+              : 'Check now'}
+          </button>
+        )}
+        {goal.status === 'earned' && !goal.needsReview && (
+          <button
+            disabled={action.isPending}
+            onClick={() => action.mutate('redeem')}
+          >
+            Mark prize redeemed
+          </button>
+        )}
+        <button
+          disabled={action.isPending}
+          onClick={() => action.mutate('end')}
+        >
+          End goal
+        </button>
+      </div>
+      {action.error && (
+        <p role="alert" className="text-sm">
+          {action.error.message}
+        </p>
+      )}
+      <GoalHistory goal={goal} />
     </article>
+  );
+}
+
+function AddGoal({ period }: { period: GoalPeriod }) {
+  const invalidate = useInvalidateGoals();
+  const [title, setTitle] = useState('');
+  const create = useMutation({
+    mutationFn: () =>
+      api.goals.create({ horizon: period.horizon, title: title.trim() }),
+    onSuccess: () => {
+      setTitle('');
+      invalidate();
+    },
+  });
+  return (
+    <form
+      className="flex gap-2 mt-2"
+      onSubmit={e => {
+        e.preventDefault();
+        if (title.trim()) create.mutate();
+      }}
+    >
+      <input
+        aria-label={`New goal for ${horizonHeading(period.horizon).toLowerCase()}`}
+        value={title}
+        onChange={e => setTitle(e.target.value)}
+        placeholder="Add a goal…"
+        className={INPUT}
+      />
+      <button type="submit" disabled={!title.trim() || create.isPending}>
+        Add
+      </button>
+    </form>
+  );
+}
+
+function Overarching({ goal }: { goal: Goal | null }) {
+  const invalidate = useInvalidateGoals();
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (text: string) => api.goals.setOverarching(text),
+    onSuccess: () => {
+      setDraft(null);
+      invalidate();
+    },
+  });
+  const text = goal?.details ?? goal?.title ?? '';
+  if (draft === null) {
+    return (
+      <div>
+        {text ? (
+          <p className="whitespace-pre-wrap">{text}</p>
+        ) : (
+          <p className="text-sm text-[var(--color-text-muted)]">
+            No overarching goal yet.
+          </p>
+        )}
+        <button className="text-sm mt-1" onClick={() => setDraft(text)}>
+          {text ? 'Change' : 'Set overarching goal'}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <form
+      onSubmit={e => {
+        e.preventDefault();
+        if (draft.trim()) save.mutate(draft.trim());
+      }}
+    >
+      <textarea
+        aria-label="Overarching goal"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        rows={4}
+        className={`${INPUT} resize-y`}
+      />
+      <p className="text-xs text-[var(--color-text-muted)]">
+        Saving writes a journal entry, so the old goal stays on record.
+      </p>
+      <div className="flex gap-3 mt-1 text-sm">
+        <button type="submit" disabled={!draft.trim() || save.isPending}>
+          Save
+        </button>
+        <button type="button" onClick={() => setDraft(null)}>
+          Cancel
+        </button>
+      </div>
+      {save.error && (
+        <p role="alert" className="text-sm">
+          {save.error.message}
+        </p>
+      )}
+    </form>
   );
 }
 
@@ -132,27 +274,47 @@ export function GoalsCard({
   onOpenEntry?: (id: string) => void;
 }) {
   const { data, error, isLoading } = useQuery({
-    queryKey: ['goals'],
-    queryFn: api.goals.list,
+    queryKey: ['goals', 'current'],
+    queryFn: api.goals.current,
     refetchInterval: 15000,
   });
   return (
-    <section className={CARD} aria-label="Goals and rewards">
-      <h2 className="text-sm font-semibold">Goals &amp; Rewards</h2>
-      <p className="text-xs text-[var(--color-text-muted)]">
-        Today counts as soon as it is logged. Days roll over at 4am.
-      </p>
+    <section className={CARD} aria-label="Goals">
+      <h2 className="text-sm font-semibold">Goals</h2>
       {isLoading && <p>Loading goals…</p>}
       {error && <p role="alert">Could not load goals: {error.message}</p>}
-      {data?.length === 0 && (
-        <p className="mt-2 text-sm">
-          Ask chat to track a daily goal and prize, such as “Pushups for seven
-          days earns a theater trip.”
-        </p>
+      {data && (
+        <>
+          <Overarching goal={data.overarching} />
+          {data.horizons.map(period => (
+            <section
+              key={period.horizon}
+              aria-label={horizonHeading(period.horizon)}
+              className="mt-4"
+            >
+              <h3 className="text-sm font-semibold">
+                {horizonHeading(period.horizon)}{' '}
+                <span className="font-normal text-[var(--color-text-muted)]">
+                  · {period.label}
+                </span>
+              </h3>
+              {period.unset && (
+                <p className="text-sm text-[var(--color-text-muted)]">
+                  {unsetPrompt(period)}
+                </p>
+              )}
+              {period.goals.map(goal => (
+                <GoalRow key={goal.id} goal={goal} onOpenEntry={onOpenEntry} />
+              ))}
+              <AddGoal period={period} />
+            </section>
+          ))}
+          <p className="text-xs text-[var(--color-text-muted)] mt-3">
+            Ask chat for a daily streak with a prize, such as “Pushups every day
+            this week earns a theater trip.” Days roll over at 4am.
+          </p>
+        </>
       )}
-      {data?.map(goal => (
-        <GoalRow key={goal.id} goal={goal} onOpenEntry={onOpenEntry} />
-      ))}
     </section>
   );
 }

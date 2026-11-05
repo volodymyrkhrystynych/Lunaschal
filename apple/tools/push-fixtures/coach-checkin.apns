@@ -1,0 +1,6 @@
+{
+  "Simulator Target Bundle": "com.lunaschal.mobile",
+  "aps": {"alert": {"title": "Evening check-in", "body": "Still open: Stretch, Weigh-in. How did today go?"},
+          "sound": "default", "category": "COACH_CHECKIN", "thread-id": "coach", "interruption-level": "active"},
+  "coach": {"kind": "checkin", "day": "2026-11-03", "messageId": "01FIXTURECHECKIN000000000", "conversationId": "01FIXTURECONV0000000000000"}
+}

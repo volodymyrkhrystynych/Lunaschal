@@ -823,7 +823,9 @@ export interface DelegateProposalRecord {
     | 'writing_note'
     | 'writing_note_update'
     // Names for screenshot runs (backend/journal/screenshot_titles.py).
-    | 'screenshot_titles';
+    | 'screenshot_titles'
+    | 'habit_plan'
+    | 'habit';
   data: Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
   resolvedAt?: number;
@@ -957,7 +959,6 @@ export interface AppSettings {
   briefingEnabled: boolean;
   briefingHour: number;
   briefingModel: string | null;
-  briefingGoals: string;
   briefingThinking: boolean;
   briefingMaxTokens: number;
   /** '' | 'brave' | 'searxng' — empty means the web-search chat tab
@@ -1681,6 +1682,13 @@ export interface DailyTask {
   longestStreak?: number;
   /** Ticked 4am days in the last twelve weeks, oldest first. */
   history?: string[];
+  /** Days the user said were out of their hands: they neither count toward
+   *  the streak nor break it. */
+  excused?: string[];
+  /** Yesterday was missed, so missing today too ends the streak. */
+  atRisk?: boolean;
+  /** The if-then half: "after coffee" for "weigh in". */
+  cue?: string | null;
 }
 
 export type TaskEventKind =
@@ -3363,14 +3371,28 @@ export interface DistanceAnchor {
   longitude: number;
 }
 
+export type GoalHorizon = 'overarching' | 'year' | 'quarter' | 'month' | 'week';
+
 export interface Goal {
   id: string;
+  horizon: GoalHorizon;
   title: string;
-  criteria: string;
-  reward: string;
+  details: string | null;
+  // A daily rule and its prize are optional; plain goals have neither.
+  criteria: string | null;
+  reward: string | null;
+  hasRule: boolean;
   startDate: string;
-  targetDays: number;
-  status: 'active' | 'earned' | 'redeemed' | 'cancelled' | 'needs_review';
+  targetDays: number | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  periodLabel: string;
+  overdue: boolean;
+  status:
+    'active' | 'earned' | 'redeemed' | 'cancelled' | 'needs_review' | 'ended';
+  rating: number | null;
+  review: string | null;
+  endedAt: string | null;
   earnedAt: string | null;
   redeemedAt: string | null;
   lastCheckedAt: string | null;
@@ -3385,12 +3407,92 @@ export interface Goal {
   }[];
 }
 
+export interface GoalPeriod {
+  horizon: Exclude<GoalHorizon, 'overarching'>;
+  label: string;
+  periodStart: string;
+  periodEnd: string;
+  goals: Goal[];
+  unset: boolean;
+}
+
+export interface CurrentGoals {
+  today: string;
+  overarching: Goal | null;
+  horizons: GoalPeriod[];
+}
+
+export interface GoalHistoryEntry {
+  id: string;
+  content: string;
+  rawContent: string | null;
+  createdAt: string;
+}
+
+export interface CoachSettings {
+  enabled: boolean;
+  checkinEnabled: boolean;
+  checkinHour: number;
+  quietStart: number;
+  quietEnd: number;
+  dailyCap: number;
+  noSendRate: number;
+  behaviors: { weight: boolean; calories: boolean; habits: boolean };
+}
+
+export interface CoachStat {
+  behavior: string;
+  label: string;
+  sent: number;
+  held: number;
+  skipped: number;
+  doneWhenSent: number | null;
+  doneWhenHeld: number | null;
+  arms: Record<string, { mean: number; n: number }>;
+  slots: Record<string, { mean: number; n: number }>;
+}
+
+export interface PushStatus {
+  configured: boolean;
+  devices: {
+    id: string;
+    token: string;
+    environment: 'sandbox' | 'production';
+    appVersion: string | null;
+    enabled: number;
+    lastError: string | null;
+    lastSeenAt: string | null;
+  }[];
+}
+
 export const api = {
+  coach: {
+    settings: () => get<CoachSettings>('/api/coach/settings'),
+    updateSettings: (changes: Partial<CoachSettings>) =>
+      patch<CoachSettings>('/api/coach/settings', changes),
+    stats: () => get<CoachStat[]>('/api/coach/stats'),
+    pushStatus: () => get<PushStatus>('/api/push/status'),
+    pushTest: () =>
+      post<{ pushed: number; errors: string[] }>('/api/push/test', {}),
+  },
   goals: {
     list: () => get<Goal[]>('/api/goals'),
+    current: () => get<CurrentGoals>('/api/goals/current'),
+    create: (goal: {
+      id?: string;
+      horizon: GoalPeriod['horizon'];
+      title: string;
+      details?: string;
+    }) => post<Goal>('/api/goals', goal),
+    edit: (id: string, changes: { title?: string; details?: string | null }) =>
+      patch<Goal>(`/api/goals/${encodeURIComponent(id)}`, changes),
+    setOverarching: (text: string) =>
+      put<Goal>('/api/goals/overarching', { text }),
+    history: (id: string) =>
+      get<GoalHistoryEntry[]>(`/api/goals/${encodeURIComponent(id)}/history`),
     check: (id: string) =>
       post<Goal>(`/api/goals/${encodeURIComponent(id)}/check`, {}),
-    update: (id: string, action: 'cancel' | 'redeem') =>
+    update: (id: string, action: 'cancel' | 'redeem' | 'end') =>
       post<Goal>(`/api/goals/${encodeURIComponent(id)}/${action}`, {}),
   },
   auth: {
@@ -5173,6 +5275,8 @@ export const api = {
     create: (title: string) => post<{ id: string }>('/api/tasks', { title }),
     update: (id: string, title: string) =>
       patch<{ success: boolean }>(`/api/tasks/${id}`, { title }),
+    setCue: (id: string, cue: string) =>
+      patch<{ success: boolean }>(`/api/tasks/${id}`, { cue }),
     reorder: (order: string[]) =>
       post<{ success: boolean }>('/api/tasks/reorder', { order }),
     remove: (id: string) => del<{ success: boolean }>(`/api/tasks/${id}`),

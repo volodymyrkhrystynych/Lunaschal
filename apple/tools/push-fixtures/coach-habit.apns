@@ -1,0 +1,6 @@
+{
+  "Simulator Target Bundle": "com.lunaschal.mobile",
+  "aps": {"alert": {"title": "Stretch", "body": "After brushing your teeth — two minutes keeps the streak."},
+          "sound": "default", "category": "COACH_HABIT", "thread-id": "coach", "interruption-level": "active"},
+  "coach": {"kind": "habit", "day": "2026-11-03", "habitId": "01FIXTUREHABIT00000000000", "messageId": "01FIXTUREHABITMSG00000000"}
+}

@@ -1575,7 +1575,7 @@ def seed_lifestyle(db):
     # something to show: an unbroken run, today still open after one, a gap.
     habits = [
         ('Read 20 minutes', [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 15]),
-        ('Stretch', [1, 2, 3, 7, 8]),
+        ('Stretch', [1, 2, 3, 7, 8]),  # its excused days and cue: seed_coach
         ('Drink water', [0, 2, 4, 5, 6, 12, 13, 14, 15, 16, 17, 18]),
     ]
     for i, (title, days_ago) in enumerate(habits):
@@ -2518,11 +2518,6 @@ def seed_code_agent(db):
          head_sha='7' * 40, finished_at=ts(5), test_exit=0,
          pr_url='https://github.com/example/demo-app/pull/12')
 
-    # A device token that is obviously not one: the push sender would get a
-    # 400 BadDeviceToken from Apple and prune it.
-    db.execute('INSERT INTO push_devices (id, token, environment, platform, created_at, '
-               'last_seen_at) VALUES (?,?,?,?,?,?)',
-               (new_id(), 'fa' * 32, 'sandbox', 'ios', ts(3), ts(0)))
 
 
 def seed_infra(db):
@@ -2663,15 +2658,114 @@ def seed_infra(db):
 
 
 def seed_goals(db):
-    goal_id = new_id()
+    """One overarching goal, goals for this week/month/quarter/year (one with a
+    daily rule and reward), a graded goal from last week, and the journal entry
+    each one left behind — the entry is a goal's only history."""
+    from backend.goals.periods import label, period_bounds
+
     now = ts(0)
-    db.execute('INSERT INTO goals (id,title,criteria,reward,start_date,target_days,created_at,updated_at) '
-               'VALUES (?,?,?,?,?,?,?,?)',
-               (goal_id, 'A week of reading', 'Read for at least 20 minutes today.',
-                'A trip to the theater', today_key(), 7, now, now))
+    today = today_key()
+
+    def entry(goal_id, text, created_at):
+        db.execute('INSERT INTO journal_entries (id,content,raw_content,goal_id,created_at,updated_at) '
+                   'VALUES (?,?,?,?,?,?)', (new_id(), text, text, goal_id, created_at, created_at))
+
+    overarching = ('Get strong and steady again: sleep before midnight, lift three times a week, '
+                   'and finish the projects I keep restarting.')
+    goal_id = new_id()
+    db.execute("INSERT INTO goals (id,horizon,title,details,start_date,created_at,updated_at) "
+               "VALUES (?,'overarching',?,?,?,?,?)",
+               (goal_id, overarching.split(':')[0], overarching, today_key(30), ts(30), ts(30)))
+    entry(goal_id, f'New overarching goal:\n\n{overarching}', ts(30))
+
+    week_start, week_end = period_bounds('week', today)
+    goal_id = new_id()
+    db.execute('INSERT INTO goals (id,horizon,title,criteria,reward,start_date,target_days,'
+               'period_start,period_end,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+               (goal_id, 'week', 'A week of reading', 'Read for at least 20 minutes today.',
+                'A trip to the theater', today, 7, week_start, max(week_end, today_key(-6)), now, now))
     db.execute('INSERT INTO goal_days (id,goal_id,date,fingerprint,verdict,evidence,checked_at) '
                'VALUES (?,?,?,?,?,?,?)',
-               (new_id(), goal_id, today_key(), 'demo', 'not_met', '[]', now))
+               (new_id(), goal_id, today, 'demo', 'not_met', '[]', now))
+    entry(goal_id, f"New goal for the {label('week', week_start).lower()}: A week of reading\n\n"
+                   'Daily rule: Read for at least 20 minutes today. (7 days in a row) — reward: '
+                   'A trip to the theater.', now)
+
+    for horizon, title, details in (
+        ('month', 'Cook at home four nights a week', None),
+        ('quarter', 'Ship the agent coach', 'Goals, the daily review, then reminders that learn.'),
+        ('year', 'Run a 10k', 'Under an hour, by the autumn race.'),
+    ):
+        start, end = period_bounds(horizon, today)
+        goal_id = new_id()
+        db.execute('INSERT INTO goals (id,horizon,title,details,start_date,period_start,period_end,'
+                   'created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+                   (goal_id, horizon, title, details, start, start, end, ts(3), ts(3)))
+        entry(goal_id, f"New goal for {label(horizon, start)}: {title}" + (f'\n\n{details}' if details else ''), ts(3))
+
+    last_start, last_end = period_bounds('week', today_key(7))
+    goal_id = new_id()
+    db.execute("INSERT INTO goals (id,horizon,title,start_date,period_start,period_end,status,rating,"
+               "review,ended_at,created_at,updated_at) VALUES (?,'week',?,?,?,?,'ended',4,?,?,?,?)",
+               (goal_id, 'Clear the inbox', last_start, last_start, last_end,
+                'Down to six emails by Friday; the last few needed replies that took real thought.',
+                ts(6), ts(10), ts(6)))
+    entry(goal_id, f"New goal for the {label('week', last_start).lower()}: Clear the inbox", ts(10))
+
+
+def seed_coach(db):
+    """Yesterday's final review and today's draft, a habit cue, and three
+    excuses naming the same obstacle — so the review shows an excused item
+    and the recurring-obstacle path has something to find."""
+    from backend.coach import review
+
+    stretch = db.execute("SELECT id FROM daily_tasks WHERE title='Stretch'").fetchone()['id']
+    db.execute("UPDATE daily_tasks SET cue='after brushing my teeth' WHERE id=?", (stretch,))
+    for days_ago, reason in ((5, 'Late meeting ran over'), (4, 'Ran late, skipped it'),
+                             (0, 'Late meetings again')):
+        db.execute('INSERT INTO day_excuses (id,day,target_kind,target_id,target_title,reason,kind,obstacle,'
+                   'created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+                   (new_id(), today_key(days_ago), 'habit', stretch, 'Stretch', reason,
+                    'internal' if days_ago == 4 else 'external', 'late meetings', ts(days_ago)))
+    db.execute('INSERT INTO day_excuses (id,day,target_kind,target_id,target_title,reason,kind,created_at) '
+               'VALUES (?,?,?,?,?,?,?,?)',
+               (new_id(), today_key(1), 'weight', None, 'Weigh-in', 'Travelling, no scale', 'external', ts(1)))
+    db.commit()
+    review.draft(today_key(1))
+    db.execute("UPDATE day_reviews SET status='final', finalized_at=?, summary=? WHERE day=?",
+               (ts(0), 'A good day: reading and water both done, and the weigh-in was fairly skipped '
+                'while travelling. Try stretching right after brushing your teeth tonight.', today_key(1)))
+    review.draft(today_key())
+    # Three weeks of reminder decisions — sent in each framing, held back as
+    # the control, skipped once logged — so Settings → Coach has stats to show.
+    import random
+    from datetime import date, timedelta
+    from backend.coach.policy import slot_time
+    rng = random.Random(42)
+    arms = ['plain', 'goal', 'identity', 'streak', 'tiny']
+    for days_ago in range(1, 22):
+        day = today_key(days_ago)
+        status = 'held' if days_ago % 4 == 0 else 'skipped_logged' if days_ago % 7 == 3 else 'sent'
+        arm = None if status != 'sent' else arms[days_ago % len(arms)]
+        reward = None if status.startswith('skipped') else float(rng.random() < (0.75 if arm == 'identity' else 0.45))
+        planned = slot_time(day, '09:00')
+        db.execute('INSERT INTO coach_decisions (id,behavior,day,slot,planned_for,status,arm,mode,context,title,body,'
+                   'decided_at,reward,resolved_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                   (new_id(), 'weight', day, '09:00', planned, status,
+                    arm if status == 'sent' else ('none' if status == 'held' else None),
+                    'policy' if status == 'sent' else ('control' if status == 'held' else None),
+                    '{"hour": 9, "weekend": false, "place": "home"}',
+                    'Weigh-in' if status == 'sent' else None,
+                    'Log your weight?' if status == 'sent' else None,
+                    planned, reward, planned + 7200 if reward is not None else None, planned - 3600))
+    planned = slot_time(today_key(), '19:30')
+    db.execute("INSERT INTO coach_decisions (id,behavior,day,slot,planned_for,created_at) "
+               "VALUES (?,'calories',?,'19:30',?,?)", (new_id(), today_key(), planned, ts(0)))
+    # A registered phone, disabled and with an obviously fake token: the demo
+    # must never push anywhere, and this script ships in a public repo.
+    db.execute('INSERT INTO push_devices (id,token,environment,app_version,enabled,coach,last_error,last_seen_at,'
+               "created_at,updated_at) VALUES (?,?,'sandbox','demo',0,1,'Demo device — never contacted',?,?,?)",
+               (new_id(), '00' * 32, ts(0), ts(0), ts(0)))
 
 
 def main() -> None:
@@ -2710,6 +2804,7 @@ def main() -> None:
     seed_practice(db)
     seed_notes(db)
     seed_goals(db)
+    seed_coach(db)
     seed_notebook(db, journal_ids)
     # After seed_notebook: a study source is bound to a note under the same
     # NOTEBOOK_ROOT, so it writes into the tree that one has just created.

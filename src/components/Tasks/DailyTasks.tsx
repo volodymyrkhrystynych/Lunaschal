@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useDraftState } from '@/hooks/useDraftState';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, DailyTask } from '../../hooks/api';
@@ -191,6 +192,7 @@ export function DailyTasks({
                     : 'text-[var(--color-text)]'
                 }
               />
+              <HabitCue task={task} />
             </div>
 
             <HabitWeek task={task} today={today} />
@@ -275,6 +277,46 @@ export function DailyTasks({
 }
 
 /** The last seven days as dots, and the running streak. */
+/** The if-then half of a habit — "after coffee" — shown under its title and
+ *  edited in place. Saved on blur; an empty cue clears it. */
+function HabitCue({ task }: { task: DailyTask }) {
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (cue: string) => api.tasks.setCue(task.id, cue),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tasks'] }),
+  });
+  if (draft === null) {
+    return (
+      <button
+        type="button"
+        onClick={() => setDraft(task.cue ?? '')}
+        className="block text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+      >
+        {task.cue ? `↳ ${task.cue}` : '+ cue'}
+      </button>
+    );
+  }
+  return (
+    <input
+      autoFocus
+      aria-label={`Cue for ${task.title}`}
+      value={draft}
+      placeholder="After my morning coffee"
+      onChange={e => setDraft(e.target.value)}
+      onBlur={() => {
+        if (draft.trim() !== (task.cue ?? '')) save.mutate(draft.trim());
+        setDraft(null);
+      }}
+      onKeyDown={e => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') setDraft(null);
+      }}
+      className="mt-0.5 w-full bg-transparent border-b border-white/20 text-xs outline-none"
+    />
+  );
+}
+
 function HabitWeek({ task, today }: { task: DailyTask; today: string }) {
   const streak = streakLabel(task.streak);
   const best = task.longestStreak ?? 0;
@@ -284,19 +326,40 @@ function HabitWeek({ task, today }: { task: DailyTask; today: string }) {
       title={best > 0 ? `Longest streak: ${best} days` : undefined}
     >
       <div className="flex gap-0.5" aria-label="Last seven days">
-        {recentDays(task.history, today).map(({ day, done }) => (
-          <span
-            key={day}
-            title={day}
-            data-testid={done ? 'habit-day-done' : 'habit-day'}
-            className={`w-1.5 h-1.5 rounded-full ${
-              done ? 'bg-[var(--color-primary)]' : 'bg-white/15'
-            }`}
-          />
-        ))}
+        {recentDays(task.history, today, 7, task.excused).map(
+          ({ day, done, excused }) => (
+            <span
+              key={day}
+              title={excused ? `${day} — excused` : day}
+              data-testid={
+                done
+                  ? 'habit-day-done'
+                  : excused
+                    ? 'habit-day-excused'
+                    : 'habit-day'
+              }
+              className={`w-1.5 h-1.5 rounded-full ${
+                done
+                  ? 'bg-[var(--color-primary)]'
+                  : excused
+                    ? 'border border-white/40'
+                    : 'bg-white/15'
+              }`}
+            />
+          )
+        )}
       </div>
       {streak && (
-        <span className="text-xs tabular-nums text-[var(--color-text-muted)] w-9 text-right">
+        <span
+          className={`text-xs tabular-nums w-9 text-right ${
+            task.atRisk ? 'text-red-400' : 'text-[var(--color-text-muted)]'
+          }`}
+          title={
+            task.atRisk
+              ? 'Missed yesterday — today keeps the streak alive'
+              : undefined
+          }
+        >
           {streak}
         </span>
       )}

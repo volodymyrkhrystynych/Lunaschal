@@ -360,6 +360,41 @@ what each device can currently do and which work remains device-only.
   is signed for push; delivery needs the server's APNs key (docs/code-agent.md).
   Passed in simulator with the `-codeFixture` demo data; notifications and a
   real agent are not yet verified.
+- Chat shows the coach's cards: yesterday's review under the morning briefing
+  (stars, each habit / weigh-in / calorie log / goal as done, missed or
+  excused, and Explain, which starts a message naming what was missed so the
+  agent can record the reason), the evening check-in's "Tell me about today",
+  and a goal period's close with a button to the Todo tab to set the next
+  ones. A review's if-then plan for a recurring obstacle is an editable
+  `habit_plan` card that sets the habit's cue. Parsing is unit tested
+  (`CoachReviewTests`); the cards build in the simulator.
+- Habits follow "never miss twice": one missed day is grace and two end the
+  streak; a day excused in chat is a ring in the week dots and neither counts
+  nor breaks the run; a streak whose grace day is spent shows a hollow red
+  flame. Each habit can carry a cue (long-press → Add a cue), and the Habits
+  header shows yesterday's rating. Core's `HabitStreaks` runs the backend's
+  own fixture (`backend/tests/fixtures/habit_streaks.json`).
+- Coach reminders (Settings → Coach, off by default): turning them on asks
+  for notification permission and registers the phone with the server
+  (`CoachReminders.swift`). Check-ins, goal rollovers and the learning
+  reminders arrive as notifications with lock-screen buttons — Done ticks the
+  habit for the day the reminder was about, Log weight / Log calories take a
+  typed value, Reply sends a message the agent answers with the app closed,
+  Later re-shows it in an hour from the phone itself. "Check-ins and
+  reminders" holds the server's switches and what reminders have changed so
+  far. Routing is unit tested (`CoachNotificationTests`) and the app builds;
+  APNs cannot reach a simulator, so delivery is unverified until a TestFlight
+  build after the signing steps in SIGNING.md. Payloads for `xcrun simctl
+  push` are in `tools/push-fixtures/`.
+- Todo opens with Goals: the overarching goal (a block of text) and
+  collapsible This week / month / quarter / year sections, each listing its
+  open goals (a goal with a daily rule shows its streak and prize) or "Not
+  set". A goal opens in an editor; the overarching goal is replaced rather
+  than edited, and every change — add, edit, end — queues in the same outbox
+  as the to-dos and leaves a journal entry on the server, dated when it was
+  made. Daily rules and prizes are set up in Chat. Core logic is unit tested
+  (`GoalsTests`); the screen builds in the simulator but has no UI test yet,
+  since the offline UI tests have no server to load goals from.
 - Todo is the desktop Lifestyle tab's tasks card: up to ten daily habits (tick
   for today, add, rename, reorder and delete under Edit), each showing its
   last seven days as dots and its running streak (Core's `HabitStreaks`, the

@@ -14,14 +14,12 @@ export function BriefingSection() {
     enabled: !!settings?.llamaUrl,
   });
   const [hourInput, setHourInput] = useState('5');
-  const [goalsInput, setGoalsInput] = useState('');
   const [maxTokensInput, setMaxTokensInput] = useState('16384');
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (settings) {
       setHourInput(String(settings.briefingHour ?? 5));
-      setGoalsInput(settings.briefingGoals ?? '');
       setMaxTokensInput(String(settings.briefingMaxTokens ?? 16384));
     }
   }, [settings]);
@@ -40,12 +38,6 @@ export function BriefingSection() {
 
   const saveHour = useMutation({
     mutationFn: (hour: number) => api.settings.updateAI({ briefingHour: hour }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
-  });
-
-  const saveGoals = useMutation({
-    mutationFn: (goals: string) =>
-      api.settings.updateAI({ briefingGoals: goals }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
@@ -216,27 +208,10 @@ export function BriefingSection() {
             <code>llama/presets.ini</code>. Raise <code>ctx-size</code> there
             and restart llama-server if a briefing ever needs a bigger one.
           </p>
-          <div>
-            <label className="text-sm text-[var(--color-text-muted)]">
-              Goals &amp; current focus
-            </label>
-            <textarea
-              value={goalsInput}
-              onChange={e => setGoalsInput(e.target.value)}
-              onBlur={() => {
-                if (goalsInput !== (settings?.briefingGoals ?? '')) {
-                  saveGoals.mutate(goalsInput);
-                }
-              }}
-              rows={5}
-              placeholder="What you're working towards, current projects, what's on your mind…"
-              className="mt-1 w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm resize-y focus:outline-none focus:border-[var(--color-primary)]"
-            />
-            <p className="text-xs text-[var(--color-text-muted)] mt-1">
-              Standing context the secretary reads every night. Saved when you
-              click away.
-            </p>
-          </div>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Goals the briefing reads now live with your habits and to-dos, in
+            Lifestyle → Goals.
+          </p>
         </>
       )}
       <div className="flex items-center gap-3">

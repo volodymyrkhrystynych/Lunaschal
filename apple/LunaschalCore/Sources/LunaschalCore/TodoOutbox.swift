@@ -13,6 +13,8 @@ import Glibc
 public enum TodoChange: Codable, Equatable {
     case addTask(id: String, title: String)
     case renameTask(id: String, title: String)
+    /// "After coffee": when the habit is done. Nil clears it.
+    case setTaskCue(id: String, cue: String?)
     case reorderTasks([String])
     case deleteTask(id: String)
     /// `day` is the 4am day it was ticked on, so a tick sent after the
@@ -23,12 +25,21 @@ public enum TodoChange: Codable, Equatable {
     case setTodo(id: String, done: Bool)
     case moveTodo(id: String, list: String)
     case deleteTodo(id: String)
+    /// A goal for a horizon; `.overarching` replaces the overarching goal.
+    /// The id is minted here, so a replayed create is a no-op on the server.
+    case createGoal(id: String, horizon: GoalHorizon, title: String, details: String?)
+    case editGoal(id: String, title: String, details: String?)
+    case setOverarching(id: String, text: String)
+    /// `end`, `cancel` or `redeem`.
+    case setGoalStatus(id: String, action: String)
 
     /// What a refusal says it was about.
     var subject: String {
         switch self {
         case let .addTask(_, title), let .renameTask(_, title): return "“\(title)”"
         case let .createTodo(draft), let .editTodo(_, draft): return "“\(draft.title)”"
+        case let .createGoal(_, _, title, _), let .editGoal(_, title, _): return "the goal “\(title)”"
+        case .setOverarching: return "the overarching goal"
         case .reorderTasks: return "the new order"
         default: return "a change"
         }
@@ -51,13 +62,19 @@ public struct TodoOp: Codable, Equatable, Identifiable {
     }
 }
 
-/// The daily tasks and to-dos as the Todo tab shows them.
+/// The goals, daily tasks and to-dos as the Today tab shows them.
 public struct TodoLists: Codable, Equatable {
     public var tasks: [DailyTask]
     public var todos: [TodoItem]
+    /// Nil until the server has been asked — and in a cache from before goals.
+    public var goals: CurrentGoals?
+    /// Yesterday's review, for the line above the habits.
+    public var review: DayReview?
 
-    public init(tasks: [DailyTask] = [], todos: [TodoItem] = []) {
-        self.tasks = tasks.sorted { $0.position < $1.position }; self.todos = todos
+    public init(tasks: [DailyTask] = [], todos: [TodoItem] = [], goals: CurrentGoals? = nil,
+                review: DayReview? = nil) {
+        self.tasks = tasks.sorted { $0.position < $1.position }; self.todos = todos; self.goals = goals
+        self.review = review
     }
 
     /// These lists with changes not yet on the server laid over them, the
@@ -76,6 +93,8 @@ public struct TodoLists: Codable, Equatable {
             tasks.append(DailyTask(id: id, title: title, position: tasks.count + 1, done: false))
         case let .renameTask(id, title):
             updateTask(id) { $0.title = title }
+        case let .setTaskCue(id, cue):
+            updateTask(id) { $0.cue = cue }
         case let .reorderTasks(order):
             let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
             tasks = tasks.enumerated().sorted {
@@ -111,6 +130,8 @@ public struct TodoLists: Codable, Equatable {
             updateTodo(id) { $0.list = list }
         case let .deleteTodo(id):
             todos.removeAll { $0.id == id }
+        case .createGoal, .editGoal, .setOverarching, .setGoalStatus:
+            goals?.apply(change)
         }
     }
 

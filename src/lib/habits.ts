@@ -5,12 +5,18 @@ import { addDays } from './dates';
 export function recentDays(
   history: readonly string[] | undefined,
   today: string,
-  count = 7
-): { day: string; done: boolean }[] {
+  count = 7,
+  excused: readonly string[] | undefined = undefined
+): { day: string; done: boolean; excused: boolean }[] {
   const done = new Set(history ?? []);
+  const off = new Set(excused ?? []);
   return Array.from({ length: count }, (_, i) => {
     const day = addDays(today, i - (count - 1));
-    return { day, done: done.has(day) };
+    return {
+      day,
+      done: done.has(day),
+      excused: !done.has(day) && off.has(day),
+    };
   });
 }
 
