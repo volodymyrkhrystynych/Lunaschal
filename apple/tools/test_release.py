@@ -3,7 +3,7 @@ import datetime as dt
 import hashlib
 import unittest
 
-from release import APP_GROUPS, BUNDLES, configuration, validate_profile
+from release import APP_GROUPS, BUNDLES, PUSH_BUNDLE, configuration, validate_profile
 
 
 class ReleaseTests(unittest.TestCase):
@@ -20,6 +20,7 @@ class ReleaseTests(unittest.TestCase):
                 "com.apple.developer.team-identifier": self.team,
                 "get-task-allow": False,
                 **({"com.apple.security.application-groups": [APP_GROUPS[bundle]]} if bundle in APP_GROUPS else {}),
+                **({"aps-environment": "production"} if bundle == PUSH_BUNDLE else {}),
             }) for i, bundle in enumerate(BUNDLES)]
 
     def test_generates_target_specific_profiles_and_matching_identity(self):
@@ -39,6 +40,16 @@ class ReleaseTests(unittest.TestCase):
             profile["Entitlements"]["com.apple.security.application-groups"] = ["group.other"]
             with self.subTest(bundle=bundle), self.assertRaises(ValueError):
                 validate_profile(profile, self.team, bundle)
+
+    def test_the_iphone_profile_needs_production_push(self):
+        index = BUNDLES.index(PUSH_BUNDLE)
+        for value in (None, "development"):
+            profile = copy.deepcopy(self.profiles[index])
+            profile["Entitlements"].pop("aps-environment")
+            if value:
+                profile["Entitlements"]["aps-environment"] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                validate_profile(profile, self.team, PUSH_BUNDLE)
 
     def test_rejects_wrong_expired_and_non_distribution_profiles(self):
         mutations = [

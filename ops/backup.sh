@@ -83,7 +83,9 @@ RSYNC_FLAGS=(-rt --modify-window=1)
 # root: in production TORRENT_ROOT points at /media/expansion/torrents and
 # is outside data/ entirely, but a dev run would otherwise rsync every
 # downloaded file into the nightly snapshot.
-MEDIA_EXCLUDES=(--exclude='lunaschal.db*' --exclude='repos/' --exclude='torrents/')
+# agent/ is the Code tab's mirrors and per-task clones (backend/codeagent/):
+# also a `git clone` away, and a finished task's result lives on GitHub.
+MEDIA_EXCLUDES=(--exclude='lunaschal.db*' --exclude='repos/' --exclude='torrents/' --exclude='agent/')
 
 # Delete the dated DB directories that have aged out. The caller passes the name
 # of a function that removes one snapshot, so the local and remote destinations

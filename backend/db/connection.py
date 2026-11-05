@@ -27,7 +27,7 @@ TIMESTAMP_COLS = frozenset({
     'applied_at', 'closed_at', 'purge_after', 'purged_at', 'fetched_at',
     'scanned_at', 'queued_at', 'last_run_at', 'triage_at', 'occurred_at',
     'added_at', 'archived_at', 'archive_restored_at', 'ready_at',
-    'captured_at',
+    'captured_at', 'last_seen_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -278,6 +278,7 @@ def init_db() -> None:
     _ensure_torrent_settings(db)
     _ensure_inference_pause_settings(db)
     _ensure_mobile_sync(db)
+    _ensure_code_agent_settings(db)
     # No _reset_stale_torrents() belongs below: the torrent client runs in its
     # own container and outlives this process, so Lunaschal never holds an
     # in-flight torrent state that a restart could orphan. See the comment on
@@ -294,6 +295,7 @@ def init_db() -> None:
     _reset_stale_voice_drafts(db)
     _reset_stale_llm_jobs(db)
     _requeue_jobs_lost_to_a_pause(db)
+    _reset_stale_agent_tasks(db)
 
 
 def _ensure_mobile_sync(db: sqlite3.Connection) -> None:
@@ -1186,6 +1188,39 @@ def _reset_stale_message_runs(db: sqlite3.Connection) -> None:
     db.execute(
         "UPDATE messages SET status='error', error='Interrupted by an app restart.'"
         " WHERE status='streaming'"
+    )
+    db.commit()
+
+
+def _ensure_code_agent_settings(db: sqlite3.Connection) -> None:
+    """The Code tab's settings and the per-repo test command.
+
+    `github_agent_token` is the *machine* account's token, never the owner's:
+    the `main` ruleset's bypass list holds the owner, so only a second account
+    makes GitHub itself refuse an agent push to main. See docs/code-agent.md.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'github_agent_token' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN github_agent_token TEXT')
+    if 'code_agent_harness' not in cols:
+        db.execute("ALTER TABLE settings ADD COLUMN code_agent_harness TEXT NOT NULL DEFAULT 'pi'")
+    repo_cols = {r[1] for r in db.execute('PRAGMA table_info(repos)')}
+    if 'agent_test_command' not in repo_cols:
+        # '' means the agent's own default (backend/codeagent/tasks.py).
+        db.execute("ALTER TABLE repos ADD COLUMN agent_test_command TEXT NOT NULL DEFAULT ''")
+    db.commit()
+
+
+def _reset_stale_agent_tasks(db: sqlite3.Connection) -> None:
+    """A coding task in flight when the process died lost its ACP connection
+    with it — the agent ran as a child of `docker exec`. It is parked as
+    `interrupted`, never restarted: the user decides whether to continue, and
+    the container is left for that continue to reuse."""
+    db.execute(
+        "UPDATE agent_tasks SET status='interrupted', "
+        "error='Interrupted by an app restart.', updated_at=? "
+        "WHERE status IN ('planning','running','testing')",
+        (int(time.time()),),
     )
     db.commit()
 

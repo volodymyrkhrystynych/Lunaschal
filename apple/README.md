@@ -352,6 +352,14 @@ what each device can currently do and which work remains device-only.
   Three iPhone simulator tests cover save/dismiss, failed-save recovery, and
   recording/relaunch/offline queuing; physical-device behavior is unverified.
   The web shows the same cards in Chat.
+- Chat has a Code page (the switch in its title bar) for the server's local
+  coding agent: start a task, approve or revise its plan, answer its
+  questions, review the diff file by file and the test run Lunaschal measured,
+  then push the `agent/<id>` branch and open a PR. The Chat tab's badge counts
+  plans and questions waiting. A tapped notification opens the task. The app
+  is signed for push; delivery needs the server's APNs key (docs/code-agent.md).
+  Passed in simulator with the `-codeFixture` demo data; notifications and a
+  real agent are not yet verified.
 - Todo is the desktop Lifestyle tab's tasks card: up to four daily tasks (tick
   for today, add, rename, reorder and delete under Edit) above the To-Do and
   Archive lists, ordered and filtered as on the desktop (soonest due first,

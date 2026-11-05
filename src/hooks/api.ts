@@ -1497,6 +1497,56 @@ export interface IdeaPaperPage {
  * ./data/repos/<slug>/ — Luna owns every checkout, so nothing here points at a
  * working tree the user is editing.
  */
+/** The Code tab (backend/routes/code_agent.py). Shapes match row_to_dict. */
+export interface CodeFileStat {
+  path: string;
+  added: number | null;
+  removed: number | null;
+}
+
+export interface CodeApproval {
+  id: string;
+  kind: 'plan' | 'question';
+  request: { plan?: string; question?: string | null; reply?: string };
+  status: string;
+}
+
+export interface CodeTask {
+  id: string;
+  repoId: string;
+  title: string;
+  prompt: string;
+  harness: 'pi' | 'omp' | 'qwen';
+  status: string;
+  phase: 'plan' | 'build';
+  plan: string | null;
+  summary: string | null;
+  diffStat: CodeFileStat[] | null;
+  headSha: string | null;
+  testExit: number | null;
+  testOutput: string | null;
+  prUrl: string | null;
+  error: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  pending: CodeApproval | null;
+  running: boolean;
+}
+
+export interface CodeTaskEvent {
+  seq: number;
+  kind: string;
+  payload: Record<string, unknown>;
+  createdAt: string | null;
+}
+
+export interface CodeDiff {
+  files: CodeFileStat[];
+  commits: string[];
+  patch: string;
+  truncated: boolean;
+}
+
 export interface Repo {
   id: string;
   slug: string;
@@ -4892,6 +4942,27 @@ export const api = {
       get<{ recording: boolean; transcribing: boolean; mode: string | null }>(
         '/api/stt/listener-state'
       ),
+  },
+
+  code: {
+    list: () => get<{ tasks: CodeTask[]; waiting: number }>('/api/code/tasks'),
+    get: (id: string, after = 0) =>
+      get<{ task: CodeTask; events: CodeTaskEvent[] }>(
+        `/api/code/tasks/${id}${after ? `?after=${after}` : ''}`
+      ),
+    diff: (id: string) => get<CodeDiff>(`/api/code/tasks/${id}/diff`),
+    create: (data: { repoId?: string; prompt: string; harness?: string }) =>
+      post<CodeTask>('/api/code/tasks', data),
+    approve: (id: string) =>
+      post<CodeTask>(`/api/code/tasks/${id}/plan`, { approve: true }),
+    revise: (id: string, text: string) =>
+      post<CodeTask>(`/api/code/tasks/${id}/plan`, { text }),
+    message: (id: string, text: string) =>
+      post<CodeTask>(`/api/code/tasks/${id}/messages`, { text }),
+    resume: (id: string) => post<CodeTask>(`/api/code/tasks/${id}/continue`),
+    cancel: (id: string) => post<CodeTask>(`/api/code/tasks/${id}/cancel`),
+    discard: (id: string) => post<CodeTask>(`/api/code/tasks/${id}/discard`),
+    push: (id: string) => post<CodeTask>(`/api/code/tasks/${id}/push`),
   },
 
   repos: {

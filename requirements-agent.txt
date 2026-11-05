@@ -1,0 +1,29 @@
+# The agent container's Python environment (agent/Dockerfile): requirements.txt
+# minus the desktop window and the speech models, which the test suite never
+# loads and which would add gigabytes (torch alone). Keep the two files in step:
+# backend/tests/test_codeagent_container.py checks every other line is here.
+
+flask>=3.1
+openai>=1.0
+google-generativeai>=0.8
+python-ulid>=3.0
+requests>=2.31
+pypdf>=6.0
+PyJWT>=2.8
+soundfile>=0.12.1
+numpy>=2.0.0
+beautifulsoup4>=4.12
+libzim>=3.7
+Pillow>=10.0
+pillow-heif>=0.16
+fsrs>=6.0
+mcp>=1.28
+nh3>=0.2.15
+mammoth>=1.6
+weasyprint>=62
+python-docx>=1.1
+mwparserfromhell>=0.6
+py7zr>=0.21
+httpx[http2]>=0.27
+cryptography>=42
+pytest>=8.0

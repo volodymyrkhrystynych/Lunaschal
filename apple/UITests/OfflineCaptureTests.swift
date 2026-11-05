@@ -1166,6 +1166,42 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["Update Note"].exists)
     }
 
+    // The Code page with no server: a plan approved from the phone, then a
+    // finished task's diff opened file by file.
+    func testCodeTaskPlanApprovalAndDiff() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-codeFixture")
+        app.launch()
+        selectTab(app, "Chat")
+        let code = app.segmentedControls.buttons.element(boundBy: 1)
+        XCTAssertTrue(code.waitForExistence(timeout: 5))
+        XCTAssertEqual(code.label, "Code (2)")
+        code.tap()
+
+        let planned = app.staticTexts["Parse \"1h30m\" durations"]
+        XCTAssertTrue(planned.waitForExistence(timeout: 5))
+        planned.tap()
+        let approve = app.buttons["code-approve"]
+        XCTAssertTrue(approve.waitForExistence(timeout: 5))
+        approve.tap()
+        XCTAssertTrue(app.staticTexts["Queued"].waitForExistence(timeout: 5))
+        XCTAssertFalse(approve.exists)
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let finished = app.staticTexts["Fix the off-by-one in the streak counter"]
+        XCTAssertTrue(finished.waitForExistence(timeout: 5))
+        finished.tap()
+        XCTAssertTrue(app.staticTexts["Tests passed"].waitForExistence(timeout: 5))
+        let diff = app.buttons["code-open-diff"]
+        for _ in 0..<3 where !diff.isHittable { app.swipeUp() }
+        diff.tap()
+        let file = app.staticTexts["backend/lifestyle/activity.py"]
+        XCTAssertTrue(file.waitForExistence(timeout: 5))
+        file.tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'day_key_for'"))
+            .firstMatch.waitForExistence(timeout: 5))
+    }
+
     func testWritingStartsANewBookAndOpensIt() {
         let app = XCUIApplication()
         app.launchArguments.append("-writingFixture")

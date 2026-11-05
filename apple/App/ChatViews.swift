@@ -3,21 +3,59 @@ import PhotosUI
 import SwiftUI
 import LunaschalCore
 
+/// Which half of the Chat tab is showing. Code is not a mode of chat — it is
+/// a different agent (the server's local coding agent) working on tasks — so
+/// it gets its own page rather than a toggle inside the conversation.
+enum ChatPage: String, CaseIterable, Identifiable {
+    case chat = "Chat", code = "Code"
+    var id: Self { self }
+}
+
 /// The Chat tab, laid out like the desktop's: the day's conversation, any
-/// drafted lesson cards, the to-do bar, then the composer.
+/// drafted lesson cards, the to-do bar, then the composer. A switch in the
+/// title bar flips to the Code page.
 struct ChatView: View {
     @ObservedObject var chat: ChatModel
     @ObservedObject var capture: CaptureModel
+    @ObservedObject var code: CodeModel
+    @Binding var page: ChatPage
 
     var body: some View {
+        Group {
+            if page == .chat { conversation } else { CodeTasksView(code: code) }
+        }
+        // Here, not on the Code page, so a notification can push a task
+        // while the page is still switching over.
+        .navigationDestination(for: CodeRoute.self) { route in
+            switch route {
+            case let .task(id): CodeTaskDetailView(code: code, taskID: id)
+            case let .diff(id): CodeDiffView(code: code, taskID: id)
+            }
+        }
+        .navigationTitle("Chat")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("Chat page", selection: $page) {
+                    ForEach(ChatPage.allCases) { item in
+                        Text(item == .code && code.waiting > 0 ? "Code (\(code.waiting))" : item.rawValue)
+                            .accessibilityIdentifier("chat-page-\(item.rawValue)")
+                            .tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
+        }
+    }
+
+    private var conversation: some View {
         VStack(spacing: 0) {
             ChatTranscript(chat: chat)
             if !chat.noteCards.isEmpty { NoteCardsPanel(chat: chat) }
             ChatTodoBar(chat: chat)
             ChatComposer(chat: chat, capture: capture)
         }
-        .navigationTitle("Chat")
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {

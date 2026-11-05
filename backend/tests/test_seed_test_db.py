@@ -123,7 +123,7 @@ def test_no_real_secrets_in_seeded_settings(seeded_db):
         settings = conn.execute('SELECT * FROM settings WHERE id = 1').fetchone()
         assert settings is not None
         for column in ('openai_api_key', 'google_api_key', 'hf_token',
-                       'research_search_key', 'adzuna_app_key'):
+                       'research_search_key', 'adzuna_app_key', 'github_agent_token'):
             value = settings[column] or ''
             assert value == '' or 'fake' in value.lower(), f'settings.{column} looks real: {value!r}'
 

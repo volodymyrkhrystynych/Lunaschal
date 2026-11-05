@@ -91,11 +91,12 @@ def _env() -> dict:
     return env
 
 
-def _run(args: list[str], cwd: Path | None = None, timeout: int = GIT_TIMEOUT) -> str:
+def _run(args: list[str], cwd: Path | None = None, timeout: int = GIT_TIMEOUT,
+         extra_env: dict | None = None) -> str:
     try:
         out = subprocess.run(
             ['git', *args], cwd=str(cwd) if cwd else None, capture_output=True,
-            text=True, timeout=timeout, env=_env(),
+            text=True, timeout=timeout, env={**_env(), **(extra_env or {})},
         )
     except subprocess.TimeoutExpired:
         raise GitError(f'git {args[0]} timed out after {timeout}s')

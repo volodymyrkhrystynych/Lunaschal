@@ -92,6 +92,12 @@ with `com.apple.developer.healthkit` (from `project.yml`'s `entitlements`), and
 a profile without it fails at install. The Watch target reads no Health data
 itself and needs no capability.
 
+The iPhone App ID also needs **Push Notifications**, for the Code page's agent
+(`aps-environment` in `project.yml`). It is enabled, and the local copy of the
+iPhone profile dated 2026-10-06 carries `aps-environment: production`.
+`apple/tools/release.py` refuses an iPhone profile without it. The Watch and
+share extension need no capability.
+
 The Watch target's `WKCompanionAppBundleIdentifier` must continue to match the
 iPhone target. If the identifiers change, update both target settings and that
 Info.plist property in `project.yml` together. If changing the background task

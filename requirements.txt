@@ -42,4 +42,9 @@ python-docx>=1.1
 # rather than deleting them; Fandom serves the dumps as .7z, which py7zr reads.
 mwparserfromhell>=0.6
 py7zr>=0.21
+# APNs push for the Code tab (backend/push/apns.py). Apple's push API is HTTP/2
+# only; the [http2] extra pulls in h2.
+httpx[http2]>=0.27
+# ES256 signing for the APNs provider token; PyJWT needs it for EC keys.
+cryptography>=42
 # Speaker diarization for meetings is optional: pip install -r requirements-diarization.txt

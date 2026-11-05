@@ -1,0 +1,246 @@
+"""The driver end to end, with a fake ACP agent and a local stand-in for Docker.
+
+`LocalRuntime` plays the container: it runs commands in the task's work dir
+(translating `/work`) and spawns the scripted agent from
+fixtures/fake_acp_agent.py there. Everything else — the mirror, out.git, the
+bundle, the event log, the approvals — is the real code.
+"""
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+import pytest
+from ulid import ULID
+
+from backend.codeagent import acp, driver, mirror, tasks
+from backend.db.connection import get_db
+from backend.repos import git as repo_git
+
+FAKE_AGENT = Path(__file__).parent / 'fixtures' / 'fake_acp_agent.py'
+ENV = {'GIT_AUTHOR_NAME': 'T', 'GIT_AUTHOR_EMAIL': 't@e', 'GIT_COMMITTER_NAME': 'T',
+       'GIT_COMMITTER_EMAIL': 't@e', 'PATH': os.environ['PATH']}
+
+
+class LocalRuntime:
+    def __init__(self, agent_env=None):
+        self.agent_env = agent_env or {}
+        self.started = []
+        self.commands = []
+
+    def start(self, task_id):
+        self.started.append(task_id)
+
+    def _cwd(self, task_id):
+        return mirror.work_dir(task_id)
+
+    def spawn(self, task_id, command):
+        assert command == driver.HARNESS_COMMANDS['pi']
+        return subprocess.Popen([sys.executable, str(FAKE_AGENT)], cwd=self._cwd(task_id),
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env={**ENV, **self.agent_env})
+
+    def run(self, task_id, command, timeout=120, max_bytes=None):
+        work = str(self._cwd(task_id))
+        cmd = [work if c == '/work' else c for c in command]
+        self.commands.append(command)
+        return subprocess.run(cmd, cwd=work, capture_output=True, timeout=timeout, env=ENV)
+
+    def stop(self, task_id):
+        pass
+
+
+class NoProxy:
+    def __init__(self, path, on_event):
+        self.on_event = on_event
+
+    def start(self):
+        return self
+
+    def stop(self):
+        pass
+
+
+@pytest.fixture
+def github(tmp_path):
+    seed = tmp_path / 'seed'
+    seed.mkdir()
+    subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=seed, check=True, env=ENV)
+    (seed / 'a.py').write_text('x = 1\n')
+    subprocess.run(['git', 'add', '-A'], cwd=seed, check=True, env=ENV)
+    subprocess.run(['git', 'commit', '-qm', 'first'], cwd=seed, check=True, env=ENV)
+    bare = tmp_path / 'github.git'
+    subprocess.run(['git', 'clone', '-q', '--bare', str(seed), str(bare)], check=True, env=ENV)
+    return bare
+
+
+@pytest.fixture(autouse=True)
+def setup(monkeypatch, tmp_path):
+    monkeypatch.setenv('AGENT_ROOT', str(tmp_path / 'agent'))
+    monkeypatch.setattr(repo_git, 'assert_clone_url', lambda url: url)
+    monkeypatch.setattr(tasks, '_listeners', [])
+
+
+@pytest.fixture
+def repo_id(github):
+    rid = str(ULID())
+    now = int(time.time())
+    get_db().execute(
+        "INSERT INTO repos (id, slug, name, remote_url, clone_state, created_at, updated_at, "
+        "agent_test_command) VALUES (?, 'demo', 'demo', ?, 'ready', ?, ?, ?)",
+        (rid, str(github), now, now, 'echo tests ran; grep -c built a.py'))
+    get_db().commit()
+    return rid
+
+
+def make_driver(**agent_env):
+    rt = LocalRuntime(agent_env)
+    return driver.Driver(rt, proxy_factory=NoProxy), rt
+
+
+def kinds(task_id):
+    return [e['kind'] for e in tasks.events(task_id)]
+
+
+def test_plan_phase_refuses_writes_and_waits_for_approval(repo_id):
+    t = tasks.create(repo_id, 'Change a.py')
+    d, rt = make_driver()
+    out = d.run(t['id'])
+    assert out['status'] == 'awaiting_plan'
+    assert '1. Change a.py' in out['plan'] and '(edit was reject)' in out['plan']
+    assert out['baseSha'] and out['baseBranch'] == 'main' and out['sessionId'] == 'sess-1'
+    approval = tasks.pending_approval(t['id'])
+    assert approval['kind'] == 'plan' and approval['request']['plan'] == out['plan']
+    perm = [e['payload'] for e in tasks.events(t['id']) if e['kind'] == 'permission']
+    assert perm == [{'title': 'edit something', 'kind': 'edit', 'decision': 'refused'}]
+    assert {'thought', 'plan', 'message'} <= set(kinds(t['id']))
+
+
+def test_a_stray_edit_in_the_plan_phase_is_reverted(repo_id):
+    t = tasks.create(repo_id, 'Change a.py')
+    d, _ = make_driver(FAKE_STRAY_EDIT='1')
+    d.run(t['id'])
+    assert not (mirror.work_dir(t['id']) / 'stray.txt').exists()
+    notes = [e['payload'].get('note') for e in tasks.events(t['id']) if e['kind'] == 'status']
+    assert any('reverted' in (n or '') for n in notes)
+
+
+def test_build_phase_commits_exports_tests_and_finishes(repo_id):
+    t = tasks.create(repo_id, 'Change a.py')
+    d, rt = make_driver()
+    d.run(t['id'])
+    tasks.update(t['id'], phase='build')
+    get_db().execute("UPDATE agent_tasks SET status='queued' WHERE id=?", (t['id'],))
+    get_db().commit()
+
+    out = d.run(t['id'])
+
+    assert out['status'] == 'done'
+    assert out['summary'] == 'Done: changed a.py.'
+    assert out['testExit'] == 0 and 'tests ran' in out['testOutput']
+    assert [f['path'] for f in out['diffStat']] == ['a.py']
+    # The diff came from out.git, and the head matches the agent's commit.
+    d_ = mirror.diff(t['id'], out['baseSha'])
+    assert '+# built (allow)' in d_['patch']
+    assert 'Uncommitted work, committed by Lunaschal' in subprocess.run(
+        ['git', 'log', '-1', '--format=%B', out['headSha']], cwd=mirror.out_dir(t['id']),
+        capture_output=True, text=True).stdout
+    assert 'test' in kinds(t['id'])
+
+
+def test_a_question_parks_the_task_on_needs_input(repo_id):
+    t = tasks.create(repo_id, 'Change a.py')
+    d, _ = make_driver()
+    d.run(t['id'])
+    tasks.update(t['id'], phase='build', pending_input='Do it, and ASK if unsure')
+    out = d.run(t['id'])
+    assert out['status'] == 'needs_input'
+    q = tasks.pending_approval(t['id'])
+    assert q['kind'] == 'question' and q['request']['question'] == 'Should b.py change too?'
+    # The work so far is already reviewable.
+    assert out['diffStat'][0]['path'] == 'a.py'
+    assert tasks.get(t['id'])['pendingInput'] is None
+
+
+def test_a_session_is_resumed_when_the_agent_can_load_it(repo_id):
+    t = tasks.create(repo_id, 'Change a.py')
+    d, _ = make_driver(FAKE_LOAD_SESSION='1')
+    d.run(t['id'])
+    before = len(tasks.events(t['id']))
+    tasks.update(t['id'], phase='build')
+    d.run(t['id'])
+    # The replayed history ('replayed') was not recorded as new events.
+    texts = [e['payload'].get('text') for e in tasks.events(t['id'])[before:]]
+    assert 'replayed' not in texts
+
+
+def test_a_crashed_agent_is_an_error_with_its_stderr(repo_id):
+    t = tasks.create(repo_id, 'Change a.py')
+    d, _ = make_driver(FAKE_CRASH='1')
+    out = d.run(t['id'])
+    assert out['status'] == 'error'
+    assert 'model went away' in out['error']
+
+
+def test_no_changes_means_done_without_a_diff(repo_id, monkeypatch):
+    t = tasks.create(repo_id, 'Change a.py')
+    d, rt = make_driver()
+    d.run(t['id'])
+    tasks.update(t['id'], phase='build')
+    # Make the agent's write vanish: the build "changes nothing".
+    real_run = rt.run
+
+    def run(task_id, command, timeout=120, max_bytes=None):
+        if command[:3] == ['git', '-C', '/work'] and command[3] == 'status':
+            subprocess.run(['git', 'checkout', '--', '.'], cwd=mirror.work_dir(task_id), env=ENV)
+        return real_run(task_id, command, timeout, max_bytes)
+    rt.run = run
+    out = d.run(t['id'])
+    assert out['status'] == 'done' and out['diffStat'] is None
+
+
+def test_permission_choice():
+    opts = [{'optionId': 'a', 'kind': 'allow_once'}, {'optionId': 'r', 'kind': 'reject_once'}]
+    assert driver._choose(opts, True) == 'a'
+    assert driver._choose(opts, False) == 'r'
+    assert driver._choose([{'optionId': 'only', 'kind': 'allow_always'}], False) is None
+
+
+@pytest.mark.parametrize('text, q', [
+    ('All done.', None),
+    ('Changed it.\nQUESTION: Keep the old API?', 'Keep the old API?'),
+    ('QUESTION: first\nmore\nQUESTION: second', 'second'),
+])
+def test_question_in(text, q):
+    assert driver.question_in(text) == q
+
+
+def test_acp_request_to_a_dead_agent_raises_closed():
+    proc = subprocess.Popen([sys.executable, '-c', 'import sys; sys.exit(0)'],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc.wait()
+    client = acp.AcpClient(proc, lambda u: None, lambda p: None)
+    with pytest.raises(acp.AcpError):
+        client.initialize()
+
+
+def test_acp_answers_unsupported_methods():
+    script = (
+        'import json,sys\n'
+        "sys.stdout.write(json.dumps({'jsonrpc':'2.0','id':7,'method':'fs/read_text_file','params':{}})+'\\n')\n"
+        'sys.stdout.flush()\n'
+        'reply = {}\n'
+        "while reply.get('id') != 7:\n"
+        '    reply = json.loads(sys.stdin.readline())\n'
+        "sys.stdout.write(json.dumps({'jsonrpc':'2.0','id':1,'result':{'echo': reply}})+'\\n')\n"
+        'sys.stdout.flush()\n'
+        'sys.stdin.readline()\n'
+    )
+    proc = subprocess.Popen([sys.executable, '-c', script], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    client = acp.AcpClient(proc, lambda u: None, lambda p: None)
+    result = client.request('anything', {}, timeout=10)
+    assert result['echo']['id'] == 7 and result['echo']['error']['code'] == -32601
+    client.close()

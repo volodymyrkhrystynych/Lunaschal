@@ -11,7 +11,11 @@ struct CaptureRoot: View {
     @StateObject private var todo: TodoModel
     @StateObject private var learning: LearningModel
     @StateObject private var context: JournalContextModel
+    @StateObject private var code: CodeModel
     @ObservedObject private var quickPhoto = QuickPhoto.shared
+    @ObservedObject private var push = PushRouter.shared
+    @State private var chatPage = ChatPage.chat
+    @State private var chatPath = NavigationPath()
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = Tab.capture
     @State private var capturePage = CaptureTab.Page.entry
@@ -41,6 +45,7 @@ struct CaptureRoot: View {
         _todo = StateObject(wrappedValue: TodoModel(capture: model))
         _learning = StateObject(wrappedValue: LearningModel(capture: model))
         _context = StateObject(wrappedValue: JournalContextModel(capture: model))
+        _code = StateObject(wrappedValue: CodeModel(capture: model))
     }
 
     var body: some View {
@@ -50,8 +55,10 @@ struct CaptureRoot: View {
                 .badge(dailyRemaining)
             NavigationStack { JournalTab(model: model, context: context, chat: chat) }
                 .tabItem { Label("Journal", systemImage: "book.closed") }.tag(Tab.journal)
-            NavigationStack { ChatView(chat: chat, capture: model) }
+            NavigationStack(path: $chatPath) { ChatView(chat: chat, capture: model, code: code, page: $chatPage) }
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }.tag(Tab.chat)
+                // A plan to approve or a question from the coding agent.
+                .badge(code.waiting)
             NavigationStack { TodoView(todo: todo) }
                 .tabItem { Label("Todo", systemImage: "checklist") }.tag(Tab.todo)
                 // Red, like a notification: to-dos due today or overdue.
@@ -108,8 +115,21 @@ struct CaptureRoot: View {
             if changes.touches([SyncChanges.todos]) { Task { await todo.refresh() } }
             if changes.full { Task { await learning.refresh() } }
         }
+        // A tapped Code-tab notification: straight to that task.
+        .onChange(of: push.openTaskID) { _, id in
+            guard let id else { return }
+            push.openTaskID = nil
+            tab = .chat
+            chatPage = .code
+            chatPath = NavigationPath([CodeRoute.task(id)])
+        }
+        .onChange(of: push.deviceToken) { _, token in
+            if let token { Task { await code.upload(token: token) } }
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active else { model.leaveForeground(); return }
+            // The Chat tab's badge counts what the coding agent is waiting on.
+            Task { await code.refresh() }
             today = DayKey.of(Date())
             model.takeSharedLinks()
             model.resumeFicDownloads()
