@@ -1,6 +1,14 @@
 // @vitest-environment jsdom
 import { beforeEach, expect, it, vi } from 'vitest';
-import { allowedPage, samePage, snapshot, createRunner } from './ffn.js';
+import {
+  allowedPage,
+  samePage,
+  snapshot,
+  createRunner,
+  AUTO_RETRY_DELAYS_MS,
+  CHALLENGE_GRACE_MS,
+  RECHECK_MS,
+} from './ffn.js';
 
 const url = 'https://www.fanfiction.net/s/123/1/';
 
@@ -81,6 +89,7 @@ function setup() {
     get: vi.fn(async () => ({})),
   };
   const save = vi.fn();
+  const clock = { t: 1000 };
   const options = {
     state,
     send,
@@ -88,10 +97,13 @@ function setup() {
     scripting,
     storage,
     save,
-    now: () => 1000,
+    now: () => clock.t,
   };
   return {
     ...options,
+    advance(ms) {
+      clock.t += ms;
+    },
     runner: createRunner(options),
     setJob(value) {
       job = value ? { attemptId: 'attempt1', ...value } : null;
@@ -119,15 +131,121 @@ it('navigates once, checkpoints first, then submits the rendered page', async ()
   expect(s.tabs.update).toHaveBeenCalledTimes(1);
 });
 
-it('holds a challenge tab until the user explicitly continues', async () => {
+const results = s => s.send.mock.calls.filter(([type]) => type === 'ffnResult');
+
+function challenge(s) {
+  s.scripting.executeScript.mockResolvedValue([
+    { result: { kind: 'challenge', url } },
+  ]);
+}
+
+it('holds a challenge tab without reloading it until the user continues', async () => {
   const s = setup();
   await s.runner.tick();
   s.setJob({ id: 'page1', url, navigate: false, needsAttention: true });
-  await s.runner.tick();
-  expect(s.scripting.executeScript).not.toHaveBeenCalled();
+  challenge(s);
+  for (let i = 0; i < 3; i++) {
+    s.advance(AUTO_RETRY_DELAYS_MS.at(-1));
+    await s.runner.tick();
+  }
+  expect(results(s)).toHaveLength(0);
+  expect(s.send).not.toHaveBeenCalledWith('ffnRetry', expect.anything());
   await s.runner.tick({ continuePage: true });
-  expect(s.scripting.executeScript).toHaveBeenCalledOnce();
+  expect(results(s)).toHaveLength(1);
   expect(s.tabs.update).toHaveBeenCalledOnce();
+});
+
+it('waits out a passive Cloudflare interstitial instead of blocking on it', async () => {
+  const s = setup();
+  await s.runner.tick();
+  s.setJob({ id: 'page1', url, navigate: false });
+  challenge(s);
+  await s.runner.tick();
+  expect(results(s)).toHaveLength(0);
+  s.advance(CHALLENGE_GRACE_MS);
+  await s.runner.tick();
+  expect(results(s)[0][1].result.kind).toBe('challenge');
+});
+
+it('takes a parsed page from a tab that never stops loading, but not a half-parsed one', async () => {
+  const s = setup();
+  await s.runner.tick();
+  s.setJob({ id: 'page1', url, navigate: false });
+  s.tabs.get.mockResolvedValue({ id: 7, url, status: 'loading' });
+  s.scripting.executeScript.mockResolvedValue([
+    {
+      result: {
+        kind: 'page',
+        url,
+        html: '<div id="storytext">te',
+        ready: false,
+      },
+    },
+  ]);
+  await s.runner.tick();
+  expect(results(s)).toHaveLength(0);
+  s.scripting.executeScript.mockResolvedValue([
+    {
+      result: {
+        kind: 'page',
+        url,
+        html: '<div id="storytext">text</div>',
+        ready: true,
+      },
+    },
+  ]);
+  await s.runner.tick();
+  expect(results(s)[0][1].result.kind).toBe('page');
+});
+
+it('submits a blocked page once the tab turns readable, re-reading at most every RECHECK_MS', async () => {
+  const s = setup();
+  await s.runner.tick();
+  s.setJob({ id: 'page1', url, navigate: false, needsAttention: true });
+  challenge(s);
+  await s.runner.tick();
+  expect(s.scripting.executeScript).toHaveBeenCalledOnce();
+  s.scripting.executeScript.mockResolvedValue([
+    { result: { kind: 'page', url, html: '<div id="storytext">text</div>' } },
+  ]);
+  await s.runner.tick();
+  expect(s.scripting.executeScript).toHaveBeenCalledOnce();
+  s.advance(RECHECK_MS);
+  await s.runner.tick();
+  expect(results(s)[0][1].result.kind).toBe('page');
+  expect(s.tabs.update).toHaveBeenCalledOnce();
+});
+
+it('re-navigates an unusable blocked tab after backoff, a bounded number of times', async () => {
+  const s = setup();
+  await s.runner.tick();
+  s.setJob({ id: 'page1', url, navigate: false, needsAttention: true });
+  s.scripting.executeScript.mockResolvedValue([
+    { result: { kind: 'page', url: 'https://www.fanfiction.net/s/123/2/' } },
+  ]);
+  const retries = () =>
+    s.send.mock.calls.filter(([type]) => type === 'ffnRetry').length;
+  await s.runner.tick();
+  expect(retries()).toBe(0);
+  expect(s.state.autoRetry.nextAt).toBe(s.now() + AUTO_RETRY_DELAYS_MS[0]);
+  for (const delay of AUTO_RETRY_DELAYS_MS) {
+    s.advance(delay - 1);
+    await s.runner.tick();
+    const before = retries();
+    s.advance(RECHECK_MS);
+    await s.runner.tick();
+    expect(retries()).toBe(before + 1);
+    // The server re-blocks the next attempt; the runner no longer owns it.
+    s.advance(RECHECK_MS);
+    await s.runner.tick();
+  }
+  expect(retries()).toBe(AUTO_RETRY_DELAYS_MS.length);
+  s.advance(AUTO_RETRY_DELAYS_MS.at(-1) * 10);
+  await s.runner.tick();
+  s.advance(RECHECK_MS);
+  await s.runner.tick();
+  expect(retries()).toBe(AUTO_RETRY_DELAYS_MS.length);
+  expect(results(s)).toHaveLength(0);
 });
 
 it('reopening the controller resumes capture without reloading the page', async () => {

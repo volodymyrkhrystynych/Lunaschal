@@ -1,4 +1,4 @@
-import { createRunner } from './lib/ffn.js';
+import { AUTO_RETRY_DELAYS_MS, createRunner } from './lib/ffn.js';
 
 const $ = id => document.getElementById(id);
 const state = JSON.parse(sessionStorage.getItem('ffn') || 'null') || {
@@ -25,6 +25,19 @@ const runner = createRunner({
   state,
 });
 
+// What the runner is doing about a blocked page, so a glance tells whether
+// anything is actually needed.
+function recoveryNote(request) {
+  const auto =
+    state.autoRetry?.requestId === request.id ? state.autoRetry : null;
+  const max = AUTO_RETRY_DELAYS_MS.length;
+  if (auto?.nextAt)
+    return `Retrying automatically at ${new Date(auto.nextAt).toLocaleTimeString()} (${auto.count + 1}/${max}).`;
+  if (auto && auto.count >= max)
+    return 'Automatic retries are used up; this one needs you.';
+  return 'Checking the tab automatically…';
+}
+
 async function tick(options) {
   if (!connected) return;
   try {
@@ -38,7 +51,7 @@ async function tick(options) {
         : reply.browser.paused
           ? 'Downloads paused in Lunaschal.'
           : current?.needsAttention
-            ? current.message
+            ? `${current.message} ${recoveryNote(current)}`
             : current
               ? 'Reading the FF.net tab…'
               : reply.browser.nextRequest * 1000 > Date.now()

@@ -93,10 +93,19 @@ main-document header observer preserves Retry-After through the same cooldown.
 
 Only one live controller may claim pages. Claims carry an attempt id, so a late
 reply from before a retry cannot satisfy the next attempt. Polling an assigned
-request does not navigate again. A challenge/login/unreadable page remains
-blocked until the user chooses Continue (capture the current page) or Retry
-(a new paced navigation); even takeover by a new controller does not reload a
-blocked page automatically. Closing a tab, losing the server, or restarting
+request does not navigate again. A blocked page **recovers by itself where it
+safely can**, because by the time anyone looked it was nearly always fine: a
+challenge snapshot within 30 s of navigating is not reported at all (Cloudflare's
+passive interstitial clears itself), a tab whose ads keep it "loading" is read
+once its HTML is parsed, and a blocked tab is re-read every 15 s and submitted
+the moment it is a readable page. A tab unusable for any *other* reason is
+re-navigated through the server's paced Retry after 1/5/15 min, three times per
+request, then left for the user. **A challenge or sign-in wall is never
+reloaded automatically** — reloading into a real wall is how a session gets
+escalated — so those still wait for the user (or are picked up by the re-read
+once solved). All of this lives in the extension (`recover` in
+`extension/lib/ffn.js`); the server's `submit`/`retry` already accept a
+`blocked` row. Closing a tab, losing the server, or restarting
 keeps durable pages and the original queue flags. Deep intent stays on an
 active fic until completion. Responses are checked against the requested
 story/chapter or collection page, size-limited, validated by the existing
