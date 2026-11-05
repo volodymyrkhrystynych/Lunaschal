@@ -250,6 +250,7 @@ struct BookListView: View {
                 }
             }
         }
+        .refreshable { await refresh() }
         .task(id: model.downloadingLibrary) { await refresh() }
         // Only when a pass changed books, folders, bookmarks or chapters. The
         // list's rows keep their ids, so it stays where it was scrolled to.
@@ -419,6 +420,7 @@ struct FolderListView: View {
                     description: Text("Folders made in the desktop library appear here after a sync."))
             }
         }
+        .refreshable { await refresh() }
         .task(id: model.downloadingLibrary) { await refresh() }
         .onChange(of: model.syncChanges) { _, changes in
             if changes.touches(["fics", "fic_folders"]) { Task { await refresh() } }
