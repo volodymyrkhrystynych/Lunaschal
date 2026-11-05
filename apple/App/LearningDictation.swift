@@ -2,13 +2,13 @@ import AVFoundation
 import Foundation
 import LunaschalCore
 
-/// The review's mic button, as the desktop's: record, and on Stop send the
-/// clip to the server's speech-to-text and hand back the words. Nothing is
-/// kept. The clip is a scratch file and is deleted once transcribed (or not),
-/// since the answer it becomes is what the server saves.
+/// The review's mic button: record, and on Stop hand the clip over as the
+/// answer. Nothing waits on the words; the server transcribes the clip and
+/// grades it while the next card is already up (`LearningModel.submitRecording`,
+/// which owns the file from then on and deletes it once sent).
 @MainActor
 final class LearningDictation: NSObject, ObservableObject, AVAudioRecorderDelegate {
-    enum Status: Equatable { case idle, starting, recording, transcribing }
+    enum Status: Equatable { case idle, starting, recording }
 
     @Published private(set) var status = Status.idle
     @Published var error: String?
@@ -17,7 +17,7 @@ final class LearningDictation: NSObject, ObservableObject, AVAudioRecorderDelega
     private let transport: () -> LearningTransport?
     private var recorder: AVAudioRecorder?
     private var clip: URL?
-    private var deliver: ((String) -> Void)?
+    private var deliver: ((URL) -> Void)?
 
     init(capture: CaptureModel, transport: @escaping () -> LearningTransport?) {
         self.capture = capture
@@ -29,16 +29,16 @@ final class LearningDictation: NSObject, ObservableObject, AVAudioRecorderDelega
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
-    /// Starts recording, or stops and transcribes; `onText` gets the words.
-    func toggle(onText: @escaping (String) -> Void) async {
+    /// Starts recording, or stops; `onClip` gets the recorded file.
+    func toggle(onClip: @escaping (URL) -> Void) async {
         switch status {
-        case .recording: await stop()
-        case .idle: await start(onText)
-        case .starting, .transcribing: return
+        case .recording: stop()
+        case .idle: await start(onClip)
+        case .starting: return
         }
     }
 
-    private func start(_ onText: @escaping (String) -> Void) async {
+    private func start(_ onClip: @escaping (URL) -> Void) async {
         guard transport() != nil else {
             error = "Dictation needs your server."
             return
@@ -64,7 +64,7 @@ final class LearningDictation: NSObject, ObservableObject, AVAudioRecorderDelega
             guard audio.prepareToRecord(), audio.record() else { throw RecorderError.message("Could not start the recorder.") }
             recorder = audio
             clip = url
-            deliver = onText
+            deliver = onClip
             status = .recording
         } catch {
             try? FileManager.default.removeItem(at: url)
@@ -74,25 +74,22 @@ final class LearningDictation: NSObject, ObservableObject, AVAudioRecorderDelega
         }
     }
 
-    func stop() async {
+    func stop() {
         guard status == .recording, let url = clip else { return }
         recorder?.stop()
         recorder = nil
         clip = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        status = .transcribing
-        defer {
+        let handOver = deliver
+        deliver = nil
+        status = .idle
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard size > 0, let handOver else {
             try? FileManager.default.removeItem(at: url)
-            deliver = nil
-            status = .idle
+            error = "Nothing was recorded."
+            return
         }
-        guard let api = transport() else { error = "Signed out before the clip could be sent."; return }
-        do {
-            let text = try await api.transcribe(audio: url)
-            if text.isEmpty { error = "No speech was heard." } else { deliver?(text) }
-        } catch {
-            self.error = error.localizedDescription
-        }
+        handOver(url)
     }
 
     /// Leaving the card drops a recording rather than typing it into the next one.
@@ -110,8 +107,8 @@ final class LearningDictation: NSObject, ObservableObject, AVAudioRecorderDelega
     @objc nonisolated private func interrupted(_ notification: Notification) {
         guard let type = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
               type == AVAudioSession.InterruptionType.began.rawValue else { return }
-        // What was said before the call is still worth transcribing.
-        Task { @MainActor in await self.stop() }
+        // What was said before the call is still worth answering with.
+        Task { @MainActor in self.stop() }
     }
 
     nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {

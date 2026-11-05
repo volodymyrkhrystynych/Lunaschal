@@ -1,6 +1,9 @@
 import AVKit
+import Photos
+import PhotosUI
 import LunaschalCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The Journal page, read the way the desktop's feed is: one timeline, newest
 /// first, every entry's photos, clips and videos on its card, and a ring in an
@@ -18,7 +21,7 @@ struct JournalFeedView: View {
     /// What this device holds that the server's record doesn't show yet. An
     /// addition to an entry is shown on that entry, never as one of its own.
     private var localCaptures: [Capture] {
-        let onServer = Set(model.journalRecords.map(\.id) + model.foodRecords.map(\.id))
+        let onServer = Set(model.journalRecords.map(\.id) + model.foodRecords.map(\.id) + model.spendingRecords.map(\.id))
         // Once the server's entry (or meal) is here it stands in for the
         // capture, which shares its id, so the card keeps its place in the list.
         return model.captures.filter { capture in
@@ -35,7 +38,16 @@ struct JournalFeedView: View {
         let meals = model.foodRecords.map {
             FeedItem.meal($0, JournalTimestamp.parse($0.data?["createdAt"]?.string) ?? .distantPast)
         }
-        return (records + meals + localCaptures.map { FeedItem.capture($0) }).sorted { $0.time > $1.time }
+        let purchases = model.spendingRecords.map {
+            FeedItem.purchase($0, JournalTimestamp.parse($0.data?["createdAt"]?.string) ?? .distantPast)
+        }
+        // A day's map card sits at the day's last second, as its summary. Not
+        // a search result: it has no text of its own.
+        let days = searching ? [] : model.locationDays.map {
+            FeedItem.day($0, JournalTimestamp.parse($0.archivedAt) ?? .distantPast)
+        }
+        return (records + meals + purchases + days + localCaptures.map { FeedItem.capture($0) })
+            .sorted { $0.time > $1.time }
     }
 
     var body: some View {
@@ -74,7 +86,8 @@ struct JournalFeedView: View {
         .scrollPosition(id: $anchor, anchor: .top)
         .background(Color(.systemGroupedBackground))
         .overlay {
-            if localCaptures.isEmpty && model.journalRecords.isEmpty && model.foodRecords.isEmpty && model.pendingEdits.isEmpty {
+            if localCaptures.isEmpty && model.journalRecords.isEmpty && model.foodRecords.isEmpty
+                && model.spendingRecords.isEmpty && model.pendingEdits.isEmpty {
                 ContentUnavailableView(searching ? "No matching entries" : "No captures yet", systemImage: "book.closed")
             }
         }
@@ -100,6 +113,8 @@ struct JournalFeedView: View {
         switch item {
         case .entry(let record, _): EntryCard(model: model, record: record)
         case .meal(let record, _): FoodEntryCard(model: model, record: record)
+        case .purchase(let record, _): SpendingEntryCard(model: model, record: record)
+        case .day(let day, _): LocationDayCard(model: model, day: day)
         case .capture(let capture):
             NavigationLink { CaptureDetail(model: model, id: capture.id) } label: {
                 LocalCaptureCard(model: model, capture: capture)
@@ -110,20 +125,28 @@ struct JournalFeedView: View {
     private enum FeedItem {
         case entry(SyncChange, Date)
         case meal(SyncChange, Date)
+        case purchase(SyncChange, Date)
+        case day(LocationDay, Date)
         case capture(Capture)
         var id: String {
             switch self {
             case .entry(let record, _): return record.id
             case .meal(let record, _): return "meal:" + record.id
+            case .purchase(let record, _): return "purchase:" + record.id
+            case .day(let day, _): return "day:" + day.date
             // The entry's own id: the same card before and after it syncs.
             case .capture(let capture):
                 let id = capture.snapshot?.id ?? capture.id
-                return capture.kind == .food ? "meal:" + id : id
+                switch capture.kind {
+                case .food: return "meal:" + id
+                case .spending: return "purchase:" + id
+                case .journal: return id
+                }
             }
         }
         var time: Date {
             switch self {
-            case .entry(_, let time), .meal(_, let time): return time
+            case .entry(_, let time), .meal(_, let time), .purchase(_, let time), .day(_, let time): return time
             case .capture(let capture): return capture.createdAt
             }
         }
@@ -235,6 +258,7 @@ private struct LocalCaptureCard: View {
                 ? (capture.files.first?.name ?? (capture.links.isEmpty ? "Recording" : "Journal entry")) : capture.text))
                 .lineLimit(2)
             if capture.kind == .food { Label("Food log", systemImage: "fork.knife").font(.caption) }
+            if capture.kind == .spending { Label("Spending", systemImage: "banknote").font(.caption) }
             let photos = capture.files.filter(\.isImage).compactMap { try? model.store.fileURL($0) }
             if !photos.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -328,9 +352,9 @@ private struct EntryCard: View {
             .accessibilityIdentifier("journal-entry")
 
             let photos = attachments.filter { $0.media == .image }
-            if !photos.isEmpty { PhotoStrip(model: model, photos: photos) }
+            if !photos.isEmpty { PhotoStrip(model: model, photos: photos, entryDate: created) }
             ForEach(attachments.filter { $0.media == .youtube || $0.media == .video }) { item in
-                VideoCard(model: model, item: item)
+                VideoCard(model: model, item: item, entryDate: created)
             }
             ForEach(attachments.filter { $0.media == .audio }) { item in
                 AudioRow(model: model, item: item)
@@ -429,7 +453,7 @@ struct FoodRecordView: View {
                     TextEditor(text: $notes).frame(minHeight: 160).focused($typing)
                         .accessibilityLabel("Meal notes")
                     AttachmentButtons(model: model, recorder: model.recorder, entryID: record.id,
-                                      foodOnly: true) { typing = false }
+                                      kind: .food) { typing = false }
                 }
                 if !staged.isEmpty {
                     Section("Adding") { StagedAttachmentRows(model: model, recorder: model.recorder, draft: staged) }
@@ -473,27 +497,265 @@ struct FoodRecordView: View {
     }
 }
 
+// MARK: Purchases
+
+/// One purchase: where, what for and how much, with its receipt and any clip.
+/// A line typed on the Daily page has nothing else, and is just that row.
+private struct SpendingEntryCard: View {
+    @ObservedObject var model: CaptureModel
+    let record: SyncChange
+
+    private var purchase: SpendingEntryRecord? { SpendingEntryRecord(record: record) }
+    private var media: [JournalAttachmentItem] { model.spendingMedia[record.id] ?? [] }
+
+    var body: some View {
+        FeedCard {
+            NavigationLink { SpendingRecordView(model: model, record: record) } label: {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Label(purchase?.heading ?? "Purchase", systemImage: "banknote").font(.headline).lineLimit(2)
+                        Spacer()
+                        SpendingAmountText(cents: purchase?.amountCents).font(.headline)
+                    }
+                    if let created = purchase?.createdAt {
+                        Text(created, format: .dateTime.month(.abbreviated).day().hour().minute())
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let body = purchase?.body {
+                        Text(body).font(.body).lineLimit(4).multilineTextAlignment(.leading)
+                    }
+                    PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("spending-entry")
+            MealMedia(model: model, media: media)
+        }
+    }
+}
+
+/// An amount in CAD, or a dash while the receipt has not been read — never $0.
+private struct SpendingAmountText: View {
+    let cents: Int?
+
+    var body: some View {
+        if let cents {
+            Text((Decimal(cents) / 100).formatted(.currency(code: "CAD"))).monospacedDigit()
+        } else {
+            Text("—").foregroundStyle(.secondary).accessibilityLabel("Amount not read yet")
+        }
+    }
+}
+
+/// A purchase opened from the Journal: read it, or correct what was read out
+/// of the receipt and add photos and recordings. Saved on the device first.
+struct SpendingRecordView: View {
+    @ObservedObject var model: CaptureModel
+    let record: SyncChange
+    @State private var editing = false
+    @State private var merchant = ""
+    @State private var category = ""
+    @State private var amount = ""
+    @State private var notes = ""
+    @State private var amountError: String?
+    @FocusState private var typing: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    private var purchase: SpendingEntryRecord? { SpendingEntryRecord(record: record) }
+    private var staged: CaptureDraft { model.entryDrafts[record.id] ?? CaptureDraft() }
+    private var shownAmount: String {
+        purchase?.amountCents.map { String(format: "%d.%02d", $0 / 100, $0 % 100) } ?? ""
+    }
+    private var changes: [String: JSONValue] {
+        var out: [String: JSONValue] = [:]
+        if merchant != purchase?.merchant ?? "" { out["merchant"] = .string(merchant) }
+        if category != purchase?.category ?? "" { out["category"] = .string(category) }
+        if notes != purchase?.notes ?? "" { out["notes"] = .string(notes) }
+        if amount != shownAmount, let cents = SpendingAmount.cents(amount) { out["amountCents"] = .number(Double(cents)) }
+        return out
+    }
+
+    var body: some View {
+        Form {
+            if editing {
+                Section {
+                    TextField("Merchant", text: $merchant).focused($typing)
+                    TextField("Category", text: $category).focused($typing)
+                    TextField("Amount (CAD)", text: $amount).keyboardType(.decimalPad).focused($typing)
+                        .accessibilityLabel("Spending amount")
+                    if let amountError { Text(amountError).font(.footnote).foregroundStyle(.red) }
+                    TextEditor(text: $notes).frame(minHeight: 120).focused($typing)
+                        .accessibilityLabel("Purchase notes")
+                    AttachmentButtons(model: model, recorder: model.recorder, entryID: record.id,
+                                      kind: .spending) { typing = false }
+                }
+                if !staged.isEmpty {
+                    Section("Adding") { StagedAttachmentRows(model: model, recorder: model.recorder, draft: staged) }
+                }
+                Section {
+                    Button("Save edit on this device") { save() }
+                        .disabled(changes.isEmpty && staged.isEmpty && amount == shownAmount)
+                    Button("Cancel", role: .cancel) { model.discardEdit(record.id); editing = false }
+                }
+            } else {
+                Section {
+                    LabeledContent("Amount") { SpendingAmountText(cents: purchase?.amountCents) }
+                    if let merchant = purchase?.merchant { LabeledContent("Merchant", value: merchant) }
+                    if let category = purchase?.category { LabeledContent("Category", value: category) }
+                    if let created = purchase?.createdAt { LabeledContent("Spent", value: created.formatted()) }
+                    if let notes = purchase?.notes { Text(notes).textSelection(.enabled) }
+                    if let raw = purchase?.rawContent, raw != purchase?.notes {
+                        DisclosureGroup("What was written and said") { Text(raw).textSelection(.enabled) }
+                    }
+                    PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
+                }
+                let media = model.spendingMedia[record.id] ?? []
+                if !media.isEmpty {
+                    Section("Receipt and recordings") { MealMedia(model: model, media: media) }
+                }
+            }
+        }
+        .navigationTitle(purchase?.heading ?? "Purchase").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !editing { ToolbarItem(placement: .primaryAction) { Button("Edit") { startEditing() } } }
+        }
+        .onAppear { if !editing && !staged.isEmpty { startEditing() } }
+        .onChange(of: amount) { _, _ in amountError = nil }
+    }
+
+    private func save() {
+        // An amount can be corrected but not cleared, and never rounded.
+        if amount != shownAmount, SpendingAmount.cents(amount) == nil {
+            amountError = DailyError.invalidAmount.localizedDescription
+            return
+        }
+        if model.saveEdit(record, changes: changes) { dismiss() }
+    }
+
+    private func startEditing() {
+        merchant = purchase?.merchant ?? ""; category = purchase?.category ?? ""
+        notes = purchase?.notes ?? ""; amount = shownAmount
+        editing = true
+    }
+}
+
+// MARK: Where the day went
+
+/// The web's map card: where the phone went that day, time at Home and Work,
+/// and each commute with how it was made. The picture is the server's, named
+/// by version, so a cached copy is never stale.
+private struct LocationDayCard: View {
+    @ObservedObject var model: CaptureModel
+    let day: LocationDay
+    @State private var image: UIImage?
+    @State private var missing = false
+    @State private var enlarged = false
+
+    private var summary: String {
+        var parts: [String] = []
+        if day.placeCount > 0 { parts.append("\(day.placeCount) place\(day.placeCount == 1 ? "" : "s")") }
+        if day.entryCount > 0 { parts.append("\(day.entryCount) \(day.entryCount == 1 ? "entry" : "entries") pinned") }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        FeedCard {
+            HStack(alignment: .firstTextBaseline) {
+                Label(dayTitle, systemImage: "map").font(.subheadline.weight(.semibold))
+                Spacer()
+                if !summary.isEmpty { Text(summary).font(.caption).foregroundStyle(.secondary) }
+            }
+            if let line = Whereabouts.line(day.whereabouts) {
+                Text(line).font(.subheadline).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("day-whereabouts")
+            }
+            ForEach(Array((day.commutes ?? []).enumerated()), id: \.offset) { _, trip in
+                Label(Whereabouts.commuteLine(trip), systemImage: Whereabouts.modeSymbol(trip.mode))
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Button { if image != nil { enlarged = true } } label: {
+                Group {
+                    if let image {
+                        Image(uiImage: image).resizable().scaledToFit()
+                    } else {
+                        ZStack {
+                            Color.secondary.opacity(0.15)
+                            if missing { Image(systemName: "map").foregroundStyle(.secondary) } else { ProgressView() }
+                        }
+                        .aspectRatio(1.5, contentMode: .fit)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Map of \(dayTitle)")
+        }
+        .task(id: day.imageUrl) {
+            if let data = await model.dayMap(day) { image = UIImage(data: data) }
+            missing = image == nil
+        }
+        .fullScreenCover(isPresented: $enlarged) {
+            NavigationStack {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    if let image { Image(uiImage: image).resizable().scaledToFit() }
+                }
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { enlarged = false } } }
+            }
+        }
+    }
+
+    private var dayTitle: String {
+        guard let date = DayKey.date(day.date) else { return day.date }
+        return date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+    }
+}
+
 // MARK: Photos
 
 /// A strip of fixed-height pictures, each width following its photo, blown
 /// up full screen on a tap: the web's journal photo strip.
-private struct PhotoStrip: View {
+struct PhotoStrip: View {
     @ObservedObject var model: CaptureModel
     let photos: [JournalAttachmentItem]
+    /// The entry's own time, so a photo taken on another day can say so.
+    var entryDate: Date? = nil
     @State private var shown: JournalAttachmentItem?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(photos) { photo in
-                    Button { shown = photo } label: { RemoteThumbnail(model: model, item: photo, height: 120) }
+                    Button { shown = photo } label: {
+                        RemoteThumbnail(model: model, item: photo, height: 120)
+                            .overlay(alignment: .topLeading) { if photo.isLivePhoto { LiveBadge() } }
+                    }
                         .buttonStyle(.plain)
                         .accessibilityLabel(photo.description ?? (photo.name.isEmpty ? "Photo" : photo.name))
+                        .accessibilityValue(photo.isLivePhoto ? "Live Photo" : "")
                         .accessibilityIdentifier("journal-photo")
                 }
             }
         }
-        .fullScreenCover(item: $shown) { photo in PhotoViewer(model: model, item: photo) }
+        .fullScreenCover(item: $shown) { photo in PhotoViewer(model: model, item: photo, entryDate: entryDate) }
+    }
+}
+
+/// A Live Photo, played the way Photos plays one: press and hold.
+private struct LivePhotoPlayer: UIViewRepresentable {
+    let photo: PHLivePhoto
+
+    func makeUIView(context: Context) -> PHLivePhotoView {
+        let view = PHLivePhotoView()
+        view.contentMode = .scaleAspectFit
+        view.livePhoto = photo
+        return view
+    }
+
+    func updateUIView(_ view: PHLivePhotoView, context: Context) {
+        if view.livePhoto !== photo { view.livePhoto = photo }
     }
 }
 
@@ -532,8 +794,10 @@ private struct RemoteThumbnail: View {
 private struct PhotoViewer: View {
     @ObservedObject var model: CaptureModel
     let item: JournalAttachmentItem
+    var entryDate: Date? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var image: UIImage?
+    @State private var live: PHLivePhoto?
     @State private var missing = false
     @State private var zoom: CGFloat = 1
     @GestureState private var pinch: CGFloat = 1
@@ -542,7 +806,10 @@ private struct PhotoViewer: View {
         NavigationStack {
             ZStack {
                 Color.black.ignoresSafeArea()
-                if let image {
+                if let live {
+                    LivePhotoPlayer(photo: live)
+                        .accessibilityIdentifier("journal-live-photo")
+                } else if let image {
                     GeometryReader { space in
                         ScrollView([.horizontal, .vertical], showsIndicators: false) {
                             Image(uiImage: image).resizable().scaledToFit()
@@ -561,7 +828,10 @@ private struct PhotoViewer: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                if let text = item.description ?? item.transcript {
+                let taken = entryDate.flatMap { item.takenLabel(entryDate: $0) }
+                let text = [taken.map { $0.prefix(1).uppercased() + $0.dropFirst() }, item.description ?? item.transcript]
+                    .compactMap { $0 }.joined(separator: "\n")
+                if !text.isEmpty {
                     Text(text).font(.footnote).foregroundStyle(.white).padding()
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(.black.opacity(0.6))
@@ -579,6 +849,42 @@ private struct PhotoViewer: View {
                 image = await Task.detached { UIImage(contentsOfFile: file.path) }.value
             }
             missing = image == nil
+            // The still shows at once; the clip, when it arrives, turns it into
+            // a Live Photo. Offline with no clip fetched, the still is all there is.
+            if item.isLivePhoto, let still = await model.journalMediaFile(item),
+               let motion = await model.journalMotionFile(item) {
+                live = await Self.livePhoto(still: still, motion: motion, mime: item.mime)
+            }
+        }
+    }
+
+    /// PhotoKit pairs the two by their file extensions, which the cached
+    /// copies do not have, so they are linked under names that say what they are.
+    private static func livePhoto(still: URL, motion: URL, mime: String) async -> PHLivePhoto? {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("live-" + still.lastPathComponent,
+                                                                                    isDirectory: true)
+        let ext = UTType(mimeType: mime)?.preferredFilenameExtension ?? "jpg"
+        let named = (folder.appendingPathComponent("still").appendingPathExtension(ext),
+                     folder.appendingPathComponent("motion.mov"))
+        do {
+            try? FileManager.default.removeItem(at: folder)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for (source, name) in [(still, named.0), (motion, named.1)] {
+                if (try? FileManager.default.linkItem(at: source, to: name)) == nil {
+                    try FileManager.default.copyItem(at: source, to: name)
+                }
+            }
+        } catch { return nil }
+        return await withCheckedContinuation { done in
+            var resumed = false
+            PHLivePhoto.request(withResourceFileURLs: [named.0, named.1], placeholderImage: nil,
+                                targetSize: .zero, contentMode: .aspectFit) { photo, info in
+                // Called more than once: a degraded version first, then the full one.
+                let degraded = (info[PHLivePhotoInfoIsDegradedKey] as? Bool) == true
+                guard !resumed, photo == nil || !degraded else { return }
+                resumed = true
+                done.resume(returning: photo)
+            }
         }
     }
 }
@@ -587,7 +893,7 @@ private struct PhotoViewer: View {
 
 /// A clip played in place, with its transcript and what was heard in it
 /// folded underneath.
-private struct AudioRow: View {
+struct AudioRow: View {
     @ObservedObject var model: CaptureModel
     let item: JournalAttachmentItem
     @State private var player: AVPlayer?
@@ -686,6 +992,7 @@ private struct AudioRow: View {
 private struct VideoCard: View {
     @ObservedObject var model: CaptureModel
     let item: JournalAttachmentItem
+    var entryDate: Date? = nil
     @State private var player: AVPlayer?
     @State private var opening = false
     @State private var failed = false
@@ -701,7 +1008,9 @@ private struct VideoCard: View {
             default:
                 Button(action: open) {
                     ZStack {
-                        if item.media == .youtube {
+                        // An uploaded video has a poster once ffmpeg has read
+                        // one off it; a YouTube video always does.
+                        if item.media == .youtube || item.hasThumb {
                             RemoteThumbnail(model: model, item: item, poster: true, height: 180)
                         } else {
                             Color.black.frame(height: 180).clipShape(RoundedRectangle(cornerRadius: 8))
@@ -711,16 +1020,28 @@ private struct VideoCard: View {
                             .padding(14).background(.black.opacity(0.6), in: Circle())
                     }
                     .frame(maxWidth: .infinity)
+                    .overlay(alignment: .bottomTrailing) {
+                        if item.media == .video, let seconds = item.durationSeconds, seconds > 0 {
+                            Text(String(format: "%d:%02d", seconds / 60, seconds % 60))
+                                .font(.caption2.monospacedDigit()).foregroundStyle(.white)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(.black.opacity(0.6), in: Capsule()).padding(8)
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
                 .disabled(opening)
                 .accessibilityLabel("Play \(item.name.isEmpty ? "video" : item.name)")
+                .accessibilityValue(item.durationSeconds.map { String(format: "%d:%02d", $0 / 60, $0 % 60) } ?? "")
                 .accessibilityIdentifier("journal-video")
                 if failed {
                     Text("This video needs the server.").font(.caption).foregroundStyle(.orange)
                 }
             }
             if !item.name.isEmpty { Text(item.name).font(.subheadline).lineLimit(2) }
+            if let entryDate, let taken = item.takenLabel(entryDate: entryDate) {
+                Text(taken).font(.caption).foregroundStyle(.secondary)
+            }
             if let source = item.sourceURL, let url = URL(string: source) {
                 Link("Open on YouTube", destination: url).font(.caption)
             }

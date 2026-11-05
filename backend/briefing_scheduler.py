@@ -1,4 +1,7 @@
-"""Overnight-briefing daemon, and the life-wiki pass that feeds it.
+"""Overnight-briefing daemon, and the two passes that feed it.
+
+(The second, the server-oddities scan in backend/oddities_job.py, runs between
+the life wiki and the briefing; the notes below about ordering apply to it too.)
 
 Like the chat-title sweep (backend/chat_title_scheduler.py), there is no general
 scheduler in the Flask backend — this is a small daemon thread that fires once
@@ -80,6 +83,18 @@ def _run_nightly() -> None:
                   + (' (hit its budget)' if result.get('timedOut') else ''))
     except Exception as e:
         print(f'Life-wiki pass failed, briefing continuing: {e}')
+
+    # After the wiki, so the night's own passes are in the window it reads;
+    # before the briefing, which ends with what it found. Wrapped for the same
+    # reason as the wiki: the briefing is the thing the user wakes up to.
+    try:
+        from backend.oddities_job import run_oddities_pass
+        result = run_oddities_pass()
+        if result['clusters']:
+            print(f'Server oddities: {result["clusters"]} kinds from '
+                  f'{result["events"]} events, {result["notes"]} notes written')
+    except Exception as e:
+        print(f'Server oddities pass failed, briefing continuing: {e}')
 
     run_briefing()
 

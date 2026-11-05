@@ -25,6 +25,7 @@ const { QUEUE, mocks } = vi.hoisted(() => {
     sourceId: null,
     derivedFrom: null,
     revisedFrom: null,
+    kind: 'qa',
     due: null,
     createdAt: '2026-07-17T10:00:00Z',
     updatedAt: '2026-07-17T10:00:00Z',

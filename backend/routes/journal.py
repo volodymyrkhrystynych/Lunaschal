@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict, search_journal_fts
@@ -20,7 +21,12 @@ from backend.ai.journal import (
 )
 from backend.ai import jobs
 from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
-from backend.journal import archive, playable, storage, voice_drafts, youtube_import
+from backend.journal import archive, context_prompts, playable, storage, voice_drafts, youtube_import
+from backend.journal import location as entry_location
+from backend.journal import refile
+from backend.journal import video as journal_video
+from backend.imaging import HEIC_EXTS, transcode_to_jpeg
+from backend.learning.review_cards import carry_review_card, ensure_review_card
 from backend.study import youtube
 from backend.tags import tags_json
 
@@ -210,6 +216,53 @@ def get_entry(id):
     )[0])
 
 
+@bp.post('/context-prompts/prepare')
+def prepare_context_prompts():
+    db = get_db()
+    entries = [row_to_dict(row) for row in context_prompts.prepare(db)]
+    return jsonify(_enrich_with_attachments(db, entries))
+
+
+@bp.post('/<id>/context-prompt')
+def resolve_context_prompt(id):
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Expected an object'}), 400
+    action = body.get('action')
+    content = body.get('content', '')
+    if action not in ('save', 'dismiss'):
+        return jsonify({'error': 'action must be save or dismiss'}), 400
+    if action == 'save' and (not isinstance(content, str) or not content.strip()):
+        return jsonify({'error': 'Context is required'}), 400
+    db = get_db()
+    with context_prompts.lock:
+        row = db.execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone()
+        if row is None:
+            return jsonify({'error': 'Not found'}), 404
+        if row['context_prompt_status'] != 'pending':
+            if action == 'save' and row['context_prompt_status'] == 'dismissed':
+                return jsonify({'error': 'This prompt was dismissed. Open the entry in Journal to add context.'}), 409
+            if action == 'save':
+                existing = (row['raw_content'] or row['content'] or '').strip()
+                if existing != content.strip() and not existing.startswith(content.strip() + '\n\n'):
+                    return jsonify({'error': 'This entry already has different context. Open it in Journal to edit it.'}), 409
+            # Lost responses/replayed clicks cannot append the context twice.
+            return jsonify({'success': True})
+        if action == 'save':
+            if (row['content'] or '').strip() or (row['raw_content'] or '').strip():
+                return jsonify({'error': 'This entry already has context. Open it in Journal to edit it.'}), 409
+            _append_entry_text(db, id, content.strip())
+        db.execute(
+            'UPDATE journal_entries SET context_prompt_status=? WHERE id=?',
+            ('answered' if action == 'save' else 'dismissed', id),
+        )
+        db.commit()
+    _notify_subscribers(id)
+    if action == 'save':
+        _generate_metadata_bg(id, content.strip())
+    return jsonify({'success': True})
+
+
 def create_journal_entry(
     content: str,
     raw_content: str | None,
@@ -221,6 +274,7 @@ def create_journal_entry(
     polish: bool = False,
     pending_attachments: int = 0,
     coords: tuple[float, float] | None = None,
+    auto_file: bool = False,
 ) -> str | None:
     """Inserts a journal entry and kicks off background metadata generation
     (and, if `polish` and `raw_content` is set, background polish — the STT
@@ -238,6 +292,11 @@ def create_journal_entry(
     photo on it that carries no GPS EXIF of its own — which is every picture
     taken through the camera rather than picked from the library.
 
+    `auto_file` is the phone's Capture tab saying this could also have been a
+    meal or a purchase: once its attachments settle it is read, and it may be
+    moved out of the journal (see `autofile_entry`). An id that was already moved
+    is a replay of that capture's create, and must not bring the entry back.
+
     A composer mints its entry id at the first recorded chunk, so a clip can
     reach `create_recording_entry` *before* this does — the boot sweep after a
     crash sends only the clip, and an offline queue can replay in either order.
@@ -248,13 +307,20 @@ def create_journal_entry(
     """
     id = entry_id or str(ULID())
     db = get_db()
+    if entry_id and refile.refiled_to(db, entry_id):
+        return None
     latitude, longitude = coords if coords else (None, None)
+    source = 'device' if coords else None
     cur = db.execute(
         'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags,'
-        ' latitude, longitude, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        ' latitude, longitude, location_source, auto_file, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         (id, content, raw_content, title, tags_json(tags),
-         latitude, longitude, created_at, created_at),
+         latitude, longitude, source, int(auto_file), created_at, created_at),
     )
+    # With no fix of its own, where the phone's trail was at that moment.
+    if cur.rowcount and not coords:
+        entry_location.fill(db, id)
     db.commit()
     if cur.rowcount == 0:
         if not content.strip():
@@ -262,12 +328,18 @@ def create_journal_entry(
         # COALESCE on the coordinates rather than a plain assignment: the
         # recording route may have located the row already, and a create with
         # no fix (button not pressed, permission refused) must not erase it.
+        # A device fix arriving with the words replaces a trail lookup the
+        # recording route made: measured beats looked up.
         adopted = db.execute(
             "UPDATE journal_entries SET content=?, raw_content=?, updated_at=?,"
-            " latitude=COALESCE(?, latitude), longitude=COALESCE(?, longitude)"
+            " latitude=COALESCE(?, latitude), longitude=COALESCE(?, longitude),"
+            " location_source=COALESCE(?, location_source), auto_file=?"
             " WHERE id=? AND content='' AND COALESCE(raw_content, '')=''",
-            (content, raw_content, created_at, latitude, longitude, id),
+            (content, raw_content, created_at, latitude, longitude, source,
+             int(auto_file), id),
         )
+        if adopted.rowcount and not coords:
+            entry_location.fill(db, id)
         db.commit()
         if not adopted.rowcount:
             return None
@@ -278,21 +350,29 @@ def create_journal_entry(
         entry_weather.nudge()
         if polish and raw_content:
             _polish_bg(id, raw_content)
-        if not title or not tags:
-            _generate_metadata_bg(id, content, expect_attachments=pending_attachments)
+        _after_create(id, content, title, tags, pending_attachments, auto_file)
         return id
     _notify_subscribers(id)
     entry_weather.nudge()
     if polish and raw_content:
         _polish_bg(id, raw_content)
-    if not title or not tags:
-        _generate_metadata_bg(id, content, expect_attachments=pending_attachments)
+    _after_create(id, content, title, tags, pending_attachments, auto_file)
     return id
+
+
+def _after_create(id: str, content: str, title, tags, pending_attachments: int,
+                  auto_file: bool) -> None:
+    """Title the entry — or, for a capture that may not be a journal entry at
+    all, decide that first."""
+    if title and tags:
+        return
+    _generate_metadata_bg(id, content, expect_attachments=pending_attachments,
+                          auto_file=auto_file)
 
 
 def _queue_todays_newspaper() -> None:
     """The day's first entry is one of the two triggers for downloading that
-    day's newspaper (the other is a random evening time — see
+    day's newspaper (the other is a random time between 5 and 7 am — see
     `backend/newspapers/scheduler.py`). Never allowed to fail the save."""
     try:
         from backend.newspapers import scheduler as newspaper_scheduler
@@ -362,7 +442,19 @@ def create_entry():
         # device answered. `coord_pair` drops a half-sent pair rather than
         # storing a row that looks located and isn't.
         coords=coord_pair(body.get('latitude'), body.get('longitude')),
+        # The phone's body is all strings; only its Capture tab sends this.
+        auto_file=body.get('autoFile') in (True, '1', 'true'),
     )
+    # A JSON true from the web, the string 'true' from the iPad, whose body is
+    # all strings.
+    if body.get('forReview') in (True, 'true'):
+        # The notebook's For review switch: the pages come back as a learning
+        # card. Before the replaced entries go, so a re-filed notebook keeps
+        # the card it had, and its schedule, rather than starting over.
+        db = get_db()
+        carry_review_card(db, replaces, id)
+        ensure_review_card(db, id)
+        db.commit()
     if replaces:
         # An iPad newspaper filed again later in the day stands in for the
         # entry it was filed as before, so the day keeps one. After the insert,
@@ -705,6 +797,8 @@ def _polish_bg(journal_id: str, raw_content: str, *, now: bool = False) -> None:
 MAX_AUDIO_BYTES = 100 * 1024 * 1024
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_BYTES = 1024 * 1024 * 1024
+# A Live Photo's clip is three seconds; anything near this is not one.
+MAX_MOTION_BYTES = 100 * 1024 * 1024
 
 # A `file` attachment is anything the media tables didn't claim. The cap sits
 # between audio and video: generous enough for a PDF, a zip or a spreadsheet,
@@ -729,7 +823,8 @@ _ATTACHMENT_COLS = (
     ' transcript, transcript_status, transcript_error,'
     ' description, description_status, description_error,'
     ' latitude, longitude, exif, source_url, duration_seconds, thumb_path,'
-    ' import_status, import_error, created_at'
+    ' import_status, import_error, captured_at, motion_path, motion_mime,'
+    ' motion_size, created_at'
 )
 
 
@@ -739,6 +834,11 @@ def _attachment_dict(row) -> dict:
     # gets URLs instead.
     d.pop('path', None)
     thumb = d.pop('thumbPath', None)
+    # A Live Photo's clip is served by its own route, so the path never leaves.
+    d.pop('motionPath', None)
+    d['hasMotion'] = bool(row['motion_path'])
+    if row['motion_path']:
+        d['motionUrl'] = f'/api/journal/attachments/{row["id"]}/motion'
     # Only when there is something to serve. A youtube attachment exists from
     # the moment the link is pasted and has no file until the download lands —
     # handing the client a URL to it then is a broken <video> on every card.
@@ -799,6 +899,7 @@ def list_attachments(id):
 def _store_attachment(
     entry_id: str, file, name: str | None, attachment_id: str | None = None,
     *, media_only: bool = False, created_at: int | None = None,
+    captured_at: int | None = None, motion=None,
 ):
     """Save one uploaded file as an attachment of `entry_id`.
 
@@ -816,6 +917,10 @@ def _store_attachment(
     recording route does: a phone holds its audio until the upload is confirmed,
     so the same clip is re-POSTed until it lands, and a client-chosen id is what
     lets the replay be recognized (see `create_recording_entry`).
+
+    `captured_at` is when the photo or video was *taken*, as the phone read it
+    off the file; without it the file's own EXIF or QuickTime date is used.
+    `motion` is a Live Photo's paired clip, accepted only beside an image.
     """
     # NOT `or not file.filename`: a voice memo dragged out of the iOS Voice Memos
     # app arrives as a File with an empty name, and rejecting it here turned a
@@ -824,6 +929,16 @@ def _store_attachment(
     ext, kind = storage.resolve_upload(file.mimetype, file.filename)
     if media_only and kind == 'file':
         return None, (_UNSUPPORTED_TYPE + ' — audio, video or images only', 400)
+    motion_ext = None
+    if motion is not None:
+        motion_ext, motion_kind = storage.resolve_upload(motion.mimetype, motion.filename)
+        if kind != 'image' or motion_kind != 'video':
+            return None, ('motion is a Live Photo clip: a video beside an image', 400)
+    # iPhone stills arrive as HEIC, which only Safari can draw. Re-encoded once
+    # here, keeping the EXIF (date, GPS) — the food log's rule, for its reason.
+    heic = kind == 'image' and ext in HEIC_EXTS
+    if heic:
+        ext = 'jpg'
 
     # The user's label for the attachment. Falling back to the filename keeps a
     # list of attachments readable even when someone skips naming them.
@@ -838,7 +953,13 @@ def _store_attachment(
     path.parent.mkdir(parents=True, exist_ok=True)
     # Streamed to disk rather than read() into memory: a phone video is happily
     # several hundred MB, and this app also runs on a handheld with 8 GB of RAM.
-    file.save(path)
+    if heic:
+        if not transcode_to_jpeg(file, path):
+            storage.delete_attachment_dir(attachment_id)
+            return None, ('could not read this HEIC photo', 400)
+    else:
+        file.save(path)
+    mime = 'image/jpeg' if heic else (file.mimetype or None)
 
     size = path.stat().st_size
     if size == 0:
@@ -847,6 +968,18 @@ def _store_attachment(
     if size > _MAX_BYTES_BY_KIND[kind]:
         storage.delete_attachment_dir(attachment_id)
         return None, ('file is too large', 413)
+
+    motion_path = motion_size = None
+    if motion is not None:
+        motion_path = storage.motion_path(attachment_id, motion_ext)
+        if motion_path is None:
+            storage.delete_attachment_dir(attachment_id)
+            return None, (_UNSUPPORTED_TYPE, 400)
+        motion.save(motion_path)
+        motion_size = motion_path.stat().st_size
+        if motion_size == 0 or motion_size > MAX_MOTION_BYTES:
+            storage.delete_attachment_dir(attachment_id)
+            return None, ('motion clip is empty or too large', 413 if motion_size else 400)
 
     # A photo should be located by where it was taken, not where it was
     # uploaded from — same helper the food log uses (backend/food/exif.py).
@@ -863,12 +996,28 @@ def _store_attachment(
     # and is read back for display, never queried.
     latitude = longitude = None
     exif_block = None
+    duration = None
+    has_poster = False
     if kind == 'image':
         from backend.food.exif import extract_exif_block, extract_photo_meta
         meta = extract_photo_meta(path)
         latitude, longitude = meta['latitude'], meta['longitude']
         block = extract_exif_block(path)
         exif_block = json.dumps(block) if block else None
+        # The phone's date wins: it read OffsetTimeOriginal, and EXIF's bare
+        # wall-clock time is only as right as the server's own timezone.
+        if captured_at is None:
+            captured_at = meta['taken_at']
+    elif kind == 'video':
+        # A probe and one decoded frame — under a second for a local file, and
+        # no model involved, so done here rather than queued.
+        probed = journal_video.probe(path)
+        duration = probed['duration_seconds']
+        if captured_at is None:
+            captured_at = probed['captured_at']
+        latitude, longitude = probed['latitude'], probed['longitude']
+        poster = storage.thumb_path(attachment_id)
+        has_poster = poster is not None and journal_video.make_poster(path, poster)
     if latitude is None:
         latitude, longitude = _entry_coords(entry_id)
 
@@ -903,11 +1052,15 @@ def _store_attachment(
             'INSERT OR IGNORE INTO journal_attachments'
             '(id, entry_id, kind, name, path, mime, size, position,'
             ' transcript_status, description_status, latitude, longitude, exif,'
-            ' created_at)'
-            ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            (attachment_id, entry_id, kind, name, str(path), file.mimetype or None,
+            ' duration_seconds, thumb_path, captured_at, motion_path, motion_mime,'
+            ' motion_size, created_at)'
+            ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (attachment_id, entry_id, kind, name, str(path), mime,
              size, position, transcript_status, description_status,
              latitude, longitude, exif_block,
+             duration, str(storage.thumb_path(attachment_id)) if has_poster else None,
+             captured_at, str(motion_path) if motion_path else None,
+             (motion.mimetype or None) if motion is not None else None, motion_size,
              created_at if created_at is not None else int(time.time())),
         )
         db.commit()
@@ -944,6 +1097,7 @@ def upload_attachment(id):
     """
     try:
         attachment_id = _client_id(request.form.get('attachmentId'))
+        captured_at = _optional_capture_time(request.form)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -959,6 +1113,9 @@ def upload_attachment(id):
             db.commit()
             return jsonify(_attachment_dict(existing)), 201
 
+    if refile.refiled_to(get_db(), id):
+        return _forward_upload(id, attachment_id, lambda: {'id': attachment_id, 'entryId': id})
+
     entry = get_db().execute(
         'SELECT id FROM journal_entries WHERE id=?', (id,)
     ).fetchone()
@@ -970,7 +1127,8 @@ def upload_attachment(id):
         return jsonify({'error': 'file is required'}), 400
 
     attachment, failure = _store_attachment(
-        id, file, request.form.get('name'), attachment_id
+        id, file, request.form.get('name'), attachment_id,
+        captured_at=captured_at, motion=request.files.get('motion'),
     )
     if failure is not None:
         message, status = failure
@@ -979,6 +1137,30 @@ def upload_attachment(id):
     _close_screenshot_session(db, id)
     db.commit()
     return jsonify(attachment), 201
+
+
+def _forward_upload(entry_id: str, attachment_id: str | None, ack, *, audio: bool = False):
+    """An upload for a journal entry that auto-filing has moved to the food
+    log or the spending ledger. The phone sent it to the journal id because
+    that is what it saved; it is answered the way the journal route would, so
+    the capture is not failed for something the server did.
+
+    `ack` builds the response body once `attachment_id` is settled — the replay
+    of a part that was moved with the entry, or a part arriving late, which is
+    stored on the entry where it now is."""
+    db = get_db()
+    if attachment_id and refile.forwarded_media(db, entry_id, attachment_id):
+        return jsonify(ack()), 201
+    file = request.files.get('file')
+    if file is None:
+        return jsonify({'error': 'file is required'}), 400
+    if attachment_id is None:
+        return jsonify({'error': 'This entry was filed elsewhere; send the attachment id'}), 409
+    kind = 'audio' if audio and (file.mimetype or '').startswith('audio/') else None
+    if not refile.store_forwarded(db, entry_id, file, attachment_id, kind=kind):
+        return jsonify({'error': 'This entry was filed as a meal or a purchase,'
+                                 ' which cannot hold this file'}), 409
+    return jsonify(ack()), 201
 
 
 def _capture_local_parts(attachment) -> tuple[str, str]:
@@ -995,7 +1177,7 @@ def _capture_local_parts(attachment) -> tuple[str, str]:
 def _sync_screenshot_event(db, session) -> None:
     """Recompute capture bounds and keep an event only for two or more shots."""
     attachments = db.execute(
-        'SELECT id, name, created_at FROM journal_attachments WHERE entry_id=?'
+        "SELECT id, name, created_at FROM journal_attachments WHERE entry_id=? AND kind='image'"
         ' ORDER BY created_at, id',
         (session['entry_id'],),
     ).fetchall()
@@ -1005,7 +1187,11 @@ def _sync_screenshot_event(db, session) -> None:
                        (session['calendar_event_id'],))
         return
 
-    for position, attachment in enumerate(attachments):
+    ordered = db.execute(
+        'SELECT id FROM journal_attachments WHERE entry_id=? ORDER BY created_at, id',
+        (session['entry_id'],),
+    ).fetchall()
+    for position, attachment in enumerate(ordered):
         db.execute(
             'UPDATE journal_attachments SET position=? WHERE id=?',
             (position, attachment['id']),
@@ -1023,7 +1209,8 @@ def _sync_screenshot_event(db, session) -> None:
          last_date, last_time, int(time.time()), session['entry_id']),
     )
     db.execute(
-        'UPDATE journal_entries SET created_at=?, updated_at=? WHERE id=?',
+        'UPDATE journal_entries SET created_at=MIN(created_at, ?),'
+        ' updated_at=MAX(updated_at, ?) WHERE id=?',
         (first['created_at'], last['created_at'], session['entry_id']),
     )
 
@@ -1084,7 +1271,9 @@ def upload_screenshot():
                 # its connection before extending the event. Replay converges
                 # that last step too, even when the session has since closed.
                 _sync_screenshot_event(db, session)
+                _merge_overlapping_screenshots(existing['entry_id'])
                 db.commit()
+            existing = _load_attachment(attachment_id)
             return jsonify({
                 'id': existing['entry_id'],
                 'attachment': _attachment_dict(_load_attachment(attachment_id)),
@@ -1097,30 +1286,37 @@ def upload_screenshot():
             return jsonify({'error': 'file must be an image'}), 400
 
         db = get_db()
+        from backend.journal.overlap import recording_for_interval
+        captured_at = int(captured.timestamp())
+        recording_id = recording_for_interval(db, captured_at, captured_at)
         session = db.execute(
+            'SELECT * FROM journal_screenshot_sessions WHERE entry_id=?',
+            (recording_id,),
+        ).fetchone() if recording_id else db.execute(
             'SELECT * FROM journal_screenshot_sessions WHERE is_open=1'
             ' ORDER BY last_captured_at DESC LIMIT 1'
         ).fetchone()
         created_entry = False
-        captured_at = int(captured.timestamp())
         local_date = captured.date().isoformat()
         local_time = captured.strftime('%H:%M:%S')
         if session is None:
-            entry_id = str(ULID())
-            db.execute(
-                'INSERT INTO journal_entries(id, content, raw_content, title, tags,'
-                ' created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
-                (entry_id, '', None, 'Screenshots', None,
-                 captured_at, captured_at),
-            )
+            entry_id = recording_id or str(ULID())
+            if not recording_id:
+                db.execute(
+                    'INSERT INTO journal_entries(id, content, raw_content, title, tags,'
+                    ' created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+                    (entry_id, '', None, 'Screenshots', None,
+                     captured_at, captured_at),
+                )
+                entry_location.fill(db, entry_id)
             now = int(time.time())
             db.execute(
                 'INSERT INTO journal_screenshot_sessions('
                 ' entry_id, calendar_event_id, is_open, first_captured_at,'
                 ' last_captured_at, first_local_date, first_local_time,'
                 ' last_local_date, last_local_time, created_at, updated_at)'
-                ' VALUES (?,NULL,1,?,?,?,?,?,?,?,?)',
-                (entry_id, captured_at, captured_at, local_date,
+                ' VALUES (?,NULL,?,?,?,?,?,?,?,?,?)',
+                (entry_id, 0 if recording_id else 1, captured_at, captured_at, local_date,
                  local_time, local_date, local_time, now, now),
             )
             db.commit()
@@ -1128,7 +1324,7 @@ def upload_screenshot():
                 'SELECT * FROM journal_screenshot_sessions WHERE entry_id=?',
                 (entry_id,),
             ).fetchone()
-            created_entry = True
+            created_entry = not recording_id
 
         name = captured.strftime('%Y-%m-%d %H:%M:%S')
         try:
@@ -1157,9 +1353,53 @@ def upload_screenshot():
             return jsonify({'error': message}), status
 
         _sync_screenshot_event(db, session)
+        # A run may grow across a recording interval after the audio arrived.
+        target_id = _merge_overlapping_screenshots(session['entry_id'])
         db.commit()
-        _notify_subscribers(session['entry_id'])
-        return jsonify({'id': session['entry_id'], 'attachment': attachment}), 201
+        _notify_subscribers(target_id)
+        return jsonify({'id': target_id, 'attachment': _attachment_dict(
+            _load_attachment(attachment_id))}), 201
+
+
+def _merge_overlapping_screenshots(entry_id):
+    from backend.journal.overlap import merge_screenshot_runs, recording_for_interval
+    db = get_db()
+    session = db.execute('SELECT * FROM journal_screenshot_sessions WHERE entry_id=?',
+                         (entry_id,)).fetchone()
+    target_id = entry_id
+    if session:
+        target_id = recording_for_interval(db, session['first_captured_at'],
+                                           session['last_captured_at']) or entry_id
+    removed = merge_screenshot_runs(db, target_id)
+    if removed:
+        session = db.execute('SELECT * FROM journal_screenshot_sessions WHERE entry_id=?',
+                             (target_id,)).fetchone()
+        _sync_screenshot_event(db, session)
+        db.commit()
+        for source in removed:
+            _notify_subscribers(source)
+        _notify_subscribers(target_id)
+        _retitle_bg(target_id)
+    return target_id if entry_id in removed else entry_id
+
+
+def _finish_recording_overlap(attachment_id, captured_at, duration):
+    """Also run on replay, in case a process stopped just after saving audio."""
+    attachment = _load_attachment(attachment_id)
+    if captured_at is None or attachment['kind'] != 'audio':
+        return
+    if attachment['duration_seconds'] is None:
+        if duration is None:
+            from backend.ai.audio_description import _probe_duration
+            duration = _probe_duration(Path(attachment['path']))
+        if duration is None:
+            return
+    with _screenshot_lock:
+        db = get_db()
+        db.execute('UPDATE journal_attachments SET duration_seconds=COALESCE(duration_seconds, ?)'
+                   ' WHERE id=?', (duration, attachment_id))
+        db.commit()
+        _merge_overlapping_screenshots(attachment['entry_id'])
 
 
 _ULID_RE = re.compile(r'^[0-9A-HJKMNP-TV-Z]{26}$')
@@ -1263,6 +1503,8 @@ def create_recording_entry():
     replay loop along with the audio. See `_link_recording_fic`.
     """
     try:
+        from backend.journal.overlap import duration_seconds
+        duration = duration_seconds(request.form.get('durationSeconds'))
         captured_at = _optional_capture_time(request.form)
         entry_id = _client_id(request.form.get('id'))
         attachment_id = _client_id(request.form.get('attachmentId'))
@@ -1296,11 +1538,22 @@ def create_recording_entry():
             db = get_db()
             _close_screenshot_session(db, existing['entry_id'])
             db.commit()
+            if not idea_id and not fic_id:
+                _finish_recording_overlap(attachment_id, captured_at, duration)
             # Already stored. Answer as if we'd just saved it so the client
             # clears its local copy — the whole point of the retry loop.
             return jsonify(
-                {'id': existing['entry_id'], 'attachment': _attachment_dict(existing)}
+                {'id': existing['entry_id'], 'attachment': _attachment_dict(
+                    _load_attachment(attachment_id))}
             ), 201
+
+    if entry_id and refile.refiled_to(db, entry_id):
+        # Before the INSERT OR IGNORE below, which would otherwise bring the
+        # moved entry back as an empty journal entry holding this clip.
+        return _forward_upload(
+            entry_id, attachment_id,
+            lambda: {'id': entry_id, 'attachment': {'id': attachment_id}}, audio=True,
+        )
 
     file = request.files.get('file')
     if file is None:
@@ -1319,6 +1572,10 @@ def create_recording_entry():
     # file is rejected must not delete the entry an earlier call got right.
     created_entry = cur.rowcount > 0
     if created_entry:
+        # A recording carries no fix (the Watch has none, nor does the bottom
+        # bar's Record): the trail says where it was made.
+        if entry_location.fill(db, entry_id):
+            db.commit()
         entry_weather.nudge()
 
     def _rollback_entry():
@@ -1357,6 +1614,12 @@ def create_recording_entry():
         # After the file for the same reason: a fic ref to a rolled-back entry
         # would put a dead row in the reader's commentary history.
         _link_recording_fic(entry_id, fic_id, chapter_id)
+
+    # Only an explicit capture start makes a duration a real time interval.
+    # Old clients that send upload time implicitly must never match by accident.
+    if not idea_id and not fic_id:
+        _finish_recording_overlap(attachment['id'], captured_at, duration)
+        attachment = _attachment_dict(_load_attachment(attachment['id']))
 
     _notify_subscribers(entry_id)
     if transcribe:
@@ -1454,6 +1717,22 @@ def get_attachment_file(attachment_id):
     # conditional=True so <audio> range requests work — seeking in a long voice
     # memo otherwise re-downloads the whole file on every scrub.
     return send_file(path, mimetype=row['mime'] or None, conditional=True)
+
+
+@bp.get('/attachments/<attachment_id>/motion')
+def get_attachment_motion(attachment_id):
+    """A Live Photo's clip — the still is `/file`. Range-served, since the
+    iPhone streams it into PHLivePhoto rather than downloading it first."""
+    row = get_db().execute(
+        'SELECT motion_path, motion_mime FROM journal_attachments WHERE id=?',
+        (attachment_id,),
+    ).fetchone()
+    if not row or not row['motion_path']:
+        return jsonify({'error': 'Not found'}), 404
+    path = storage.resolve_stored_path(row['motion_path'])
+    if path is None or not path.is_file():
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(path, mimetype=row['motion_mime'] or 'video/quicktime', conditional=True)
 
 
 @bp.post('/<entry_id>/attachments/link')
@@ -1918,6 +2197,7 @@ def _transcribe_attachment_bg(
     *, into_entry: bool = False, now: bool = False,
 ) -> None:
     def _run():
+        nonlocal entry_id
         try:
             # Video takes the speech path, not the vision one: what is worth
             # keeping from a clip filmed to talk into is what was said.
@@ -1951,9 +2231,14 @@ def _transcribe_attachment_bg(
             # re-running Transcribe on a clip must not paste it into the entry
             # a second time.
             prior = db.execute(
-                'SELECT transcript FROM journal_attachments WHERE id=?',
+                'SELECT transcript, entry_id FROM journal_attachments WHERE id=?',
                 (attachment_id,),
             ).fetchone()
+            if prior is None:
+                return
+            # A late caption belongs to the entry the screenshot lives in now,
+            # including a merge performed while the model was running.
+            entry_id = prior['entry_id']
             first_time = not (prior and prior['transcript'])
 
             updates = {'transcript_status': status, 'transcript_error': error}
@@ -1998,6 +2283,11 @@ def _transcribe_attachment_bg(
             # reaches them. The merge branch above has already retitled, so this
             # is only for the case it skipped.
             if not merge and text and kind in ('audio', 'video'):
+                _retitle_bg(entry_id)
+            elif text and kind == 'image' and db.execute(
+                "SELECT 1 FROM journal_attachments WHERE entry_id=?"
+                " AND kind='audio' AND duration_seconds > 0 LIMIT 1", (entry_id,),
+            ).fetchone():
                 _retitle_bg(entry_id)
 
             # A watched video's words are not the entry's words (so `merge` is
@@ -2272,6 +2562,46 @@ def _attachments_settled(entry_id: str, expected: int) -> bool:
     return True
 
 
+def _descriptions_settled(entry_id: str) -> bool:
+    """No clip on the entry is still being listened to.
+
+    The title does not wait for this (see `_attachments_settled`); auto-filing
+    does, because for a clip recorded without transcription the description is
+    the only account the classifier gets of what was said over the plate.
+    """
+    return get_db().execute(
+        "SELECT 1 FROM journal_attachments WHERE entry_id=? AND description_status='running'"
+        ' LIMIT 1', (entry_id,),
+    ).fetchone() is None
+
+
+def autofile_entry(entry_id: str) -> None:
+    """The `journal.autofile` job: read a settled phone capture and move it to
+    the food log or the spending ledger when that is what it is; otherwise
+    title it as the journal entry it stays.
+
+    A paused or preempted classification propagates, leaving the job pending
+    and the entry untitled until it can run. Anything else lands in the journal.
+    """
+    from backend.ai.autofile import classify_capture
+
+    db = get_db()
+    targets = refile.moveable_to(db, entry_id)
+    if targets:
+        has_video = db.execute(
+            "SELECT 1 FROM journal_attachments WHERE entry_id=? AND kind='video' LIMIT 1",
+            (entry_id,),
+        ).fetchone() is not None
+        readings = (_metadata_context(entry_id) or '').splitlines()
+        kind = classify_capture(_entry_raw_text(entry_id) or '', readings, has_video=has_video)
+        if kind in targets and refile.refile_entry(db, entry_id, kind):
+            return
+    row = db.execute('SELECT content, title, tags FROM journal_entries WHERE id=?',
+                     (entry_id,)).fetchone()
+    if row and (not row['title'] or not row['tags']):
+        jobs.enqueue('journal.metadata', entry_id, {'content': row['content']})
+
+
 def _entry_has_video(entry_id: str) -> bool:
     """Whether the entry has a watched video on it, and so gets the long cap.
 
@@ -2288,7 +2618,7 @@ def _entry_has_video(entry_id: str) -> bool:
 
 def _generate_metadata_bg(
     journal_id: str, content: str, *, expect_attachments: int = 0,
-    now: bool = False,
+    now: bool = False, auto_file: bool = False,
 ) -> None:
     def _run():
         try:
@@ -2322,8 +2652,11 @@ def _generate_metadata_bg(
     if now:
         _run()
         return
+    # A capture that may be a meal or a purchase is sorted before it is titled:
+    # titling one that then leaves the journal is a model call for nothing.
+    settled_kind = 'journal.autofile' if auto_file else 'journal.metadata'
     if expect_attachments <= 0:
-        jobs.enqueue('journal.metadata', journal_id, {'content': content})
+        jobs.enqueue(settled_kind, journal_id, {'content': content})
         return
 
     stop = threading.Event()
@@ -2332,9 +2665,13 @@ def _generate_metadata_bg(
         try:
             started = time.monotonic()
             deadline = started + _METADATA_WAIT_SECONDS
+            settled = False
             while time.monotonic() < deadline:
                 try:
-                    if _attachments_settled(journal_id, expect_attachments):
+                    if _attachments_settled(journal_id, expect_attachments) and (
+                        not auto_file or _descriptions_settled(journal_id)
+                    ):
+                        settled = True
                         break
                     if _entry_has_video(journal_id):
                         deadline = started + _METADATA_VIDEO_WAIT_SECONDS
@@ -2349,7 +2686,10 @@ def _generate_metadata_bg(
                     return
             if stop.is_set():
                 return
-            jobs.enqueue('journal.metadata', journal_id, {'content': content})
+            # Out of time is not settled: sorting a capture whose photo never
+            # arrived would move half of it, so it stays in the journal.
+            jobs.enqueue(settled_kind if settled else 'journal.metadata',
+                         journal_id, {'content': content})
         finally:
             with _metadata_waiters_lock:
                 _metadata_waiters.pop(waiter, None)

@@ -107,6 +107,21 @@ public struct CalorieLine: Equatable {
     }
 }
 
+/// A purchase typed as a category followed by a CAD amount, e.g. "Coffee 4.50".
+public struct SpendingLine: Equatable {
+    public let category: String
+    public let amountCents: Int
+
+    public static func parse(_ text: String) -> SpendingLine? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separator = trimmed.lastIndex(where: { $0.isWhitespace }) else { return nil }
+        let category = String(trimmed[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let amount = String(trimmed[trimmed.index(after: separator)...])
+        guard !category.isEmpty, let cents = SpendingAmount.cents(amount) else { return nil }
+        return SpendingLine(category: category, amountCents: cents)
+    }
+}
+
 /// The Daily tab's outbox. One JSON manifest per log, the selfie's bytes
 /// beside it. Call from one executor (the app uses MainActor).
 public final class DailyStore {
@@ -244,10 +259,14 @@ public struct DailyStatus: Equatable {
     public var selfie: Selfie?
     public var entries: [Entry]
     public var spending: [Spending]
+    /// Purchases captured as a receipt or clip that the server has not read an
+    /// amount out of yet. Not in `spending`; nil from a server that predates them.
+    public var pendingSpending: Int?
 
-    public init(day: String, weight: Double? = nil, selfie: Selfie? = nil, entries: [Entry] = [], spending: [Spending] = []) {
+    public init(day: String, weight: Double? = nil, selfie: Selfie? = nil, entries: [Entry] = [], spending: [Spending] = [],
+                pendingSpending: Int? = nil) {
         self.day = day; self.weight = weight; self.selfie = selfie; self.entries = entries
-        self.spending = spending
+        self.spending = spending; self.pendingSpending = pendingSpending
     }
 }
 
@@ -278,14 +297,24 @@ public struct DailySummary: Equatable {
     public var total: Int { entries.reduce(0) { $0 + $1.calories } }
     public var spending: [Spending] = []
     public var totalCents: Int { spending.reduce(0) { $0 + $1.amountCents } }
+    /// Receipts the server is still reading; shown beside the total, not in it.
+    public var pendingSpending = 0
     public var hasSelfie: Bool { localSelfie != nil || serverSelfie != nil }
+
+    /// Each daily requirement contributes one reminder, including offline logs.
+    public var remainingCount: Int {
+        (total < 2000 ? 1 : 0) + (hasSelfie ? 0 : 1) + (weight == nil ? 1 : 0)
+    }
 
     public init(day: String, server: DailyStatus?, local: [DailyLog]) {
         self.day = day
-        let mine = local.filter { $0.day == day }
+        // A refused upload isn't a completed requirement; the Daily view
+        // reports it separately so it can be discarded or corrected.
+        let mine = local.filter { $0.day == day && $0.state != .failed }
         let status = server?.day == day ? server : nil
         weight = status?.weight
         serverSelfie = status?.selfie
+        pendingSpending = status?.pendingSpending ?? 0
         let known = Set(status?.entries.map(\.id) ?? [])
         entries = (status?.entries ?? []).map { Entry(id: $0.id, description: $0.description, calories: $0.calories, waiting: false) }
         let knownSpending = Set(status?.spending.map(\.id) ?? [])

@@ -1,7 +1,20 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type SavedPlace } from '../../hooks/api';
+import {
+  api,
+  type PlaceRole,
+  type PlaceRolePeriod,
+  type SavedPlace,
+} from '../../hooks/api';
+import { localDayKey } from '../../lib/dates';
 import { currentPosition } from '../../lib/geo';
+import {
+  historyByRole,
+  patternsSummary,
+  periodRange,
+  roleLabel,
+  roleOf,
+} from '../../lib/placeRoles';
 
 const inputClass =
   'rounded border border-white/20 bg-[var(--color-bg)] px-2 py-1 text-sm w-full';
@@ -53,6 +66,49 @@ export function PlacesSection() {
       if (id === editing) edit();
     },
   });
+  const periods = useQuery({
+    queryKey: ['placeRoles'],
+    queryFn: api.memory.placeRoles,
+  });
+  const today = localDayKey();
+  // A Home change re-measures every job's commute, and every role change can
+  // redraw a day's map, so both are refetched rather than patched in place.
+  const rolesChanged = () => {
+    queryClient.invalidateQueries({ queryKey: ['placeRoles'] });
+    queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    queryClient.invalidateQueries({ queryKey: ['location', 'journal'] });
+  };
+  const [rolePlace, setRolePlace] = useState('');
+  const [role, setRole] = useState<PlaceRole>('home');
+  const [since, setSince] = useState(today);
+  const assign = useMutation({
+    mutationFn: () => api.memory.assignRole(role, rolePlace, since),
+    onSuccess: rolesChanged,
+  });
+  const updateRole = useMutation({
+    mutationFn: ({
+      id,
+      ...changes
+    }: {
+      id: string;
+      startedOn?: string;
+      endedOn?: string | null;
+    }) => api.memory.updateRole(id, changes),
+    onSuccess: rolesChanged,
+  });
+  const deleteRole = useMutation({
+    mutationFn: api.memory.deleteRole,
+    onSuccess: rolesChanged,
+  });
+  const located = (places.data ?? []).filter(
+    p => p.latitude != null && p.longitude != null
+  );
+  const history = historyByRole(periods.data ?? []);
+  const patterns = useQuery({
+    queryKey: ['location', 'patterns'],
+    queryFn: () => api.location.patterns(),
+  });
+  const patternLine = patternsSummary(patterns.data);
   async function locate() {
     setLocating(true);
     const position = await currentPosition();
@@ -69,26 +125,117 @@ export function PlacesSection() {
   return (
     <div className="space-y-3">
       <p className="text-sm text-[var(--color-text-muted)]">
-        Save Home, Work and other places so chat and the overnight briefing can
-        understand your locations. Add an address or aliases in Notes. Optional
-        coordinates match locations recorded with journal entries and meals.
+        Save the places you go so chat and the overnight briefing can understand
+        your locations. Add an address or aliases in Notes. Optional coordinates
+        match locations recorded with journal entries and meals. Make a place
+        your Home or a Work below; the location trail, the briefing, weather and
+        job commutes use whichever applied on the day.
       </p>
       {places.isError && <p role="alert">Could not load saved places.</p>}
-      {places.data?.map(place => (
-        <div key={place.id} className="flex items-center gap-3 text-sm">
-          <span className="flex-1">
-            {place.name}
-            {place.notes ? ` — ${place.notes}` : ''}
-          </span>
-          <button onClick={() => edit(place)}>Edit {place.name}</button>
+      {places.data?.map(place => {
+        const current = roleOf(place.id, periods.data ?? [], today);
+        return (
+          <div key={place.id} className="flex items-center gap-3 text-sm">
+            <span className="flex-1">
+              {place.name}
+              {current && (
+                <span className="ml-2 rounded bg-white/10 px-1.5 py-0.5 text-xs">
+                  {roleLabel(current.role)} {periodRange(current)}
+                </span>
+              )}
+              {place.notes ? ` — ${place.notes}` : ''}
+            </span>
+            <button onClick={() => edit(place)}>Edit {place.name}</button>
+            <button
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(place.id)}
+            >
+              Delete {place.name}
+            </button>
+          </div>
+        );
+      })}
+      {located.length > 0 && (
+        <form
+          aria-label="Set Home or Work"
+          className="flex flex-wrap items-end gap-2 text-sm"
+          onSubmit={e => {
+            e.preventDefault();
+            if (rolePlace) assign.mutate();
+          }}
+        >
+          <label className="flex-1 min-w-[8rem]">
+            Place
+            <select
+              required
+              value={rolePlace}
+              onChange={e => setRolePlace(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">Choose…</option>
+              {located.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Role
+            <select
+              value={role}
+              onChange={e => setRole(e.target.value as PlaceRole)}
+              className={inputClass}
+            >
+              <option value="home">Home</option>
+              <option value="work">Work</option>
+            </select>
+          </label>
+          <label>
+            Since
+            <input
+              type="date"
+              required
+              value={since}
+              onChange={e => setSince(e.target.value)}
+              className={inputClass}
+            />
+          </label>
           <button
-            disabled={remove.isPending}
-            onClick={() => remove.mutate(place.id)}
+            type="submit"
+            disabled={assign.isPending || !rolePlace}
+            className="rounded bg-[var(--color-primary)] px-3 py-1 text-white"
           >
-            Delete {place.name}
+            {role === 'home' ? 'Set as Home' : 'Add as Work'}
           </button>
-        </div>
-      ))}
+        </form>
+      )}
+      <p className="text-xs text-[var(--color-text-muted)]">
+        Moving? Add the new place and set it as Home from the move date; the old
+        one stays in the history. Editing a place’s coordinates corrects it for
+        all of its history. Only places with coordinates can be Home or Work.
+      </p>
+      {(['home', 'work'] as const).map(
+        r =>
+          history[r].length > 0 && (
+            <section key={r} aria-label={`${roleLabel(r)} history`}>
+              <h4 className="text-sm font-medium">{roleLabel(r)} history</h4>
+              <ul className="space-y-1">
+                {history[r].map(period => (
+                  <RolePeriodRow
+                    key={period.id}
+                    period={period}
+                    busy={updateRole.isPending || deleteRole.isPending}
+                    onChange={changes =>
+                      updateRole.mutate({ id: period.id, ...changes })
+                    }
+                    onDelete={() => deleteRole.mutate(period.id)}
+                  />
+                ))}
+              </ul>
+            </section>
+          )
+      )}
       <form
         className="space-y-2"
         onSubmit={e => {
@@ -172,11 +319,78 @@ export function PlacesSection() {
           )}
         </div>
       </form>
-      {(save.error || remove.error || locationError) && (
+      {patternLine && (
+        <p
+          className="text-sm text-[var(--color-text-muted)]"
+          aria-label="Location patterns"
+        >
+          {patternLine}
+        </p>
+      )}
+      {(save.error ||
+        remove.error ||
+        assign.error ||
+        updateRole.error ||
+        deleteRole.error ||
+        locationError) && (
         <p role="alert" className="text-sm text-red-400">
-          {save.error?.message || remove.error?.message || locationError}
+          {save.error?.message ||
+            remove.error?.message ||
+            assign.error?.message ||
+            updateRole.error?.message ||
+            deleteRole.error?.message ||
+            locationError}
         </p>
       )}
     </div>
+  );
+}
+
+/** One period in a role's history. Dates commit on change; clearing the end
+ *  date reopens the period. */
+function RolePeriodRow({
+  period,
+  busy,
+  onChange,
+  onDelete,
+}: {
+  period: PlaceRolePeriod;
+  busy: boolean;
+  onChange: (changes: { startedOn?: string; endedOn?: string | null }) => void;
+  onDelete: () => void;
+}) {
+  return (
+    <li className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="flex-1 min-w-[6rem]">{period.placeName}</span>
+      <label className="text-xs">
+        From
+        <input
+          type="date"
+          aria-label={`${period.placeName} from`}
+          defaultValue={period.startedOn}
+          onBlur={e => {
+            if (e.target.value && e.target.value !== period.startedOn)
+              onChange({ startedOn: e.target.value });
+          }}
+          className={inputClass}
+        />
+      </label>
+      <label className="text-xs">
+        Until
+        <input
+          type="date"
+          aria-label={`${period.placeName} until`}
+          defaultValue={period.endedOn ?? ''}
+          onBlur={e => {
+            const next = e.target.value || null;
+            if (next !== period.endedOn) onChange({ endedOn: next });
+          }}
+          className={inputClass}
+        />
+      </label>
+      <button type="button" disabled={busy} onClick={onDelete}>
+        Remove {period.placeName} period
+      </button>
+    </li>
   );
 }

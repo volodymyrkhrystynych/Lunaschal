@@ -98,6 +98,9 @@ extension LibraryDownload {
             guard try store.storePrefetched((page.fic.map { [$0] } ?? []) + page.chapters, epoch: page.epoch) else {
                 throw FicDownloadError.historyChanged
             }
+            // Pictures are small and few; fetched with their page, a fic
+            // that's on the device reads with them offline.
+            try await fetchImages(of: page.chapters, using: transport)
             if page.hasMore && page.after == after { throw ReplicaError.invalidPage }
             after = page.after
             let fileBytes = page.media?.available == true ? page.media?.size ?? 0 : 0

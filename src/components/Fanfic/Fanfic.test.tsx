@@ -152,6 +152,20 @@ describe('Library infinite scroll', () => {
     }
   });
 
+  it('lists the Backlog: fics on none of your lists on the site', async () => {
+    const { api } = await import('../../hooks/api');
+    renderFanfic();
+    await screen.findByText('Test Fic');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Backlog', exact: true })
+    );
+    await waitFor(() =>
+      expect(api.fanfic.list).toHaveBeenLastCalledWith(
+        expect.objectContaining({ folderId: 'backlog', offset: 0 })
+      )
+    );
+  });
+
   it('applies source filters to browsing and search, and clears them', async () => {
     const { api } = await import('../../hooks/api');
     renderFanfic();

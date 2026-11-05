@@ -17,16 +17,25 @@ interface Props {
 export function Browse({ folderId, tag, onSelectTag }: Props) {
   const [editing, setEditing] = useState<LearningCard | null>(null);
   const [verifying, setVerifying] = useState<LearningCard | null>(null);
+  // Retired cards: ones taken out of the deck (which can come back) and old
+  // versions a revision replaced (which can't).
+  const [showRetired, setShowRetired] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: cards } = useQuery({
-    queryKey: ['learning', 'cards', folderId, tag],
+    queryKey: ['learning', 'cards', folderId, tag, showRetired],
     queryFn: () =>
       api.learning.listCards({
         folderId: folderId ?? undefined,
         tag: tag ?? undefined,
         limit: 200,
+        state: showRetired ? 'retired' : undefined,
       }),
+  });
+
+  const unretire = useMutation({
+    mutationFn: (id: string) => api.learning.unretireCard(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['learning'] }),
   });
 
   const deleteCard = useMutation({
@@ -42,7 +51,9 @@ export function Browse({ folderId, tag, onSelectTag }: Props) {
     prev,
     drillIn: () => {
       const c = cards?.[selIndex];
-      if (!c) return false;
+      // A review card has no wording to edit, and a retired one is out of
+      // the deck.
+      if (!c || c.kind === 'review' || c.state === 'retired') return false;
       setEditing(c);
       return true;
     },
@@ -61,9 +72,22 @@ export function Browse({ folderId, tag, onSelectTag }: Props) {
 
   return (
     <>
+      <div className="mb-3 flex justify-end">
+        <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
+          <input
+            type="checkbox"
+            checked={showRetired}
+            onChange={e => setShowRetired(e.target.checked)}
+          />
+          Show retired cards
+        </label>
+      </div>
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {cards?.map((card, idx) => {
-          const isDue = card.due !== null && new Date(card.due) <= new Date();
+          const isDue =
+            card.state === 'active' &&
+            card.due !== null &&
+            new Date(card.due) <= new Date();
           const selected = isSelected(idx);
           return (
             <div
@@ -78,7 +102,11 @@ export function Browse({ folderId, tag, onSelectTag }: Props) {
               }`}
             >
               <div className="flex items-center justify-between mb-3">
-                {isDue ? (
+                {card.state === 'retired' ? (
+                  <span className="px-2 py-0.5 text-xs bg-white/10 text-[var(--color-text-muted)] rounded">
+                    {card.superseded ? 'Old version' : 'Retired'}
+                  </span>
+                ) : isDue ? (
                   <span className="px-2 py-0.5 text-xs bg-orange-500/20 text-orange-400 rounded">
                     Due
                   </span>
@@ -88,18 +116,31 @@ export function Browse({ folderId, tag, onSelectTag }: Props) {
                   </span>
                 )}
                 <div className="flex gap-2">
-                  <button
-                    onClick={() => setVerifying(card)}
-                    className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                  >
-                    Verify
-                  </button>
-                  <button
-                    onClick={() => setEditing(card)}
-                    className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                  >
-                    Edit
-                  </button>
+                  {card.state === 'retired' && !card.superseded && (
+                    <button
+                      onClick={() => unretire.mutate(card.id)}
+                      disabled={unretire.isPending}
+                      className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                    >
+                      Unretire
+                    </button>
+                  )}
+                  {card.state !== 'retired' && card.kind !== 'review' && (
+                    <>
+                      <button
+                        onClick={() => setVerifying(card)}
+                        className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                      >
+                        Verify
+                      </button>
+                      <button
+                        onClick={() => setEditing(card)}
+                        className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                      >
+                        Edit
+                      </button>
+                    </>
+                  )}
                   <button
                     onClick={() => deleteCard.mutate(card.id)}
                     className="text-xs text-red-400 hover:text-red-300"
@@ -108,18 +149,32 @@ export function Browse({ folderId, tag, onSelectTag }: Props) {
                   </button>
                 </div>
               </div>
-              <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
-                Question
-              </div>
-              <div className="text-[var(--color-text)] mb-4 line-clamp-3">
-                <MessageMarkdown content={card.question} />
-              </div>
-              <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
-                Answer
-              </div>
-              <div className="text-[var(--color-text)] mb-4 line-clamp-3">
-                <MessageMarkdown content={card.answer} />
-              </div>
+              {card.kind === 'review' ? (
+                <>
+                  <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
+                    For review
+                  </div>
+                  <div className="text-[var(--color-text)] mb-4">
+                    {card.review?.title || 'Untitled notes'} ·{' '}
+                    {card.review?.pages.length ?? 0} pages
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
+                    Question
+                  </div>
+                  <div className="text-[var(--color-text)] mb-4 line-clamp-3">
+                    <MessageMarkdown content={card.question} />
+                  </div>
+                  <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
+                    Answer
+                  </div>
+                  <div className="text-[var(--color-text)] mb-4 line-clamp-3">
+                    <MessageMarkdown content={card.answer} />
+                  </div>
+                </>
+              )}
               {card.tags.length > 0 && (
                 <div className="tag-row flex flex-wrap gap-1 mb-3">
                   {card.tags.map(t => (

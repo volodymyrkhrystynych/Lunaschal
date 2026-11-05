@@ -6,7 +6,6 @@ import { RecordingBackfillSection } from './RecordingBackfillSection';
 import { ShortcutSettings } from '../ShortcutSettings';
 import { STTStatusSection } from './STTStatusSection';
 import { ShortcutsSection } from './ShortcutsSection';
-import { NudgeSection } from './NudgeSection';
 import { WeatherSection } from './WeatherSection';
 import { PlacesSection } from './PlacesSection';
 import { BriefingSection } from './BriefingSection';
@@ -144,10 +143,6 @@ export function Settings() {
 
           <CollapsibleSection title="Voice Shortcuts">
             <ShortcutsSection />
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Task Nudges">
-            <NudgeSection />
           </CollapsibleSection>
 
           <CollapsibleSection title="Weather">

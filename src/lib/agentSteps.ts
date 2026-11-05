@@ -89,7 +89,21 @@ export function parseDelegateProposals(
   if (!metadata) return [];
   try {
     const parsed = JSON.parse(metadata);
-    return Array.isArray(parsed?.proposals) ? parsed.proposals : [];
+    if (!Array.isArray(parsed?.proposals)) return [];
+    // Older briefings offered the reader's spans as events. They now appear
+    // automatically on the leisure rail; retain resolved history and mixed
+    // evidence, but stop asking the user to approve reading-only duplicates.
+    return parsed.proposals.filter(
+      (p: DelegateProposalRecord) =>
+        !(
+          p?.kind === 'calendar' &&
+          p.status === 'pending' &&
+          p.reconstructionDay &&
+          Array.isArray(p.sources) &&
+          p.sources.length > 0 &&
+          p.sources.every(source => source?.id?.startsWith('reading:'))
+        )
+    );
   } catch {
     return [];
   }
@@ -119,6 +133,22 @@ const PROPOSAL_LABELS: Record<string, string> = {
 export function stepLabel(step: AgentStep): string {
   const target = step.title || step.arg || '';
   switch (step.tool) {
+    case 'create_goal':
+      return step.ok
+        ? `Goal saved: ${target}`
+        : `Could not save goal: ${step.error ?? ''}`;
+    case 'list_goals':
+      return step.ok
+        ? 'Read goals and rewards'
+        : `Could not read goals: ${step.error ?? ''}`;
+    case 'check_goal':
+      return step.ok
+        ? `Checked goal: ${target}`
+        : `Could not check goal: ${step.error ?? ''}`;
+    case 'update_goal':
+      return step.ok
+        ? `Updated goal: ${target}`
+        : `Could not update goal: ${step.error ?? ''}`;
     case 'web_search':
       return step.ok
         ? `Searched the web for "${target}" — ${step.count ?? 0} results`
@@ -187,6 +217,21 @@ export function stepLabel(step: AgentStep): string {
         ? `Read ${step.kind === 'chapter' ? 'chapter' : 'note'}: ${target}`
         : `Couldn't open "${target}"${step.error ? ` — ${step.error}` : ''}`;
     // The rest of one repository's idea backlog, on the Ideas discussion.
+    case 'propose_note':
+    case 'propose_note_update':
+      return step.ok
+        ? `Staged ${target}`
+        : `Couldn't stage that note${step.error ? ` — ${step.error}` : ''}`;
+    case 'canon_search':
+      if (!step.ok)
+        return `Couldn't search the canon wiki${step.error ? ` — ${step.error}` : ''}`;
+      return step.count
+        ? `Searched the canon wiki for "${target}" (${step.count})`
+        : `Nothing in the canon wiki for "${target}"`;
+    case 'canon_read':
+      return step.ok
+        ? `Read canon: ${target}`
+        : `Couldn't open that canon page${step.error ? ` — ${step.error}` : ''}`;
     case 'idea_list':
       return step.ok
         ? `Checked the other ideas for this repo (${step.count ?? 0})`

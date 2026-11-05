@@ -37,6 +37,11 @@ def fake_net(monkeypatch, tmp_path):
     monkeypatch.setenv('FANFIC_ROOT', str(tmp_path / 'fanfic'))
     monkeypatch.setattr(download, 'REQUEST_DELAY', 0)
     monkeypatch.setattr(fanfic_routes, '_start_bookmark_scan_bg', download.run_bookmark_scan)
+    # The import and drain workers share the process-wide SQLite connection
+    # with the request thread; left as real threads, one commits inside
+    # the other's transaction and the test fails at random.
+    monkeypatch.setattr(fanfic_routes, '_start_import_bg', download.run_import)
+    monkeypatch.setattr(download, 'start_drain', download.run_drain_pending)
 
     pages = {
         P1: row('11111', 'a-worm-fic', ['Slow Burn', 'Worm']),

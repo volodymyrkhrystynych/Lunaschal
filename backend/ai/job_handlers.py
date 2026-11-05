@@ -32,6 +32,12 @@ def _journal_metadata(target_id, payload):
     _generate_metadata_bg(target_id, payload['content'], now=True)
 
 
+@jobs.handler('journal.autofile')
+def _journal_autofile(target_id, payload):
+    from backend.routes.journal import autofile_entry
+    autofile_entry(target_id)
+
+
 @jobs.handler('journal.transcribe_attachment')
 def _journal_transcribe(target_id, payload):
     from backend.routes.journal import _transcribe_attachment_bg
@@ -93,6 +99,24 @@ def _food_describe_media(target_id, payload):
     describe_food_media(target_id)
 
 
+@jobs.handler('spending.structure')
+def _spending_structure(target_id, payload):
+    from backend.routes.spending import structure_spending_entry
+    structure_spending_entry(target_id)
+
+
+@jobs.handler('spending.transcribe_media')
+def _spending_transcribe_media(target_id, payload):
+    from backend.routes.spending import transcribe_spending_media
+    transcribe_spending_media(target_id)
+
+
+@jobs.handler('spending.describe_media')
+def _spending_describe_media(target_id, payload):
+    from backend.routes.spending import describe_spending_media
+    describe_spending_media(target_id)
+
+
 @jobs.handler('food.recipe_match')
 def _food_recipe_match(target_id, payload):
     from backend.food.recipe_match import check_homemade_recipe_match
@@ -109,6 +133,12 @@ def _lifestyle_structure_workout(target_id, payload):
 def _learning_grade_attempt(target_id, payload):
     from backend.routes.learning import _queue_grade
     _queue_grade(target_id, now=True)
+
+
+@jobs.handler('learning.process_lesson')
+def _learning_process_lesson(target_id, payload):
+    from backend.learning.lessons import process_lesson
+    process_lesson(target_id, force=bool(payload.get('force')))
 
 
 @jobs.handler('calendar.classify')

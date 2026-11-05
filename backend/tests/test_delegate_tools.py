@@ -156,6 +156,60 @@ def test_an_untimed_calendar_event_carries_time_none():
     assert proposal['data']['time'] is None
 
 
+def _span(**args):
+    _, _, proposal = _proposal('propose_calendar_event',
+                               {'title': 'Line', 'date': '2026-10-25', **args})
+    data = proposal['data']
+    return data['date'], data['time'], data['endTime']
+
+
+def test_something_that_just_finished_ends_at_the_message_and_starts_before_it():
+    """"I just spent 10 minutes in a line" used to stage an event starting at
+    the message's time with no end: half an event, beginning after it was over.
+    The model now gives the end and the length, and the start is computed."""
+    assert _span(endTime='14:32', durationMinutes=10) == ('2026-10-25', '14:22', '14:32')
+
+
+def test_a_start_computed_from_before_midnight_moves_to_the_day_before():
+    assert _span(endTime='00:05', durationMinutes=10) == ('2026-10-24', '23:55', '00:05')
+
+
+def test_a_start_and_a_length_give_the_end():
+    assert _span(time='09:00', durationMinutes=90) == ('2026-10-25', '09:00', '10:30')
+    # Crossing midnight keeps the date; the lower end reads as the next day.
+    assert _span(time='23:30', durationMinutes=60) == ('2026-10-25', '23:30', '00:30')
+
+
+def test_both_clock_times_win_over_a_conflicting_length():
+    assert _span(time='09:00', endTime='10:00', durationMinutes=5) == (
+        '2026-10-25', '09:00', '10:00')
+
+
+def test_a_length_with_no_clock_time_stays_untimed():
+    assert _span(durationMinutes=30) == ('2026-10-25', None, None)
+
+
+def test_a_nonsense_length_is_ignored_and_the_card_still_stages():
+    for bad in (0, -5, '10', 10.5, True, 5000):
+        assert _span(time='09:00', durationMinutes=bad) == ('2026-10-25', '09:00', None), bad
+
+
+def test_an_all_day_event_ignores_a_length():
+    assert _span(allDay=True, time='09:00', durationMinutes=30) == ('2026-10-25', None, None)
+
+
+def test_a_malformed_clock_time_is_dropped_and_a_loose_one_normalized():
+    assert _span(time='noonish', endTime='9:05') == ('2026-10-25', None, '09:05')
+
+
+def test_the_calendar_tool_offers_a_duration():
+    from backend.delegate.tools import TOOLS
+    tool = next(t for t in TOOLS if t['function']['name'] == 'propose_calendar_event')
+    params = tool['function']['parameters']['properties']
+    assert params['durationMinutes']['type'] == 'integer'
+    assert 'ended' in params['endTime']['description']
+
+
 def test_calories_must_be_a_real_number_the_user_gave():
     for bad in (None, 'lots', 12.5):
         _, event, proposal = _proposal('propose_calorie_log',

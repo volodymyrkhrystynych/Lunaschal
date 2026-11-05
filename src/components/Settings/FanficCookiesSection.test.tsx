@@ -27,6 +27,7 @@ vi.mock('../../hooks/api', () => ({
       },
       scanWatched: vi.fn(),
       scanBookmarks: vi.fn(),
+      recheckReactions: vi.fn(),
     },
   },
 }));
@@ -207,4 +208,20 @@ it('offers no bookmark sync on AO3, whose bookmarks come in on the collection sc
     screen.queryByRole('button', { name: 'Sync bookmark labels' })
   ).toBeNull();
   expect(screen.getByText(/tags become folders on that scan/)).toBeTruthy();
+});
+
+describe('recheck likes', () => {
+  it('queues the full re-read from Settings and says how many', async () => {
+    vi.mocked(api.fanfic.recheckReactions).mockResolvedValue({ queued: 3 });
+    renderSection();
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Recheck likes on all forum fics',
+      })
+    );
+    expect(
+      await screen.findByText('3 forum fics queued for a full re-read')
+    ).toBeTruthy();
+    expect(api.fanfic.recheckReactions).toHaveBeenCalledTimes(1);
+  });
 });

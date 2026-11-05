@@ -110,6 +110,13 @@ extension JournalAPI {
                                  from: await postFanfic("api/fanfic/refresh-alerts", [String: Bool]()))
     }
 
+    /// Re-get one forum chapter from its post, in case the author edited it.
+    /// The new text arrives through the next sync.
+    public func refetchFicChapter(_ chapterID: String) async throws {
+        guard ULID.isValid(chapterID) else { throw CaptureError.invalidID }
+        _ = try await postFanfic("api/fanfic/chapters/\(chapterID)/refetch", [String: Bool]())
+    }
+
     func postFanfic<Body: Encodable>(_ path: String, _ body: Body) async throws -> Data {
         var req = request(path, method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

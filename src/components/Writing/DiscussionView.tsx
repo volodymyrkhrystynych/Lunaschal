@@ -6,8 +6,14 @@ import { MessageMarkdown } from '../MessageMarkdown';
 import { readSSE } from '../../lib/sse';
 import { DOC_TYPE_LABELS, type DocType } from './WritingNav';
 import { AgentSteps } from '@/components/Chat/AgentSteps';
+import { DelegateProposals } from '@/components/Chat/DelegateProposals';
 import { ThinkingLabel } from '@/components/Chat/ThinkingLabel';
-import { parseAgentMeta, type AgentStep } from '@/lib/agentSteps';
+import {
+  parseAgentMeta,
+  parseDelegateProposals,
+  type AgentStep,
+} from '@/lib/agentSteps';
+import { POLL_INTERVAL_MS, shouldPollConversation } from '@/lib/chatPolling';
 
 interface Props {
   project: WritingProject;
@@ -25,9 +31,9 @@ export function DiscussionView({
   const [streamingReasoning, setStreamingReasoning] = useState('');
   const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(
-    new Set()
-  );
+  // The row the server's run is writing into, announced in the stream's first
+  // frame â€” hidden from the transcript while this tab is drawing it live.
+  const [liveMessageId, setLiveMessageId] = useState<string | null>(null);
   const [showContextPanel, setShowContextPanel] = useState(false);
   const [title, setTitle] = useState('');
   const [editingTitle, setEditingTitle] = useState(false);
@@ -35,10 +41,17 @@ export function DiscussionView({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
 
+  // The reply generates on a server thread (backend/delegate/runs.py) that
+  // owns its row, so a dropped stream is recovered by polling the row until it
+  // stops being 'streaming' â€” the Chat tab's rule, in src/lib/chatPolling.ts.
   const { data: conversation } = useQuery({
     queryKey: ['chat', 'conversation', discussionId],
     queryFn: () => api.chat.getConversation(discussionId),
     enabled: !!discussionId,
+    refetchInterval: query =>
+      shouldPollConversation(query.state.data?.messages)
+        ? POLL_INTERVAL_MS
+        : false,
   });
 
   const { data: notes } = useQuery({
@@ -94,32 +107,18 @@ export function DiscussionView({
     messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' });
   }, [conversation?.messages, streamingContent, streamingReasoning]);
 
-  const toggleNote = (noteId: string) => {
-    setSelectedNoteIds(prev => {
-      const next = new Set(prev);
-      if (next.has(noteId)) next.delete(noteId);
-      else next.add(noteId);
-      return next;
-    });
-  };
-
-  const buildSystemPrompt = (checkedNotes: WritingNote[]): string => {
-    let prompt = `You are a creative writing partner helping the author develop the story "${project.title}".`;
-    if (project.description)
-      prompt += `\n\nStory description: ${project.description}`;
-
-    if (checkedNotes.length > 0) {
-      prompt += '\n\nNotes provided by the author:';
-      checkedNotes.forEach(note => {
-        prompt += `\n\n--- ${note.docType}: ${note.title} ---\n${note.content}`;
-      });
-    }
-
-    prompt += `
-
-This is a brainstorming discussion. Help the author generate and refine ideas â€” plot, characters, worldbuilding, themes, and structure. Offer concrete suggestions with alternatives, point out weaknesses, contradictions, and clichÃ©s honestly instead of praising everything, and ask sharp questions when an idea is underdeveloped. Build on the author's ideas rather than replacing them; when the author makes a decision, treat it as canon for the rest of the discussion. Keep replies conversational and focused. This discussion may later be distilled into reference notes, so favor substance over filler.`;
-    return prompt;
-  };
+  // Pinning is a property of the note, not of this screen: the server reads
+  // pinned notes into every turn's prompt (backend/writing/discuss.py), so a
+  // pin set here also holds for a discussion continued from the phone.
+  const togglePin = useMutation({
+    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
+      api.writing.updateNote(id, { pinned }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: ['writing', 'notes', project.id],
+      }),
+  });
+  const pinnedCount = (notes ?? []).filter(n => !!n.pinned).length;
 
   const sendMessage = async (messageText?: string) => {
     const userMessage = (messageText ?? input).trim();
@@ -143,27 +142,15 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
     setLiveSteps([]);
 
     try {
-      const checkedNotes = await Promise.all(
-        [...selectedNoteIds].map(id => api.writing.getNote(id))
-      );
-
+      // Only the transcript and the conversation: the server reads
+      // conversations.writing_project_id and builds the prompt, the tools and
+      // the project scope itself (backend/writing/discuss.py), then owns the
+      // reply's row â€” so nothing here persists the answer.
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
-          messages,
-          systemPrompt: buildSystemPrompt(checkedNotes),
-          // Research tools only: the library first, the web behind the
-          // delegate. A systemPrompt otherwise means no tools at all, which is
-          // right for the voice listener and the nudges but not for a screen.
-          toolset: 'research',
-          // The project's own chapters and notes â€” everything not ticked in
-          // the context panel. Named explicitly because this request takes the
-          // inline path (no conversationId), so the server never reads
-          // conversations.writing_project_id.
-          writingProjectId: project.id,
-        }),
+        body: JSON.stringify({ messages, conversationId: discussionId }),
       });
 
       if (!response.ok) {
@@ -176,52 +163,33 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
 
       let fullContent = '';
       let fullReasoning = '';
-      let truncated = false;
-      let timedOut = false;
-      let steps: AgentStep[] = [];
-      let sources: unknown[] = [];
-      for await (const parsed of readSSE(reader)) {
-        if (parsed.tool) {
-          const step = parsed as AgentStep;
-          setLiveSteps(prev => [...prev, step]);
+      try {
+        for await (const parsed of readSSE(reader)) {
+          if (typeof parsed.messageId === 'string') {
+            setLiveMessageId(parsed.messageId);
+          }
+          if (parsed.tool) {
+            const step = parsed as AgentStep;
+            setLiveSteps(prev => [...prev, step]);
+          }
+          if (parsed.thinking) {
+            fullReasoning += parsed.thinking;
+            setStreamingReasoning(fullReasoning);
+          }
+          if (parsed.content) {
+            fullContent += parsed.content;
+            setStreamingContent(fullContent);
+          }
+          if (parsed.error) throw new Error(parsed.error);
         }
-        if (parsed.thinking) {
-          fullReasoning += parsed.thinking;
-          setStreamingReasoning(fullReasoning);
-        }
-        if (parsed.content) {
-          fullContent += parsed.content;
-          setStreamingContent(fullContent);
-        }
-        if (parsed.done) {
-          truncated = parsed.truncated === true;
-          timedOut = parsed.timedOut === true;
-          // The `done` frame is authoritative for the trace: the live events
-          // are only what arrived on this connection.
-          if (Array.isArray(parsed.steps)) steps = parsed.steps as AgentStep[];
-          if (Array.isArray(parsed.sources)) sources = parsed.sources;
-        }
-        if (parsed.error) throw new Error(parsed.error);
+      } catch (streamError) {
+        // The run already owns its row and keeps going; the poll above
+        // brings in whatever it finishes with. Only a failure before the
+        // stream opened (caught below) is a reply that never started.
+        console.warn('[writing] discussion stream ended early', streamError);
       }
-
-      // Persisted in the same shape the Chat tab's messages carry
-      // (parseAgentMeta) so reopening this discussion shows the same
-      // reasoning trace instead of losing it the moment the stream ends.
-      const metadata =
-        fullReasoning || truncated || timedOut || steps.length
-          ? JSON.stringify({
-              thinking: fullReasoning,
-              truncated,
-              timedOut,
-              steps,
-              sources,
-            })
-          : undefined;
-
-      await addMessage.mutateAsync({
-        role: 'assistant',
-        content: fullContent,
-        metadata,
+      await queryClient.invalidateQueries({
+        queryKey: ['chat', 'conversation', discussionId],
       });
     } catch (error) {
       setStreamingContent(
@@ -229,6 +197,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
       );
     } finally {
       setIsStreaming(false);
+      setLiveMessageId(null);
       setStreamingContent('');
       setLiveSteps([]);
       setStreamingReasoning('');
@@ -262,7 +231,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
   const aiConfigured = !!settings?.llamaUrl;
   const thinkingConfigured = !!settings?.llmThinking;
   const messages = (conversation?.messages || []).filter(
-    m => m.role !== 'system'
+    m => m.role !== 'system' && !(isStreaming && m.id === liveMessageId)
   );
 
   return (
@@ -349,8 +318,9 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
         {messages.length === 0 && !isStreaming && (
           <div className="text-sm text-[var(--color-text-muted)] text-center mt-8">
-            Brainstorm ideas, characters, and plots â€” then hit Summarize to save
-            the takeaways as a note
+            Brainstorm ideas, characters, and plots. Decisions get proposed as
+            notes for you to confirm â€” or hit Summarize to distill the whole
+            discussion
           </div>
         )}
         {messages.map(msg => {
@@ -358,6 +328,10 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
           // open, so a message written before this shipped just renders no
           // trace below it rather than throwing.
           const { thinking, steps } = parseAgentMeta(msg.metadata);
+          const proposals =
+            msg.role === 'assistant'
+              ? parseDelegateProposals(msg.metadata)
+              : [];
           return (
             <div
               key={msg.id}
@@ -381,7 +355,14 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
                     shows the same collapsed trace a tab that never left
                     would, same as the Chat tab. */}
                 {msg.role === 'assistant' && (
-                  <AgentSteps steps={steps} thinking={thinking} />
+                  <AgentSteps
+                    steps={steps}
+                    thinking={thinking}
+                    live={msg.status === 'streaming'}
+                  />
+                )}
+                {proposals.length > 0 && (
+                  <DelegateProposals messageId={msg.id} proposals={proposals} />
                 )}
               </div>
             </div>
@@ -432,10 +413,8 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
           className="w-full px-4 py-2 flex items-center justify-between text-xs text-[var(--color-text-muted)] hover:bg-white/5 transition-colors"
         >
           <span>
-            Context notes
-            {selectedNoteIds.size > 0
-              ? ` (${selectedNoteIds.size} selected)`
-              : ''}
+            Pinned notes
+            {pinnedCount > 0 ? ` (${pinnedCount})` : ''}
           </span>
           <span>{showContextPanel ? 'â–²' : 'â–¼'}</span>
         </button>
@@ -447,8 +426,10 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
                 <input
                   type="checkbox"
                   id={`ctx-${note.id}`}
-                  checked={selectedNoteIds.has(note.id)}
-                  onChange={() => toggleNote(note.id)}
+                  checked={!!note.pinned}
+                  onChange={() =>
+                    togglePin.mutate({ id: note.id, pinned: !note.pinned })
+                  }
                   className="accent-[var(--color-primary)]"
                 />
                 <label
@@ -464,7 +445,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
             ))}
             {(!notes || notes.length === 0) && (
               <div className="text-xs text-[var(--color-text-muted)]">
-                No notes yet â€” checked notes are sent to the AI as context
+                No notes yet â€” pinned notes are read into every turn
               </div>
             )}
           </div>

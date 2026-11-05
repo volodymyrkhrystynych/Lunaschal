@@ -320,6 +320,10 @@ def test_a_bedtime_after_midnight_reads_back_as_the_same_wall_clock(client):
 def test_resolve_day_defaults_to_the_real_clock():
     # The only caller that passes `now` is a test; the routes rely on the
     # default, so a signature change there has to keep working.
-    journal(int(time.time()) - 3600)
+    # An hour ago, but never before today's 4am boundary: run between 04:00
+    # and 05:00 and an hour ago is yesterday's day, leaving today empty.
+    now = int(time.time())
     today = day_key_for()
+    start, _ = day_bounds(today)
+    journal(max(now - 3600, start + (now - start) // 2))
     assert sleep.resolve_day(today)['wakeAt'] is not None

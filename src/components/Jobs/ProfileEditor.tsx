@@ -4,6 +4,7 @@ import { api } from '@/hooks/api';
 import type { ProfileSection } from '@/hooks/api';
 import { ProfileImport } from './ProfileImport';
 import { TagsInput } from '../TagsInput';
+import { DISTANCE_ANCHOR_LABEL } from '@/lib/jobs';
 
 function Field({
   label,
@@ -99,6 +100,11 @@ export function ProfileEditor() {
   const { data, isLoading } = useQuery({
     queryKey: ['jobs', 'profile'],
     queryFn: api.jobs.profile.get,
+  });
+  const anchor = useQuery({
+    queryKey: ['jobs', 'distanceAnchor'],
+    queryFn: api.jobs.distanceAnchor,
+    staleTime: 5 * 60_000,
   });
 
   // Every profile mutation funnels through here, so this is also where the
@@ -276,7 +282,7 @@ export function ProfileEditor() {
             }
           />
           <Field
-            label="Max commute (km from Union Station)"
+            label={`Max commute (km from ${anchor.data?.label ?? DISTANCE_ANCHOR_LABEL})`}
             value={profile.maxDistanceKm?.toString() ?? ''}
             onCommit={v =>
               patchContact.mutate({ maxDistanceKm: v ? Number(v) : null })

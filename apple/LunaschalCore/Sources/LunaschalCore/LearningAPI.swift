@@ -15,6 +15,10 @@ public protocol LearningTransport: AnyObject {
     func learningFolders() async throws -> [LearningFolder]
     func saveAttempt(_ answer: LearningSession.Answer) async throws
     func rate(_ answer: LearningSession.Answer, _ rating: LearningRating, grade: LearningGrade?) async throws
+    /// Rates a review card from its pages: self-rated, with no attempt behind it.
+    func rateReview(_ card: LearningCard, _ rating: LearningRating, reviewID: String) async throws
+    /// One of a review card's pages, as image data.
+    func reviewPage(_ page: LearningReviewPages.Page) async throws -> Data
     func learningQueue() async throws -> [LearningCard]
     func approveQueued(_ id: String, force: Bool) async throws -> LearningApproval
     func regenerateCard(_ id: String, direction: String) async throws -> [DraftCard]
@@ -23,7 +27,11 @@ public protocol LearningTransport: AnyObject {
     func setCardTags(_ id: String, _ tags: [String]) async throws
     func reviseCard(_ id: String, question: String, answer: String) async throws -> String
     func deleteCard(_ id: String) async throws
-    func transcribe(audio: URL) async throws -> String
+    /// Takes a card out of review for good; it and its history are kept.
+    func retireCard(_ id: String) async throws
+    /// A spoken answer: the clip is the answer, transcribed and then graded on
+    /// the server, so nothing waits on the words before the next card.
+    func saveRecordedAttempt(_ answer: LearningSession.Answer, clip: URL) async throws
     /// Speech mode's read-aloud: the server's text-to-speech, as audio data.
     func speak(_ text: String) async throws -> Data
 }
@@ -83,6 +91,20 @@ extension JournalAPI {
             userAnswer: userAnswer, coverage: coverage, answerMode: answer.answerMode))
     }
 
+    /// The review id is minted per rating, so a resend of the same tap
+    /// doesn't advance the schedule twice.
+    public func rateReview(_ card: LearningCard, _ rating: LearningRating, reviewID: String) async throws {
+        struct Body: Encodable { let reviewId: String; let rating: Int; let answerMode: String }
+        _ = try await chatJSON("api/learning/cards/\(try Self.pathID(card.id))/review", Body(
+            reviewId: try Self.pathID(reviewID), rating: rating.rawValue, answerMode: "self"))
+    }
+
+    /// Built from the page's id rather than the url it came with, so nothing
+    /// the server sends can point the request anywhere but an attachment.
+    public func reviewPage(_ page: LearningReviewPages.Page) async throws -> Data {
+        try await get("api/journal/attachments/\(try Self.pathID(page.id))/file", [:])
+    }
+
     // MARK: Approval queue
 
     public func learningQueue() async throws -> [LearningCard] {
@@ -131,20 +153,21 @@ extension JournalAPI {
         try await send("api/learning/cards/\(try Self.pathID(id))", method: "DELETE")
     }
 
+    public func retireCard(_ id: String) async throws {
+        _ = try await chatJSON("api/learning/cards/\(try Self.pathID(id))/retire", [String: String]())
+    }
+
     // MARK: Dictation
 
-    /// Speech to text on the server, as the desktop's mic button does it. A
-    /// clip with no speech in it comes back as the server's own words.
-    public func transcribe(audio: URL) async throws -> String {
-        let body = try TranscribeMultipart(audio: audio)
+    /// Uploads a spoken answer as its attempt. The attempt id is the client's,
+    /// so a resend after a dropped connection is a no-op on the server.
+    public func saveRecordedAttempt(_ answer: LearningSession.Answer, clip: URL) async throws {
+        let body = try RecordedAnswerMultipart(answer: answer, audio: clip)
         defer { try? FileManager.default.removeItem(at: body.url) }
-        var req = request("api/transcribe", method: "POST")
+        var req = request("api/learning/attempts/recording", method: "POST")
         req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
         let (data, response) = try await session.upload(for: req, fromFile: body.url)
         try checkChat(data, response)
-        struct Reply: Decodable { let text: String? }
-        return try JSONDecoder().decode(Reply.self, from: data).text?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     public func speak(_ text: String) async throws -> Data {
@@ -173,15 +196,18 @@ extension JournalAPI {
     }
 }
 
-/// `/api/transcribe`'s form: the clip as `audio` and nothing else, so the
-/// server doesn't log it as a dictated transcription.
-public struct TranscribeMultipart {
+/// `/api/learning/attempts/recording`'s form: the attempt's id and card, any
+/// words typed before the mic was tapped, speech mode, and the clip as `audio`.
+public struct RecordedAnswerMultipart {
     public let url: URL
     public let boundary: String
 
-    public init(audio: URL) throws {
+    public init(answer: LearningSession.Answer, audio: URL) throws {
         guard (try audio.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else { throw CaptureError.missingAudio }
-        (url, boundary) = try writeMultipart(fields: [], files: [
+        var fields = [("id", try JournalAPI.pathID(answer.id)), ("cardId", answer.card.id),
+                      ("speechMode", answer.speech ? "true" : "false")]
+        if let typed = answer.text { fields.append(("answer", typed)) }
+        (url, boundary) = try writeMultipart(fields: fields, files: [
             MultipartFile(field: "audio", filename: "answer.m4a", contentType: "audio/mp4", source: audio)
         ])
     }

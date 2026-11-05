@@ -103,4 +103,28 @@ public enum CalendarSleep {
         }
         return days
     }
+
+    /// The days a sent sleep change touched, for when it leaves the outbox:
+    /// the overlay that drew it goes with it, and the cache still holds the
+    /// server's answer from before. Each landed day and its neighbours take
+    /// what was `shown`, so the day view doesn't flick back while the
+    /// server's own reading is fetched. A change still queued is left alone,
+    /// since the overlay keeps drawing it.
+    public static func keepSent(_ cache: [String: SleepDay], shown: [String: SleepDay],
+                                sent: [CalendarOp], stillQueued: [CalendarOp]) -> (cache: [String: SleepDay], landed: [String]) {
+        func dates(_ ops: [CalendarOp]) -> Set<String> {
+            Set(ops.compactMap { op -> String? in
+                if case let .sleep(date, _, _) = op.change { return date }
+                return nil
+            })
+        }
+        let landed = dates(sent).subtracting(dates(stillQueued))
+        var cache = cache
+        for date in landed {
+            for day in [CalendarTimeline.addingDays(-1, to: date), date, CalendarTimeline.addingDays(1, to: date)] {
+                if let value = shown[day] { cache[day] = value }
+            }
+        }
+        return (cache, landed.sorted())
+    }
 }

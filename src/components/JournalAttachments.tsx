@@ -443,6 +443,62 @@ const DESCRIPTION_SEEN_KEY_PREFIX = 'journal-attachment-description-seen:';
  * audible), and a shared key would make opening either of them close the other
  * on the next load.
  */
+/**
+ * A Live Photo: the still, with its clip played over it while the pointer is
+ * on it (or a finger is down). The clip is fetched only then — preload="none" —
+ * and a browser that cannot decode it (Chrome and HEVC) simply keeps the still.
+ */
+function LivePhoto({
+  still,
+  motion,
+  alt,
+}: {
+  still: string;
+  motion: string;
+  alt: string;
+}) {
+  const [playing, setPlaying] = useState(false);
+  return (
+    <span
+      className="relative block h-full"
+      onPointerEnter={() => setPlaying(true)}
+      onPointerLeave={() => setPlaying(false)}
+    >
+      <img
+        src={still}
+        alt={alt}
+        loading="lazy"
+        className="h-full w-auto max-w-full object-contain"
+      />
+      {playing && (
+        <video
+          src={motion}
+          autoPlay
+          muted
+          playsInline
+          preload="none"
+          onEnded={() => setPlaying(false)}
+          onError={() => setPlaying(false)}
+          className="absolute inset-0 h-full w-full object-contain"
+        />
+      )}
+      <span className="absolute top-1 left-1 px-1 rounded text-[10px] font-semibold tracking-wide bg-black/50 text-white">
+        LIVE
+      </span>
+    </span>
+  );
+}
+
+/** "taken 3 Jul 2024" — only when it was taken on a different day than it was attached. */
+function takenLabel(a: JournalAttachment): string | null {
+  if (!a.capturedAt) return null;
+  const taken = new Date(a.capturedAt);
+  if (Number.isNaN(taken.getTime())) return null;
+  if (taken.toDateString() === new Date(a.createdAt).toDateString())
+    return null;
+  return `taken ${taken.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`;
+}
+
 function AttachmentDescription({
   attachmentId,
   descriptionKind,
@@ -591,6 +647,7 @@ function AttachmentRow({
       {a.kind === 'video' && a.url && (
         <video
           src={a.url}
+          poster={a.thumbnailUrl}
           controls
           playsInline
           preload="none"
@@ -608,13 +665,25 @@ function AttachmentRow({
             className="shrink-0 h-32 max-w-full rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
             title="View"
           >
-            <img
-              src={imageUrl}
-              alt={a.name}
-              loading="lazy"
-              className="h-full w-auto max-w-full object-contain"
-            />
+            {a.motionUrl ? (
+              <LivePhoto still={imageUrl} motion={a.motionUrl} alt={a.name} />
+            ) : (
+              <img
+                src={imageUrl}
+                alt={a.name}
+                loading="lazy"
+                className="h-full w-auto max-w-full object-contain"
+              />
+            )}
           </button>
+          {takenLabel(a) && (
+            <span
+              className="text-xs text-[var(--color-text-muted)]"
+              title="When this was taken"
+            >
+              {takenLabel(a)}
+            </span>
+          )}
           {geoLink && (
             <a
               href={geoLink}

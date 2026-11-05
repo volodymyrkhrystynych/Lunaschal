@@ -9,6 +9,7 @@ struct LunaschalComplications: WidgetBundle {
         FocusComplication()
         TimeoutComplication()
         LauncherComplication()
+        WorkoutComplication()
         RecordComplication()
         TranscribeComplication()
         FocusControl()
@@ -21,10 +22,11 @@ struct LunaschalComplications: WidgetBundle {
 // MARK: - What the face reads
 
 /// Everything a complication can show: the timer as the app (or a Control)
-/// last wrote it, and the clip going, if any.
+/// last wrote it, the Workout timer, and the clip going, if any.
 struct WatchEntry: TimelineEntry {
     let date: Date
     let timer: PomodoroTimer.State
+    var rest: RestTimer.State = .idle
     let recording: RecordingStatus?
 }
 
@@ -42,10 +44,17 @@ struct WatchProvider: TimelineProvider {
         completion(Timeline(entries: entries(), policy: .never))
     }
 
+    /// One entry wherever either timer changes: now, and each one's end.
     private func entries() -> [WatchEntry] {
-        let timer = WatchComplication.timerURL.flatMap(PomodoroTimer.load(from:)) ?? PomodoroTimer()
+        let now = Date()
+        let timer = (WatchComplication.timerURL.flatMap(PomodoroTimer.load(from:)) ?? PomodoroTimer()).glances(now: now)
+        let rest = (WatchComplication.restTimerURL.flatMap(RestTimer.load(from:)) ?? RestTimer()).glances(now: now)
         let recording = WatchComplication.recordingURL.flatMap(RecordingStatus.load(from:))
-        return timer.glances().map { WatchEntry(date: $0.date, timer: $0.state, recording: recording) }
+        let dates = Set(timer.map(\.date) + rest.map(\.date)).sorted()
+        return dates.map { date in
+            WatchEntry(date: date, timer: timer.last { $0.date <= date }!.state,
+                       rest: rest.last { $0.date <= date }!.state, recording: recording)
+        }
     }
 
     /// The face editor's preview: a run partway through reads better than a bare glyph.
@@ -58,37 +67,72 @@ struct WatchProvider: TimelineProvider {
 
 extension TimerChoice {
     var symbol: String { kind.symbol }
-    var title: String { self == .focus ? "Focus" : "Timeout" }
     var widgetKind: String { self == .focus ? WatchComplication.focusKind : WatchComplication.timeoutKind }
     var controlKind: String { self == .focus ? WatchComplication.focusControl : WatchComplication.timeoutControl }
     var link: WatchLink { .start(kind) }
+}
 
-    /// The run this button owns: focus owns its breaks, since pressing Focus
-    /// during one should show the timer, not start another.
-    func owns(_ run: PomodoroTimer.Run) -> Bool {
-        self == .focus ? run.kind != .timeout : run.kind == .timeout
+extension PomodoroKind {
+    /// The colour a run's ring is drawn in, matching its page in the app.
+    var tint: Color {
+        switch self {
+        case .work: return .indigo
+        case .break: return .green
+        case .timeout: return .teal
+        }
     }
 }
 
 extension RecordingChoice {
-    var symbol: String { self == .record ? "mic.fill" : "waveform" }
-    var title: String { self == .record ? "Record" : "Transcribe" }
     var widgetKind: String { self == .record ? WatchComplication.recordKind : WatchComplication.transcribeKind }
     var controlKind: String { self == .record ? WatchComplication.recordControl : WatchComplication.transcribeControl }
     var link: WatchLink { self == .record ? .record : .transcribe }
 }
 
-/// A countdown ring, for the circular families.
-struct CountdownRing: View {
-    let run: PomodoroTimer.Run
+/// A run counting down, the way the system Timer draws one: a ring round the
+/// edge that empties, with the time left centred inside it, the time with a gauge in a corner,
+/// the time after the icon inline. Every timer complication uses it.
+struct Countdown: View {
+    let span: ClosedRange<Date>
+    let symbol: String
+    var tint: Color = .orange
+    @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        ProgressView(timerInterval: run.startedAt...run.endsAt, countsDown: true) {
-            EmptyView()
-        } currentValueLabel: {
-            Text(timerInterval: run.startedAt...run.endsAt, countsDown: true).monospacedDigit()
+        switch family {
+        case .accessoryCorner:
+            Text(timerInterval: span, countsDown: true)
+                .font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
+                .minimumScaleFactor(0.6)
+                .widgetLabel {
+                    ProgressView(timerInterval: span, countsDown: true,
+                                 label: { EmptyView() }, currentValueLabel: { EmptyView() })
+                        .tint(tint)
+                }
+        case .accessoryInline:
+            Label { Text(timerInterval: span, countsDown: true).monospacedDigit() } icon: { Image(systemName: symbol) }
+        default:
+            ZStack {
+                AccessoryWidgetBackground()
+                // The ring runs round the whole edge and empties as the time
+                // goes, like the system Timer's; the time sits in the middle.
+                ProgressView(timerInterval: span, countsDown: true,
+                             label: { EmptyView() }, currentValueLabel: { EmptyView() })
+                    .progressViewStyle(.circular)
+                    .tint(tint)
+                    .widgetAccentable()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Text(timerInterval: span, countsDown: true, showsHours: false)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .minimumScaleFactor(0.5)
+                    .lineLimit(1)
+                    // A timer's text is laid out at its widest; centring it
+                    // takes both of these.
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 7)
+            }
         }
-        .progressViewStyle(.circular)
     }
 }
 
@@ -151,14 +195,6 @@ struct PomodoroComplicationView: View {
     @ViewBuilder private func running(_ run: PomodoroTimer.Run) -> some View {
         let span = run.startedAt...run.endsAt
         switch family {
-        case .accessoryCorner:
-            Image(systemName: run.kind.symbol).font(.title3)
-                .widgetLabel {
-                    ProgressView(timerInterval: span, countsDown: true,
-                                 label: { EmptyView() }, currentValueLabel: { EmptyView() })
-                }
-        case .accessoryInline:
-            Label { Text(timerInterval: span, countsDown: true) } icon: { Image(systemName: run.kind.symbol) }
         case .accessoryRectangular:
             VStack(alignment: .leading, spacing: 2) {
                 Label(run.kind.label, systemImage: run.kind.symbol).font(.headline)
@@ -168,7 +204,7 @@ struct PomodoroComplicationView: View {
                              label: { EmptyView() }, currentValueLabel: { EmptyView() })
             }.frame(maxWidth: .infinity, alignment: .leading)
         default:
-            CountdownRing(run: run)
+            Countdown(span: span, symbol: run.kind.symbol, tint: run.kind.tint)
         }
     }
 
@@ -216,19 +252,7 @@ struct TimerButtonView: View {
 
     var body: some View {
         if case .running(let run) = state, choice.owns(run) {
-            switch family {
-            case .accessoryCorner:
-                Image(systemName: run.kind.symbol).font(.title3)
-                    .widgetLabel {
-                        ProgressView(timerInterval: run.startedAt...run.endsAt, countsDown: true,
-                                     label: { EmptyView() }, currentValueLabel: { EmptyView() })
-                    }
-            case .accessoryInline:
-                Label { Text(timerInterval: run.startedAt...run.endsAt, countsDown: true) }
-                    icon: { Image(systemName: run.kind.symbol) }
-            default:
-                CountdownRing(run: run)
-            }
+            Countdown(span: run.startedAt...run.endsAt, symbol: run.kind.symbol, tint: run.kind.tint)
         } else {
             let minutes = choice.kind.minutes
             switch family {
@@ -285,7 +309,7 @@ struct LauncherView: View {
 
     @ViewBuilder private func recording(_ choice: RecordingChoice) -> some View {
         if let status = entry.recording, status.mode == choice.mode {
-            button(choice.link, symbol: "stop.fill", tint: .red) {
+            button(choice.link, symbol: choice.symbol, tint: .red) {
                 Text(status.startedAt, style: .timer).monospacedDigit()
             }
         } else {
@@ -305,6 +329,47 @@ struct LauncherView: View {
                 caption().font(.system(size: 11)).lineLimit(1).minimumScaleFactor(0.6)
             }
             .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+// MARK: - Workout
+
+/// The 90-second rest timer. A tap opens the Workout page and starts it,
+/// unless it is already going.
+struct WorkoutComplication: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: WatchComplication.workoutKind, provider: WatchProvider()) { entry in
+            WorkoutGlyph(rest: entry.rest)
+                .widgetURL(WatchLink.workout.url)
+                .containerBackground(.clear, for: .widget)
+        }
+        .configurationDisplayName("Workout 90s")
+        .description("Starts 90 seconds of rest that buzzes until you stop it.")
+        .supportedFamilies([.accessoryCircular, .accessoryCorner, .accessoryInline])
+    }
+}
+
+struct WorkoutGlyph: View {
+    let rest: RestTimer.State
+    @Environment(\.widgetFamily) private var family
+
+    var body: some View {
+        switch rest {
+        case .idle:
+            switch family {
+            case .accessoryCorner: Image(systemName: "dumbbell").font(.title2).widgetLabel("Workout 90s")
+            case .accessoryInline: Label("Workout 90s", systemImage: "dumbbell")
+            default: Glyph(symbol: "dumbbell")
+            }
+        case .running(let startedAt, let endsAt):
+            Countdown(span: startedAt...endsAt, symbol: "dumbbell", tint: .orange)
+        case .ringing:
+            switch family {
+            case .accessoryCorner: Image(systemName: "bell.fill").font(.title2).widgetLabel("Rest's over")
+            case .accessoryInline: Label("Rest's over", systemImage: "bell.fill")
+            default: Glyph(symbol: "bell.fill", tint: .orange)
+            }
         }
     }
 }
@@ -334,24 +399,54 @@ struct RecordingGlyph: View {
     @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        let symbol = status == nil ? choice.symbol : "stop.fill"
+        if let status { recording(since: status.startedAt) } else { idle }
+    }
+
+    @ViewBuilder private var idle: some View {
         switch family {
         case .accessoryCorner:
-            if let status {
-                Image(systemName: symbol).font(.title2).foregroundStyle(.red)
-                    .widgetLabel { Text(status.startedAt, style: .timer) }
-            } else {
-                Image(systemName: symbol).font(.title2).widgetLabel(choice.title)
-            }
+            Image(systemName: choice.symbol).font(.title2).widgetLabel(choice.title)
         case .accessoryInline:
-            if let status {
-                Label { Text(status.startedAt, style: .timer) } icon: { Image(systemName: symbol) }
-            } else {
-                Label(choice.title, systemImage: symbol)
-            }
+            Label(choice.title, systemImage: choice.symbol)
         default:
-            Glyph(symbol: symbol, tint: status == nil ? nil : .red)
-                .accessibilityLabel(status == nil ? choice.title : "Stop \(choice.title.lowercased())")
+            Glyph(symbol: choice.symbol).accessibilityLabel(choice.title)
+        }
+    }
+
+    /// On: the elapsed time takes the glyph's place. Red alone is not enough —
+    /// most faces draw complications tinted or accented, which drops the
+    /// colour, and a red mic then looked exactly like an idle one.
+    @ViewBuilder private func recording(since start: Date) -> some View {
+        let going = choice == .record ? "Recording" : "Transcribing"
+        switch family {
+        case .accessoryCorner:
+            Text(start, style: .timer)
+                .font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
+                .minimumScaleFactor(0.6)
+                .foregroundStyle(.red)
+                .widgetAccentable()
+                .widgetLabel { Text(going).foregroundStyle(.red) }
+        case .accessoryInline:
+            Label { Text(start, style: .timer).monospacedDigit() } icon: { Image(systemName: choice.symbol) }
+        default:
+            ZStack {
+                AccessoryWidgetBackground()
+                // A full ring, the shape a running timer has, so the face
+                // reads "going" in any rendering mode.
+                Circle().strokeBorder(.red, lineWidth: 3).widgetAccentable()
+                VStack(spacing: 0) {
+                    Image(systemName: choice.symbol).font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.red).widgetAccentable()
+                    Text(start, style: .timer)
+                        .font(.system(size: 14, weight: .semibold, design: .rounded)).monospacedDigit()
+                        .minimumScaleFactor(0.5)
+                        .lineLimit(1)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal, 6)
+            }
+            .accessibilityLabel("Stop \(choice.title.lowercased())")
         }
     }
 }

@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from backend.food import storage as food
+from backend.spending import storage as spending
 from backend.journal import storage as journal
 from backend.paper import storage as paper
 from backend.study import storage as study
@@ -32,6 +33,7 @@ MEDIA = {
     'newspaper_frontpages': ('image_path', newspapers.resolve_stored_path),
     'fics': ('id', _fic_pdf_path),
     'food_media': ('path', food.resolve_stored_path),
+    'spending_media': ('path', spending.resolve_stored_path),
 }
 
 
@@ -43,7 +45,9 @@ def validate_collection(collection):
 def active_path(collection, row):
     if collection == 'fics' and row['source_type'] != 'pdf':
         return None
-    if collection == 'journal_attachments' and row['kind'] == 'youtube':
+    # Videos stream on demand rather than ride the bulk sync: a phone's library
+    # of clips is gigabytes the replica would otherwise pull on every device.
+    if collection == 'journal_attachments' and row['kind'] in ('youtube', 'video'):
         return None
     if collection == 'study_sources' and row['kind'] in study.ARCHIVED_KINDS:
         return None

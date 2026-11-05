@@ -28,7 +28,7 @@ from pathlib import Path
 
 REQUIRED_ENV_VARS = [
     'DATABASE_URL', 'FANFIC_ROOT', 'MEETINGS_ROOT', 'JOURNAL_ROOT',
-    'JOURNAL_DRAFTS_ROOT', 'LIFESTYLE_ROOT', 'FOOD_ROOT', 'RECIPE_ROOT',
+    'JOURNAL_DRAFTS_ROOT', 'LIFESTYLE_ROOT', 'FOOD_ROOT', 'SPENDING_ROOT', 'RECIPE_ROOT',
     'CHAT_ROOT', 'PAPER_ROOT', 'JOBS_ROOT', 'NEWSPAPERS_ROOT', 'NEWSPAPERS_ARCHIVE_ROOT',
     'NOTEBOOK_ROOT', 'EMAIL_MEDIA_ROOT', 'PIANO_ROOT', 'PIANO_ARCHIVE_ROOT',
     'FILES_ROOT', 'TORRENT_ROOT', 'STUDY_ROOT', 'STUDY_ARCHIVE_ROOT',
@@ -239,6 +239,32 @@ def seed_journal(db):
          }),
          ts(1)),
     )
+    # Taken the day before it was attached, and a Live Photo: the clip beside
+    # the still is placeholder bytes for the same reason the YouTube video below
+    # is — nothing in the demo decodes it.
+    motion = d / 'motion.mov'
+    motion.write_bytes(b'\x00\x00\x00 ftypqt  ')
+    db.execute(
+        "UPDATE journal_attachments SET captured_at=?, motion_path=?,"
+        " motion_mime='video/quicktime', motion_size=? WHERE id=?",
+        (ts(2), str(motion), motion.stat().st_size, attachment_id),
+    )
+
+    # A clip from the phone's camera roll on the same entry, with the poster and
+    # length the upload route reads off it with ffmpeg.
+    clip_id = new_id()
+    clip_path = attachment_path(clip_id, 'mov')
+    clip_path.parent.mkdir(parents=True, exist_ok=True)
+    clip_path.write_bytes(b'\x00\x00\x00 ftypqt  ')
+    clip_thumb = clip_path.parent / 'thumb.jpg'
+    placeholder_image(clip_thumb, 'drawer, open', size=(640, 360))
+    db.execute(
+        'INSERT INTO journal_attachments (id, entry_id, kind, name, path, mime, size,'
+        ' position, duration_seconds, thumb_path, captured_at, created_at)'
+        " VALUES (?, ?, 'video', 'drawer slides', ?, 'video/quicktime', ?, 1, 14, ?, ?, ?)",
+        (clip_id, entry_id, str(clip_path), clip_path.stat().st_size,
+         str(clip_thumb), ts(2), ts(1)),
+    )
 
     # The screenshot shortcut's main shape: several captures collected into
     # one text-free journal entry, ordered and named by their local capture
@@ -272,6 +298,24 @@ def seed_journal(db):
              str(screenshot_path), screenshot_path.stat().st_size, position,
              captured_at),
         )
+
+    # Yesterday's bare screenshot exercises Chat's context suggestion modal.
+    context_id, context_photo = new_id(), new_id()
+    from datetime import date, timedelta
+    yesterday = (date.fromisoformat(today_key()) - timedelta(days=1)).isoformat()
+    context_at = day_bounds(yesterday)[0] + 12 * 3600
+    context_path = attachment_path(context_photo, 'jpg')
+    placeholder_image(context_path, 'A game worth remembering', size=(720, 405))
+    db.execute(
+        'INSERT INTO journal_entries (id, content, title, context_prompt_day, context_prompt_status, created_at, updated_at)'
+        " VALUES (?, '', 'Game night', ?, 'pending', ?, ?)",
+        (context_id, today_key(), context_at, context_at),
+    )
+    db.execute(
+        'INSERT INTO journal_attachments (id, entry_id, kind, name, path, mime, created_at)'
+        " VALUES (?, ?, 'image', 'Game night screenshot', ?, 'image/jpeg', ?)",
+        (context_photo, context_id, str(context_path), context_at),
+    )
 
     # A YouTube video watched and commented on: the entry is the commentary,
     # the attachment is what was watched. `import_status='ready'`, never
@@ -473,6 +517,80 @@ def seed_learning(db):
         (new_id(), card_ids[0], card_ids[0], 'manual_edit', 'el puento', 'el puente',
          '- el puento\n+ el puente', 0, None, 'Typo in the original answer.', ts(2)),
     )
+    seed_review_card(db)
+    seed_learning_lessons(db)
+
+
+def seed_learning_lessons(db):
+    """Two lessons from a coding agent's daily learnings file: one carded into
+    a pending scenario card, one the judge found already covered."""
+    from backend.learning.lessons import CARD_TAG, SOURCE_TYPE, lesson_hash
+
+    carded_id, covered_id = new_id(), new_id()
+    lessons = [
+        (carded_id, 'Recursive functions need a depth limit',
+         '- **Failure it prevents:** a cycle in the data recurses until the stack overflows.\n'
+         '- **When it does not apply:** the input is a tree the code built itself.',
+         'carded', None, None, 1),
+        (covered_id, 'Retries need a cap and backoff',
+         '- **Failure it prevents:** a dead dependency gets hammered forever.',
+         'covered', None, 'An existing card already asks about unbounded retries.', 0),
+    ]
+    retry_card = new_id()
+    db.execute(
+        'INSERT INTO learning_cards (id, question, answer, state, due, created_at, updated_at)'
+        " VALUES (?, ?, ?, 'active', ?, ?, ?)",
+        (retry_card, 'A client retries a failed request in a loop. What two limits does it need?',
+         'A maximum number of attempts and a growing delay between them.', ts(1), ts(5), ts(5)),
+    )
+    for lesson_id, title, body, status, _, reason, count in lessons:
+        db.execute(
+            'INSERT INTO learning_lessons (id, source, source_name, title, body, content_hash,'
+            ' status, covered_by, reason, card_count, created_at, processed_at)'
+            " VALUES (?, 'inbox', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (lesson_id, f'{today_key(1)}.md', title, body, lesson_hash(title, body), status,
+             retry_card if status == 'covered' else None, reason, count, ts(1), ts(1)),
+        )
+    db.execute(
+        'INSERT INTO learning_cards (id, question, answer, state, tags, source_type, source_id,'
+        " created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
+        (new_id(),
+         'A function follows user-defined links between documents to build a summary. What can go wrong?',
+         'Two documents linking to each other recurse forever. Add a depth limit or a visited set.',
+         tags_json([CARD_TAG]), SOURCE_TYPE, carded_id, ts(1), ts(1)),
+    )
+
+
+def seed_review_card(db):
+    """A notebook saved For review on the iPad: a journal entry whose pages are
+    two images, and the review card that shows them. Due now rather than at
+    the next 4am a real one starts at, so the demo deck has one to read."""
+    from backend.journal.storage import attachment_dir, attachment_path
+    from backend.learning.review_cards import SOURCE_TYPE, ensure_review_folder
+
+    entry_id = new_id()
+    db.execute(
+        'INSERT INTO journal_entries (id, content, raw_content, title, tags, created_at, updated_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (entry_id, '', None, 'Fern life cycle', tags_json(['study']), ts(3), ts(3)),
+    )
+    for position, label in enumerate(['Notes p1: spores, prothallus', 'Notes p2: sporophyte']):
+        attachment_id = new_id()
+        attachment_dir(attachment_id).mkdir(parents=True, exist_ok=True)
+        img_path = attachment_path(attachment_id, 'jpg')
+        placeholder_image(img_path, label, size=(768, 1024), color=(80, 100, 90))
+        db.execute(
+            'INSERT INTO journal_attachments (id, entry_id, kind, name, path, mime, size, position, created_at)'
+            " VALUES (?, ?, 'image', ?, ?, 'image/jpeg', ?, ?, ?)",
+            (attachment_id, entry_id, f'Notes p{position + 1}.jpg', str(img_path),
+             img_path.stat().st_size, position, ts(3)),
+        )
+    db.execute(
+        'INSERT INTO learning_cards (id, folder_id, question, answer, state, kind, source_type,'
+        ' source_id, due, created_at, updated_at)'
+        " VALUES (?, ?, 'For review', '', 'active', 'review', ?, ?, ?, ?, ?)",
+        (new_id(), ensure_review_folder(db), SOURCE_TYPE, entry_id, ts(1), ts(3), ts(3)),
+    )
 
 
 def seed_cookbook(db):
@@ -537,6 +655,12 @@ def seed_food(db, recipe_id):
         ('Ordered the pad tie again.', 'Ordered the pad thai again.',
          'Ordered the pad thai again.', entry_ids[-1]),
     )
+    # Saved with the Capture tab's Save button and auto-filed as a meal: the
+    # journal row is gone, this is what still answers the phone's replays.
+    db.execute(
+        "INSERT INTO journal_refiles (entry_id, target_collection, refiled_at) VALUES (?, 'food_entries', ?)",
+        (entry_ids[-1], ts(3)),
+    )
 
     # A meal that was talked over as well as photographed. 'done', never
     # 'running': an in-flight state is rewritten by init_db()'s orphan reset on
@@ -560,9 +684,47 @@ def seed_food(db, recipe_id):
         )
     for category, cents in [("McDonald's", 1500), ('Groceries', 3000)]:
         db.execute(
-            'INSERT INTO spending_logs (id, date, category, amount_cents, created_at) VALUES (?, ?, ?, ?, ?)',
-            (new_id(), today, category, cents, ts(0)),
+            'INSERT INTO spending_logs (id, date, category, amount_cents, created_at, updated_at)'
+            ' VALUES (?, ?, ?, ?, ?, ?)',
+            (new_id(), today, category, cents, ts(0), ts(0)),
         )
+    seed_spending_receipts(db)
+
+
+def seed_spending_receipts(db):
+    """A purchase captured the meal way: a receipt photo, a clip over it, and
+    what the structuring pass read out of both — settled, never mid-read."""
+    from backend.spending.storage import media_path
+
+    entry_id = new_id()
+    db.execute(
+        'INSERT INTO spending_logs (id, date, category, amount_cents, merchant, raw_content, notes,'
+        ' generated_notes, latitude, longitude, created_at, updated_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        (entry_id, today_key(1), 'Groceries', 4286, 'Loblaws',
+         'picked up the week\'s groceries, the strawberries were on sale',
+         "Picked up the week's groceries; the strawberries were on sale.",
+         "Picked up the week's groceries; the strawberries were on sale.",
+         43.6532, -79.3832, ts(1), ts(1)),
+    )
+    image_id, audio_id = new_id(), new_id()
+    img_path = media_path(entry_id, image_id, 'jpg')
+    placeholder_image(img_path, 'receipt', size=(480, 900), color=(235, 232, 220))
+    db.execute(
+        'INSERT INTO spending_media (id, entry_id, kind, path, mime, position, description,'
+        " description_status, created_at) VALUES (?, ?, 'image', ?, 'image/jpeg', 0, ?, 'done', ?)",
+        (image_id, entry_id, str(img_path),
+         'LOBLAWS\nSTRAWBERRIES 1LB  4.99\nMILK 2L  5.49\nSUBTOTAL 40.12\nHST 2.74\nTOTAL 42.86',
+         ts(1)),
+    )
+    wav_path = media_path(entry_id, audio_id, 'wav')
+    placeholder_audio(wav_path)
+    db.execute(
+        'INSERT INTO spending_media (id, entry_id, kind, path, mime, position, transcript,'
+        " transcript_status, created_at) VALUES (?, ?, 'audio', ?, 'audio/wav', 1, ?, 'done', ?)",
+        (audio_id, entry_id, str(wav_path),
+         "picked up the week's groceries, the strawberries were on sale", ts(1)),
+    )
 
 
 def seed_fanfic(db, journal_ids):
@@ -654,6 +816,55 @@ def seed_fanfic(db, journal_ids):
             'INSERT INTO fic_site_tags (fic_id, name, created_at) VALUES (?, ?, ?)',
             (fic_id, name, ts(15)),
         )
+
+    # Shelves: the never-opened favorite waits on to_read, and a forum quest
+    # was dropped with a review -- the archive the library hides by default.
+    db.execute("UPDATE fics SET shelf='to_read' WHERE id=?", (browser_fic_id,))
+    db.execute("UPDATE fics SET rating=4, review=? WHERE id=?",
+               ('Gentle and strange; the second chapter earns the title.', fic_id))
+    dropped_id = new_id()
+    db.execute(
+        'INSERT INTO fics (id, title, author, source_type, source_url, site, thread_id, word_count,'
+        ' chapter_count, download_status, rating, review, shelf, shelved_at, last_opened_at,'
+        ' created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        (dropped_id, 'Quest for the Ninth Archive (demo)', 'forum_author', 'xenforo',
+         'https://forums.example.com/threads/ninth-archive.1001/', 'forums.example.com', '1001',
+         2400, 3, 'complete', 2, 'Lost me once the council arc started. Dropped at 3.',
+         'dropped', ts(2), ts(3), ts(40), ts(2)),
+    )
+    for position in (1, 2, 3):
+        text = f'Part {position} of the archive quest.'
+        db.execute(
+            'INSERT INTO fic_chapters (id, fic_id, position, title, content_html, content_text,'
+            ' source_url, source_post_id, word_count, posted_at, created_at)'
+            ' VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (new_id(), dropped_id, position, f'Part {position}', f'<p>{text}</p>', text,
+             f'https://forums.example.com/posts/{9000 + position}/', str(9000 + position),
+             800, ts(40 - position), ts(40)),
+        )
+    parts = [r['id'] for r in db.execute(
+        'SELECT id FROM fic_chapters WHERE fic_id=? ORDER BY position', (dropped_id,))]
+    for chapter_id in parts[:2]:
+        db.execute('INSERT INTO fic_chapter_reads (chapter_id, fic_id, created_at) VALUES (?,?,?)',
+                   (chapter_id, dropped_id, ts(3)))
+    # Part 1 liked, part 2 checked with no reaction, part 3 never checked.
+    db.execute('INSERT INTO fic_chapter_reactions (chapter_id, fic_id, reaction, checked_at)'
+               ' VALUES (?,?,?,?)', (parts[0], dropped_id, 'Like', ts(2)))
+    db.execute('INSERT INTO fic_chapter_reactions (chapter_id, fic_id, reaction, checked_at)'
+               ' VALUES (?,?,?,?)', (parts[1], dropped_id, None, ts(2)))
+
+    # Which of the user's own lists on the source each fic is on. The FF.net
+    # favorite is on one; a second FF.net story imported from a link is on
+    # none, and since favorites has had a full pass, it is the Backlog.
+    db.execute('INSERT INTO fic_source_lists (fic_id, list, seen_at) VALUES (?,?,?)',
+               (browser_fic_id, 'favorites', ts(2)))
+    db.execute('INSERT INTO fic_list_passes (site, list, completed_at) VALUES (?,?,?)',
+               ('fanfiction.net', 'favorites', ts(2)))
+    db.execute(
+        'INSERT INTO fics(id,title,author,source_type,source_url,site,thread_id,download_status,'
+        "chapter_count,shelf,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'complete',0,'to_read',?,?)",
+        (new_id(), 'Something to get around to (demo)', 'a_backlog_author', 'fanfiction',
+         'https://www.fanfiction.net/s/456/1/', 'fanfiction.net', '456', ts(6), ts(6)))
 
     # Site bookkeeping. The cookie is obviously fake on purpose — this database
     # is built from a script that ships in a public repo.
@@ -1122,18 +1333,44 @@ def seed_writing(db):
         'VALUES (?, ?, ?, ?, 0, ?, ?)',
         (new_id(), project_id, 'Opening', 'The keeper climbs the same stairs every night, and every night they are different.', ts(12), ts(12)),
     )
-    # Context docs are what the scoped writing chat is allowed to see.
-    for title, doc_type, content in [
+    # Context docs are what the scoped writing chat is allowed to see. The
+    # character is pinned, so the discussion's prompt carries it on every turn.
+    note_ids = {}
+    for title, doc_type, content, pinned in [
         ('Lyra Ashworth', 'character',
-         'Forty years a keeper. Speaks little, writes everything down in a ledger she never shows anyone.'),
+         'Forty years a keeper. Speaks little, writes everything down in a ledger she never shows anyone.', 1),
         ('Outline', 'outline',
-         '1. The storm.\n2. What the light found.\n3. The ledger is opened.'),
+         '1. The storm.\n2. What the light found.\n3. The ledger is opened.', 0),
     ]:
+        note_ids[title] = new_id()
         db.execute(
-            'INSERT INTO writing_context_docs (id, project_id, title, content, doc_type, created_at, updated_at) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (new_id(), project_id, title, content, doc_type, ts(12), ts(12)),
+            'INSERT INTO writing_context_docs (id, project_id, title, content, doc_type, pinned, created_at, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (note_ids[title], project_id, title, content, doc_type, pinned, ts(12), ts(12)),
         )
+    # The outline as it stood before an accepted discussion proposal added
+    # its third beat — what the note's history panel offers to restore.
+    db.execute(
+        'INSERT INTO writing_context_doc_revisions (id, doc_id, title, content, source, message_id, created_at) '
+        "VALUES (?, ?, 'Outline', ?, 'accept', NULL, ?)",
+        (new_id(), note_ids['Outline'], '1. The storm.\n2. What the light found.', ts(12)),
+    )
+    # A canon source row with no file behind it: dumps are tens of MB and come
+    # from Fandom, so the demo describes the link rather than shipping a wiki.
+    # Its status is 'error' (never 'importing', an in-flight state), which is
+    # also what keeps the discussion from offering canon tools it cannot run.
+    source_id = new_id()
+    db.execute(
+        'INSERT INTO writing_canon_sources (id, name, wiki_host, source_url, filename, status, pages, chunks, '
+        'error, licence, created_at, updated_at) '
+        "VALUES (?, 'Lighthouse Wiki', 'lighthouses.fandom.com', NULL, NULL, 'error', 0, 0, "
+        "'Demo row: import a Fandom XML dump to make canon searchable', 'CC BY-SA 3.0', ?, ?)",
+        (source_id, ts(12), ts(12)),
+    )
+    db.execute(
+        'INSERT INTO writing_project_canon (project_id, source_id, created_at) VALUES (?, ?, ?)',
+        (project_id, source_id, ts(12)),
+    )
 
     return project_id
 
@@ -1470,10 +1707,82 @@ def seed_apple_health(db):
             (hk_id(), activity, name, start, start + minutes * 60, minutes * 60, kcal, meters,
              'Apple Watch', 'com.apple.health.demo', '{"HKIndoorWorkout":false}', received),
         )
-
+        if name == 'running':
+            # Heart rate through the run, so its stars come from heart rate
+            # (~83% of the 186 peak: four) and the walk shows the energy fallback.
+            for minute, bpm in ((2, 138), (8, 152), (14, 158), (20, 161), (26, 186), (30, 150)):
+                moment = start + minute * 60
+                db.execute(
+                    'INSERT INTO health_samples (id, type, kind, start_ts, end_ts, value, unit, source_name,'
+                    ' source_bundle, device, metadata, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (hk_id(), 'HKQuantityTypeIdentifierHeartRate', 'quantity', moment, moment, bpm,
+                     'count/min', 'Apple Watch', 'com.apple.health.demo', 'Watch7,9', None, received),
+                )
 
     from backend.apple_health.lifestyle import reconcile
     reconcile(db)
+
+
+def seed_location(db):
+    """The phone's location trail (backend/location/), so the Journal shows a
+    map card for today and yesterday: a morning at home, a recorded walk
+    downtown, an afternoon there, and coarse fixes on the way back -- the same
+    mix of fine routes and sparse jumps the phone really uploads. The seeded
+    journal entries sit near 43.6532,-79.3832, so they land on the map too."""
+    import math
+
+    received = ts(0)
+    rows = []
+    for days_ago in (0, 1):
+        start, _ = day_bounds(today_key(days_ago))
+        home, downtown = (43.6677, -79.3948), (43.6532, -79.3832)
+        rows.append((f'visit-{start}-home', start + 3 * 3600, today_key(days_ago), *home, 25.0,
+                     None, None, 'visit', start + 5 * 3600, received, None))
+        walk_start = start + 5 * 3600 + 120
+        for i in range(40):
+            f = i / 39
+            lat = home[0] + (downtown[0] - home[0]) * f
+            lon = home[1] + (downtown[1] - home[1]) * f + 0.0012 * math.sin(f * math.pi * 3)
+            rows.append((f'fix-{start}-{i:03d}', walk_start + i * 45, today_key(days_ago), lat, lon,
+                         8.0, 90.0, 1.4, 'fine', None, received, 'walking'))
+        arrive = walk_start + 40 * 45 + 60
+        rows.append((f'visit-{start}-downtown', arrive, today_key(days_ago), *downtown, 30.0,
+                     None, None, 'visit', arrive + 3 * 3600, received, None))
+        for i, (lat, lon) in enumerate(((43.6600, -79.3790), (43.6650, -79.3900))):
+            rows.append((f'sig-{start}-{i}', arrive + 3 * 3600 + (i + 1) * 900, today_key(days_ago),
+                         lat, lon, 300.0, None, None, 'coarse', None, received, 'automotive'))
+        # Home again for the evening, so the day has a commute each way.
+        rows.append((f'visit-{start}-evening', arrive + 4 * 3600, today_key(days_ago), *home, 25.0,
+                     None, None, 'visit', None if days_ago == 0 else arrive + 9 * 3600, received, None))
+    db.executemany(
+        'INSERT INTO location_points (id, fix_ts, day_key, latitude, longitude, accuracy_m, altitude_m,'
+        ' speed_mps, kind, departed_ts, received_at, activity) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        rows,
+    )
+
+
+def seed_work_attendance(db):
+    """Yesterday's seeded afternoon downtown, as the work calendar records it:
+    a one-off "At Downtown office" event, since the demo has no recurring work
+    event (backend/location/work_calendar.py). Runs after seed_memory, which
+    makes the office a Work place."""
+    from datetime import datetime
+
+    start, _ = day_bounds(today_key(1))
+    arrive = start + 5 * 3600 + 120 + 40 * 45 + 60
+    leave = arrive + 3 * 3600
+    clock = lambda t: datetime.fromtimestamp(t).strftime('%H:%M')  # noqa: E731
+    event_id = new_id()
+    db.execute(
+        'INSERT INTO calendar_events (id, title, description, date, time, end_time, created_at,'
+        ' category_tags, classified_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        (event_id, 'At Downtown office', 'Recorded from your location trail.',
+         datetime.fromtimestamp(arrive).date().isoformat(), clock(arrive), clock(leave), ts(1),
+         json.dumps(['work']), ts(1)))
+    db.execute(
+        'INSERT INTO work_attendance (day_key, event_id, occurrence_date, created_event, place_name,'
+        ' written_time, written_end_time, released, updated_at) VALUES (?,?,NULL,1,?,?,?,0,?)',
+        (today_key(1), event_id, 'Downtown office', clock(arrive), clock(leave), ts(1)))
 
 
 def _seed_weather(db):
@@ -1978,11 +2287,28 @@ def seed_files():
 def seed_memory(db):
     """The one standing document about the user, plus the revisions every write
     snapshots (backend/memory.py). Nothing but Settings → Memory writes it."""
-    db.execute(
-        'INSERT INTO saved_places(id,name,notes,latitude,longitude,radius_m,created_at,updated_at)'
-        ' VALUES (?,?,?,?,?,?,?,?)',
-        (new_id(), 'Home', 'Fictional demo location', 43.65, -79.38, 150, ts(2), ts(2)),
-    )
+    # Home and the office sit on the seeded trail's two visits (seed_location),
+    # so the Journal's map card shows time at each. The old flat is a former
+    # Home, which is what gives Settings → Saved Places a history to show.
+    old_flat, home, office = new_id(), new_id(), new_id()
+    for place_id, name, notes, lat, lon in (
+        (old_flat, 'Old flat', 'Fictional demo location', 43.6487, -79.4202),
+        (home, 'Home', 'Fictional demo location', 43.6677, -79.3948),
+        (office, 'Downtown office', 'Fictional demo workplace', 43.6532, -79.3832),
+    ):
+        db.execute(
+            'INSERT INTO saved_places(id,name,notes,latitude,longitude,radius_m,created_at,updated_at)'
+            ' VALUES (?,?,?,?,?,?,?,?)',
+            (place_id, name, notes, lat, lon, 150, ts(400), ts(400)),
+        )
+    for role, place_id, started, ended in (
+        ('home', old_flat, today_key(400), today_key(120)),
+        ('home', home, today_key(120), None),
+        ('work', office, today_key(300), None),
+    ):
+        db.execute(
+            'INSERT INTO place_roles(id,role,place_id,started_on,ended_on,created_at,updated_at)'
+            ' VALUES (?,?,?,?,?,?,?)', (new_id(), role, place_id, started, ended, ts(120), ts(120)))
     content = (
         "Lives in Toronto. Writes in the mornings.\n\n"
         "Names that dictation tends to mangle: Lyra Ashworth (a character), "
@@ -2117,7 +2443,7 @@ def seed_infra(db):
     db.execute(
         'UPDATE settings SET ai_provider = ?, llama_url = ?, llama_model = ?, '
         'stt_backend = ?, tts_backend = ?, whisper_model = ?, stt_device = ?, '
-        'voice_pipeline_enabled = 0, nudge_enabled = 0, briefing_enabled = 0, '
+        'voice_pipeline_enabled = 0, briefing_enabled = 0, '
         "stt_screenshot_key = '', "
         'email_sync_enabled = 0, research_enabled = 0, jobs_paused = 1, '
         # Never seed a paused demo: the switch lives at the top of Settings and
@@ -2155,6 +2481,52 @@ def seed_infra(db):
         (new_id(), 'calendar.classify', new_id(), '{}', 'pending', ts(0)),
     )
 
+    # Server oddities: one recurring problem with a note, one new traceback
+    # still waiting for its note, and one that has gone quiet — the three
+    # shapes the briefing's section renders differently. The scan row is
+    # recent, so a briefing run from the demo reports them rather than saying
+    # the check didn't run.
+    fp_audio, fp_tb, fp_old = '0a1b2c3d4e5f6a7b', '1b2c3d4e5f6a7b8c', '2c3d4e5f6a7b8c9d'
+    for fp, kind, template, sample, frame, status, count, note, first, last in [
+        (fp_audio, 'error',
+         'cpu call describe_audio failed after Ns: InternalServerError: proxy error: '
+         'Could not establish connection',
+         'cpu call describe_audio failed after 0.4s: InternalServerError: proxy error: '
+         'Could not establish connection',
+         None, 'recurring', 15,
+         'The CPU omni model looks unreachable behind the router, so audio '
+         'descriptions are being skipped; worth checking the llama service.',
+         ts(3), ts(0, 2)),
+        (fp_tb, 'traceback',
+         'sqlite3.InterfaceError in backend/fanfic/pacing.py:state: bad parameter or other API misuse',
+         '[demo] ERROR in app: Exception on /api/fanfic/browser/poll [POST]\n'
+         'Traceback (most recent call last):\n'
+         'sqlite3.InterfaceError: bad parameter or other API misuse',
+         '{"file": "backend/fanfic/pacing.py", "line": 23, "function": "state"}',
+         'new', 1, None, ts(0, 5), ts(0, 5)),
+        (fp_old, 'warning',
+         'UserWarning: resource_tracker: There appear to be N leaked semaphore objects',
+         'UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects',
+         None, 'quiet', 0, None, ts(20), ts(12)),
+    ]:
+        db.execute(
+            'INSERT INTO server_oddities (fingerprint, unit, kind, template, sample, frame, '
+            'status, total_count, last_scan_count, note, note_written_at, first_seen, last_seen) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (fp, 'lunaschal', kind, template, sample, frame, status, max(count, 3), count,
+             note, ts(1) if note else None, first, last),
+        )
+    for fp, days_ago, count in [(fp_audio, 2, 6), (fp_audio, 0, 15), (fp_tb, 0, 1), (fp_old, 12, 1)]:
+        db.execute(
+            'INSERT INTO server_oddity_days (fingerprint, day_key, count) VALUES (?,?,?)',
+            (fp, today_key(days_ago), count),
+        )
+    db.execute(
+        'INSERT INTO server_oddity_scans (id, since_ts, until_ts, journal_available, '
+        'event_count, created_at) VALUES (?,?,?,?,?,?)',
+        (new_id(), ts(1), ts(0), 1, 16, ts(0)),
+    )
+
     db.execute(
         'INSERT INTO mcp_servers (id, name, transport, command, args, env, created_at, updated_at) '
         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -2190,6 +2562,18 @@ def seed_infra(db):
         )
 
 
+def seed_goals(db):
+    goal_id = new_id()
+    now = ts(0)
+    db.execute('INSERT INTO goals (id,title,criteria,reward,start_date,target_days,created_at,updated_at) '
+               'VALUES (?,?,?,?,?,?,?,?)',
+               (goal_id, 'A week of reading', 'Read for at least 20 minutes today.',
+                'A trip to the theater', today_key(), 7, now, now))
+    db.execute('INSERT INTO goal_days (id,goal_id,date,fingerprint,verdict,evidence,checked_at) '
+               'VALUES (?,?,?,?,?,?,?)',
+               (new_id(), goal_id, today_key(), 'demo', 'not_met', '[]', now))
+
+
 def main() -> None:
     print('Wiping scratch DB and media directories...')
     wipe_scratch()
@@ -2219,15 +2603,18 @@ def main() -> None:
     seed_lifestyle(db)
     seed_pomodoro(db)
     seed_apple_health(db)
+    seed_location(db)
     seed_piano(db)
     seed_practice(db)
     seed_notes(db)
+    seed_goals(db)
     seed_notebook(db, journal_ids)
     # After seed_notebook: a study source is bound to a note under the same
     # NOTEBOOK_ROOT, so it writes into the tree that one has just created.
     seed_study(db)
     seed_files()
     seed_memory(db)
+    seed_work_attendance(db)
     seed_knowledge(db)
     seed_docpacks(db)
     seed_infra(db)

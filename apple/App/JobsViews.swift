@@ -19,7 +19,9 @@ final class JobsFeedModel: ObservableObject {
 
     func refresh() async {
         guard let api = capture.chatAPI() else {
-            error = "Sign in under More → Settings to load new postings."
+            error = UIDevice.current.userInterfaceIdiom == .pad
+                ? "Sign in under Settings to load new postings."
+                : "Sign in under More → Settings to load new postings."
             return
         }
         loading = true

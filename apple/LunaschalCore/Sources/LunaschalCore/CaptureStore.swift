@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(ImageIO)
+import ImageIO
+#endif
 
 /// Small, append-oriented capture outbox. Each manifest is replaced atomically;
 /// recordings are separate files and never loaded into the manifest or pruned.
@@ -38,7 +41,18 @@ public final class CaptureStore {
     }
 
     /// What the replica says about a synced capture's journal entry.
-    public enum EntryOnServer { case present, removed, unknown }
+    public enum EntryOnServer {
+        case present, removed, unknown
+
+        /// A journal capture's entry, from the replica. `filedElsewhere` is a
+        /// meal or a purchase holding its id: the server auto-filed it there,
+        /// which deletes the journal row, and that is not a removal.
+        public static func of(journalDeleted: Bool?, filedElsewhere: Bool) -> EntryOnServer {
+            if filedElsewhere { return .present }
+            guard let journalDeleted else { return .unknown }
+            return journalDeleted ? .removed : .present
+        }
+    }
 
     public static let removedOnServer = "Removed on server. This device still holds its original capture."
 
@@ -65,12 +79,19 @@ public final class CaptureStore {
                 try save(capture)
                 changed += 1
             case .present:
+                // Read as removed by a pass that saw the journal row go before
+                // the meal it was filed as arrived.
+                if capture.lastError == Self.removedOnServer {
+                    capture.lastError = nil
+                    try save(capture)
+                    changed += 1
+                }
                 let origin = root.appendingPathComponent(capture.id + ".watch-origin").path
                 let confirmed = root.appendingPathComponent(capture.id + ".watch-server-confirmed").path
                 guard now.timeIntervalSince(capture.createdAt) > olderThan,
                       !fm.fileExists(atPath: origin) || fm.fileExists(atPath: confirmed) else { continue }
                 if capture.attachmentID != nil { try? fm.removeItem(at: audioURL(capture)) }
-                for file in capture.files { try? fm.removeItem(at: fileURL(file)) }
+                for file in capture.files { removeBytes(file) }
                 for clip in capture.clips { try? fm.removeItem(at: clipURL(clip)) }
                 try fm.removeItem(at: manifest(capture.id))
                 changed += 1
@@ -83,10 +104,12 @@ public final class CaptureStore {
         guard ULID.isValid(capture.id), capture.attachmentID.map(ULID.isValid) ?? true else {
             throw CaptureError.invalidID
         }
-        if capture.kind == .food {
-            // The food log has no YouTube links and keeps media only.
+        if capture.kind.isMediaLog {
+            // The food log and spending have no YouTube links and keep media only.
             guard capture.mode == .text, capture.links.isEmpty else { throw CaptureError.invalidID }
-            guard capture.files.allSatisfy(\.isFoodMedia) else { throw CaptureError.notFoodMedia }
+            guard capture.files.allSatisfy(capture.kind.accepts) else {
+                throw capture.kind == .spending ? CaptureError.notSpendingMedia : CaptureError.notFoodMedia
+            }
         }
         for link in capture.links {
             guard capture.mode == .text, ULID.isValid(link.attachmentID),
@@ -96,6 +119,10 @@ public final class CaptureStore {
             guard capture.mode == .text, ULID.isValid(file.attachmentID) else { throw CaptureError.invalidID }
             let size = try fileURL(file).resourceValues(forKeys: [.fileSizeKey]).fileSize
             guard (size ?? 0) > 0 else { throw CaptureError.missingFile }
+            if file.isLivePhoto {
+                let motion = try motionURL(file).resourceValues(forKeys: [.fileSizeKey]).fileSize
+                guard (motion ?? 0) > 0 else { throw CaptureError.missingFile }
+            }
         }
         for clip in capture.clips {
             guard capture.mode == .text, ULID.isValid(clip.attachmentID) else { throw CaptureError.invalidID }
@@ -147,6 +174,18 @@ public final class CaptureStore {
     public func fileURL(_ file: CaptureFile) throws -> URL {
         guard ULID.isValid(file.attachmentID) else { throw CaptureError.invalidID }
         return root.appendingPathComponent("files").appendingPathComponent(file.attachmentID)
+    }
+
+    /// A Live Photo's clip, beside its still.
+    public func motionURL(_ file: CaptureFile) throws -> URL {
+        CaptureFile.motionURL(beside: try fileURL(file))
+    }
+
+    /// A staged file's bytes — both halves of a Live Photo.
+    private func removeBytes(_ file: CaptureFile) {
+        guard let url = try? fileURL(file) else { return }
+        try? fm.removeItem(at: url)
+        try? fm.removeItem(at: CaptureFile.motionURL(beside: url))
     }
 
     public func clipURL(_ clip: CaptureClip) throws -> URL {
@@ -208,10 +247,15 @@ public final class CaptureStore {
     /// Copies a picked file into the draft, so it survives the picker's
     /// temporary URL going away and the app being closed before Save.
     @discardableResult
+    /// `capturedAt` is for what the store cannot read itself — a movie's
+    /// creation date, which takes AVFoundation; a photo's EXIF is read here.
     public func stageFile(from source: URL, name: String, contentType: String?, into entryID: String? = nil,
-                          now: Date = Date()) throws -> CaptureFile {
+                          capturedAt: Date? = nil, now: Date = Date()) throws -> CaptureFile {
         _ = try draftURL(entryID)
-        let file = CaptureFile(name: name, contentType: contentType, now: now)
+        let photoTime = contentType?.hasPrefix("image/") == true
+            ? Self.photoDate(try? Data(contentsOf: source, options: .mappedIfSafe)) : nil
+        let file = CaptureFile(name: name, contentType: contentType,
+                               capturedAt: capturedAt ?? photoTime, now: now)
         let destination = try fileURL(file)
         try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fm.copyItem(at: source, to: destination)
@@ -225,15 +269,80 @@ public final class CaptureStore {
 
     @discardableResult
     public func stageFile(data: Data, name: String, contentType: String?, into entryID: String? = nil,
+                          capturedAt: Date? = nil,
                           now: Date = Date()) throws -> CaptureFile {
         guard !data.isEmpty else { throw CaptureError.missingFile }
         _ = try draftURL(entryID)
-        let file = CaptureFile(name: name, contentType: contentType, now: now)
+        let photoTime = contentType?.hasPrefix("image/") == true ? Self.photoDate(data) : nil
+        let file = CaptureFile(name: name, contentType: contentType,
+                               capturedAt: capturedAt ?? photoTime, now: now)
         let destination = try fileURL(file)
         try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: destination, options: .atomic)
         try updateDraft(entryID) { $0.files.append(file) }
         return file
+    }
+
+    /// A Live Photo: the still and its clip, staged together as one file so
+    /// neither can be uploaded, discarded or lost without the other.
+    @discardableResult
+    public func stageLivePhoto(still: Data, stillType: String, motion: URL, motionType: String, name: String,
+                               into entryID: String? = nil, now: Date = Date()) throws -> CaptureFile {
+        guard !still.isEmpty,
+              (try motion.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
+            throw CaptureError.missingFile
+        }
+        _ = try draftURL(entryID)
+        let file = CaptureFile(name: name, contentType: stillType, capturedAt: Self.photoDate(still),
+                               motionContentType: motionType, now: now)
+        let destination = try fileURL(file)
+        try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        do {
+            try still.write(to: destination, options: .atomic)
+            try fm.copyItem(at: motion, to: CaptureFile.motionURL(beside: destination))
+        } catch {
+            removeBytes(file)
+            throw error
+        }
+        try updateDraft(entryID) { $0.files.append(file) }
+        return file
+    }
+
+    /// When an entry is dated. A meal or purchase is dated by its first photo,
+    /// and so is a journal entry that is nothing but pictures and videos: with
+    /// no words, no voice and no link, it is a record of when they were taken
+    /// rather than of when they were attached — an old photo saved today lands
+    /// on the day it was taken. Anything with words says when it was written.
+    public static func entryDate(kind: CaptureKind, text: String, files: [CaptureFile], clips: [CaptureClip],
+                                 links: [String], now: Date) -> Date {
+        if kind.isMediaLog {
+            return files.first(where: { $0.isImage && $0.capturedAt != nil })?.capturedAt ?? now
+        }
+        guard text.isEmpty, clips.isEmpty, links.isEmpty else { return now }
+        let taken = files.filter { $0.isImage || $0.isVideo }.compactMap(\.capturedAt)
+        // Never in the future: a camera with a wrong clock must not file an
+        // entry under a day that has not happened.
+        return min(taken.min() ?? now, now)
+    }
+
+    /// Read the original camera time before the picker or upload can strip it.
+    private static func photoDate(_ data: Data?) -> Date? {
+        #if canImport(ImageIO)
+        guard let data, let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
+              let exif = properties[kCGImagePropertyExifDictionary as String] as? [String: Any],
+              let original = exif[kCGImagePropertyExifDateTimeOriginal as String] as? String else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        if let offset = exif[kCGImagePropertyExifOffsetTimeOriginal as String] as? String {
+            formatter.dateFormat = "yyyy:MM:dd HH:mm:ssXXXXX"
+            return formatter.date(from: original + offset)
+        }
+        return formatter.date(from: original)
+        #else
+        return nil
+        #endif
     }
 
     /// Records the clip in the draft before any audio is written, so a crash
@@ -269,8 +378,8 @@ public final class CaptureStore {
 
     /// Removes a staged file the user took back out of the draft.
     public func discardStaged(_ file: CaptureFile) throws {
-        let url = try fileURL(file)
-        if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
+        _ = try fileURL(file)
+        removeBytes(file)
         guard let key = try draftKey(holding: file.attachmentID) else { return }
         try updateDraft(key) { $0.files.removeAll { $0.attachmentID == file.attachmentID } }
     }
@@ -292,21 +401,24 @@ public final class CaptureStore {
     /// `images` are the draft notebook's rendered pages, filed after what was
     /// staged; the notebook itself is let go with the rest of the draft.
     public func commitDraft(text: String, youtubeURLs: [String], kind: CaptureKind = .journal,
-                            images: [(data: Data, name: String)] = [],
+                            images: [(data: Data, name: String)] = [], forReview: Bool = false,
+                            autoFile: Bool = false,
                             location: (latitude: Double, longitude: Double)? = nil,
                             now: Date = Date()) throws -> Capture {
         let staged = try draft()
         // A meal takes no notebook: its pages, and the notebook, wait for the next entry.
-        let pages = try writeImages(kind == .food ? [] : images, now: now)
+        let pages = try writeImages(kind.isMediaLog ? [] : images, now: now)
         let capture: Capture
         do {
+            // A meal is never a review card, as it never takes the notebook.
             capture = try commit(text: text, youtubeURLs: youtubeURLs, kind: kind, files: staged.files + pages,
-                                 clips: staged.clips, location: location, now: now)
+                                 clips: staged.clips, forReview: forReview && kind == .journal,
+                                 autoFile: autoFile && kind == .journal, location: location, now: now)
         } catch {
-            for file in pages { try? fm.removeItem(at: fileURL(file)) }
+            for file in pages { removeBytes(file) }
             throw error
         }
-        try updateDraft { $0 = CaptureDraft(); if kind == .food { $0.notebookID = staged.notebookID } }
+        try updateDraft { $0 = CaptureDraft(); if kind.isMediaLog { $0.notebookID = staged.notebookID } }
         return capture
     }
 
@@ -324,7 +436,7 @@ public final class CaptureStore {
     public func commitAdditions(to entryID: String, kind: CaptureKind, youtubeURLs: [String] = [],
                                 now: Date = Date()) throws -> Capture? {
         let staged = try draft(for: entryID)
-        let links = kind == .food ? [] : try youtubeURLs.map(YouTubeLink.canonical)
+        let links = kind.isMediaLog ? [] : try youtubeURLs.map(YouTubeLink.canonical)
         guard !(staged.isEmpty && links.isEmpty) else { return nil }
         let capture = Capture(kind: kind, now: now, youtubeURLs: links, files: staged.files,
                               clips: staged.clips, entryID: entryID)
@@ -337,7 +449,7 @@ public final class CaptureStore {
     /// staged there, bytes included.
     public func discardDraft(for entryID: String?) throws {
         let staged = try draft(for: entryID)
-        for file in staged.files { try? fm.removeItem(at: fileURL(file)) }
+        for file in staged.files { removeBytes(file) }
         for clip in staged.clips { try? fm.removeItem(at: clipURL(clip)) }
         try updateDraft(entryID) { $0 = CaptureDraft() }
     }
@@ -353,15 +465,15 @@ public final class CaptureStore {
     /// names entries this one supersedes (see `Capture.replaces`).
     @discardableResult
     public func commitImages(text: String, youtubeURLs: [String], images: [(data: Data, name: String)],
-                             replaces: [String] = [],
+                             replaces: [String] = [], forReview: Bool = false,
                              location: (latitude: Double, longitude: Double)? = nil,
                              now: Date = Date()) throws -> Capture {
         let files = try writeImages(images, now: now)
         do {
             return try commit(text: text, youtubeURLs: youtubeURLs, kind: .journal, files: files, clips: [],
-                              replaces: replaces, location: location, now: now)
+                              replaces: replaces, forReview: forReview, location: location, now: now)
         } catch {
-            for file in files { try? fm.removeItem(at: fileURL(file)) }
+            for file in files { removeBytes(file) }
             throw error
         }
     }
@@ -380,7 +492,7 @@ public final class CaptureStore {
             }
             return files
         } catch {
-            for file in files { try? fm.removeItem(at: fileURL(file)) }
+            for file in files { removeBytes(file) }
             throw error
         }
     }
@@ -402,23 +514,27 @@ public final class CaptureStore {
         for id in capture.replaces where fm.fileExists(atPath: manifest(id).path) {
             let old = try load(id)
             if old.attachmentID != nil { try? fm.removeItem(at: audioURL(old)) }
-            for file in old.files { try? fm.removeItem(at: fileURL(file)) }
+            for file in old.files { removeBytes(file) }
             for clip in old.clips { try? fm.removeItem(at: clipURL(clip)) }
             try fm.removeItem(at: manifest(id))
         }
     }
 
     private func commit(text: String, youtubeURLs: [String], kind: CaptureKind, files: [CaptureFile],
-                        clips: [CaptureClip], replaces: [String] = [],
+                        clips: [CaptureClip], replaces: [String] = [], forReview: Bool = false,
+                        autoFile: Bool = false,
                         location: (latitude: Double, longitude: Double)?, now: Date) throws -> Capture {
-        let links = kind == .food ? [] : try youtubeURLs.map(YouTubeLink.canonical)
+        let links = kind.isMediaLog ? [] : try youtubeURLs.map(YouTubeLink.canonical)
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Links are attachments, just like files and clips, never substitute words.
-        var capture = Capture(text: body, kind: kind, now: now,
+        let date = Self.entryDate(kind: kind, text: body, files: files, clips: clips, links: links, now: now)
+        var capture = Capture(text: body, kind: kind, now: date,
                               youtubeURLs: links, files: files, clips: clips)
         capture.latitude = location?.latitude
         capture.longitude = location?.longitude
         capture.replaces = replaces
+        capture.forReview = forReview
+        capture.autoFile = autoFile
         try save(capture)
         return capture
     }

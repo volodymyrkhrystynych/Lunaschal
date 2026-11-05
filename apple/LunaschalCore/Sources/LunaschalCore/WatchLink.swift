@@ -9,6 +9,8 @@ public enum WatchLink: Equatable {
     case start(PomodoroKind)
     case record
     case transcribe
+    /// The Workout page: starts the 90-second rest timer unless it is already going.
+    case workout
 
     public static let scheme = "lunaschal-watch"
 
@@ -18,6 +20,7 @@ public enum WatchLink: Equatable {
         case .start(let kind): return URL(string: "\(Self.scheme)://timer/\(kind.rawValue)")!
         case .record: return URL(string: "\(Self.scheme)://record")!
         case .transcribe: return URL(string: "\(Self.scheme)://transcribe")!
+        case .workout: return URL(string: "\(Self.scheme)://workout")!
         }
     }
 
@@ -32,6 +35,7 @@ public enum WatchLink: Equatable {
             self = .start(kind)
         case ("record", 0): self = .record
         case ("transcribe", 0): self = .transcribe
+        case ("workout", 0): self = .workout
         default: return nil
         }
     }
@@ -49,8 +53,7 @@ public enum WatchComplication {
     public static let recordKind = "record"
     public static let transcribeKind = "transcribe"
     public static let launcherKind = "launcher"
-    public static let timerKinds = [pomodoroKind, focusKind, timeoutKind]
-    public static let recordingKinds = [recordKind, transcribeKind]
+    public static let workoutKind = "workout"
     /// Control kinds, for `ControlCenter.reloadControls(ofKind:)`.
     public static let focusControl = "control.focus"
     public static let timeoutControl = "control.timeout"
@@ -69,6 +72,8 @@ public enum WatchComplication {
     /// The timer's state and its outbox, owned by whichever process changed it last.
     public static var pomodoroRoot: URL? { container?.appendingPathComponent("Pomodoro", isDirectory: true) }
     public static var timerURL: URL? { pomodoroRoot?.appendingPathComponent("timer.json") }
+    /// The Workout timer's state. Written by the app, read by its complication.
+    public static var restTimerURL: URL? { container?.appendingPathComponent("rest-timer.json") }
     /// What the Watch is recording, if anything. Written by the app.
     public static var recordingURL: URL? { container?.appendingPathComponent("recording.json") }
     /// A screen a Control asked the app to open, consumed when it next comes forward.

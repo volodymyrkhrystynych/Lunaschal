@@ -2,18 +2,32 @@ import { describe, it, expect } from 'vitest';
 import {
   shiftDateISO,
   isFutureDate,
-  todayISO,
+  paperDay,
+  downloadWindowOpen,
   hasMissingEditions,
   issueLoadStatus,
 } from './newspapers';
 
-describe('todayISO', () => {
+describe('paperDay', () => {
   it('uses the local calendar date, not the UTC one', () => {
-    // 11pm local time can already be tomorrow in UTC for timezones behind
-    // UTC — todayISO must still report the viewer's local "today" so it
-    // stays in sync with the backend's `date.today()` (also local).
+    // 11pm local time can already be tomorrow in UTC for timezones behind UTC.
     const localLateEvening = new Date(2026, 6, 9, 23, 0, 0); // Jul 9, 11pm, local time
-    expect(todayISO(localLateEvening)).toBe('2026-07-09');
+    expect(paperDay(localLateEvening)).toBe('2026-07-09');
+  });
+
+  it('keeps the previous day’s paper until 4am', () => {
+    expect(paperDay(new Date(2026, 6, 10, 0, 30))).toBe('2026-07-09');
+    expect(paperDay(new Date(2026, 6, 10, 3, 59))).toBe('2026-07-09');
+    expect(paperDay(new Date(2026, 6, 10, 4, 0))).toBe('2026-07-10');
+  });
+});
+
+describe('downloadWindowOpen', () => {
+  it('is closed from midnight to 4am', () => {
+    expect(downloadWindowOpen(new Date(2026, 6, 10, 0, 0))).toBe(false);
+    expect(downloadWindowOpen(new Date(2026, 6, 10, 3, 59))).toBe(false);
+    expect(downloadWindowOpen(new Date(2026, 6, 10, 4, 0))).toBe(true);
+    expect(downloadWindowOpen(new Date(2026, 6, 10, 23, 59))).toBe(true);
   });
 });
 

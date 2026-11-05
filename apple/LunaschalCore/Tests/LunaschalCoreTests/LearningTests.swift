@@ -137,22 +137,87 @@ final class LearningTests: XCTestCase {
         XCTAssertEqual(resumed.answers.map(\.voice), [true, false])
     }
 
-    func testTheClipGoesToTranscribeAsAudioAndNothingElse() throws {
+    func testARecordedAnswerUploadsItsAttemptWithTheClip() throws {
         let clip = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).m4a")
         try Data("not really aac".utf8).write(to: clip)
         defer { try? FileManager.default.removeItem(at: clip) }
-        let body = try TranscribeMultipart(audio: clip)
+        var session = LearningSession(due: [card("1")], attempts: [])
+        let answer = try XCTUnwrap(session.answerSpoken(typed: " Well, ", speech: true, id: "a1"))
+        let body = try RecordedAnswerMultipart(answer: answer, audio: clip)
         defer { try? FileManager.default.removeItem(at: body.url) }
         let text = String(decoding: try Data(contentsOf: body.url), as: UTF8.self)
+        XCTAssertTrue(text.contains("name=\"id\"\r\n\r\na1\r\n"))
+        XCTAssertTrue(text.contains("name=\"cardId\"\r\n\r\n1\r\n"))
+        XCTAssertTrue(text.contains("name=\"speechMode\"\r\n\r\ntrue\r\n"))
+        XCTAssertTrue(text.contains("name=\"answer\"\r\n\r\nWell,\r\n"), "What was typed first goes with it")
         XCTAssertTrue(text.contains("name=\"audio\"; filename=\"answer.m4a\""))
         XCTAssertTrue(text.contains("not really aac"))
-        XCTAssertFalse(text.contains("name=\"source\""), "A source would log it as a dictation")
         XCTAssertTrue(text.hasSuffix("--\(body.boundary)--\r\n"))
 
         let empty = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).m4a")
         try Data().write(to: empty)
         defer { try? FileManager.default.removeItem(at: empty) }
-        XCTAssertThrowsError(try TranscribeMultipart(audio: empty))
+        XCTAssertThrowsError(try RecordedAnswerMultipart(answer: answer, audio: empty))
+    }
+
+    func testASpokenAnswerMovesOnAtOnceAndItsWordsComeFromTheServer() throws {
+        var session = LearningSession(due: [card("1"), card("2")], attempts: [])
+        let spoken = try XCTUnwrap(session.answerSpoken(id: "a1"))
+        XCTAssertNil(spoken.text)
+        XCTAssertTrue(spoken.voice)
+        XCTAssertEqual(session.card?.id, "2", "The next card is up before the clip is heard")
+
+        XCTAssertNil(LearningSession.text(of: spoken, in: []))
+        let heard = [LearningAttempt(id: "a1", cardId: "1", mode: "answered", answer: "heard it", answerMode: "voice")]
+        XCTAssertEqual(LearningSession.text(of: spoken, in: heard), "heard it")
+        // An older attempt for the same card isn't this answer's words.
+        let stale = [LearningAttempt(id: "old", cardId: "1", mode: "answered", answer: "before", answerMode: "voice")]
+        XCTAssertNil(LearningSession.text(of: spoken, in: stale))
+    }
+
+    func testAClipThatCannotBeSentPutsItsCardBack() throws {
+        var session = LearningSession(due: [card("1"), card("2")], attempts: [])
+        _ = session.answerSpoken(id: "a1")
+        session.unanswer("a1")
+        XCTAssertEqual(session.card?.id, "1")
+        XCTAssertTrue(session.answers.isEmpty)
+    }
+
+    func testARebuiltDeckKeepsARecordingStillUploading() throws {
+        var session = LearningSession(due: [card("1"), card("2")], attempts: [])
+        let spoken = try XCTUnwrap(session.answerSpoken(id: "a1"))
+        var rebuilt = LearningSession(due: [card("1"), card("2")], attempts: [])
+        rebuilt.adopt(spoken)
+        rebuilt.adopt(spoken)
+        XCTAssertEqual(rebuilt.answers.map(\.id), ["a1"])
+        XCTAssertEqual(rebuilt.card?.id, "2")
+        // A card no longer in the deck isn't brought back.
+        var other = LearningSession(due: [card("2")], attempts: [])
+        other.adopt(spoken)
+        XCTAssertTrue(other.answers.isEmpty)
+    }
+
+    func testRetiringACardTakesItOutOfTheSittingWherever() throws {
+        // Mid answering pass: the retired card is skipped.
+        var session = LearningSession(due: [card("1"), card("2"), card("3")], attempts: [])
+        _ = session.answer("x", id: "a1")
+        session.remove("2")
+        XCTAssertEqual(session.card?.id, "3")
+        XCTAssertEqual(session.total, 2)
+
+        // In results, retiring an earlier answer keeps the one on screen.
+        var results = LearningSession(due: [card("1"), card("2"), card("3")], attempts: [])
+        _ = results.answer("x", id: "a1"); _ = results.answer("y", id: "a2"); _ = results.answer("z", id: "a3")
+        XCTAssertFalse(results.advance())
+        XCTAssertEqual(results.result?.id, "a2")
+        results.remove("1")
+        XCTAssertEqual(results.result?.id, "a2")
+        // Retiring the one on screen shows the next.
+        results.remove("2")
+        XCTAssertEqual(results.result?.id, "a3")
+        XCTAssertFalse(results.isSpent)
+        results.remove("3")
+        XCTAssertTrue(results.isSpent, "Nothing left, so the deck is fetched again")
     }
 
     func testSpeechModeIsStampedOnTheAnswerAndItsSummaryRead() throws {
@@ -170,5 +235,71 @@ final class LearningTests: XCTestCase {
     func testTheTextToSpeakIsFormEncoded() {
         XCTAssertEqual(String(decoding: JournalAPI.ttsForm("You missed A & B = 2?"), as: UTF8.self),
                        "text=You%20missed%20A%20%26%20B%20%3D%202%3F")
+    }
+
+    // MARK: Review cards
+
+    private func review(_ id: String) -> LearningCard {
+        LearningCard(id: id, question: "For review", answer: "", sourceType: "journal_review", kind: "review",
+                     review: LearningReviewPages(entryId: "e\(id)", pages: []))
+    }
+
+    func testDecodesAReviewCardAndItsPages() throws {
+        // As `_cards_to_dicts` writes one: the entry's pages attached.
+        let cards = try JSONDecoder().decode([LearningCard].self, from: Data("""
+        [{"id":"r1","folderId":"f0","question":"For review","answer":"","state":"active","tags":[],
+          "sourceType":"journal_review","sourceId":"e1","derivedFrom":null,"revisedFrom":null,
+          "due":"2026-10-05T12:00:00+00:00","kind":"review",
+          "review":{"entryId":"e1","title":null,"pages":[
+            {"id":"p1","name":"Notes p1.jpg","url":"/api/journal/attachments/p1/file"},
+            {"id":"p2","name":"Notes p2.jpg","url":"/api/journal/attachments/p2/file"}]}}]
+        """.utf8))
+        XCTAssertTrue(cards[0].isReview)
+        XCTAssertNil(cards[0].review?.title)
+        XCTAssertEqual(cards[0].review?.pages.map(\.id), ["p1", "p2"])
+        XCTAssertFalse(card("q").isReview, "A server from before review cards sends no kind")
+
+        let folders = try JSONDecoder().decode([LearningFolder].self, from: Data(
+            #"[{"id":"f0","name":"For review","dueCount":1,"system":true},{"id":"f1","name":"Rust","dueCount":0}]"#.utf8))
+        XCTAssertEqual(folders.map(\.system), [true, nil])
+    }
+
+    func testAReviewCardIsRatedInPlaceAndNeverAnswered() {
+        var session = LearningSession(due: [card("1"), review("2"), card("3")], attempts: [])
+        _ = session.answer("one", id: "a1")
+        XCTAssertEqual(session.card?.id, "2")
+        XCTAssertEqual(session.position, 2)
+        XCTAssertNil(session.answer("text", id: "x"), "A review card takes no answer")
+        XCTAssertNil(session.skip(id: "x"), "Nor is it flipped past")
+
+        XCTAssertEqual(session.markReviewed()?.id, "2")
+        XCTAssertEqual(session.card?.id, "3")
+        XCTAssertEqual(session.position, 3)
+        XCTAssertNil(session.markReviewed(), "An ordinary card isn't marked reviewed")
+        _ = session.answer("three", id: "a3")
+
+        XCTAssertTrue(session.inResults)
+        XCTAssertFalse(session.isFinished)
+        XCTAssertEqual(session.answers.map(\.id), ["a1", "a3"], "The results pass leaves the review card out")
+    }
+
+    func testADeckOfOnlyReviewCardsFinishesWithoutResults() {
+        var session = LearningSession(due: [review("1"), review("2")], attempts: [])
+        session.markReviewed()
+        XCTAssertFalse(session.isFinished)
+        session.markReviewed()
+        XCTAssertTrue(session.isFinished)
+        XCTAssertFalse(session.inResults)
+        XCTAssertNil(session.card)
+        XCTAssertNil(session.result)
+    }
+
+    func testAResumedSessionReachesItsReviewCardAfterTheAnswers() {
+        let attempts = [LearningAttempt(id: "a1", cardId: "1", mode: "answered", answer: "one")]
+        var session = LearningSession(due: [card("1"), review("2")], attempts: attempts)
+        XCTAssertEqual(session.card?.id, "2")
+        session.markReviewed()
+        XCTAssertTrue(session.inResults)
+        XCTAssertEqual(session.result?.id, "a1")
     }
 }

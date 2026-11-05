@@ -31,6 +31,7 @@ vi.mock('../../hooks/api', () => ({
     writing: {
       listNotes: vi.fn().mockResolvedValue([]),
       getNote: vi.fn(),
+      updateNote: vi.fn().mockResolvedValue({ success: true }),
       summarizeDiscussion: vi.fn(),
     },
     chat: {
@@ -59,6 +60,7 @@ vi.mock('../../hooks/api', () => ({
       updateTitle: vi.fn(),
       deleteConversation: vi.fn(),
       addMessage: vi.fn(),
+      resolveProposal: vi.fn(),
     },
   },
 }));
@@ -320,7 +322,9 @@ describe('reasoning', () => {
     ).not.toBeNull();
   });
 
-  it('persists the reasoning trace onto the saved assistant message', async () => {
+  it('leaves saving the reply to the server', async () => {
+    // The run in backend/delegate/runs.py owns the assistant row, so the only
+    // message this screen writes is the author's own.
     vi.mocked(api.settings.get).mockResolvedValueOnce({
       llamaUrl: 'http://localhost:8080',
     } as never);
@@ -335,33 +339,34 @@ describe('reasoning', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalledTimes(1));
+    const fetches = vi.mocked(api.chat.getConversation).mock.calls.length;
 
+    stream.push({ messageId: 'live1' });
     stream.push({ thinking: 'A clean exit keeps the mystery alive.' });
     stream.push({ content: 'She leaves to protect her sister.' });
     stream.close({ truncated: false, timedOut: false });
 
+    // The finished row is re-read rather than written.
     await waitFor(() =>
-      expect(api.chat.addMessage).toHaveBeenCalledWith('d1', {
-        role: 'assistant',
-        content: 'She leaves to protect her sister.',
-        metadata: JSON.stringify({
-          thinking: 'A clean exit keeps the mystery alive.',
-          truncated: false,
-          timedOut: false,
-          steps: [],
-          sources: [],
-        }),
-      })
+      expect(
+        vi.mocked(api.chat.getConversation).mock.calls.length
+      ).toBeGreaterThan(fetches)
     );
+    expect(api.chat.addMessage).toHaveBeenCalledTimes(1);
+    expect(api.chat.addMessage).toHaveBeenCalledWith('d1', {
+      role: 'user',
+      content: 'why does she leave',
+    });
 
     vi.unstubAllGlobals();
   });
 });
 
 describe('research tools', () => {
-  it('asks for the research toolset by name', async () => {
-    // A systemPrompt otherwise means no tools at all — right for the voice
-    // listener, wrong for a screen that can show a step.
+  it('sends only the transcript and the conversation', async () => {
+    // The server reads conversations.writing_project_id and builds the
+    // prompt, the tools and the project scope itself — none of them is the
+    // client's to send, which is what lets another client take part.
     const stream = openStream();
     const fetchMock = vi.fn().mockResolvedValue(stream.response);
     vi.stubGlobal('fetch', fetchMock);
@@ -375,18 +380,20 @@ describe('research tools', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.toolset).toBe('research');
-    expect(typeof body.systemPrompt).toBe('string');
-    // The scope for the project's own chapters and notes. The server cannot
-    // derive it: this request takes the inline path, so it carries no
-    // conversationId and conversations.writing_project_id is never read.
-    expect(body.writingProjectId).toBe(project.id);
+    expect(body.conversationId).toBe('d1');
+    expect(body.messages.at(-1)).toEqual({
+      role: 'user',
+      content: 'how did Tolkien do this',
+    });
+    expect(body).not.toHaveProperty('systemPrompt');
+    expect(body).not.toHaveProperty('toolset');
+    expect(body).not.toHaveProperty('writingProjectId');
 
     stream.close({});
     vi.unstubAllGlobals();
   });
 
-  it('shows a step as it happens and saves the trace with the reply', async () => {
+  it('shows a step as it happens', async () => {
     // Without this the turn is 30-90s of silence: the gathering happens before
     // a single token of the answer streams.
     const stream = openStream();
@@ -410,21 +417,6 @@ describe('research tools', () => {
     ).not.toBeNull();
 
     stream.close({ steps: [step], sources: [] });
-
-    await waitFor(() =>
-      expect(api.chat.addMessage).toHaveBeenCalledWith('d1', {
-        role: 'assistant',
-        content: 'Mostly grain.',
-        metadata: JSON.stringify({
-          thinking: '',
-          truncated: false,
-          timedOut: false,
-          steps: [step],
-          sources: [],
-        }),
-      })
-    );
-
     vi.unstubAllGlobals();
   });
 
@@ -489,5 +481,89 @@ describe('research tools', () => {
     expect(
       await screen.findByText(/Searched the offline library/i)
     ).not.toBeNull();
+  });
+});
+
+describe('notebook', () => {
+  it('shows a proposed note as a card that can be accepted', async () => {
+    vi.mocked(api.chat.getConversation).mockResolvedValueOnce({
+      id: 'd6',
+      title: 'Notebook talk',
+      messages: [
+        {
+          id: 'm1',
+          conversationId: 'd6',
+          role: 'user',
+          content: 'Let us make Mara a swimmer.',
+          metadata: null,
+          createdAt: '',
+        },
+        {
+          id: 'm2',
+          conversationId: 'd6',
+          role: 'assistant',
+          content: 'Good call — I staged it.',
+          metadata: JSON.stringify({
+            proposals: [
+              {
+                id: 'p1',
+                kind: 'writing_note_update',
+                status: 'pending',
+                data: {
+                  noteId: 'n1',
+                  title: 'Mara',
+                  mode: 'append',
+                  content: 'She swims better than she walks.',
+                },
+              },
+            ],
+          }),
+          createdAt: '',
+        },
+      ],
+      createdAt: '',
+      updatedAt: '',
+    });
+    vi.mocked(api.chat.resolveProposal).mockResolvedValueOnce({} as never);
+    renderWithProviders(<DiscussionView project={project} discussionId="d6" />);
+
+    expect(await screen.findByText('Update this note?')).not.toBeNull();
+    expect(
+      (screen.getByLabelText('Content') as HTMLTextAreaElement).value
+    ).toBe('She swims better than she walks.');
+    fireEvent.click(screen.getByText('Update Note'));
+
+    await waitFor(() =>
+      expect(api.chat.resolveProposal).toHaveBeenCalledWith(
+        'm2',
+        'p1',
+        'accept',
+        expect.objectContaining({ noteId: 'n1', mode: 'append' })
+      )
+    );
+  });
+
+  it('pins a note on the server rather than in this screen', async () => {
+    vi.mocked(api.writing.listNotes).mockResolvedValueOnce([
+      {
+        id: 'n1',
+        projectId: 'p1',
+        title: 'Mara',
+        docType: 'character',
+        pinned: 0,
+        createdAt: '',
+        updatedAt: '',
+      },
+    ]);
+    renderWithProviders(<DiscussionView project={project} discussionId="d1" />);
+
+    fireEvent.click(await screen.findByText(/Pinned notes/));
+    fireEvent.click(await screen.findByLabelText(/Mara/));
+
+    await waitFor(() =>
+      expect(api.writing.updateNote).toHaveBeenCalledWith('n1', {
+        pinned: true,
+      })
+    );
   });
 });

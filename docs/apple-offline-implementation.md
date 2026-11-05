@@ -1,8 +1,92 @@
 # Apple apps and offline experience — implementation tracker
 
+Chat todos and daily reminders (`fix/chat-todos-daily-badges`): Capture returns
+to Entry when reselected; Capture and Daily count the three unmet daily health
+requirements using server records plus offline logs. Core tests cover the
+2,000-calorie threshold, deletion, deduplication, and 4am rollover. Chat expands
+new to-dos and reports refresh failures. Capture navigation and offline Daily
+logging passed in the iPhone simulator; live-model chat and physical-device
+camera use have not been verified.
+
+Server oddities (`feat/server-oddities-modal`): saved briefing reports open in
+a native sheet with expandable entries; the web uses a modal. Both extract the
+saved report without a new API or sync format, so existing cached briefings work.
+Parser regression tests cover counts, explanations, notices and ordinary replies.
+Native sheet interaction remains to be verified in the iOS simulator.
+
+Journal-context prompts (2026-10-15, `feat/journal-context-prompts`): the native
+Journal tab's Context page (right of Calendar; the web keeps them in Chat) uses the same daily selection and permanent-dismissal endpoints as the web.
+Sheets reuse journal photo/audio viewers and stage transcribed clips through
+the existing per-entry capture outbox. Typed saves precede clip uploads;
+failures retain the draft, and the original entry date is unchanged.
+The Swift core suite passes 538 tests, including server-payload decoding,
+resolution payloads and recording recovery/targeting. Three iPhone simulator
+tests pass: media preview/save/permanent dismissal, failed saves preserving
+typed words, and recording/relaunch/offline queuing. Fourteen backend context
+tests pass, including a second device's stale save receiving a conflict rather
+than silently discarding its draft. Physical-device microphone
+and background delivery have not been verified.
+
+Live Photos, videos and capture dates (2026-10-26, `feat/ios-journal-live-video`):
+
+- Journal Choose photo takes stills, Live Photos and videos; the camera records
+  video too. A Live Photo is one attachment (still + paired clip); videos and
+  Live Photos upload through a background `URLSession`, confirmed by the outbox
+  validating the server's answer (`BackgroundUploads`).
+- Every photo and video sends its original capture time (`capturedAt` on the
+  attachment upload); the camera's JPEG keeps the camera's metadata. A
+  pictures-only journal entry is dated by its earliest picture.
+- Server: `journal_attachments.captured_at` and `motion_*`, a `/motion` route,
+  HEIC stills re-encoded to JPEG with EXIF kept, and ffprobe/ffmpeg poster,
+  length, date and location for uploaded video (`backend/journal/video.py`).
+  Uploaded videos left out of the bulk media manifest.
+- Local verification: Swift core suite, iPhone app unit tests and the journal
+  feed UI test passed in simulator. Real Live Photo/video picking, camera video,
+  Live Photo playback and background completion are not verified on device.
+
+Capture follow-up (2026-10-11, `fix/capture-photo-tools`):
+
+- Capture actions are Food and Save; YouTube Paste validates and adds the link.
+- The entry text box accepts image paste into persistent draft attachments,
+  preserves existing text and retains standard text paste.
+  Two image/text paste app tests and two iPhone composer UI tests passed,
+  including draft recovery after relaunch and saving the pasted image.
+- Food captures retain the photo's original EXIF time locally and across upload,
+  falling back to the save time when no photo timestamp is available.
+- Notebook tool changes return first responder to PaperKit after image insertion.
+- Photo timestamps and legacy manifests have portable regression coverage;
+  paste and notebook responder changes have simulator regression tests.
+- Local verification: 470 Swift core tests, three iPhone capture UI tests and
+  one iPad notebook tool regression passed. Physical Pencil testing remains
+  unverified.
+
+Full local CI verification (2026-10-11): 470 Swift core tests and 21 Python
+helper tests passed; unsigned device archive validation and the Watch simulator
+build passed. All five iPhone shards passed on fresh, seeded simulators (90 tests:
+49 app unit tests and 41 UI tests). Spending swipe-to-delete passed on CI's
+configured retry. All six iPad CI selections passed, including the drawing
+reopen rerun after teaching the test to scroll past existing notebooks. The
+exact Linux Swift 6.2 container job was not available locally; core tests ran
+with macOS Swift 6.3.3. Signing and TestFlight distribution were not run.
+
 Last updated: 2026-10-04. Working branch: `fix/apple-library-navigation`.
 
 Books-library follow-up:
+
+- Library navigation (`fix/ios-library-navigation`): a book opens its chapter
+  list and goes straight on into the resume chapter; the reader's Chapters
+  button pops back to that list instead of pushing a new one, so chapters no
+  longer stack. A compact iPad window uses the iPhone's five tabs (Study and
+  Draw in More), removing the doubled navigation bar that iPadOS's own More
+  overflow produced. `testChapterBackGoesToTheChapterListOnce` and
+  `testCompactIPadKeepsOneNavigationBar` passed in simulator; Split View on a
+  device is unverified.
+
+- iPad navigation now exposes Library, Jobs, Writing, Learning and Settings as separate
+  tabs, leaving narrow-window overflow to iPadOS. iPhone keeps its app More
+  menu. Three iPad navigation/jobs/library UI tests and two iPhone menu/jobs
+  regression tests passed in simulator. Actual Split View on device remains
+  unverified.
 
 - Library now opens directly to books. Title/tag search, source/folder/tag
   filtering, Unsorted, recent/latest/title ordering, and Favorite/Continue
@@ -13,6 +97,21 @@ Books-library follow-up:
 - Chapter bookmarks queue offline and sync to the desktop table through durable
   receipts and revision checks. Pending/conflicting changes are visible in the
   book; a pending Continue change must finish before another replaces it.
+- Library organizing: shelves (to read/reading/paused/finished/dropped, the last two
+  hidden by default), rating/review, folder filing, single and batch, and chapter read
+  marks queue offline as last-write-wins operations. Per-chapter forum reactions and
+  read marks sync as a separate chapter-keyed scope. This projection change forces a
+  fresh mobile bootstrap. Core tests (`FicLibraryTests`), backend tests
+  (`test_mobile_fic_edits.py`, `test_fanfic_reactions.py`) and two library UI tests
+  passed in simulator; the reaction markup is unverified against a live forum.
+- Forum likes from the phone queue offline as last-write-wins `fic_chapter_reactions`
+  operations (`ReplicaStore.setChapterLiked`; a newer tap replaces a waiting one), and
+  the server's `backend/fanfic/likes.py` makes them on the forum. Open on site queues
+  an `assumed` like, which the server never sends. Re-get chapter is an
+  online-only call; rechecking likes lives in the web app's Settings. The Backlog is the snapshot's server-derived `backlog` flag
+  (`backend/fanfic/source_lists.py`). Core tests (`FicLibraryTests`), backend tests
+  (`test_fanfic_likes.py`, `test_fanfic_source_lists.py`, `test_mobile_fic_edits.py`)
+  and two UI tests passed in simulator; the like POST is unverified against a live forum.
 - Study holds non-book material. The tab is iPad-only; the iPhone no longer shows it
   (UI test asserts its absence on iPhone).
 - Local verification: 110 Swift core tests and 54 backend bookmark/sync/seeding
@@ -163,27 +262,28 @@ and any remaining limits. Do not promote “source written” to “device verif
 
 ## Agreed requirements and constraints
 
-| Area              | Decision                                                                                                                                       |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| iPhone            | iPhone 16, user-reported iOS 26.6.2                                                                                                            |
-| iPad              | 2021 12.9-inch M1 iPad Pro, Pencil 2, user-reported iPadOS 26.6.2                                                                              |
-| Watch             | Apple Watch Series 7, user-reported watchOS 26.6                                                                                               |
-| Existing computer | Early-2015 Intel MacBook on Monterey 12.7.6; do not require buying a new Mac                                                                   |
-| Development       | Linux workspace; hosted macOS builds and tests; real devices for hardware behavior                                                             |
-| Developer account | User has an Apple developer membership; team/signing setup remains outstanding                                                                 |
-| Server            | Retain Linux Flask/SQLite server and existing local AI services                                                                                |
-| Connectivity      | Keep Tailscale; use HTTPS within the tailnet; public exposure is not required                                                                  |
-| Cellular          | Text/audio sync enabled over cellular by default, with a per-device option                                                                     |
-| Bulk downloads    | Wi-Fi only; also account for a Wi-Fi hotspot being an expensive connection                                                                     |
-| Device storage    | Both iPhone and iPad have 256 GB, typically more than 50 GB free; use measured free space and budgets, not an assumed entitlement to all of it |
-| Offline scope     | Aim for the full active library and personal data needed by the mobile app, with archive media excluded by default                             |
-| Knowledge         | Optional on each device; Wikipedia is a candidate collection, not a mandatory download                                                         |
-| Mobile exclusions | Practice and Notebook do not need native mobile tabs                                                                                           |
-| Drawing           | Native-quality Pencil drawing is a central reason for the Apple app                                                                            |
-| Chat              | Server-backed native tab (passed in simulator); voice messages queue offline. Local chat is optional and requires evaluation                   |
-| Todo              | Native tab (passed in simulator offline): daily tasks and to-dos, changes queued in an outbox, and a due-today/overdue badge                   |
-| Jobs              | More → Jobs (passed in simulator offline): the triage feed, last copy kept offline, Queue/Dismiss queued in an outbox                          |
-| Watch controls    | Transcribe and Record; both preserve the original audio and create journal entries                                                             |
+| Area              | Decision                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| iPhone            | iPhone 16, user-reported iOS 26.6.2                                                                                                                          |
+| iPad              | 2021 12.9-inch M1 iPad Pro, Pencil 2, user-reported iPadOS 26.6.2                                                                                            |
+| Watch             | Apple Watch Series 7, user-reported watchOS 26.6                                                                                                             |
+| Existing computer | Early-2015 Intel MacBook on Monterey 12.7.6; do not require buying a new Mac                                                                                 |
+| Development       | Linux workspace; hosted macOS builds and tests; real devices for hardware behavior                                                                           |
+| Developer account | User has an Apple developer membership; team/signing setup remains outstanding                                                                               |
+| Server            | Retain Linux Flask/SQLite server and existing local AI services                                                                                              |
+| Connectivity      | Keep Tailscale; use HTTPS within the tailnet; public exposure is not required                                                                                |
+| Cellular          | Text/audio sync enabled over cellular by default, with a per-device option                                                                                   |
+| Bulk downloads    | Wi-Fi only; also account for a Wi-Fi hotspot being an expensive connection                                                                                   |
+| Device storage    | Both iPhone and iPad have 256 GB, typically more than 50 GB free; use measured free space and budgets, not an assumed entitlement to all of it               |
+| Offline scope     | Aim for the full active library and personal data needed by the mobile app, with archive media excluded by default                                           |
+| Knowledge         | Optional on each device; Wikipedia is a candidate collection, not a mandatory download                                                                       |
+| Mobile exclusions | Practice and Notebook do not need native mobile tabs                                                                                                         |
+| Drawing           | Native-quality Pencil drawing is a central reason for the Apple app                                                                                          |
+| Chat              | Server-backed native tab (passed in simulator); voice messages queue offline. Local chat is optional and requires evaluation                                 |
+| Todo              | Native tab (passed in simulator offline): daily tasks and to-dos, changes queued in an outbox, and a due-today/overdue badge                                 |
+| Jobs              | More → Jobs (passed in simulator offline): the triage feed, last copy kept offline, Queue/Dismiss queued in an outbox                                        |
+| Writing           | More → Writing / iPad tab (passed in simulator against a fixture): notes with pin and history, discussions with proposed-note cards; fetched, not replicated |
+| Watch controls    | Transcribe and Record; both preserve the original audio and create journal entries                                                                           |
 
 “Transcribe” means record and retain audio, create a journal entry, and request
 transcription into its text. “Record” means create the entry with its recording
@@ -565,6 +665,37 @@ relaunch tests, Watch compilation, and the inspected unsigned device archive
 
 ### M5 — PencilKit drawing and annotations
 
+The Notes/Newspaper PaperKit surface now uses a compact favorites toolbar with
+Undo/Redo, all native ink types, both erasers, selection, ruler and insertion.
+Color/width presets, ordering and edge docking are saved per device. A handle
+drags the bar between edges; All tools also offers accessible positioning buttons.
+Tapping the selected tool opens immediate size/color controls (five presets and
+a slider); the eraser exposes Object/Pixel modes and pixel width. The canvas
+registers `UIPencilInteraction` with the toolbar, which follows system double-tap
+and squeeze preferences and preserves exact tools across eraser/previous swaps.
+Physical Pencil
+and palm-rejection behavior still need device verification.
+Passed on the iPad Pro 13-inch (M5) simulator: 4 toolbar tests and 18 notebook
+editor tests, plus UI tests for adding/reordering/removing favorites, relaunching,
+moving the toolbar without turning a page, and notebook page swipes. Coverage
+includes undo/redo actions, all eight ink types, persisted preferences and bounds
+after resizing. These checks used unsigned `xcodebuild ... test`; this is not
+physical-device verification.
+
+The compact-control regression run passed on the iPad Pro 13-inch (M5)
+simulator: 7 toolbar unit tests, 19 notebook editor tests and the size-control
+UI test, using unsigned `xcodebuild ... test`. It covers immediate preset
+application, persisted widths after relaunch, native ink/eraser sizes, the
+installed Pencil interaction and exact-tool restoration. Hardware double-taps
+and squeezes are not synthesized by these tests.
+
+The black/white ink regression reproduced in a dark SwiftUI host: its environment
+overrode the outer controller's light appearance and PaperKit inherited dark
+ink rendering over a white page. Pinning the PaperKit child to light fixes it.
+The follow-up unsigned iPad simulator run passed 8 toolbar tests, 20 notebook
+editor tests and 6 conversion/rendering tests, including rendered black/white
+stroke pixels across dark/light/dark appearance changes.
+
 Prototype this early, alongside M0–M2, because drawing quality is a primary
 motivation. Final integration depends on the M3 conflict/storage contract.
 
@@ -648,14 +779,28 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
 - [x] Add historical Journal browsing, editing, attachment readers, and conflict resolution.
       New photo/document attachment capture and share-extension imports remain open.
 - [x] Save YouTube URLs and commentary offline; queue server metadata/import work.
+- [x] Spending captured like a meal: the composer's Spent button saves the draft's
+      words, receipt photos and clips as a `.spending` capture through the food
+      log's upload path at `/api/spending` (videos refused before upload, since the
+      server drops them and the acknowledgement would never arrive). Purchases
+      replicate as `spending_logs`/`spending_media` into the Journal feed with an
+      editable merchant, category, amount and notes; Daily counts unread receipts
+      beside its total. Portable Swift tests and the composer/feed UI test passed in
+      the iPhone simulator; real receipt capture not yet verified on device.
 - [x] Capture → Daily: swipe to delete calorie entries; voluntary spending with an
-      amount in CAD and a free-text category, a daily total and swipe deletion.
+      amount in CAD at the end of a single free-text category line (e.g. `Coffee 4.50`),
+      a daily total and swipe deletion. Earlier two-field drafts migrate on open.
       Purchases use `spending_logs` with whole cents, client ULIDs and the original
       4am day/capture timestamp. Creates and deletions persist in the Daily outbox;
       deleting during an upload cannot be overwritten by its response, and a
       replayed deletion treats 404 as success. Synced deletion markers keep stale
       server snapshots from bringing rows back. Backend and portable Swift tests
-      passed; simulator coverage added but not run locally.
+      passed; single-line spending capture, relaunch and deletion passed in the
+      iPhone simulator. All 471 portable Swift tests and 18 notebook editor tests
+      on the iPad simulator passed for these fixes.
+      Selfies now open with flash off. Notebooks explicitly apply the initial
+      picker tool and use light-page ink colours; Pencil and camera behaviour
+      still require device verification.
 - [ ] Show archive playback availability without preventing URL/commentary capture.
 - [x] Health → Lifestyle: automatic workout imports and bodyweight backfill in
       kg using the historical 140 cutoff. Capture → Daily and web Lifestyle show
@@ -667,7 +812,8 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
       Real Health data remains device-unverified.
 - [ ] Complete share-extension support: fic/YouTube links and journal screenshots
       are implemented; audio and documents remain outstanding. Image shares (up to 20) preserve original bytes in `ScreenshotOutbox`, upload through
-      `POST /api/journal/screenshots`, and retry during app sync. The existing server
+      `POST /api/journal/screenshots`, retry briefly in the extension, then hand off
+      to a background `URLSession` (App Group) and reconcile during app sync. The existing server
       session groups consecutive arrivals until other journal activity, matching
       desktop behavior; timestamps use share time with its original local offset.
 - [x] Use a shared app container/outbox with safe handoff from the share extension.

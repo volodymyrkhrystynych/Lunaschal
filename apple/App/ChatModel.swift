@@ -11,6 +11,7 @@ import SwiftUI
 final class ChatModel: NSObject, ObservableObject, AVAudioRecorderDelegate {
     @Published private(set) var conversation: ChatConversation?
     @Published private(set) var todos: [ChatTodo] = []
+    @Published private(set) var todoProblem: String?
     @Published var input = ""
     @Published private(set) var staged: [ChatAttachment] = []
     @Published private(set) var uploadingPhotos = false
@@ -84,7 +85,7 @@ final class ChatModel: NSObject, ObservableObject, AVAudioRecorderDelegate {
             let today = try await api.chatToday()
             apply(today)
             loadProblem = nil
-            if withTodos { todos = (try? await api.chatTodos()) ?? todos }
+            if withTodos { await refreshTodos() }
             await refreshStaged(using: api)
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
@@ -329,6 +330,8 @@ final class ChatModel: NSObject, ObservableObject, AVAudioRecorderDelegate {
         do {
             try await api.resolveProposal(messageID: messageID, proposalID: proposal.id, accept: accept, data: data)
             await refresh()
+            // A kept carry-over lands in today's bar.
+            if accept, proposal.kind == "todo" { await refreshTodos() }
             return nil
         } catch { return error.localizedDescription }
     }
@@ -373,8 +376,14 @@ final class ChatModel: NSObject, ObservableObject, AVAudioRecorderDelegate {
     // MARK: Today's to-dos
 
     func refreshTodos() async {
-        guard let api = capture.chatAPI(), let fresh = try? await api.chatTodos() else { return }
-        todos = fresh
+        guard let api = capture.chatAPI() else { return }
+        do {
+            todos = try await api.chatTodos()
+            todoProblem = nil
+        } catch {
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
+            todoProblem = "Couldn't refresh today's to-dos. Pull down in Chat to retry."
+        }
     }
 
     func toggle(_ todo: ChatTodo) async {

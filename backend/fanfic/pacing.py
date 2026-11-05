@@ -139,9 +139,11 @@ def start_scheduler():
         _started = True
 
     def worker():
-        from backend.fanfic import collections, download
+        from backend.fanfic import collections, download, likes
         while True:
             try:
+                if likes.has_runnable(get_db()):
+                    likes.start_push()
                 if ready():
                     db = get_db()
                     if db.execute("SELECT 1 FROM fanfic_collection_scans WHERE status='pending' LIMIT 1").fetchone():

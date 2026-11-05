@@ -49,7 +49,9 @@ web.py's contract — a tool that raised would abandon a turn that is otherwise
 fine.
 """
 import logging
+from datetime import date as _date, timedelta
 
+from backend.calendar_voice import MINUTES_PER_DAY, _hhmm, _minutes
 from backend.todo_recurrence import parse_due_date
 
 logger = logging.getLogger(__name__)
@@ -113,7 +115,10 @@ TOOLS = [
                 'Stage a calendar event for the user to confirm. Use for things '
                 'that happened or are going to happen at a particular time. An '
                 'event needs a real date: if you cannot work one out from what '
-                'the user said, call ask_user rather than staging one.'
+                'the user said, call ask_user rather than staging one. When '
+                'they say how long it took or will take, pass durationMinutes '
+                'and only the one clock time you know — the other end is '
+                'worked out for you.'
             ),
             'parameters': {
                 'type': 'object',
@@ -126,8 +131,26 @@ TOOLS = [
                             'Tuesday") against the current date yourself.'
                         ),
                     },
-                    'time': {'type': 'string', 'description': 'HH:MM, 24-hour. Omit if untimed.'},
-                    'endTime': {'type': 'string', 'description': 'HH:MM, 24-hour. Omit if open-ended.'},
+                    'time': {
+                        'type': 'string',
+                        'description': 'When it started, HH:MM 24-hour. Omit if unknown.',
+                    },
+                    'endTime': {
+                        'type': 'string',
+                        'description': (
+                            'When it ended, HH:MM 24-hour. Omit if unknown. For '
+                            'something the user says just happened or just '
+                            'finished ("I just spent 10 minutes in a line"), '
+                            'the time of their message is when it ended: put it '
+                            'here, not in time, and give durationMinutes.'
+                        ),
+                    },
+                    'durationMinutes': {
+                        'type': 'integer',
+                        'minimum': 1,
+                        'maximum': MINUTES_PER_DAY,
+                        'description': 'How long it lasted or will last, when the user said so.',
+                    },
                     'allDay': {
                         'type': 'boolean',
                         'description': (
@@ -470,6 +493,33 @@ def _add_todos(args: dict) -> tuple[str, dict]:
     )
 
 
+def _fill_span(when: str, start: str | None, end: str | None,
+               duration) -> tuple[str, str | None, str | None]:
+    """Work out the missing end of an event from its length.
+
+    The model is asked for the facts it actually has — "I just spent 10
+    minutes in a line" is an end (the message's own time) plus a length — and
+    the subtraction happens here. Left to do it itself, it put the message time
+    in `time` and dropped the end, staging half an event starting when it was
+    already over. Both clocks given win over the duration; a duration with no
+    clock stays untimed rather than being pinned to a guess. A start that lands
+    before midnight moves the event to the day before, and the end then reads
+    as crossing midnight, as it already does for every other calendar event.
+    """
+    if isinstance(duration, bool) or not isinstance(duration, int):
+        return when, start, end
+    if not 0 < duration <= MINUTES_PER_DAY or (start is None) == (end is None):
+        return when, start, end
+    if start is not None:
+        landed = (_minutes(start) + duration) % MINUTES_PER_DAY
+        return when, start, f'{landed // 60:02d}:{landed % 60:02d}'
+    began = _minutes(end) - duration
+    if began < 0:
+        when = (_date.fromisoformat(when) - timedelta(days=1)).isoformat()
+        began %= MINUTES_PER_DAY
+    return when, f'{began // 60:02d}:{began % 60:02d}', end
+
+
 def _propose_calendar_event(args: dict) -> tuple[str, dict]:
     title = _text(args.get('title'))[:MAX_TITLE_CHARS]
     if not title:
@@ -491,13 +541,16 @@ def _propose_calendar_event(args: dict) -> tuple[str, dict]:
     tags = args.get('tags')
     tags = [_text(t) for t in tags if _text(t)] if isinstance(tags, list) else []
     all_day = args.get('allDay') is True
+    # An all-day event is explicitly the whole day, not merely untimed, so
+    # setting the flag clears any clock the model also volunteered.
+    start = None if all_day else _hhmm(args.get('time'))
+    end = None if all_day else _hhmm(args.get('endTime'))
+    when, start, end = _fill_span(when, start, end, args.get('durationMinutes'))
     data = {
         'title': title,
         'date': when,
-        # An all-day event is explicitly the whole day, not merely untimed, so
-        # setting the flag clears any clock the model also volunteered.
-        'time': None if all_day else (_text(args.get('time')) or None),
-        'endTime': None if all_day else (_text(args.get('endTime')) or None),
+        'time': start,
+        'endTime': end,
         'allDay': all_day,
         'description': _text(args.get('description')),
         'tags': tags,

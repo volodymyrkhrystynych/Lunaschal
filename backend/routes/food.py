@@ -9,7 +9,7 @@ from backend.ai import jobs
 from backend.ai.food import parse_food_entry
 from backend.capture_time import optional_capture_time
 from backend.db.connection import build_update, get_db, row_to_dict
-from backend.food import storage
+from backend.food import location as meal_location, storage
 from backend.food.exif import extract_photo_meta
 from backend.food.recipe_match import check_homemade_recipe_match
 from backend.geo import parse_coord
@@ -644,6 +644,7 @@ def create_entry():
         overrides['longitude'] = meta['longitude']
     if overrides:
         build_update(db, 'food_entries', overrides, 'id=?', (entry_id,))
+    meal_location.fill(db, entry_id)
 
     db.commit()
     entry_weather.nudge()
@@ -709,6 +710,7 @@ def add_media(id):
     # answer with the stored row rather than store the picture again.
     media_ids = _parse_media_ids(request.form.get('mediaIds'))
     saved = []
+    image_paths = []
     pos = _next_media_position(db, id)
     for i, f in enumerate(files):
         media_id = media_ids[i] if i < len(media_ids) else None
@@ -724,6 +726,14 @@ def add_media(id):
             if res:
                 saved.append(res[0])
                 pos += 1
+                if res[2] == 'image':
+                    image_paths.append(res[1])
+    # The phone uploads a meal's photos here rather than with the meal, so
+    # this is where a photo's own GPS can first be read. It only fills a meal
+    # with no location yet; a capture fix that already landed is kept.
+    meta = _photo_meta_from(image_paths)
+    photo = (meta['latitude'], meta['longitude']) if meta['latitude'] is not None else None
+    meal_location.fill(db, id, photo_coords=photo)
     db.execute('UPDATE food_entries SET updated_at=? WHERE id=?', (int(time.time()), id))
     db.commit()
     return jsonify({'id': id, 'media': saved}), 201

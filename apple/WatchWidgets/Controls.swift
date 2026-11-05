@@ -58,7 +58,7 @@ struct RecordingControl {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: choice.controlKind, provider: RecordingValue(choice: choice)) { isOn in
             ControlWidgetToggle(isOn: isOn, action: ToggleRecordingIntent(choice)) {
-                Label(choice.title, systemImage: isOn ? "stop.fill" : choice.symbol)
+                Label(choice.title, systemImage: choice.symbol)
             } valueLabel: { on in
                 Text(on ? "Recording" : "Off")
             }

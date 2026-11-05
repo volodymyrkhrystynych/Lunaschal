@@ -69,6 +69,57 @@ final class NotebookTests: XCTestCase {
         XCTAssertEqual(try store.pages(restored), [Data([1]), Data([2])])
     }
 
+    func testUnchangedFilesAreKeptFromTheCurrentCheckpoint() throws {
+        let root = try directory(), store = try NotebookStore(root: root)
+        let notebook = try store.create()
+        let first = try store.checkpoint(notebook.id, pages: [Data([1]), Data([2]), Data([3])],
+                                         locked: [nil, Data([7])], marked: [1], preview: Data([9]))
+        // Page 1 deleted: what was page 2 is kept from its old place.
+        let second = try store.checkpoint(notebook.id, files: [.kept(0), .kept(2), .bytes(Data([4]))],
+                                          locked: [nil, nil, .kept(1)], marked: [2], preview: nil)
+        XCTAssertEqual(try NotebookStore(root: root).pages(second), [Data([1]), Data([3]), Data([4])])
+        XCTAssertEqual(try store.lockedLayers(second), [nil, nil, Data([7])])
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.previewURL(second))), Data([9]))
+        // The checkpoint a kept file came from can go; the kept copy stays.
+        let third = try store.checkpoint(notebook.id, files: [.kept(0), .kept(1), .kept(2)], marked: [], preview: nil)
+        let revisions = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(notebook.id).path)
+        XCTAssertFalse(revisions.contains(first.checkpoint!))
+        XCTAssertEqual(try store.pages(third), [Data([1]), Data([3]), Data([4])])
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.previewURL(third))), Data([9]))
+        XCTAssertEqual(try store.pages(store.restorePrevious(notebook.id)), [Data([1]), Data([3]), Data([4])])
+    }
+
+    func testKeepingWhatIsNotThereFailsAndLeavesNoHalfCheckpoint() throws {
+        let root = try directory(), store = try NotebookStore(root: root)
+        let notebook = try store.create()
+        XCTAssertThrowsError(try store.checkpoint(notebook.id, files: [.kept(0)], marked: [], preview: Data([9])),
+                             "nothing to keep before the first checkpoint")
+        XCTAssertThrowsError(try store.checkpoint(notebook.id, files: [.bytes(Data([1]))], marked: [], preview: nil),
+                             "no preview to keep either")
+        let saved = try store.checkpoint(notebook.id, pages: [Data([1])], marked: [], preview: Data([9]))
+        XCTAssertThrowsError(try store.checkpoint(notebook.id, files: [.bytes(Data([2])), .kept(5)], marked: [], preview: nil))
+        XCTAssertThrowsError(try store.checkpoint(notebook.id, files: [.kept(0)], locked: [.kept(0)], marked: [], preview: nil))
+        XCTAssertEqual(try store.notebook(notebook.id), saved)
+        let revisions = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(notebook.id).path)
+        XCTAssertEqual(revisions, [saved.checkpoint!])
+        XCTAssertThrowsError(try store.restorePrevious(notebook.id), "no failed checkpoint to restore into")
+    }
+
+    func testASaveOffTheMainThreadDoesNotUndoAManifestEdit() throws {
+        let store = try NotebookStore(root: directory())
+        let notebook = try store.create()
+        try store.checkpoint(notebook.id, pages: [Data([1])], marked: [], preview: Data([9]))
+        DispatchQueue.concurrentPerform(iterations: 40) { index in
+            if index % 2 == 0 {
+                _ = try? store.checkpoint(notebook.id, files: [.bytes(Data([UInt8(index)]))], marked: [], preview: nil)
+            } else {
+                _ = try? store.setForReview(notebook.id, true)
+            }
+        }
+        XCTAssertTrue(try store.notebook(notebook.id).isForReview)
+        XCTAssertEqual(try store.pages(store.notebook(notebook.id)).count, 1)
+    }
+
     func testOneYouTubeLinkReplacedOrRemoved() throws {
         let store = try NotebookStore(root: directory())
         let notebook = try store.create()
@@ -78,6 +129,16 @@ final class NotebookTests: XCTestCase {
         XCTAssertThrowsError(try store.setYouTube(notebook.id, url: "https://example.com/video"))
         XCTAssertEqual(try store.notebook(notebook.id).youtubeURL, replaced.youtubeURL)
         XCTAssertNil(try store.setYouTube(notebook.id, url: "  ").youtubeURL)
+    }
+
+    func testForReviewIsKeptPerNotebookAcrossRestart() throws {
+        let root = try directory(), store = try NotebookStore(root: root)
+        let notebook = try store.create()
+        XCTAssertFalse(notebook.isForReview)
+        XCTAssertTrue(try store.setForReview(notebook.id, true).isForReview)
+        XCTAssertTrue(try NotebookStore(root: root).notebook(notebook.id).isForReview)
+        XCTAssertFalse(try store.setForReview(notebook.id, false).isForReview)
+        XCTAssertFalse(try NotebookStore(root: root).notebook(notebook.id).isForReview)
     }
 
     func testInboxKeepsScreenshotsUntilCleared() throws {
@@ -182,9 +243,12 @@ final class NotebookTests: XCTestCase {
         XCTAssertEqual(NewspaperIssue.choose(issues, now: at(5, 20), calendar: calendar), .today(issues[1]))
         // 01:30 on the 6th is still the 5th's day.
         XCTAssertEqual(NewspaperIssue.choose(issues, now: at(6, 1), calendar: calendar), .today(issues[1]))
-        // The 6th's paper isn't in; the newest not in the future is offered.
-        XCTAssertEqual(NewspaperIssue.choose(issues, now: at(6, 9), calendar: calendar), .newest(issues[1]))
-        XCTAssertEqual(NewspaperIssue.choose([], now: at(6, 9), calendar: calendar), .none)
+        // The 6th's paper isn't in, and it is past 4am: it is downloaded.
+        XCTAssertEqual(NewspaperIssue.choose(issues, now: at(6, 9), calendar: calendar), .download("2026-10-06"))
+        XCTAssertEqual(NewspaperIssue.choose(issues, now: at(6, 4), calendar: calendar), .download("2026-10-06"))
+        // 01:00 on the 7th is the 6th's day, still missing, and too early to fetch the 7th.
+        XCTAssertEqual(NewspaperIssue.choose(issues, now: at(7, 1), calendar: calendar), .missing("2026-10-06"))
+        XCTAssertEqual(NewspaperIssue.choose([], now: at(6, 3), calendar: calendar), .missing("2026-10-05"))
     }
 
     func testIssueFromReplicaRecord() {
@@ -211,12 +275,21 @@ final class NotebookColumnStoreTests: XCTestCase {
         return url
     }
 
-    func testANewIssueIsAColumnAndABlankNotebookIsNot() throws {
+    func testANewIssueHasAMarkupPerPage() throws {
         let root = try directory(), store = try NotebookStore(root: root)
         let paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 40)
-        XCTAssertTrue(paper.isColumn)
-        XCTAssertEqual(paper.markupCount, 1)
+        XCTAssertFalse(paper.isColumn, "a column re-encoded the whole issue's ink on every save")
+        XCTAssertEqual(paper.layout, .paged)
+        XCTAssertEqual(paper.markupCount, 40)
         XCTAssertFalse(try store.create().isColumn)
+    }
+
+    /// An issue made while issues were columns, as that build saved it.
+    private func columnIssue(_ store: NotebookStore, root: URL, pageCount: Int) throws -> Notebook {
+        var paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: pageCount)
+        paper.layout = .column
+        try JSONEncoder().encode(paper).write(to: root.appendingPathComponent(paper.id + ".json"))
+        return try store.notebook(paper.id)
     }
 
     func testANotebookFromBeforeColumnsReadsAsPaged() throws {
@@ -234,7 +307,7 @@ final class NotebookColumnStoreTests: XCTestCase {
 
     func testAColumnSavesOneMarkupForEveryPage() throws {
         let root = try directory(), store = try NotebookStore(root: root)
-        let paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 40)
+        let paper = try columnIssue(store, root: root, pageCount: 40)
         let saved = try store.checkpoint(paper.id, pages: [Data([7])], locked: [Data([8])], marked: [3, 39, 40],
                                          preview: Data([9]), column: 41)
         XCTAssertEqual(saved.pageCount, 41, "an added page at the foot of the column")
@@ -245,7 +318,7 @@ final class NotebookColumnStoreTests: XCTestCase {
 
     func testAColumnCannotDropIssuePagesOrBeSavedAsPages() throws {
         let root = try directory(), store = try NotebookStore(root: root)
-        let paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3)
+        let paper = try columnIssue(store, root: root, pageCount: 3)
         XCTAssertThrowsError(try store.checkpoint(paper.id, pages: [Data([1])], marked: [], preview: Data([9]), column: 2))
         XCTAssertThrowsError(try store.checkpoint(paper.id, pages: [Data([1]), Data([2])], marked: [], preview: Data([9]), column: 3))
         XCTAssertThrowsError(try store.checkpoint(paper.id, pages: [Data([1]), Data([2]), Data([3])], marked: [], preview: Data([9])),
@@ -262,14 +335,14 @@ final class NotebookColumnStoreTests: XCTestCase {
         let column = try store.checkpoint(paper.id, pages: [Data([4])], marked: [1], preview: Data([9]), column: 3)
         XCTAssertTrue(column.isColumn)
         let restored = try store.restorePrevious(paper.id)
-        XCTAssertFalse(restored.isColumn, "back to the paged pages, to be converted again on open")
+        XCTAssertFalse(restored.isColumn, "back to the paged pages, which open as a stack of page canvases")
         XCTAssertEqual(restored.pageCount, 3)
         XCTAssertEqual(try store.pages(restored), [Data([1]), Data([2]), Data([3])])
     }
 
     func testRestoringAColumnKeepsItsPageCount() throws {
         let root = try directory(), store = try NotebookStore(root: root)
-        let paper = try store.createNewspaper(date: "2026-10-06", pdf: try pdf(in: root), pageCount: 3)
+        let paper = try columnIssue(store, root: root, pageCount: 3)
         try store.checkpoint(paper.id, pages: [Data([1])], marked: [], preview: Data([9]), column: 4)
         try store.checkpoint(paper.id, pages: [Data([2])], marked: [], preview: Data([9]), column: 4)
         let restored = try store.restorePrevious(paper.id)
@@ -310,15 +383,12 @@ final class NotebookColumnTests: XCTestCase {
         }
     }
 
-    func testWhichPagesCarryInk() {
-        // Ten units a row: rows 0-223 are page 1, 224-309 page 2, the rest page 3.
-        var rows = Array(repeating: false, count: 472)
-        rows[5] = true
-        rows[400] = true
-        XCTAssertEqual(NotebookColumn.slotsWithInk(rows: rows, unitsPerRow: 10, slots: slots), [0, 2])
-        rows[250] = true
-        XCTAssertEqual(NotebookColumn.slotsWithInk(rows: rows, unitsPerRow: 10, slots: slots), [0, 1, 2])
-        XCTAssertEqual(NotebookColumn.slotsWithInk(rows: [], unitsPerRow: 10, slots: slots), [])
+    func testOnlyPagesUnderTheInkAreLookedAt() {
+        // Page 1 is 0-2232, page 2 2232-3100, page 3 3100-4712.
+        XCTAssertEqual(NotebookColumn.slots(under: CGRect(x: 100, y: 500, width: 300, height: 4), in: slots), [0])
+        XCTAssertEqual(NotebookColumn.slots(under: CGRect(x: 100, y: 4000, width: 2, height: 2), in: slots), [2])
+        XCTAssertEqual(NotebookColumn.slots(under: CGRect(x: 0, y: 2000, width: 50, height: 1500), in: slots), [0, 1, 2])
+        XCTAssertEqual(NotebookColumn.slots(under: .null, in: slots), [], "nothing drawn, nothing to look at")
     }
 }
 
@@ -331,50 +401,20 @@ final class NotebookFitTests: XCTestCase {
             XCTAssertEqual(shown.height / shown.width, view.height / view.width, accuracy: 0.001)
         }
     }
-}
 
-final class PageSwipeTests: XCTestCase {
-    func testOnlyADragFromASideTurnsThePage() {
-        XCTAssertEqual(PageSwipe.edge(startX: 10, width: 1000), .leading)
-        XCTAssertEqual(PageSwipe.edge(startX: 44, width: 1000), .leading)
-        XCTAssertEqual(PageSwipe.edge(startX: 990, width: 1000), .trailing)
-        // Mid-page is where a palm rests: never a page turn.
-        XCTAssertNil(PageSwipe.edge(startX: 45, width: 1000))
-        XCTAssertNil(PageSwipe.edge(startX: 500, width: 1000))
-        XCTAssertNil(PageSwipe.edge(startX: 955, width: 1000))
-        XCTAssertNil(PageSwipe.edge(startX: 10, width: 60), "no room for two edges")
+    func testZoomOffPinsTheRangeToTheFit() {
+        XCTAssertEqual(NotebookFit.zoomRange(fitted: 0.8, maximum: 6, enabled: false), 0.8...0.8)
+        let on = NotebookFit.zoomRange(fitted: 0.8, maximum: 6, enabled: true)
+        XCTAssertEqual(on.lowerBound, 0.8)
+        XCTAssertEqual(on.upperBound, 4.8, accuracy: 0.0001)
     }
 
-    func testADragOnlyCountsInwardsFromItsSide() {
-        XCTAssertEqual(PageSwipe.pull(dx: -300, from: .trailing), -300)
-        XCTAssertEqual(PageSwipe.pull(dx: 300, from: .trailing), 0)
-        XCTAssertEqual(PageSwipe.pull(dx: 300, from: .leading), 300)
-        XCTAssertEqual(PageSwipe.pull(dx: -300, from: .leading), 0)
-    }
-
-    func testAPageTurnIsADeliberateDrag() {
-        XCTAssertEqual(PageSwipe.threshold(pageWidth: 1000), 350)
-        XCTAssertEqual(PageSwipe.threshold(pageWidth: 200), 120)
-    }
-
-    func testThePageFollowsTheFinger() {
-        let preview = PageSwipe.preview(dx: -100, index: 1, count: 3, threshold: 200)
-        XCTAssertEqual(preview, .init(offset: -100, creating: false, progress: 0.5, armed: false))
-        XCTAssertEqual(PageSwipe.outcome(dx: -100, index: 1, count: 3, threshold: 200), .stay, "springs back")
-        XCTAssertEqual(PageSwipe.outcome(dx: -250, index: 1, count: 3, threshold: 200), .next)
-        XCTAssertEqual(PageSwipe.outcome(dx: 250, index: 1, count: 3, threshold: 200), .previous)
-    }
-
-    func testFinishingTheSwipeOnTheLastPageAddsOne() {
-        let near = PageSwipe.preview(dx: -80, index: 2, count: 3, threshold: 200)
-        XCTAssertTrue(near.creating)
-        XCTAssertFalse(near.armed)
-        XCTAssertTrue(PageSwipe.preview(dx: -200, index: 2, count: 3, threshold: 200).armed)
-        XCTAssertEqual(PageSwipe.outcome(dx: -200, index: 2, count: 3, threshold: 200), .newPage)
-    }
-
-    func testBackwardsFromTheFirstPageNothingMoves() {
-        XCTAssertEqual(PageSwipe.preview(dx: 300, index: 0, count: 3, threshold: 200), .idle)
-        XCTAssertEqual(PageSwipe.outcome(dx: 300, index: 0, count: 3, threshold: 200), .stay)
+    func testUnzoomingKeepsTheReaderWhereTheyWereLooking() {
+        let fit = CGRect(x: 0, y: 0, width: 1240, height: 1560)
+        // Zoomed in on a spot two pages down: back to full width, centred there.
+        let back = NotebookFit.unzoomed(CGRect(x: 600, y: 3000, width: 200, height: 250), fit: fit)
+        XCTAssertEqual(back, CGRect(x: 0, y: 3125 - 780, width: 1240, height: 1560))
+        // Zoomed in near the top: never above the first page.
+        XCTAssertEqual(NotebookFit.unzoomed(CGRect(x: 100, y: 10, width: 200, height: 250), fit: fit).minY, 0)
     }
 }

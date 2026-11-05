@@ -85,6 +85,51 @@ describe('pending cards', () => {
     );
   });
 
+  it('offers a carried-over to-do under its own header and keeps it for today', async () => {
+    resolveProposal().mockResolvedValue({
+      proposal: { id: 't1', kind: 'todo', status: 'accepted', data: {} },
+    });
+    renderProposals([
+      {
+        id: 't1',
+        kind: 'todo',
+        status: 'pending',
+        carriedFrom: '2026-08-04',
+        data: { title: 'Call the dentist', notes: 'before noon', priority: 3 },
+      },
+    ]);
+    expect(
+      screen.getByText('Carried over from yesterday — keep or dismiss')
+    ).toBeTruthy();
+    expect(screen.queryByText('Suggested events from yesterday')).toBeNull();
+    expect(screen.getByText('before noon')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Call the dentist about the crown' },
+    });
+    fireEvent.click(screen.getByText('Add to today'));
+    await waitFor(() =>
+      expect(resolveProposal()).toHaveBeenCalledWith(
+        'm1',
+        't1',
+        'accept',
+        expect.objectContaining({ title: 'Call the dentist about the crown' })
+      )
+    );
+  });
+
+  it('collapses an accepted carried-over to-do to what was added', () => {
+    renderProposals([
+      {
+        id: 't1',
+        kind: 'todo',
+        status: 'accepted',
+        carriedFrom: '2026-08-04',
+        data: { title: 'Call the dentist' },
+      },
+    ]);
+    expect(screen.getByText('Added to today: Call the dentist')).toBeTruthy();
+  });
+
   it('renders a calendar proposal with its title, date and tags', () => {
     renderProposals([
       {

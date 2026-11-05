@@ -3,6 +3,8 @@ import PDFKit
 import PaperKit
 import PencilKit
 import UIKit
+import SwiftUI
+import Combine
 import LunaschalCore
 @testable import Lunaschal
 
@@ -138,6 +140,18 @@ private func drawApp(_ context: UIGraphicsImageRendererContext, _ rect: CGRect, 
     }
 }
 
+private struct NotebookColorHost: UIViewControllerRepresentable {
+    let controller: NotebookCanvasController
+    func makeUIViewController(context: Context) -> NotebookCanvasController { controller }
+    func updateUIViewController(_ controller: NotebookCanvasController, context: Context) {}
+}
+
+private func isDark(_ image: CGImage, at point: CGPoint) -> Bool {
+    let bytes = CFDataGetBytePtr(image.dataProvider!.data!)!
+    let offset = Int(point.y) * image.bytesPerRow + Int(point.x) * 4
+    return bytes[offset] < 80 && bytes[offset + 1] < 80 && bytes[offset + 2] < 80
+}
+
 func picture(_ size: CGSize, draw: (UIGraphicsImageRendererContext) -> Void) -> CGImage? {
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
@@ -153,8 +167,82 @@ func solid(_ color: UIColor, _ size: CGSize) -> CGImage? {
     }.cgImage
 }
 
+/// An issue made while new issues were columns, as that build saved it:
+/// those stay columns, since ink can't be cut out of one by region.
+@MainActor
+func columnIssue(_ store: NotebookStore, pdf: URL, pageCount: Int) throws -> Notebook {
+    var paper = try store.createNewspaper(date: "2026-10-06", pdf: pdf, pageCount: pageCount)
+    paper.layout = .column
+    try JSONEncoder().encode(paper).write(to: store.root.appendingPathComponent(paper.id + ".json"))
+    return try store.notebook(paper.id)
+}
+
 @MainActor
 final class NotebookEditorTests: XCTestCase {
+    func testWhitePaperKeepsLightInkTraitsInsideDarkSwiftUI() async throws {
+        let store = try store()
+        let controller = NotebookCanvasController(model: NotebookEditorModel(store: store, notebook: try store.create()))
+        let host = UIHostingController(rootView: NotebookColorHost(controller: controller).environment(\.colorScheme, .dark))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 1366))
+        window.overrideUserInterfaceStyle = .dark
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        for scheme in [ColorScheme.dark, .light, .dark] {
+            host.rootView = NotebookColorHost(controller: controller).environment(\.colorScheme, scheme)
+            host.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(controller.paper.traitCollection.userInterfaceStyle, .light)
+            XCTAssertEqual(controller.paper.view.traitCollection.userInterfaceStyle, .light)
+            for white in [false, true] {
+                let component = white ? 1.0 : 0.0
+                controller.drawingToolbar.select(DrawingFavorite(kind: "pen", red: component, green: component, blue: component, width: 12))
+                let tool = try XCTUnwrap(controller.paper.drawingTool as? PKInkingTool)
+                let points = [20.0, 50.0, 80.0].enumerated().map { index, x in
+                    PKStrokePoint(location: CGPoint(x: x, y: 50), timeOffset: Double(index) * 0.1,
+                                  size: CGSize(width: 12, height: 12), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+                }
+                let drawing = PKDrawing(strokes: [PKStroke(ink: tool.ink, path: PKStrokePath(controlPoints: points, creationDate: Date()))])
+                var rendered: CGImage?
+                controller.paper.view.traitCollection.performAsCurrent {
+                    rendered = drawing.image(from: CGRect(x: 0, y: 0, width: 100, height: 100), scale: 1).cgImage
+                }
+                XCTAssertEqual(isDark(try XCTUnwrap(rendered), at: CGPoint(x: 50, y: 50)), !white,
+                               "The rendered stroke must match the selected black/white swatch in \(scheme)")
+            }
+        }
+    }
+
+    func testInitialToolMatchesTheFavoriteWithoutAToolChange() throws {
+        let store = try store()
+        let controller = NotebookCanvasController(model: NotebookEditorModel(store: store, notebook: try store.create()))
+        controller.loadViewIfNeeded()
+        let chosen = try XCTUnwrap(controller.drawingToolbar.preferences.favorites.first?.tool as? PKInkingTool)
+        let active = try XCTUnwrap(controller.paper.drawingTool as? PKInkingTool)
+        XCTAssertEqual(active.inkType, chosen.inkType)
+        XCTAssertEqual(active.color, chosen.color)
+        XCTAssertEqual(active.width, chosen.width)
+        XCTAssertEqual(controller.overrideUserInterfaceStyle, .light)
+    }
+
+    func testCompactToolbarOwnsPencilInteractionAndAppliesSizeToCanvas() throws {
+        let store = try store()
+        let controller = NotebookCanvasController(model: NotebookEditorModel(store: store, notebook: try store.create()))
+        controller.loadViewIfNeeded()
+        let interaction = try XCTUnwrap(controller.view.interactions.compactMap { $0 as? UIPencilInteraction }.first)
+        XCTAssertTrue(interaction.delegate === controller.drawingToolbar)
+        XCTAssertTrue(interaction.isEnabled)
+        var pen = DrawingFavorite(kind: "pen", blue: 0.7)
+        controller.drawingToolbar.select(pen)
+        pen.width = pen.widthPresets[3]
+        controller.drawingToolbar.updateActiveTool(pen)
+        XCTAssertEqual((controller.paper.drawingTool as? PKInkingTool)?.width, CGFloat(pen.width))
+        controller.drawingToolbar.performPencilAction(.switchEraser)
+        XCTAssertNotNil(controller.paper.drawingTool as? PKEraserTool)
+        controller.drawingToolbar.performPencilAction(.switchEraser)
+        XCTAssertEqual(controller.paper.drawingTool as? PKInkingTool, pen.tool as? PKInkingTool)
+    }
+
     private func store() throws -> NotebookStore {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -228,6 +316,109 @@ final class NotebookEditorTests: XCTestCase {
         XCTAssertFalse(NotebookPage.isBlank(reopened.pages[1]))
     }
 
+    /// The file's identity on disk: a linked file shares it with its source.
+    private func inode(_ store: NotebookStore, _ notebook: Notebook, _ name: String) throws -> Int {
+        let url = try XCTUnwrap(store.previewURL(notebook)).deletingLastPathComponent().appendingPathComponent(name)
+        return try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.systemFileNumber] as? Int)
+    }
+
+    func testAnAutosaveWritesOnlyTheTouchedPageAndKeepsThePreview() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        model.addPage()
+        model.addPage()
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 600, height: 400))))
+        await model.checkpoint()
+        let first = try store.notebook(model.notebook.id)
+        let before = try ["page-0.markup", "page-1.markup", "page-2.markup", "preview.png"].map { try inode(store, first, $0) }
+
+        model.go(to: 1)
+        model.insertScreenshot(try XCTUnwrap(solid(.blue, CGSize(width: 600, height: 400))))
+        await model.checkpoint(final: false)
+        let second = try store.notebook(model.notebook.id)
+        XCTAssertNotEqual(second.checkpoint, first.checkpoint)
+        XCTAssertEqual(try inode(store, second, "page-0.markup"), before[0], "untouched pages are linked, not rewritten")
+        XCTAssertNotEqual(try inode(store, second, "page-1.markup"), before[1], "the touched page is written")
+        XCTAssertEqual(try inode(store, second, "page-2.markup"), before[2])
+        XCTAssertEqual(try inode(store, second, "preview.png"), before[3], "the cover wasn't touched")
+        XCTAssertEqual(second.markedPages, [1, 2])
+        let reopened = NotebookEditorModel(store: store, notebook: second)
+        XCTAssertEqual(reopened.pages.map(NotebookPage.isBlank), [true, false, false])
+    }
+
+    func testOnlyLeavingRedrawsATouchedCover() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        await model.checkpoint()
+        let blank = try Data(contentsOf: XCTUnwrap(store.previewURL(store.notebook(model.notebook.id))))
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 600, height: 400))))
+        await model.checkpoint(final: false)
+        let autosaved = try store.notebook(model.notebook.id)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.previewURL(autosaved))), blank)
+        XCTAssertFalse(NotebookPage.isBlank(NotebookEditorModel(store: store, notebook: autosaved).pages[0]),
+                       "the ink is saved even though the preview waits")
+        // Nothing new to write, but the preview is behind: Back catches it up.
+        await model.checkpoint()
+        let left = try store.notebook(model.notebook.id)
+        XCTAssertNotEqual(left.checkpoint, autosaved.checkpoint)
+        XCTAssertNotEqual(try Data(contentsOf: XCTUnwrap(store.previewURL(left))), blank)
+        // And with nothing behind at all, Back writes nothing.
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(model.notebook.id).checkpoint, left.checkpoint)
+    }
+
+    func testDeletingAPageKeepsEveryOtherPageItsOwnInk() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        model.addPage()
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 600, height: 400))))
+        model.addPage()
+        model.addPage()
+        model.insertScreenshot(try XCTUnwrap(solid(.blue, CGSize(width: 600, height: 300))))
+        await model.checkpoint()
+        let frames = model.pages.map(\.contentsRenderFrame)
+        // Page 3 goes; pages 1, 2 and 4 are linked from where they were.
+        model.go(to: 2)
+        model.deleteCurrentPage()
+        await model.checkpoint(final: false)
+        let reopened = NotebookEditorModel(store: store, notebook: try store.notebook(model.notebook.id))
+        XCTAssertEqual(reopened.pages.map(\.contentsRenderFrame), [frames[0], frames[1], frames[3]])
+    }
+
+    func testReopeningANotebookStillSavingPicksUpItsEditor() async throws {
+        let store = try store()
+        let notebook = try store.create()
+        let first = NotebookEditorModel.open(store: store, notebook: notebook)
+        first.addPage()
+        // Back: the save hasn't landed, and the notebook is opened again.
+        let reopened = NotebookEditorModel.open(store: store, notebook: notebook)
+        XCTAssertTrue(reopened === first)
+        XCTAssertEqual(reopened.pageCount, 2)
+        XCTAssertFalse(NotebookEditorModel.open(store: store, notebook: try store.create()) === first,
+                       "another notebook gets its own editor")
+        await reopened.checkpoint()
+        XCTAssertEqual(try store.notebook(notebook.id).pageCount, 2)
+    }
+
+    func testRestoreWaitsForASaveUnderWay() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        await model.checkpoint()
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 600, height: 400))))
+        await model.checkpoint()
+        let red = model.pages[0].contentsRenderFrame
+        model.insertScreenshot(try XCTUnwrap(solid(.blue, CGSize(width: 600, height: 400))))
+        let saving = Task { await model.checkpoint() }
+        await Task.yield()
+        // The save under way lands first; the restore then goes back from it.
+        await model.restorePrevious()
+        await saving.value
+        XCTAssertNil(model.error)
+        XCTAssertEqual(model.pages[0].contentsRenderFrame, red)
+        XCTAssertEqual(NotebookEditorModel(store: store, notebook: try store.notebook(model.notebook.id))
+            .pages[0].contentsRenderFrame, red)
+    }
+
     func testBackOnAnUntouchedNotebookStillLeavesOneToContinue() async throws {
         let store = try store()
         let notebook = try store.create()
@@ -255,21 +446,21 @@ final class NotebookEditorTests: XCTestCase {
         let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try issuePDF(pages: 4), pageCount: 4)
         let model = NotebookEditorModel(store: store, notebook: notebook)
         XCTAssertNil(model.error)
-        // One scroll: the four issue pages stacked in a single markup, each at
-        // the column's width in its own shape.
-        XCTAssertTrue(model.isColumn)
+        // One scroll of four pages, each its own markup at the column's width
+        // in its own shape, stacked top to bottom.
+        XCTAssertTrue(model.isStack)
         XCTAssertEqual(model.pageCount, 4)
-        XCTAssertEqual(model.pages.count, 1)
-        XCTAssertEqual(model.pageRect(0).size, CGSize(width: 1240, height: 1550))
-        XCTAssertEqual(model.pages[0].bounds.size, CGSize(width: 1240, height: 1550 * 4))
+        XCTAssertEqual(model.pages.count, 4)
+        XCTAssertEqual(model.pages[0].bounds.size, CGSize(width: 1240, height: 1550))
+        XCTAssertEqual(model.slots[3], CGRect(x: 0, y: 1550 * 3, width: 1240, height: 1550))
         XCTAssertEqual(model.pageLabel, "p. 1 / 4")
         XCTAssertFalse(model.canDeleteCurrent, "issue pages can't be deleted")
         model.go(to: 2)
         model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 400, height: 300))))
         model.addPage()
         XCTAssertEqual(model.pageCount, 5)
-        XCTAssertFalse(model.canDeleteCurrent, "ink can't be cut out of a column, so no page of one can go")
-        XCTAssertEqual(model.pageRect(4), CGRect(x: 0, y: 1550 * 4, width: 1240, height: NotebookPage.blank.height))
+        XCTAssertTrue(model.canDeleteCurrent, "a page added after the issue can go again")
+        XCTAssertEqual(model.slots[4], CGRect(x: 0, y: 1550 * 4, width: 1240, height: NotebookPage.blank.height))
 
         let files = await model.renderForSave()
         XCTAssertEqual(files.map(\.name), ["Toronto Star 2026-10-06 p1.jpg", "Toronto Star 2026-10-06 p3.jpg"])
@@ -432,13 +623,143 @@ final class NotebookEditorTests: XCTestCase {
         XCTAssertTrue(scrolls.allSatisfy { $0.panGestureRecognizer.minimumNumberOfTouches == 2 })
     }
 
+    /// Every page's canvas holds still under one finger, not only the first:
+    /// after a page is added, after turning back, and after a paste reloads
+    /// the page, which PaperKit answers by laying its views out again.
+    func testOneFingerScrollsNoNotesPageAfterTurnsAndPastes() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = shown(model)
+        func check(_ when: String) {
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
+            for canvas in controller.papers.values where !canvas.view.isHidden {
+                let scrolls = scrollViews(canvas.view)
+                XCTAssertFalse(scrolls.isEmpty, when)
+                for scroll in scrolls {
+                    XCTAssertEqual(scroll.panGestureRecognizer.minimumNumberOfTouches, 2, "one finger scrolls \(when)")
+                    XCTAssertFalse(scroll.alwaysBounceHorizontal, "bounces sideways \(when)")
+                    XCTAssertFalse(scroll.alwaysBounceVertical, "bounces down \(when)")
+                    XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1, "room to scroll sideways \(when)")
+                }
+            }
+        }
+        check("on the first page")
+        model.addPage()
+        controller.show(page: model.current, revision: model.revision)
+        check("on an added page")
+        model.go(to: 0)
+        controller.show(page: model.current, revision: model.revision)
+        check("after turning back")
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 300, height: 200))))
+        controller.show(page: model.current, revision: model.revision)
+        check("after a paste")
+        // PaperKit setting its scroll views up again, as it seems to on the
+        // iPad: the next layout takes one-finger scrolling away again.
+        for scroll in scrollViews(controller.paper.view) {
+            scroll.panGestureRecognizer.minimumNumberOfTouches = 1
+            scroll.alwaysBounceVertical = true
+        }
+        check("after PaperKit reset its scroll views")
+    }
+
+    /// A newspaper's stack scrolls down, never sideways, until zoomed in.
+    func testTheNewspaperStackDoesNotScrollSidewaysUnzoomed() throws {
+        let store = try store()
+        let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try issuePDF(pages: 3), pageCount: 3)
+        let model = NotebookEditorModel(store: store, notebook: notebook)
+        let controller = shown(model)
+        let stack = try XCTUnwrap(scrollViews(controller.view).first { $0.accessibilityIdentifier == "notebook-stack" })
+        controller.view.layoutIfNeeded()
+        XCTAssertLessThanOrEqual(stack.contentSize.width, stack.bounds.width, "nothing off to either side")
+        XCTAssertFalse(stack.alwaysBounceHorizontal)
+        stack.contentOffset = CGPoint(x: 40, y: 0)
+        controller.view.layoutIfNeeded()
+        XCTAssertEqual(stack.contentOffset.x, 0, accuracy: 0.5, "a sideways drag has nowhere to go")
+        controller.scroll(toSlot: 2, animated: false)
+        var inner = controller.papers.values.flatMap { scrollViews($0.view) }
+        XCTAssertTrue(inner.allSatisfy { !$0.isScrollEnabled }, "no page's own canvas scrolls after scrolling the stack")
+        // Switched back on behind our back: the next layout turns it off again.
+        inner.forEach { $0.isScrollEnabled = true }
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        inner = controller.papers.values.flatMap { scrollViews($0.view) }
+        XCTAssertTrue(inner.allSatisfy { !$0.isScrollEnabled }, "and stays off after PaperKit resets it")
+    }
+
+    func testToolChangeAfterInsertingPhotoReturnsFirstResponderToCanvas() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = shown(model)
+        model.insertScreenshot(try XCTUnwrap(solid(.red, CGSize(width: 300, height: 200))))
+        controller.show(page: model.current, revision: model.revision)
+        let selectionEditor = UITextField(frame: CGRect(x: 0, y: 0, width: 100, height: 30))
+        controller.view.addSubview(selectionEditor)
+        selectionEditor.becomeFirstResponder()
+        XCTAssertTrue(selectionEditor.isFirstResponder)
+        controller.drawingToolbar.select(DrawingFavorite(kind: "marker", red: 1, width: 12))
+        XCTAssertTrue(controller.paper.isFirstResponder)
+        XCTAssertFalse(selectionEditor.isFirstResponder)
+        XCTAssertFalse(NotebookPage.isBlank(try XCTUnwrap(controller.paper.markup)))
+    }
+
     func testTheNewspaperColumnStillScrollsWithOneFinger() throws {
         let store = try store()
-        let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try issuePDF(pages: 2), pageCount: 2)
+        let notebook = try columnIssue(store, pdf: try issuePDF(pages: 2), pageCount: 2)
         let controller = shown(NotebookEditorModel(store: store, notebook: notebook))
         let scrolls = scrollViews(controller.paper.view)
         XCTAssertFalse(scrolls.isEmpty)
         XCTAssertTrue(scrolls.contains { $0.panGestureRecognizer.minimumNumberOfTouches == 1 })
+    }
+
+    /// A newspaper is read by scrolling the stack with one finger; its pages'
+    /// own canvases hold still under it.
+    func testANewspaperScrollsAsOneStackWithOneFinger() throws {
+        let store = try store()
+        let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try issuePDF(pages: 2), pageCount: 2)
+        let controller = shown(NotebookEditorModel(store: store, notebook: notebook))
+        let stack = try XCTUnwrap(scrollViews(controller.view).first { $0.accessibilityIdentifier == "notebook-stack" })
+        XCTAssertTrue(stack.isScrollEnabled)
+        XCTAssertEqual(stack.panGestureRecognizer.minimumNumberOfTouches, 1)
+        XCTAssertGreaterThan(stack.contentSize.height, stack.bounds.height, "two pages are taller than the window")
+        let inner = controller.papers.values.flatMap { scrollViews($0.view) }
+        XCTAssertFalse(inner.isEmpty)
+        XCTAssertTrue(inner.allSatisfy { !$0.isScrollEnabled }, "a page's own canvas never scrolls")
+    }
+
+    /// Only the pages near the screen have canvases, so a sixty-page issue
+    /// isn't sixty canvases; a page written on keeps its canvas, so nothing it
+    /// holds can go with it.
+    func testOnlyPagesNearTheScreenHaveCanvasesUnlessWrittenOn() throws {
+        let store = try store()
+        let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try issuePDF(pages: 8), pageCount: 8)
+        let model = NotebookEditorModel(store: store, notebook: notebook)
+        let controller = shown(model)
+        func pagesWithCanvases() -> Set<Int> { Set(controller.papers.keys.compactMap { model.pageKeys.firstIndex(of: $0) }) }
+        XCTAssertEqual(pagesWithCanvases(), [0, 1])
+        let first = try XCTUnwrap(controller.papers[model.pageKeys[0]])
+        first.markup = try inked(model.pages[0])
+        XCTAssertFalse(NotebookPage.isBlank(model.pages[0]))
+
+        controller.scroll(toSlot: 6, animated: false)
+        XCTAssertEqual(model.current, 6)
+        XCTAssertEqual(pagesWithCanvases(), [0, 5, 6, 7], "page 1 kept; page 2 let go")
+        XCTAssertTrue(controller.papers[model.pageKeys[0]] === first)
+        XCTAssertEqual(first.markup, model.pages[0], "the written page's canvas still holds its ink")
+    }
+
+    /// The point of the stack: an autosave encodes the page written on, not
+    /// the whole issue.
+    func testAStackAutosaveWritesOnlyThePageWrittenOn() async throws {
+        let store = try store()
+        let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try issuePDF(pages: 8), pageCount: 8)
+        let model = NotebookEditorModel(store: store, notebook: notebook)
+        await model.checkpoint()
+        model.canvasChanged(try inked(model.pages[5]), page: 5)
+        await model.checkpoint(final: false)
+        XCTAssertTrue(model.log.lines.last?.contains("autosave: wrote p6 ·") == true, model.log.text)
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(notebook.id).markedPages, [5])
     }
 
     func testAddingAPageKeepsInkTheCanvasHadNotReported() async throws {
@@ -479,16 +800,162 @@ final class NotebookEditorTests: XCTestCase {
         let store = try store()
         let notebook = try store.create()
         let model = NotebookEditorModel(store: store, notebook: notebook)
-        drawUnreported(try inked(model.pages[0]), on: canvas(model))
+        // Held, as the editor holds it: the model's reference is weak.
+        let controller = canvas(model)
+        drawUnreported(try inked(model.pages[0]), on: controller)
         let files = await model.renderForSave()
         XCTAssertEqual(files.map(\.name), ["Notes p1.jpg"])
         await model.checkpoint()
         XCTAssertEqual(try store.notebook(notebook.id).markedPages, [0])
+        withExtendedLifetime(controller) {}
+    }
+
+    /// Written page by page, turning away from each: Save files every one,
+    /// not only the page on screen.
+    func testSaveFilesEveryWrittenPageNotOnlyTheOneShown() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = canvas(model)
+        controller.show(page: model.current, revision: model.revision)
+        for page in 0..<3 {
+            if page > 0 {
+                model.addPage()
+                controller.show(page: model.current, revision: model.revision)
+            }
+            drawUnreported(try inked(model.pages[page]), on: controller)
+        }
+        model.go(to: 1)
+        controller.show(page: model.current, revision: model.revision)
+        await model.checkpoint()
+        let files = await model.renderForSave()
+        XCTAssertEqual(files.map(\.name), ["Notes p1.jpg", "Notes p2.jpg", "Notes p3.jpg"])
+        withExtendedLifetime(controller) {}
+    }
+
+    // MARK: A canvas per notes page
+
+    /// A picture on a page, in its own place so two pages' ink differs.
+    private func marked(_ page: PaperMarkup, at y: CGFloat) throws -> PaperMarkup {
+        var markup = page
+        markup.insertNewImage(try XCTUnwrap(solid(.blue, CGSize(width: 200, height: 100))),
+                              frame: CGRect(x: 100, y: y, width: 200, height: 100))
+        return markup
+    }
+
+    /// Turning a page hides its canvas rather than loading the next page into
+    /// it, and turning back shows that same canvas, untouched.
+    func testEachNotesPageKeepsItsOwnCanvas() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = canvas(model)
+        let first = controller.paper
+        model.addPage()
+        controller.show(page: model.current, revision: model.revision)
+        let second = controller.paper
+        XCTAssertFalse(first === second, "the new page has a canvas of its own")
+        XCTAssertEqual(controller.papers.count, 2)
+        XCTAssertTrue(first.view.isHidden, "only the page on screen is drawn")
+        XCTAssertFalse(second.view.isHidden)
+
+        let held = try marked(model.pages[1], at: 300)
+        drawUnreported(held, on: controller)
+        model.go(to: 0)
+        controller.show(page: model.current, revision: model.revision)
+        XCTAssertTrue(controller.paper === first, "turning back finds the same canvas")
+        XCTAssertTrue(second.view.isHidden)
+        XCTAssertEqual(second.markup, held, "a canvas turned away from keeps exactly what it held")
+    }
+
+    /// The fault on the iPad: ink PaperKit handed over only after its page was
+    /// turned away from. It now arrives from that page's own canvas, onto that page.
+    func testInkReportedAfterTurningAwayLandsOnItsOwnPage() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = canvas(model)
+        let first = controller.paper
+        model.addPage()
+        controller.show(page: model.current, revision: model.revision)
+
+        // The first page's canvas reports late, through its delegate.
+        first.markup = try marked(model.pages[0], at: 200)
+        XCTAssertFalse(NotebookPage.isBlank(model.pages[0]), "the late ink is the first page's")
+        XCTAssertTrue(NotebookPage.isBlank(model.pages[1]), "and not the page on screen")
+        XCTAssertEqual(model.marked, [0])
+
+        await model.checkpoint()
+        XCTAssertTrue(model.log.text.contains("late from turned-away page p1×1"), model.log.text)
+        let reopened = NotebookEditorModel(store: store, notebook: try store.notebook(model.notebook.id))
+        XCTAssertFalse(NotebookPage.isBlank(reopened.pages[0]))
+        XCTAssertTrue(NotebookPage.isBlank(reopened.pages[1]))
+        withExtendedLifetime(controller) {}
+    }
+
+    /// Save reads every page's canvas, not only the one on screen.
+    func testSaveReadsEveryPagesCanvas() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = canvas(model)
+        let first = controller.paper
+        model.addPage()
+        controller.show(page: model.current, revision: model.revision)
+        // Ink the first page's canvas never reported at all.
+        let delegate = first.delegate
+        first.delegate = nil
+        first.markup = try marked(model.pages[0], at: 200)
+        first.delegate = delegate
+        XCTAssertTrue(NotebookPage.isBlank(model.pages[0]), "the model has not been told")
+
+        let files = await model.renderForSave()
+        XCTAssertEqual(files.map(\.name), ["Notes p1.jpg"])
+        XCTAssertTrue(model.log.text.contains("unreported until read") == false, "renderForSave alone writes no checkpoint")
+        XCTAssertTrue(model.log.text.contains("entry pictures: p1.jpg · blank, left out p2"), model.log.text)
+        await model.checkpoint()
+        XCTAssertTrue(model.log.text.contains("unreported until read p1×1"), model.log.text)
+        withExtendedLifetime(controller) {}
+    }
+
+    func testDeletingAPageDropsItsCanvas() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = canvas(model)
+        model.addPage()
+        controller.show(page: model.current, revision: model.revision)
+        let doomed = controller.paper
+        model.deleteCurrentPage()
+        controller.show(page: model.current, revision: model.revision)
+        XCTAssertEqual(controller.papers.count, 1)
+        XCTAssertNil(doomed.parent, "the deleted page's canvas is let go")
+        XCTAssertFalse(controller.paper.view.isHidden)
+    }
+
+    func testANewPagesCanvasTakesTheChosenTool() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        let controller = shown(model)
+        controller.drawingToolbar.select(DrawingFavorite(kind: "marker", red: 1, width: 12))
+        model.addPage()
+        controller.show(page: model.current, revision: model.revision)
+        XCTAssertEqual((controller.paper.drawingTool as? PKInkingTool)?.inkType, .marker)
+        XCTAssertTrue(controller.paper.isFirstResponder, "the Pencil writes on the new page straight away")
+    }
+
+    /// Strokes no longer re-run the editor's SwiftUI body: once the page is
+    /// marked and the status says it's saving, a stroke publishes nothing.
+    func testAStrokeDoesNotRepublishTheEditor() throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try store.create())
+        model.canvasChanged(try marked(model.pages[0], at: 100), page: 0)
+        var published = 0
+        let watching = model.objectWillChange.sink { published += 1 }
+        model.canvasChanged(try marked(model.pages[0], at: 300), page: 0)
+        model.canvasChanged(try marked(model.pages[0], at: 500), page: 0)
+        XCTAssertEqual(published, 0)
+        withExtendedLifetime(watching) {}
     }
 
     func testAPageAddedToAColumnKeepsInkTheCanvasHadNotReported() throws {
         let store = try store()
-        let notebook = try store.createNewspaper(date: "2026-10-06", pdf: try issuePDF(pages: 2), pageCount: 2)
+        let notebook = try columnIssue(store, pdf: try issuePDF(pages: 2), pageCount: 2)
         let model = NotebookEditorModel(store: store, notebook: notebook)
         let controller = canvas(model)
         drawUnreported(try inked(model.pages[0]), on: controller)
@@ -502,7 +969,7 @@ final class NotebookEditorTests: XCTestCase {
 }
 
 @MainActor
-final class NotebookColumnConversionTests: XCTestCase {
+final class NotebookNewspaperTests: XCTestCase {
     private func store() throws -> NotebookStore {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -530,44 +997,69 @@ final class NotebookColumnConversionTests: XCTestCase {
         return try store.checkpoint(paper.id, pages: pages, marked: [1], preview: Data([1]))
     }
 
-    func testAPagedIssueOpensAsAColumnWithItsInkStillOnPageTwo() async throws {
+    /// An issue from before columns is already a markup per page: it opens
+    /// as the stack, with nothing converted.
+    func testAPagedIssueOpensAsAStackWithItsInkStillOnPageTwo() async throws {
         let store = try store()
         let paged = try await pagedIssue(store)
-        XCTAssertFalse(paged.isColumn)
         let model = NotebookEditorModel(store: store, notebook: paged)
-        XCTAssertTrue(model.isColumn)
+        XCTAssertTrue(model.isStack)
         XCTAssertEqual(model.pageCount, NewspaperFixture.shapes.count)
-        XCTAssertEqual(model.pages.count, 1, "one markup for the whole issue")
-        XCTAssertTrue(model.pages[0].contentsRenderFrame.intersects(model.pageRect(1)),
-                      "the mark moved down onto page 2")
-        XCTAssertFalse(model.pages[0].contentsRenderFrame.intersects(model.pageRect(0)))
+        XCTAssertEqual(model.pages.count, NewspaperFixture.shapes.count)
+        XCTAssertFalse(NotebookPage.isBlank(model.pages[1]))
+        XCTAssertTrue(NotebookPage.isBlank(model.pages[0]))
         await model.checkpoint()
         let saved = try store.notebook(paged.id)
-        XCTAssertTrue(saved.isColumn)
-        XCTAssertEqual(saved.pageCount, NewspaperFixture.shapes.count)
-        XCTAssertEqual(saved.markedPages, [1], "page 2's mark came across with it")
+        XCTAssertFalse(saved.isColumn)
+        XCTAssertEqual(saved.markedPages, [1])
     }
 
-    func testWritingOnAPageFilesItAndRubbingItOutStopsFilingIt() async throws {
+    func testBackAfterAnAutosaveStillFindsTheWrittenPages() async throws {
         let store = try store()
-        let model = NotebookEditorModel(store: store, notebook: try await pagedIssue(store))
-        await model.checkpoint()
-        // Written on page 3, with page 3 on screen.
-        model.go(to: 2)
+        let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
+        try NewspaperFixture.makeIssue(at: pdfURL)
+        // Never saved: the autosave is its first checkpoint and draws the
+        // preview, so the preview is no reason for Back to save again.
+        let paper = try columnIssue(store, pdf: pdfURL, pageCount: NewspaperFixture.shapes.count)
+        let model = NotebookEditorModel(store: store, notebook: paper)
         var written = model.pages[0]
         written.insertNewShape(configuration: ShapeConfiguration(type: .ellipse),
                                frame: model.pageRect(2).insetBy(dx: 400, dy: 200))
         model.canvasChanged(written, page: 0)
-        await model.checkpoint()
-        XCTAssertEqual(try store.notebook(model.notebook.id).markedPages, [1, 2])
-        // Page 2's mark erased while page 2 is on screen: it stops being filed.
-        model.go(to: 1)
-        var erased = PaperMarkup(bounds: written.bounds)
-        erased.insertNewShape(configuration: ShapeConfiguration(type: .ellipse),
-                              frame: model.pageRect(2).insetBy(dx: 400, dy: 200))
-        model.canvasChanged(erased, page: 0)
+        // The autosave writes the ink but leaves the marks; Back, with
+        // nothing new to write, must still look for them.
+        await model.checkpoint(final: false)
         await model.checkpoint()
         XCTAssertEqual(try store.notebook(model.notebook.id).markedPages, [2])
+        XCTAssertEqual(model.marked, [2])
+    }
+
+    /// The sudoku case: marks written, erased, then something else written.
+    /// Each save files what is on the pages now, no more and no less.
+    func testWritingOnAPageFilesItAndRubbingItOutStopsFilingIt() async throws {
+        let store = try store()
+        let model = NotebookEditorModel(store: store, notebook: try await pagedIssue(store))
+        await model.checkpoint()
+        var written = model.pages[2]
+        written.insertNewShape(configuration: ShapeConfiguration(type: .ellipse),
+                               frame: model.pages[2].bounds.insetBy(dx: 400, dy: 200))
+        model.canvasChanged(written, page: 2)
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(model.notebook.id).markedPages, [1, 2])
+        // Page 2's mark erased: it stops being filed.
+        model.canvasChanged(PaperMarkup(bounds: model.pages[1].bounds), page: 1)
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(model.notebook.id).markedPages, [2])
+        // Then a puzzle worked on page 4, and back out: it is there on reopening.
+        var puzzle = model.pages[3]
+        puzzle.insertNewShape(configuration: ShapeConfiguration(type: .rectangle),
+                              frame: model.pages[3].bounds.insetBy(dx: 300, dy: 300))
+        model.canvasChanged(puzzle, page: 3)
+        await model.checkpoint()
+        let reopened = NotebookEditorModel(store: store, notebook: try store.notebook(model.notebook.id))
+        XCTAssertTrue(NotebookPage.isBlank(reopened.pages[1]), "the erasure kept")
+        XCTAssertFalse(NotebookPage.isBlank(reopened.pages[3]), "and the puzzle too")
+        XCTAssertEqual(reopened.marked, [2, 3])
     }
 
     func testPagesStackAtFullWidthInTheirOwnShapes() async throws {
@@ -575,7 +1067,7 @@ final class NotebookColumnConversionTests: XCTestCase {
         let model = NotebookEditorModel(store: store, notebook: try await pagedIssue(store))
         var top: CGFloat = 0
         for (index, ratio) in NewspaperFixture.shapes.enumerated() {
-            let slot = model.pageRect(index)
+            let slot = model.slots[index]
             XCTAssertEqual(slot.minY, top, "page \(index + 1) starts where the last one ended")
             XCTAssertEqual(slot.width, NotebookColumn.width)
             XCTAssertEqual(slot.height / slot.width, ratio, accuracy: 0.01, "page \(index + 1) keeps its shape")
@@ -584,18 +1076,57 @@ final class NotebookColumnConversionTests: XCTestCase {
             let image = try XCTUnwrap(rendered)
             XCTAssertEqual(Double(image.height) / Double(image.width), Double(ratio), accuracy: 0.01)
         }
-        XCTAssertEqual(model.pages[0].bounds.height, top)
+        XCTAssertEqual(NotebookColumn.bounds(of: model.slots).height, top)
     }
 
-    func testANewIssueStartsAsAColumn() throws {
+    /// Handwriting, not a big shape: a fine pen line, a light pencil line and
+    /// a short tick, each on its own later page. Each page is filed.
+    func testFineHandwritingOnLaterPagesIsFiled() async throws {
+        let store = try store()
+        let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
+        try NewspaperFixture.makeIssue(at: pdfURL)
+        let paper = try columnIssue(store, pdf: pdfURL, pageCount: NewspaperFixture.shapes.count)
+        let model = NotebookEditorModel(store: store, notebook: paper)
+        XCTAssertTrue(model.isColumn)
+        var written = model.pages[0]
+        written.append(contentsOf: handwriting(in: model.pageRect(1), ink: PKInk(.pen, color: .black), width: 1, length: 200))
+        written.append(contentsOf: handwriting(in: model.pageRect(2), ink: PKInk(.pencil, color: .darkGray), width: 2,
+                                               length: 200, opacity: 0.25))
+        written.append(contentsOf: handwriting(in: model.pageRect(3), ink: PKInk(.pen, color: .blue), width: 2, length: 12))
+        model.canvasChanged(written, page: 0)
+        await model.checkpoint()
+        XCTAssertEqual(try store.notebook(model.notebook.id).markedPages, [1, 2, 3], "every written page is marked")
+        let files = await model.renderForSave()
+        let filed: [String] = files.map { String($0.name.split(separator: " ").last ?? "") }
+        XCTAssertEqual(filed, ["p1.jpg", "p2.jpg", "p3.jpg", "p4.jpg"])
+    }
+
+    /// One pen stroke across the middle of `rect`.
+    private func handwriting(in rect: CGRect, ink: PKInk, width: CGFloat, length: CGFloat,
+                             opacity: CGFloat = 1) -> PKDrawing {
+        let points: [PKStrokePoint] = (0..<12).map { i in
+            let x = rect.midX + length * CGFloat(i) / 11
+            return PKStrokePoint(location: CGPoint(x: x, y: rect.midY), timeOffset: Double(i) * 0.01,
+                                 size: CGSize(width: width, height: width), opacity: opacity, force: 0.3,
+                                 azimuth: 0, altitude: .pi / 2)
+        }
+        let path = PKStrokePath(controlPoints: points, creationDate: Date())
+        return PKDrawing(strokes: [PKStroke(ink: ink, path: path)])
+    }
+
+    func testANewIssueIsAStackOfPages() throws {
         let store = try store()
         let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
         try NewspaperFixture.makeIssue(at: pdfURL)
         let paper = try store.createNewspaper(date: "2026-10-06", pdf: pdfURL, pageCount: NewspaperFixture.shapes.count)
         let model = NotebookEditorModel(store: store, notebook: paper)
-        XCTAssertTrue(model.isColumn)
-        XCTAssertEqual(model.pages.first?.bounds.width, NotebookColumn.width)
-        XCTAssertEqual(model.pages.first?.bounds.height, model.pageRect(NewspaperFixture.shapes.count - 1).maxY)
+        XCTAssertTrue(model.isStack)
+        XCTAssertFalse(model.isColumn)
+        XCTAssertEqual(model.pages.count, NewspaperFixture.shapes.count, "a markup per page")
+        for index in model.pages.indices {
+            XCTAssertEqual(model.pages[index].bounds, model.pageBounds(index), "page \(index + 1) in its own shape")
+            XCTAssertEqual(model.slots[index].size, model.pageBounds(index).size)
+        }
         XCTAssertFalse(model.canDeleteCurrent)
     }
 
@@ -629,7 +1160,7 @@ final class NotebookColumnConversionTests: XCTestCase {
         let store = try store()
         let pdfURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).pdf")
         try NewspaperFixture.makeIssue(at: pdfURL)
-        let paper = try store.createNewspaper(date: "2026-10-06", pdf: pdfURL, pageCount: NewspaperFixture.shapes.count)
+        let paper = try columnIssue(store, pdf: pdfURL, pageCount: NewspaperFixture.shapes.count)
         let model = NotebookEditorModel(store: store, notebook: paper)
         let pages = 0..<NewspaperFixture.shapes.count
         let widths: [CGFloat] = [400, 1240, 2000]
@@ -695,9 +1226,4 @@ final class NotebookColumnConversionTests: XCTestCase {
         return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
     }
 
-    private func isDark(_ image: CGImage, at point: CGPoint) -> Bool {
-        let bytes = CFDataGetBytePtr(image.dataProvider!.data!)!
-        let offset = Int(point.y) * image.bytesPerRow + Int(point.x) * 4
-        return bytes[offset] < 80 && bytes[offset + 1] < 80 && bytes[offset + 2] < 80
-    }
 }

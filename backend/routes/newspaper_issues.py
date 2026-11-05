@@ -33,11 +33,10 @@ def pressreader_settings():
 
 @bp.post('/issues/<date>/download')
 def download_issue(date):
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
     try:
         issues.validate_date(date)
-        if date > datetime.now(ZoneInfo('America/Toronto')).date().isoformat():
+        # The 4am day: from midnight to 04:00 the new date's paper is tomorrow's.
+        if date > scheduler.paper_day():
             raise ValueError('Cannot download a future issue')
         job = scheduler.queue_issue(date, retry=True)
     except ValueError as exc:

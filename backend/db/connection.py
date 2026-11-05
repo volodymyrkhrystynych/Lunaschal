@@ -13,6 +13,7 @@ _DB_PATH = os.environ.get('DATABASE_URL', './data/lunaschal.db')
 _conn: sqlite3.Connection | None = None
 
 TIMESTAMP_COLS = frozenset({
+    'earned_at', 'redeemed_at',
     'created_at', 'updated_at', 'next_review', 'completed_at',
     'posted_at', 'last_checked_at', 'last_opened_at', 'edited_at', 'started_at', 'ended_at', 'due',
     'source_favorited_at', 'source_followed_at',
@@ -26,6 +27,7 @@ TIMESTAMP_COLS = frozenset({
     'applied_at', 'closed_at', 'purge_after', 'purged_at', 'fetched_at',
     'scanned_at', 'queued_at', 'last_run_at', 'triage_at', 'occurred_at',
     'added_at', 'archived_at', 'archive_restored_at', 'ready_at',
+    'captured_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -101,7 +103,8 @@ def _ensure_fanfic_request_interval(db):
 
 def _ensure_workout_quick_entry(db):
     for table, columns in {
-        'workout_sessions': {'capture_kind': 'TEXT', 'started_at': 'INTEGER', 'ended_at': 'INTEGER'},
+        'workout_sessions': {'capture_kind': 'TEXT', 'started_at': 'INTEGER', 'ended_at': 'INTEGER',
+                             'intensity_source': 'TEXT'},
         'workout_exercises': {'logged_at': 'INTEGER', 'logged_order': 'INTEGER'},
     }.items():
         existing = {r[1] for r in db.execute(f'PRAGMA table_info({table})')}
@@ -158,18 +161,21 @@ def init_db() -> None:
     _ensure_newspaper_downloads(db)
     _ensure_newspaper_last_read_at(db)
     _ensure_writing_project_id(db)
+    _ensure_writing_note_pinned(db)
     _ensure_conversation_day_key(db)
     _ensure_conversation_mode(db)
     _ensure_websearch_settings(db)
     _ensure_stt_shortcuts(db)
     _ensure_stt_model_settings(db)
     _ensure_journal_raw_content(db)
+    _ensure_journal_context_prompts(db)
     _ensure_journal_idea_id(db)
+    _ensure_journal_auto_file(db)
     _ensure_journal_screenshot_event_threshold(db)
     _ensure_journal_attachment_youtube(db)
+    _ensure_journal_attachment_capture(db)
     _migrate_flashcards_to_learning(db)
     _ensure_prevent_sleep(db)
-    _ensure_nudge_settings(db)
     _ensure_briefing_settings(db)
     _ensure_research_settings(db)
     _ensure_timeout_settings(db)
@@ -199,6 +205,7 @@ def init_db() -> None:
     _ensure_backup_settings(db)
     _ensure_files_settings(db)
     _ensure_knowledge_settings(db)
+    _ensure_learnings_inbox_settings(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
     # they used to own, reading their values first.
@@ -219,6 +226,7 @@ def init_db() -> None:
     _ensure_journal_attachment_location(db)
     _ensure_journal_attachment_exif(db)
     _ensure_journal_entry_location(db)
+    _ensure_location_point_columns(db)
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
@@ -235,7 +243,9 @@ def init_db() -> None:
     from backend.db.fic_sources_migration import ensure_fic_sources
     ensure_fic_sources(db)
     _ensure_fic_source_dates(db)
+    _ensure_fic_shelf(db)
     _ensure_collection_scan_retry(db)
+    _ensure_fic_like_push(db)
     _ensure_site_cookie_user_agent(db)
     _repair_escaped_image_fallbacks(db)
     _ensure_paper_archive_requested(db)
@@ -244,6 +254,7 @@ def init_db() -> None:
     _ensure_food_recipe_match_status(db)
     _ensure_food_media_transcript(db)
     _ensure_food_descriptions(db)
+    _migrate_spending_entries(db)
     _ensure_hf_token(db)
     _ensure_weather_settings(db)
     _ensure_weather_detail(db)
@@ -260,6 +271,7 @@ def init_db() -> None:
     _ensure_practice_recall_columns(db)
     _ensure_piano_attempt_metrics(db)
     _ensure_learning_attempts_speech_requested(db)
+    _ensure_learning_review(db)
     _ensure_study_position(db)
     _ensure_study_paper(db)
     _ensure_study_archive_requested(db)
@@ -273,6 +285,7 @@ def init_db() -> None:
     _reset_stale_fic_downloads(db)
     _reset_stale_knowledge_downloads(db)
     _reset_stale_study_imports(db)
+    _reset_stale_canon_imports(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
     _reset_stale_journal_youtube_imports(db)
@@ -565,6 +578,43 @@ def _ensure_collection_scan_retry(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_fic_shelf(db: sqlite3.Connection) -> None:
+    """Reading shelves. A fic never opened and with nothing marked read has not
+    been started, so it lands on to_read; everything else is reading. The
+    CHECK in schema.sql is not repeated here -- the route and the mobile edit
+    validate the value, and a rebuild from schema.sql brings the constraint."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fics)')}
+    if 'shelf' in cols:
+        return
+    db.execute("ALTER TABLE fics ADD COLUMN shelf TEXT NOT NULL DEFAULT 'reading'")
+    db.execute('ALTER TABLE fics ADD COLUMN shelved_at INTEGER')
+    db.execute(
+        "UPDATE fics SET shelf='to_read' WHERE last_opened_at IS NULL"
+        ' AND NOT EXISTS (SELECT 1 FROM fic_chapter_reads r WHERE r.fic_id=fics.id)')
+    db.commit()
+
+
+def _ensure_fic_like_push(db: sqlite3.Connection) -> None:
+    """Likes asked for from the Library, and the scans' pass bookkeeping that
+    the Backlog is derived from. Existing reaction rows were all read off the
+    site, which is the column default."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fic_chapter_reactions)')}
+    if 'source' not in cols:
+        db.execute("ALTER TABLE fic_chapter_reactions ADD COLUMN source TEXT NOT NULL DEFAULT 'site'")
+    if 'pending' not in cols:
+        db.execute('ALTER TABLE fic_chapter_reactions ADD COLUMN pending TEXT')
+    if 'push_error' not in cols:
+        db.execute('ALTER TABLE fic_chapter_reactions ADD COLUMN push_error TEXT')
+    if 'push_attempts' not in cols:
+        db.execute('ALTER TABLE fic_chapter_reactions ADD COLUMN push_attempts INTEGER NOT NULL DEFAULT 0')
+    if 'push_after' not in cols:
+        db.execute('ALTER TABLE fic_chapter_reactions ADD COLUMN push_after INTEGER NOT NULL DEFAULT 0')
+    for table in ('fanfic_watched_scans', 'fanfic_bookmark_scans', 'fanfic_collection_scans'):
+        if 'pass_started_at' not in {r[1] for r in db.execute(f'PRAGMA table_info({table})')}:
+            db.execute(f'ALTER TABLE {table} ADD COLUMN pass_started_at INTEGER')
+    db.commit()
+
+
 def _ensure_fic_review_columns(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(fics)')}
     if 'rating' not in cols:
@@ -608,6 +658,25 @@ def _ensure_learning_attempts_speech_requested(db: sqlite3.Connection) -> None:
     if 'speech_requested' not in cols:
         db.execute('ALTER TABLE learning_attempts ADD COLUMN speech_requested INTEGER NOT NULL DEFAULT 0')
         db.commit()
+
+
+def _ensure_learning_review(db: sqlite3.Connection) -> None:
+    """Review cards (`learning_cards.kind`) and the For review folder they live
+    in. The folder is made here rather than on the first review card so it is
+    always in the list, and a folder the user already called "For review" is
+    adopted instead of colliding with the UNIQUE name."""
+    from backend.learning.review_cards import ensure_review_folder
+    cols = {r[1] for r in db.execute('PRAGMA table_info(learning_cards)')}
+    if 'kind' not in cols:
+        db.execute("ALTER TABLE learning_cards ADD COLUMN kind TEXT NOT NULL DEFAULT 'qa'"
+                   " CHECK(kind IN ('qa','review'))")
+    cols = {r[1] for r in db.execute('PRAGMA table_info(learning_folders)')}
+    if 'system_key' not in cols:
+        db.execute('ALTER TABLE learning_folders ADD COLUMN system_key TEXT')
+    db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_folders_system'
+               ' ON learning_folders(system_key) WHERE system_key IS NOT NULL')
+    ensure_review_folder(db)
+    db.commit()
 
 
 def _ensure_fic_update_pending(db: sqlite3.Connection) -> None:
@@ -746,6 +815,45 @@ def _ensure_food_descriptions(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(food_entries)')}
     if 'generated_notes' not in cols:
         db.execute('ALTER TABLE food_entries ADD COLUMN generated_notes TEXT')
+    db.commit()
+
+
+def _migrate_spending_entries(db: sqlite3.Connection) -> None:
+    """Widen the typed-only spending log into an entry a receipt can open.
+
+    A receipt photo or a spoken clip arrives with no category and no amount —
+    those come later, from the structuring pass — so both lose their NOT NULL,
+    and the amount's CHECK has to admit NULL. SQLite cannot relax a constraint
+    in place, so the table is rebuilt once, latched on `raw_content`. Must run
+    before `_ensure_mobile_sync`, which re-creates the change triggers the DROP
+    takes with it.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(spending_logs)')}
+    if not cols or 'raw_content' in cols:
+        return
+    db.execute("""
+        CREATE TABLE spending_logs_new (
+            id TEXT PRIMARY KEY,
+            date TEXT NOT NULL,
+            category TEXT,
+            amount_cents INTEGER CHECK(amount_cents IS NULL OR (amount_cents > 0 AND amount_cents <= 100000000)),
+            merchant TEXT,
+            raw_content TEXT,
+            notes TEXT,
+            generated_notes TEXT,
+            latitude REAL,
+            longitude REAL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER
+        )
+    """)
+    db.execute("""
+        INSERT INTO spending_logs_new (id, date, category, amount_cents, created_at, updated_at)
+        SELECT id, date, category, amount_cents, created_at, created_at FROM spending_logs
+    """)
+    db.execute('DROP TABLE spending_logs')
+    db.execute('ALTER TABLE spending_logs_new RENAME TO spending_logs')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_spending_logs_date ON spending_logs(date)')
     db.commit()
 
 
@@ -1201,15 +1309,6 @@ def _ensure_prevent_sleep(db: sqlite3.Connection) -> None:
         db.commit()
 
 
-def _ensure_nudge_settings(db: sqlite3.Connection) -> None:
-    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
-    if 'nudge_enabled' not in cols:
-        db.execute('ALTER TABLE settings ADD COLUMN nudge_enabled INTEGER DEFAULT 1')
-    if 'nudge_interval_minutes' not in cols:
-        db.execute('ALTER TABLE settings ADD COLUMN nudge_interval_minutes INTEGER DEFAULT 45')
-    db.commit()
-
-
 def _ensure_briefing_settings(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'briefing_enabled' not in cols:
@@ -1390,6 +1489,19 @@ def _ensure_email_settings(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_location_point_columns(db: sqlite3.Connection) -> None:
+    """Two optional facts the phone now sends with a trail point: which saved
+    place a geofence ('region') stay was at, and what Core Motion said the
+    user was doing (walking/cycling/automotive...), which is what tells a
+    commute by bike from one by car."""
+    cols = {r['name'] for r in db.execute('PRAGMA table_info(location_points)')}
+    if 'place_id' not in cols:
+        db.execute('ALTER TABLE location_points ADD COLUMN place_id TEXT')
+    if 'activity' not in cols:
+        db.execute('ALTER TABLE location_points ADD COLUMN activity TEXT')
+    db.commit()
+
+
 def _ensure_backup_settings(db: sqlite3.Connection) -> None:
     """Where the nightly backup writes, and how many DB snapshots it keeps.
 
@@ -1438,6 +1550,19 @@ def _ensure_knowledge_settings(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'knowledge_root' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN knowledge_root TEXT')
+    db.commit()
+
+
+def _ensure_learnings_inbox_settings(db: sqlite3.Connection) -> None:
+    """Where coding agents write their daily learnings files, and the folder
+    the cards made from them land in (backend/learning/lessons.py). Both are
+    optional: with no path, import is upload-only; with no folder, the cards
+    are unfiled."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'learnings_inbox_path' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN learnings_inbox_path TEXT')
+    if 'learnings_folder_id' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN learnings_folder_id TEXT')
     db.commit()
 
 
@@ -1570,6 +1695,11 @@ def _ensure_job_triage_columns(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE jobs ADD COLUMN triage_at INTEGER')
     if 'triage_error' not in cols:
         db.execute('ALTER TABLE jobs ADD COLUMN triage_error TEXT')
+    # The gazetteer key an `inferred` distance was measured to. Without it the
+    # reading could not be re-measured when the commute anchor (the current
+    # Home) moves, and it would keep the old origin's kilometres forever.
+    if 'distance_place' not in cols:
+        db.execute("ALTER TABLE jobs ADD COLUMN distance_place TEXT NOT NULL DEFAULT ''")
     db.commit()
 
     # The worker scans for pending rows on every tick, and the feed filters on
@@ -2015,6 +2145,15 @@ def _ensure_journal_entry_location(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE journal_entries ADD COLUMN latitude REAL')
     if 'longitude' not in cols:
         db.execute('ALTER TABLE journal_entries ADD COLUMN longitude REAL')
+    # Where the coordinates came from: 'device' (a fix measured at capture) or
+    # 'trail' (backend/journal/location.py: the phone's location trail at that
+    # moment, for an entry that arrived without one -- the Watch, a standalone
+    # recording, a fix gone stale). Rows located before this were all device
+    # fixes, so they are labelled once.
+    if 'location_source' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN location_source TEXT')
+        db.execute("UPDATE journal_entries SET location_source='device'"
+                   ' WHERE latitude IS NOT NULL AND longitude IS NOT NULL')
     db.commit()
 
 
@@ -2108,11 +2247,31 @@ def _ensure_llama_server_settings(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_journal_context_prompts(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
+    if 'context_prompt_day' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN context_prompt_day TEXT')
+    if 'context_prompt_status' not in cols:
+        db.execute("ALTER TABLE journal_entries ADD COLUMN context_prompt_status TEXT NOT NULL DEFAULT 'pending'")
+    db.commit()
+
+
 def _ensure_journal_raw_content(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
     if 'raw_content' not in cols:
         db.execute('ALTER TABLE journal_entries ADD COLUMN raw_content TEXT')
         db.commit()
+
+
+def _ensure_journal_auto_file(db: sqlite3.Connection) -> None:
+    """Whether the phone saved this entry with the Capture tab's Save button
+    while it could also have been a meal or a purchase. Such an entry is read
+    once its attachments settle and may be moved into the food log or the
+    spending ledger (backend/journal/refile.py); 0 for everything else."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
+    if 'auto_file' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN auto_file INTEGER NOT NULL DEFAULT 0')
+    db.commit()
 
 
 def _ensure_journal_idea_id(db: sqlite3.Connection) -> None:
@@ -2170,6 +2329,24 @@ def _ensure_journal_attachment_youtube(db: sqlite3.Connection) -> None:
         )
     if 'import_error' not in cols:
         db.execute('ALTER TABLE journal_attachments ADD COLUMN import_error TEXT')
+    db.commit()
+
+
+def _ensure_journal_attachment_capture(db: sqlite3.Connection) -> None:
+    """The original capture time and a Live Photo's paired clip.
+
+    `captured_at` is NULL for every row predating it — those were never sent a
+    date, and guessing one from created_at would claim a precision they lack.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_attachments)')}
+    if 'captured_at' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN captured_at INTEGER')
+    if 'motion_path' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN motion_path TEXT')
+    if 'motion_mime' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN motion_mime TEXT')
+    if 'motion_size' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN motion_size INTEGER')
     db.commit()
 
 
@@ -2240,6 +2417,24 @@ def _ensure_writing_project_id(db: sqlite3.Connection) -> None:
     if 'writing_project_id' not in cols:
         db.execute('ALTER TABLE conversations ADD COLUMN writing_project_id TEXT REFERENCES writing_projects(id)')
         db.commit()
+
+
+def _ensure_writing_note_pinned(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(writing_context_docs)')}
+    if 'pinned' not in cols:
+        db.execute('ALTER TABLE writing_context_docs ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
+        db.commit()
+
+
+def _reset_stale_canon_imports(db: sqlite3.Connection) -> None:
+    """An import runs on a daemon thread and dies with the process; a row left
+    'importing' would show a progress bar for work nobody is doing."""
+    db.execute(
+        "UPDATE writing_canon_sources SET status='error',"
+        " error='Import was interrupted by a restart; import the dump again'"
+        " WHERE status='importing'"
+    )
+    db.commit()
 
 
 def _ensure_journal_screenshot_event_threshold(db: sqlite3.Connection) -> None:

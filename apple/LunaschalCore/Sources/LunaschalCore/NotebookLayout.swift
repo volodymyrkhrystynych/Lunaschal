@@ -39,17 +39,12 @@ public enum NotebookColumn {
         NotebookFit.width(slot, in: view)
     }
 
-    /// Which pages carry ink, from a picture of the ink alone: one flag per
-    /// pixel row, true where anything was drawn, each row `unitsPerRow` of the
-    /// column tall. A newspaper files only these and its cover, and PaperKit
-    /// has no way to ask a markup what lies where.
-    public static func slotsWithInk(rows: [Bool], unitsPerRow: CGFloat, slots: [CGRect]) -> Set<Int> {
-        guard !slots.isEmpty, unitsPerRow > 0 else { return [] }
-        var found = Set<Int>()
-        for (row, inked) in rows.enumerated() where inked {
-            found.insert(slot(atY: (CGFloat(row) + 0.5) * unitsPerRow, in: slots))
-        }
-        return found
+    /// The pages any of `content` lies on, top to bottom: the only ones worth
+    /// drawing to find out which carry ink. A newspaper files only those and
+    /// its cover, and PaperKit has no way to ask a markup what lies where.
+    public static func slots(under content: CGRect, in slots: [CGRect]) -> [Int] {
+        guard !content.isNull, !content.isEmpty else { return [] }
+        return slots.indices.filter { slots[$0].intersects(content) }
     }
 }
 
@@ -72,74 +67,18 @@ public enum NotebookFit {
         guard view.width > 0, view.height > 0 else { return page }
         return CGRect(x: page.minX, y: page.minY, width: page.width, height: page.width * view.height / view.width)
     }
-}
 
-/// Turning a notes page with a finger. A page turn is a deliberate drag, not
-/// a flick: the page follows the finger, and only a drag past the threshold
-/// turns it when the finger lifts. Short of that it springs back.
-public enum PageSwipe {
-    /// Of the page's on-screen width, and never less than `minimum` points.
-    public static let fraction: CGFloat = 0.35
-    public static let minimum: CGFloat = 120
-    /// How close to a side of the screen a finger has to land for its drag to
-    /// turn the page. Anywhere else a finger is as likely to be a palm the
-    /// Pencil's palm rejection missed, and a page that slides under it is a
-    /// page being written on going somewhere else.
-    public static let edgeWidth: CGFloat = 44
-
-    public enum Edge: Equatable { case leading, trailing }
-
-    /// The side a drag starting at `x` pulls from, in a view `width` wide; nil
-    /// away from both.
-    public static func edge(startX x: CGFloat, width: CGFloat) -> Edge? {
-        guard width > 2 * edgeWidth else { return nil }
-        if x <= edgeWidth { return .leading }
-        if x >= width - edgeWidth { return .trailing }
-        return nil
+    /// How far the canvas may zoom, from the fit up to `maximum` times it.
+    /// With zoom off the range is the fit alone, so a palm that lands as a
+    /// pinch has nowhere to take the page.
+    public static func zoomRange(fitted: CGFloat, maximum: CGFloat, enabled: Bool) -> ClosedRange<CGFloat> {
+        enabled ? fitted...(fitted * max(maximum, 1)) : fitted...fitted
     }
 
-    /// The part of a drag that counts: in from the side it started at. From
-    /// the trailing edge it pulls the next page in, from the leading edge the
-    /// previous one; outwards it does nothing.
-    public static func pull(dx: CGFloat, from edge: Edge) -> CGFloat {
-        edge == .trailing ? min(dx, 0) : max(dx, 0)
-    }
-
-    public static func threshold(pageWidth: CGFloat) -> CGFloat {
-        max(minimum, pageWidth * fraction)
-    }
-
-    public struct Preview: Equatable {
-        /// How far to slide the page, in points.
-        public var offset: CGFloat
-        /// The drag is heading past the last page, so finishing it adds one.
-        public var creating: Bool
-        /// 0...1, how far towards the threshold.
-        public var progress: CGFloat
-        /// Lifting now turns the page, or adds one.
-        public var armed: Bool
-
-        public static let idle = Preview(offset: 0, creating: false, progress: 0, armed: false)
-    }
-
-    public enum Outcome: Equatable {
-        case stay, previous, next, newPage
-    }
-
-    /// A drag in progress, `dx` points from where it started; negative is
-    /// towards the next page. Backwards from the first page nothing moves —
-    /// a drag that does nothing should look like it does nothing.
-    public static func preview(dx: CGFloat, index: Int, count: Int, threshold: CGFloat) -> Preview {
-        guard dx != 0, !(dx > 0 && index <= 0) else { return .idle }
-        let progress = min(1, abs(dx) / max(threshold, 1))
-        return Preview(offset: dx, creating: dx < 0 && index >= count - 1, progress: progress, armed: progress >= 1)
-    }
-
-    /// What lifting the finger does.
-    public static func outcome(dx: CGFloat, index: Int, count: Int, threshold: CGFloat) -> Outcome {
-        let preview = preview(dx: dx, index: index, count: count, threshold: threshold)
-        guard preview.armed else { return .stay }
-        if preview.creating { return .newPage }
-        return dx < 0 ? .next : .previous
+    /// Back to the fit's scale from a zoomed-in `visible` frame: the fit's
+    /// width and sideways position, centred down the page on wherever the
+    /// reader was looking, never above the top.
+    public static func unzoomed(_ visible: CGRect, fit: CGRect) -> CGRect {
+        CGRect(x: fit.minX, y: max(visible.midY - fit.height / 2, 0), width: fit.width, height: fit.height)
     }
 }

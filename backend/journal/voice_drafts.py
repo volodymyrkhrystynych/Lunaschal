@@ -285,6 +285,8 @@ def _create_entry(content: str, raw_content: str) -> str:
         ' VALUES (?,?,?,?,?,?,?)',
         (entry_id, content, raw_content, None, None, now, now),
     )
+    from backend.journal import location as entry_location
+    entry_location.fill(db, entry_id)
     db.commit()
     entry_weather.nudge()
     return entry_id

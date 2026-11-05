@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import CoreLocation
 import PhotosUI
 import UniformTypeIdentifiers
 import LunaschalCore
@@ -9,39 +10,98 @@ struct CaptureRoot: View {
     @StateObject private var chat: ChatModel
     @StateObject private var todo: TodoModel
     @StateObject private var learning: LearningModel
+    @StateObject private var context: JournalContextModel
+    @ObservedObject private var quickPhoto = QuickPhoto.shared
     @Environment(\.scenePhase) private var scenePhase
+    @State private var tab = Tab.capture
+    @State private var capturePage = CaptureTab.Page.entry
+    @State private var showQuickCamera = false
+    @State private var today = DayKey.of(Date())
+
+    private var dailyRemaining: Int {
+        DailySummary(day: today, server: model.dailyStatus, local: model.dailyLogs).remainingCount
+    }
+
+    enum Tab: Hashable { case capture, journal, chat, todo, more, study, draw, library, jobs, writing, learning, settings }
+    @Environment(\.horizontalSizeClass) private var widthClass
+
+    /// Every destination gets a tab of its own only on an iPad window wide
+    /// enough for the floating tab bar, which pages through them. A compact one
+    /// (Split View, Slide Over, a narrow Stage Manager window) has the iPhone's
+    /// five-slot bottom bar, and the rest went into iPadOS's own More list —
+    /// which nests each tab's NavigationStack inside its navigation controller:
+    /// two bars, two back buttons. So a compact iPad gets the iPhone's tabs.
+    private var everyDestinationIsATab: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad && widthClass != .compact
+    }
 
     init(model: CaptureModel) {
         self.model = model
         _chat = StateObject(wrappedValue: ChatModel(capture: model))
         _todo = StateObject(wrappedValue: TodoModel(capture: model))
         _learning = StateObject(wrappedValue: LearningModel(capture: model))
+        _context = StateObject(wrappedValue: JournalContextModel(capture: model))
     }
 
     var body: some View {
-        TabView {
-            NavigationStack { CaptureTab(model: model) }
-                .tabItem { Label("Capture", systemImage: "square.and.pencil") }
-            NavigationStack { JournalTab(model: model) }
-                .tabItem { Label("Journal", systemImage: "book.closed") }
+        TabView(selection: $tab) {
+            NavigationStack { CaptureTab(model: model, page: $capturePage, dailyRemaining: dailyRemaining) }
+                .tabItem { Label("Capture", systemImage: "square.and.pencil") }.tag(Tab.capture)
+                .badge(dailyRemaining)
+            NavigationStack { JournalTab(model: model, context: context, chat: chat) }
+                .tabItem { Label("Journal", systemImage: "book.closed") }.tag(Tab.journal)
             NavigationStack { ChatView(chat: chat, capture: model) }
-                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }.tag(Tab.chat)
             NavigationStack { TodoView(todo: todo) }
-                .tabItem { Label("Todo", systemImage: "checklist") }
+                .tabItem { Label("Todo", systemImage: "checklist") }.tag(Tab.todo)
                 // Red, like a notification: to-dos due today or overdue.
                 .badge(todo.dueCount)
-            if UIDevice.current.userInterfaceIdiom == .pad {
+            if everyDestinationIsATab {
                 NavigationStack { StudyLibraryView(model: model) }
-                    .tabItem { Label("Study", systemImage: "doc.text") }
+                    .tabItem { Label("Study", systemImage: "doc.text") }.tag(Tab.study)
                 NavigationStack { DrawingLibraryView(model: model) }
-                    .tabItem { Label("Draw", systemImage: "pencil.tip") }
+                    .tabItem { Label("Draw", systemImage: "pencil.tip") }.tag(Tab.draw)
+                NavigationStack { LibraryView(model: model) }
+                    .tabItem { Label("Library", systemImage: "books.vertical") }.tag(Tab.library)
+                NavigationStack { JobsFeedView(capture: model) }
+                    .tabItem { Label("Jobs", systemImage: "briefcase") }.tag(Tab.jobs)
+                NavigationStack { WritingRootView(capture: model) }
+                    .tabItem { Label("Writing", systemImage: "text.book.closed") }.tag(Tab.writing)
+                NavigationStack { LearningView(learning: learning) }
+                    .tabItem { Label("Learning", systemImage: "graduationcap") }.tag(Tab.learning)
+                    .badge(learning.stats.due)
+                NavigationStack { ConnectionSettings(model: model) }
+                    .tabItem { Label("Settings", systemImage: "gear") }.tag(Tab.settings)
+            } else {
+                NavigationStack {
+                    MoreMenu(model: model, learning: learning,
+                             showsStudyAndDraw: UIDevice.current.userInterfaceIdiom == .pad)
+                }
+                    .tabItem { Label("More", systemImage: "line.3.horizontal") }.tag(Tab.more)
             }
-            NavigationStack { MoreMenu(model: model, learning: learning) }
-                .tabItem { Label("More", systemImage: "line.3.horizontal") }
+        }
+        .onChange(of: tab) { _, selected in
+            if selected == .capture { capturePage = .entry }
         }
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
+        // The Action Button's Take Photo: the camera over everything, the
+        // photo into the composer's draft, and the composer under it to land
+        // on. Presented here rather than from the composer, because a hidden
+        // KeptPage is out of the window and can't present anything.
+        .onReceive(quickPhoto.$requested) { requested in
+            guard requested else { return }
+            quickPhoto.requested = false
+            tab = .capture
+            capturePage = .entry
+            if UIImagePickerController.isSourceTypeAvailable(.camera) { showQuickCamera = true }
+        }
+        .fullScreenCover(isPresented: $showQuickCamera) {
+            CameraPicker(allowsVideo: false) { shot in
+                if case .photo(let image, let metadata) = shot { model.stageCameraPhoto(image, metadata: metadata) }
+            }.ignoresSafeArea()
+        }
         // The Todo badge stays current, but neither list is fetched again for a
         // pass that didn't touch it.
         .onChange(of: model.syncChanges) { _, changes in
@@ -50,6 +110,7 @@ struct CaptureRoot: View {
         }
         .task(id: scenePhase) {
             guard scenePhase == .active else { model.leaveForeground(); return }
+            today = DayKey.of(Date())
             model.takeSharedLinks()
             model.resumeFicDownloads()
             // Everything once on the way in, then one small question every
@@ -57,6 +118,7 @@ struct CaptureRoot: View {
             model.syncOnForeground()
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                today = DayKey.of(Date())
                 model.checkIn()
             }
         }
@@ -72,9 +134,9 @@ private struct CaptureTab: View {
     }
 
     @ObservedObject var model: CaptureModel
-    @State private var page = Page.entry
+    @Binding var page: Page
+    let dailyRemaining: Int
     @State private var notebook: Notebook?
-    @State private var olderIssue: NewspaperIssue?
     @State private var fetchingPaper = false
 
     var body: some View {
@@ -99,7 +161,12 @@ private struct CaptureTab: View {
             ToolbarItem(placement: .topBarLeading) { CurrentWeatherButton(weather: model.weather) }
             ToolbarItem(placement: .principal) {
                 Picker("Capture page", selection: $page) {
-                    ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                    ForEach(Page.allCases) { item in
+                        Text(item == .daily && dailyRemaining > 0 ? "Daily (\(dailyRemaining))" : item.rawValue)
+                            .accessibilityLabel(item == .daily ? "Daily, \(dailyRemaining) remaining" : item.rawValue)
+                            .accessibilityIdentifier(item.rawValue)
+                            .tag(item)
+                    }
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()
@@ -120,11 +187,6 @@ private struct CaptureTab: View {
         .navigationDestination(item: $notebook) { NotebookEditor(owner: model, notebook: $0) }
         // Back from a notebook: the composer's notes row shows what was drawn.
         .onChange(of: notebook) { _, shown in if shown == nil { model.reloadCaptures() } }
-        .confirmationDialog("Today's paper isn't archived yet.", isPresented: Binding(get: { olderIssue != nil }, set: { if !$0 { olderIssue = nil } }),
-                            titleVisibility: .visible, presenting: olderIssue) { issue in
-            Button("Open \(issue.date)") { Task { await open(issue) } }
-            Button("Cancel", role: .cancel) {}
-        }
     }
 
     /// The entry draft's own notes, so Back and Notes again find them as left.
@@ -132,15 +194,17 @@ private struct CaptureTab: View {
         notebook = model.openDraftNotes()
     }
 
-    /// Today's paper by the 4am day; the newest one is offered if today's isn't in.
+    /// Today's paper by the 4am day, downloaded first if it isn't archived
+    /// yet. Before 4am the day is yesterday's, and a missing paper stays missing.
     private func openNewspaper() async {
         fetchingPaper = true
         defer { fetchingPaper = false }
         switch NewspaperIssue.choose(await model.newspaperIssues()) {
         case .today(let issue): await open(issue)
-        case .newest(let issue): olderIssue = issue
-        case .none: model.message = model.signedIn ? NotebookError.noIssue.localizedDescription
-            : "Sign in to your server to open the newspaper."
+        case .download(let date):
+            if let issue = await model.downloadNewspaper(date: date) { await open(issue) }
+        case .missing(let date):
+            model.message = "Today's paper (\(date)) doesn't exist. Downloads open at 4 am."
         }
     }
 
@@ -208,6 +272,7 @@ private struct CaptureComposer: View {
     @State private var saving = false
     @State private var confirmingDiscard = false
     @FocusState private var typing: Bool
+    @State private var typingText = false
 
     private var links: [String] { draftLinks.split(separator: "\n").map(String.init) }
     private var linkList: Binding<[String]> {
@@ -229,13 +294,23 @@ private struct CaptureComposer: View {
         (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.draft.isEmpty)
             && model.draft.files.allSatisfy(\.isFoodMedia)
     }
+    /// A purchase is the meal's shape with no videos: a receipt photo, a clip
+    /// about it, or a few words ("coffee with Sam, 4.50").
+    private var canSaveSpending: Bool {
+        (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.draft.isEmpty)
+            && model.draft.files.allSatisfy(\.isSpendingMedia)
+    }
 
     var body: some View {
         Form {
             Section {
-                TextEditor(text: $text).frame(minHeight: 160).accessibilityLabel("Journal text")
-                    .focused($typing)
-                AttachmentButtons(model: model, recorder: recorder) { saved = false; typing = false }
+                CaptureEntryEditor(text: $text, focused: $typingText) { image in
+                    guard let data = image.pngData() else { return }
+                    model.stage { try $0.stageFile(data: data, name: "Pasted image \(ULID.make()).png", contentType: "image/png") }
+                    saved = false
+                }
+                .frame(minHeight: 160)
+                AttachmentButtons(model: model, recorder: recorder) { saved = false; typing = false; typingText = false }
                 if saved { Text("Saved on this device").foregroundStyle(.secondary) }
             }
             if !model.draft.isEmpty || notes != nil {
@@ -250,30 +325,40 @@ private struct CaptureComposer: View {
         // however far the form has scrolled.
         .safeAreaInset(edge: .bottom) {
             HStack {
-                // Icon only, so three fit on a phone; it asks before clearing anything.
+                // Icons only, so all four fit on a phone; the titles stay as
+                // their accessibility labels. Discard asks before clearing anything.
                 Button(role: .destructive) { confirmingDiscard = true } label: {
                     Label("Discard draft", systemImage: "trash")
                 }
-                .labelStyle(.iconOnly)
                 .buttonStyle(.glass)
                 .disabled(!hasDraft || recorder.activeID != nil)
                 Spacer()
                 // Glass rather than a plain tint: the form scrolls under this
                 // bar, and an unblurred button prints the rows through itself.
-                Button { saveFood() } label: { Label("Save food entry", systemImage: "fork.knife") }
+                Button { saveFood() } label: { Label("Food", systemImage: "fork.knife") }
                     .buttonStyle(.glass)
                     .disabled(!canSaveFood)
                     .accessibilityHint(model.draft.files.allSatisfy(\.isFoodMedia) ? ""
                         : "Food entries hold photos, videos and recordings only.")
                 Spacer()
-                Button { save() } label: { Label("Save entry", systemImage: "checkmark") }
+                Button { saveSpending() } label: { Label("Spent", systemImage: "banknote") }
+                    .buttonStyle(.glass)
+                    .disabled(!canSaveSpending)
+                    .accessibilityLabel("Save spending")
+                    .accessibilityHint(model.draft.files.allSatisfy(\.isSpendingMedia) ? ""
+                        : "Spending entries hold photos and recordings only.")
+                Spacer()
+                Button { save() } label: { Label("Save", systemImage: "checkmark") }
                     .buttonStyle(.borderedProminent)
                     .disabled(!canSave || saving)
             }
+            .labelStyle(.iconOnly)
             .controlSize(.large)
             .padding()
         }
         .onChange(of: text) { _, value in if !value.isEmpty { saved = false } }
+        .onChange(of: typing) { _, focused in if focused { typingText = false } }
+        .onChange(of: typingText) { _, focused in if focused { typing = false } }
         .alert("Discard this draft?", isPresented: $confirmingDiscard) {
             Button("Discard", role: .destructive) { discard() }
             Button("Cancel", role: .cancel) {}
@@ -284,7 +369,7 @@ private struct CaptureComposer: View {
 
     private func discard() {
         guard model.discardComposerDraft() else { return }
-        text = ""; draftLinks = ""; youtubeURL = ""; saved = false; typing = false
+        text = ""; draftLinks = ""; youtubeURL = ""; saved = false; typing = false; typingText = false
     }
 
     private func save() {
@@ -293,7 +378,11 @@ private struct CaptureComposer: View {
         // Read now, as tapped: the words must not wait behind rendering the notes.
         let words = text, chosen = links
         guard let notes else {
-            if model.saveEntry(words, youtubeURLs: chosen) { cleared() }
+            // Save is the button under the thumb, pressed for a plate or a
+            // receipt as often as for a thought. When the draft could be
+            // either, the server reads it and files it where it belongs.
+            let couldBeElsewhere = chosen.isEmpty && (canSaveFood || canSaveSpending)
+            if model.saveEntry(words, youtubeURLs: chosen, autoFile: couldBeElsewhere) { cleared() }
             return
         }
         saving = true
@@ -308,13 +397,21 @@ private struct CaptureComposer: View {
     }
 
     private func cleared() {
-        text = ""; draftLinks = ""; saved = true; typing = false
+        text = ""; draftLinks = ""; saved = true; typing = false; typingText = false
     }
 
     private func saveFood() {
         // Links, a half-typed URL and the notes are left where they are, for the next entry.
         if model.saveEntry(text, youtubeURLs: [], kind: .food) {
-            text = ""; saved = true; typing = false
+            text = ""; saved = true; typing = false; typingText = false
+        }
+    }
+
+    /// The same as a meal, filed as a purchase: the server reads the amount,
+    /// the merchant and the category out of the receipt and what was said.
+    private func saveSpending() {
+        if model.saveEntry(text, youtubeURLs: [], kind: .spending) {
+            text = ""; saved = true; typing = false; typingText = false
         }
     }
 }
@@ -325,13 +422,14 @@ private struct CaptureComposer: View {
 ///
 /// Shared by the Capture tab (`entryID` nil, its own draft) and by editing a
 /// journal entry or a meal, where everything lands in that entry's draft and
-/// is sent only when the edit is saved. `foodOnly` limits Attach file to what
-/// the food log keeps: pictures, videos and voice memos.
+/// is sent only when the edit is saved. `kind` limits Attach file to what that
+/// log keeps: pictures, videos and voice memos for a meal, no videos for a
+/// purchase.
 struct AttachmentButtons: View {
     @ObservedObject var model: CaptureModel
     @ObservedObject var recorder: Recorder
     var entryID: String? = nil
-    var foodOnly = false
+    var kind: CaptureKind = .journal
     /// Called when a button is used: the composer clears its "Saved" note and
     /// drops the keyboard.
     var onUse: () -> Void = {}
@@ -339,12 +437,37 @@ struct AttachmentButtons: View {
     @State private var showFiles = false
     @State private var photoItems: [PhotosPickerItem] = []
 
+    /// What Choose photo offers: a purchase keeps pictures only, a meal takes
+    /// videos too, and the journal takes Live Photos as well.
+    private var pickable: PHPickerFilter {
+        switch kind {
+        case .journal: return .any(of: [.images, .livePhotos, .videos])
+        case .food: return .any(of: [.images, .videos])
+        case .spending: return .images
+        }
+    }
+
+    private var importable: [UTType] {
+        switch kind {
+        case .journal: return [.item]
+        case .food: return [.image, .movie, .audio]
+        case .spending: return [.image, .audio]
+        }
+    }
+
     var body: some View {
         Group {
             if recorder.activeID != nil {
-                Button(role: .destructive) { recorder.stop() } label: {
-                    Label("Stop recording", systemImage: "stop.circle.fill")
+                // Where Record and Transcribe were: the thumb that started the
+                // clip doesn't have to cross the row to stop it.
+                HStack {
+                    Spacer()
+                    Button(role: .destructive) { recorder.stop() } label: {
+                        Label("Stop recording", systemImage: "stop.circle.fill")
+                    }
                 }
+                // A plain button in a list row claims the whole row.
+                .buttonStyle(.borderless)
             } else {
                 // Most-used last: the right end of the row is under the thumb.
                 HStack {
@@ -352,11 +475,16 @@ struct AttachmentButtons: View {
                         Label("Attach file", systemImage: "paperclip")
                     }
                     Spacer()
-                    PhotosPicker(selection: $photoItems, matching: .images) {
+                    // `.current`: the original file, not a re-encoded copy, so a
+                    // photo keeps its EXIF and a video its creation date.
+                    PhotosPicker(selection: $photoItems, matching: pickable, preferredItemEncoding: .current) {
                         Label("Choose photo", systemImage: "photo.on.rectangle")
                     }
                     Spacer()
-                    Button { onUse(); showCamera = true } label: {
+                    // The camera hands back pixels without the photo's GPS,
+                    // so a fresh fix is what places a meal. Asked for now so it
+                    // has landed by the time the capture is saved.
+                    Button { onUse(); model.location.refresh(); showCamera = true } label: {
                         Label("Take photo", systemImage: "camera")
                     }.disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
                     Spacer()
@@ -375,13 +503,16 @@ struct AttachmentButtons: View {
             }
         }
         .fullScreenCover(isPresented: $showCamera) {
-            CameraPicker { image in
-                guard let data = image.jpegData(compressionQuality: 0.9) else { return }
-                model.stage { try $0.stageFile(data: data, name: photoName("jpg"), contentType: "image/jpeg", into: entryID) }
+            CameraPicker(allowsVideo: kind != .spending) { shot in
+                switch shot {
+                case .photo(let image, let metadata): model.stageCameraPhoto(image, metadata: metadata, into: entryID)
+                case .movie(let url): Task { await model.stageMovie(url, contentType: "video/quicktime", into: entryID,
+                                                                     capturedAt: Date()) }
+                }
                 onUse()
             }.ignoresSafeArea()
         }
-        .fileImporter(isPresented: $showFiles, allowedContentTypes: foodOnly ? [.image, .movie, .audio] : [.item],
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: importable,
                       allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
             for url in urls {
@@ -401,16 +532,26 @@ struct AttachmentButtons: View {
 
     private func stagePhoto(_ item: PhotosPickerItem) async {
         do {
+            // A Live Photo first: loaded as a still it would lose its clip.
+            if kind == .journal, item.supportedContentTypes.contains(where: { $0.conforms(to: .livePhoto) }),
+               let live = try await item.loadTransferable(type: PHLivePhoto.self),
+               let files = try await MediaImport.export(live) {
+                model.stageLivePhoto(files, into: entryID)
+                onUse()
+                return
+            }
+            if let type = item.supportedContentTypes.first(where: { $0.conforms(to: .movie) }) {
+                guard let movie = try await item.loadTransferable(type: MediaImport.Movie.self) else { return }
+                await model.stageMovie(movie.url, contentType: type.preferredMIMEType, into: entryID)
+                onUse()
+                return
+            }
             guard let data = try await item.loadTransferable(type: Data.self) else { return }
             let type = item.supportedContentTypes.first { $0.conforms(to: .image) }
-            model.stage { try $0.stageFile(data: data, name: photoName(type?.preferredFilenameExtension ?? "jpg"),
+            model.stage { try $0.stageFile(data: data, name: CaptureModel.photoName(type?.preferredFilenameExtension ?? "jpg"),
                                            contentType: type?.preferredMIMEType, into: entryID) }
             onUse()
         } catch { model.message = error.localizedDescription }
-    }
-
-    private func photoName(_ ext: String) -> String {
-        "Photo \(Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))).\(ext)"
     }
 }
 
@@ -463,6 +604,61 @@ struct StagedAttachmentRows: View {
     }
 }
 
+/// Keep ordinary text editing while routing clipboard pictures to the draft.
+struct CaptureEntryEditor: UIViewRepresentable {
+    @Binding var text: String
+    var focused: Binding<Bool>
+    var onPasteImage: (UIImage) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> CaptureEntryTextView {
+        let view = CaptureEntryTextView()
+        view.delegate = context.coordinator
+        view.backgroundColor = .clear
+        view.font = .preferredFont(forTextStyle: .body)
+        view.adjustsFontForContentSizeCategory = true
+        view.accessibilityLabel = "Journal text"
+        view.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        view.onPasteImage = onPasteImage
+        return view
+    }
+
+    func updateUIView(_ view: CaptureEntryTextView, context: Context) {
+        context.coordinator.parent = self
+        view.onPasteImage = onPasteImage
+        if view.text != text { view.text = text }
+        if focused.wrappedValue, !view.isFirstResponder { view.becomeFirstResponder() }
+        if !focused.wrappedValue, view.isFirstResponder { view.resignFirstResponder() }
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: CaptureEntryEditor
+        init(_ parent: CaptureEntryEditor) { self.parent = parent }
+        func textViewDidChange(_ textView: UITextView) { parent.text = textView.text }
+        func textViewDidBeginEditing(_ textView: UITextView) { parent.focused.wrappedValue = true }
+        func textViewDidEndEditing(_ textView: UITextView) { parent.focused.wrappedValue = false }
+    }
+}
+
+final class CaptureEntryTextView: UITextView {
+    var onPasteImage: ((UIImage) -> Void)?
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), UIPasteboard.general.hasImages { return true }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        let clipboard = UIPasteboard.general
+        if clipboard.hasImages, let images = clipboard.images, !images.isEmpty, let onPasteImage {
+            for image in images { onPasteImage(image) }
+            return
+        }
+        super.paste(sender)
+    }
+}
+
 /// The YouTube links going onto an entry, and the field a new one is typed in.
 struct YouTubeLinksSection: View {
     @ObservedObject var model: CaptureModel
@@ -482,6 +678,14 @@ struct YouTubeLinksSection: View {
                     .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                     .focused(typing)
                     .onSubmit { if Self.add(typed: $typed, to: $links, model: model) { onChange() } }
+                PasteButton(payloadType: String.self) { values in
+                    guard let value = values.first else { return }
+                    typed = value
+                    if Self.add(typed: $typed, to: $links, model: model) { onChange() }
+                }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Paste and add YouTube link")
+                .accessibilityIdentifier("youtube-paste")
                 Button("Add link") { if Self.add(typed: $typed, to: $links, model: model) { onChange() } }
                     .disabled(typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -534,29 +738,80 @@ private struct StagedFileRow: View {
     @ObservedObject var model: CaptureModel
     let file: CaptureFile
 
+    @State private var poster: UIImage?
+
     var body: some View {
         HStack {
             if file.isImage, let url = try? model.store.fileURL(file), let image = UIImage(contentsOfFile: url.path) {
                 Image(uiImage: image).resizable().scaledToFill()
                     .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(alignment: .topLeading) { if file.isLivePhoto { LiveBadge() } }
+            } else if file.isVideo {
+                ZStack {
+                    if let poster { Image(uiImage: poster).resizable().scaledToFill() } else { Color.black }
+                    Image(systemName: "play.fill").font(.caption).foregroundStyle(.white)
+                }
+                .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 6))
+                .task(id: file.id) {
+                    guard let url = try? model.store.fileURL(file) else { return }
+                    poster = await MediaImport.poster(of: url, mime: file.contentType, size: 88)
+                }
             } else {
                 Image(systemName: "doc").frame(width: 44, height: 44)
             }
-            Text(file.name).lineLimit(1).truncationMode(.middle)
+            VStack(alignment: .leading) {
+                Text(file.name).lineLimit(1).truncationMode(.middle)
+                if let taken = file.capturedAt, !Calendar.current.isDateInToday(taken) {
+                    Text("Taken \(taken.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
+    }
+}
+
+/// The Photos app's mark for a Live Photo, small enough for a thumbnail.
+struct LiveBadge: View {
+    var body: some View {
+        Image(systemName: "livephoto").font(.caption2.weight(.semibold)).foregroundStyle(.white)
+            .padding(3).background(.black.opacity(0.5), in: Circle()).padding(2)
+            .accessibilityLabel("Live Photo")
     }
 }
 
 /// The system camera. iOS has no SwiftUI camera, so this wraps UIKit's.
 struct CameraPicker: UIViewControllerRepresentable {
+    /// A photo with what the camera wrote about it, or a video it recorded
+    /// (a file of our own, since the camera's is deleted once it closes).
+    enum Shot {
+        case photo(UIImage, metadata: [String: Any]?)
+        case movie(URL)
+    }
+
     var front = false
-    let onImage: (UIImage) -> Void
+    var allowsVideo = false
+    let onShot: (Shot) -> Void
     @Environment(\.dismiss) private var dismiss
+
+    init(front: Bool = false, onImage: @escaping (UIImage) -> Void) {
+        self.front = front
+        onShot = { if case .photo(let image, _) = $0 { onImage(image) } }
+    }
+
+    init(allowsVideo: Bool, onShot: @escaping (Shot) -> Void) {
+        self.allowsVideo = allowsVideo
+        self.onShot = onShot
+    }
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
         picker.sourceType = .camera
+        if allowsVideo {
+            picker.mediaTypes = [UTType.image.identifier, UTType.movie.identifier]
+            picker.videoQuality = .typeHigh
+        }
         if front && UIImagePickerController.isCameraDeviceAvailable(.front) { picker.cameraDevice = .front }
+        if front { picker.cameraFlashMode = .off }
         picker.delegate = context.coordinator
         return picker
     }
@@ -570,7 +825,13 @@ struct CameraPicker: UIViewControllerRepresentable {
 
         func imagePickerController(_ picker: UIImagePickerController,
                                    didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            if let image = info[.originalImage] as? UIImage { parent.onImage(image) }
+            if let movie = info[.mediaURL] as? URL {
+                let copy = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                    .appendingPathExtension(movie.pathExtension.isEmpty ? "mov" : movie.pathExtension)
+                if (try? FileManager.default.copyItem(at: movie, to: copy)) != nil { parent.onShot(.movie(copy)) }
+            } else if let image = info[.originalImage] as? UIImage {
+                parent.onShot(.photo(image, metadata: info[.mediaMetadata] as? [String: Any]))
+            }
             parent.dismiss()
         }
 
@@ -578,15 +839,19 @@ struct CameraPicker: UIViewControllerRepresentable {
     }
 }
 
-/// The Journal tab: Sync on the left on both pages, and a switch on the right
-/// between the journal and the calendar.
+/// The Journal tab: Sync on the left on every page, and a switch on the right
+/// between the journal, the calendar, and the entries waiting for context.
 private struct JournalTab: View {
     enum Page: String, CaseIterable, Identifiable {
-        case journal = "Journal", calendar = "Calendar"
+        case journal = "Journal", calendar = "Calendar", context = "Context"
         var id: Self { self }
     }
 
     @ObservedObject var model: CaptureModel
+    @ObservedObject var context: JournalContextModel
+    // Not observed: Chat publishes on every refresh tick, and each one would
+    // redraw the whole feed. Only the Context page watches it.
+    let chat: ChatModel
     @SceneStorage("journalTabPage") private var page = Page.journal
 
     var body: some View {
@@ -594,9 +859,11 @@ private struct JournalTab: View {
             switch page {
             case .journal: JournalFeedView(model: model)
             case .calendar: CalendarPage(model: model)
+            case .context: JournalContextPage(context: context, capture: model, chat: chat)
             }
         }
         .onChange(of: page) { _, page in if page == .calendar { model.requestSync() } }
+        .task { await context.refresh() }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 if model.syncing { ProgressView() }
@@ -604,12 +871,28 @@ private struct JournalTab: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Picker("Journal page", selection: $page) {
-                    ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                    // Icons: three words don't fit beside Sync on a phone, and the
+                    // bar would fold the whole switch into its overflow menu.
+                    ForEach(Page.allCases) { page in
+                        Image(systemName: symbol(page)).tag(page)
+                            .accessibilityLabel(page == .context && !context.prompts.isEmpty
+                                                ? "\(page.rawValue) \(context.prompts.count)" : page.rawValue)
+                    }
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()
                 .accessibilityIdentifier("journal-page")
             }
+        }
+    }
+
+    /// Context's bubble fills while anything is waiting, so the backlog is
+    /// noticed from the other pages.
+    private func symbol(_ page: Page) -> String {
+        switch page {
+        case .journal: return "book"
+        case .calendar: return "calendar"
+        case .context: return context.prompts.isEmpty ? "text.bubble" : "text.bubble.fill"
         }
     }
 }
@@ -653,7 +936,7 @@ struct CaptureDetail: View {
                     details(capture)
                 }
             }
-            .navigationTitle(capture.snapshot?.title ?? (capture.kind == .food ? "Meal" : "Capture"))
+            .navigationTitle(capture.snapshot?.title ?? (capture.kind == .food ? "Meal" : capture.kind == .spending ? "Purchase" : "Capture"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // Only while the server certainly has none of it: a re-sent
@@ -670,6 +953,7 @@ struct CaptureDetail: View {
     @ViewBuilder private func details(_ capture: Capture) -> some View {
         Section {
             if capture.kind == .food { Label("Food log entry", systemImage: "fork.knife") }
+            if capture.kind == .spending { Label("Spending entry", systemImage: "banknote") }
             Text(capture.createdAt, format: .dateTime)
             Text(captureStatus(capture))
             if let error = capture.lastError { Text(error).foregroundStyle(.orange) }
@@ -749,24 +1033,41 @@ private struct AudioPreview: View {
 
 // The last tab: everything that doesn't earn a slot of its own. The iPhone
 // shows five tabs before iOS adds its own More overflow, so this owns that slot.
+// A compact iPad window has the same five, and its iPad-only Study and Draw
+// come in here too.
 private struct MoreMenu: View {
     @ObservedObject var model: CaptureModel
     @ObservedObject var learning: LearningModel
+    var showsStudyAndDraw = false
 
     var body: some View {
         List {
+            if showsStudyAndDraw {
+                NavigationLink { StudyLibraryView(model: model) } label: {
+                    Label("Study", systemImage: "doc.text")
+                }.accessibilityIdentifier("more-Study")
+                NavigationLink { DrawingLibraryView(model: model) } label: {
+                    Label("Draw", systemImage: "pencil.tip")
+                }.accessibilityIdentifier("more-Draw")
+            }
             NavigationLink { LibraryView(model: model) } label: {
                 Label("Library", systemImage: "books.vertical")
             }.accessibilityIdentifier("more-Library")
             NavigationLink { JobsFeedView(capture: model) } label: {
                 Label("Jobs", systemImage: "briefcase")
             }.accessibilityIdentifier("more-Jobs")
+            NavigationLink { WritingRootView(capture: model) } label: {
+                Label("Writing", systemImage: "text.book.closed")
+            }.accessibilityIdentifier("more-Writing")
             NavigationLink { LearningView(learning: learning) } label: {
                 Label("Learning", systemImage: "graduationcap")
             }
             // Cards due for review, as the desktop's Review button counts them.
             .badge(learning.stats.due)
             .accessibilityIdentifier("more-Learning")
+            NavigationLink { PlacesScreen(model: model) } label: {
+                Label("Places", systemImage: "mappin.and.ellipse")
+            }.accessibilityIdentifier("more-Places")
             NavigationLink { ConnectionSettings(model: model) } label: {
                 Label("Settings", systemImage: "gear")
             }.accessibilityIdentifier("more-Settings")
@@ -833,11 +1134,81 @@ private struct ConnectionSettings: View {
                 Text("Hear what you got wrong. For answers given while this is on, a short summary of what you missed is read aloud on the results, using your server's text-to-speech.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            LocationTrailSettings(model: model, trail: model.trail)
+            Section {
+                NavigationLink { PlacesScreen(model: model) } label: {
+                    Label("Places, Home & Work", systemImage: "mappin.and.ellipse")
+                }.accessibilityIdentifier("settings-places")
+            } footer: {
+                Text("Your Home and Works are watched as geofences while the trail is on, so the calendar's workday follows when you actually arrive and leave.")
+            }
             if model.healthAvailable { HealthSettings(model: model) }
             IntelligenceAvailabilityView()
         }
         .navigationTitle("Settings")
         .onAppear { address = model.server?.absoluteString ?? address }
+    }
+}
+
+/// The background trail behind the Journal's daily map. Most of this section
+/// is about permission, because that is where it goes wrong: iOS asks for
+/// Always at most once, and every later change has to be made in the Settings
+/// app, so the section says plainly what's missing and links there.
+private struct LocationTrailSettings: View {
+    @ObservedObject var model: CaptureModel
+    @ObservedObject var trail: LocationTracker
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        Section("Location") {
+            Toggle("Record where I go", isOn: Binding(
+                get: { trail.enabled },
+                set: { $0 ? trail.enable() : trail.disable() }))
+                .accessibilityIdentifier("settings-location-trail")
+            if trail.enabled {
+                if let problem {
+                    Text(problem).font(.footnote).foregroundStyle(.orange)
+                    Button("Open iOS Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                    }
+                } else {
+                    Text(trail.mode == .fine ? "Recording your route now." : "Watching for walks and places, in low-power mode.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                let status = trail.status
+                if let last = status.lastSuccess {
+                    Text("Last uploaded \(last.formatted(date: .abbreviated, time: .shortened)) · \(trail.pending.formatted()) waiting")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else if trail.pending > 0 {
+                    Text("\(trail.pending.formatted()) points waiting to upload.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                if let error = status.lastError {
+                    Text(error).font(.footnote).foregroundStyle(.red)
+                }
+                if trail.pending > 0 {
+                    Button("Upload now") { model.requestSync(manual: true) }.disabled(model.syncing)
+                }
+            }
+            Text("Records the places you stop at, and your route while you walk, run or cycle, and draws a map of each day in your journal with a pin wherever you wrote an entry. Precise GPS runs only while you're moving on foot or by bike; the rest of the day uses iOS's low-power location. Everything goes only to your own Lunaschal server.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    /// What stops the trail from being recorded, if anything.
+    private var problem: String? {
+        switch trail.authorization {
+        case .denied, .restricted:
+            return "Location access is off for Lunaschal. Turn it on and choose Always: Settings → Lunaschal → Location."
+        case .authorizedWhenInUse:
+            return "Location is set to While Using, so nothing is recorded while Lunaschal is closed. Choose Always: Settings → Lunaschal → Location."
+        case .notDetermined:
+            return nil
+        default:
+            return trail.reducedAccuracy
+                ? "Precise Location is off, so every point is blurred by kilometres. Turn on Precise Location: Settings → Lunaschal → Location."
+                : nil
+        }
     }
 }
 

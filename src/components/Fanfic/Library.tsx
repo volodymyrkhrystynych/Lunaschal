@@ -192,6 +192,7 @@ export function Library({ onOpen }: LibraryProps) {
       if (r.newImports)
         parts.push(`${r.newImports} new import${r.newImports > 1 ? 's' : ''}`);
       if (r.skippedActive) parts.push(`${r.skippedActive} already queued`);
+      if (r.skippedFresh) parts.push(`${r.skippedFresh} already up to date`);
       if (parts.length === 0)
         parts.push(`no library threads among ${r.alertsSeen} alerts`);
       const siteErrors = Object.entries(r.errors).map(
@@ -305,6 +306,11 @@ export function Library({ onOpen }: LibraryProps) {
                   [null, 'All', 'Books ordered by latest chapter publication'],
                   ['recent', 'Recent', 'Books ordered by most recently opened'],
                   ['unsorted', 'Unsorted', 'Books not assigned to a folder'],
+                  [
+                    'backlog',
+                    'Backlog',
+                    'Imported, but on none of your lists on the site (watched, bookmarked, followed, favorited)',
+                  ],
                 ].map(([id, label, title]) => (
                   <TagPill
                     key={label}

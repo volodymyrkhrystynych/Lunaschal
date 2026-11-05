@@ -51,6 +51,12 @@ describe('distanceLabel', () => {
     expect(distanceLabel(job({ distanceKm: null }))).toBeNull();
   });
 
+  it('names the current Home when the commute is measured from it', () => {
+    expect(
+      distanceLabel(job({ distanceKm: 12, distancePrecision: 'exact' }), 'Home')
+    ).toBe('12 km from Home');
+  });
+
   it('drops the tilde only when the board posted real coordinates', () => {
     expect(
       distanceLabel(job({ distanceKm: 12, distancePrecision: 'exact' }))

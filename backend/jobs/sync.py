@@ -349,11 +349,15 @@ def recompute_distances(db) -> int:
     rows had — and, because the writer is guarded on `distance_km IS NULL`, it
     could only be recovered by a re-triage. A reading that *can* be recomputed
     is still refreshed, so a gazetteer improvement reaches every row it should.
+
+    Every reading is measured from `distance.anchor()` — the current Home — so
+    changing Home (`backend/routes/memory.py`) re-runs this pass too.
     """
     rows = db.execute(
-        'SELECT id, location, raw, distance_precision FROM jobs WHERE dismissed=0'
+        'SELECT id, location, raw, distance_precision, distance_place FROM jobs WHERE dismissed=0'
     ).fetchall()
 
+    origin = distance.anchor()[0]
     changed = 0
     for row in rows:
         job = {'location': row['location'] or ''}
@@ -364,8 +368,15 @@ def recompute_distances(db) -> int:
                 raw = None
             if isinstance(raw, dict):
                 job['latitude'], job['longitude'] = _stored_coords(raw)
-        reading = distance.reading_for(job)
+        reading = distance.reading_for(job, origin)
         if reading is None and row['distance_precision'] == 'inferred':
+            # Re-measured from the key the model pointed at, so a moved Home
+            # reaches these rows too; one stored before the key was kept has
+            # nothing to re-measure and keeps its reading.
+            inferred = distance.resolve_keys([row['distance_place']], origin) if row['distance_place'] else None
+            if inferred is not None:
+                db.execute('UPDATE jobs SET distance_km=? WHERE id=?', (inferred.km, row['id']))
+                changed += 1
             continue
         db.execute(
             'UPDATE jobs SET distance_km=?, distance_precision=? WHERE id=?',

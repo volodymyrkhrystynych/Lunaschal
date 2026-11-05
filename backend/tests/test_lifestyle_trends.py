@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 
 from ulid import ULID
 
+from backend.day_boundary import day_key_for
 from backend.db.connection import get_db
 from backend.lifestyle.trends import week_start, weekly_series
 
@@ -99,7 +100,7 @@ def _insert_email(day: date, *, category='job_application', job_status='sent') -
 
 
 def test_trends_counts_this_week_on_both_series(client):
-    today = date.today()
+    today = date.fromisoformat(day_key_for())  # the route's 4am day, not the wall clock
     _insert_journal(today)
     _insert_journal(today)
     _insert_email(today)
@@ -112,7 +113,7 @@ def test_trends_counts_this_week_on_both_series(client):
 
 
 def test_trends_only_counts_applications_that_were_sent(client):
-    today = date.today()
+    today = date.fromisoformat(day_key_for())  # the route's 4am day, not the wall clock
     _insert_email(today, job_status='rejection')
     _insert_email(today, job_status='interview_next_step')
     _insert_email(today, category='newsletter', job_status=None)
@@ -139,7 +140,7 @@ def test_trends_defaults_to_26_weeks_and_clamps_absurd_requests(client):
 
 
 def test_trends_ignores_entries_older_than_the_window(client):
-    today = date.today()
+    today = date.fromisoformat(day_key_for())  # the route's 4am day, not the wall clock
     _insert_journal(today - timedelta(weeks=6))
     _insert_journal(today)
     weeks = client.get('/api/lifestyle/trends?weeks=2').get_json()['weeks']

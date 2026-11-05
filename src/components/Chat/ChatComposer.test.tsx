@@ -37,6 +37,7 @@ vi.mock('../../hooks/api', () => ({
       deny: vi.fn(),
     },
     notes: { due: vi.fn().mockResolvedValue([]) },
+    journal: { contextPrompts: vi.fn().mockResolvedValue([]) },
     chatTodos: { list: vi.fn().mockResolvedValue([]) },
   },
 }));

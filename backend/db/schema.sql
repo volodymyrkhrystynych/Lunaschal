@@ -28,10 +28,42 @@ CREATE TABLE IF NOT EXISTS mobile_sync_operations (
     created_at INTEGER NOT NULL
 );
 
+-- Goal rules are immutable; corrections come from the original source records.
+CREATE TABLE IF NOT EXISTS goals (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    criteria TEXT NOT NULL,
+    reward TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    target_days INTEGER NOT NULL CHECK(target_days BETWEEN 1 AND 366),
+    exercise TEXT,
+    minimum_reps INTEGER,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','earned','redeemed','cancelled','needs_review')),
+    earned_at INTEGER,
+    redeemed_at INTEGER,
+    last_checked_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS goal_days (
+    id TEXT PRIMARY KEY,
+    goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK(verdict IN ('met','not_met','uncertain')),
+    evidence TEXT NOT NULL DEFAULT '[]',
+    error TEXT,
+    checked_at INTEGER NOT NULL,
+    UNIQUE(goal_id,date)
+);
+
 CREATE TABLE IF NOT EXISTS journal_entries (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
     raw_content TEXT,
+    context_prompt_day TEXT,
+    context_prompt_status TEXT NOT NULL DEFAULT 'pending',
     title TEXT,
     tags TEXT,
     -- Where the entry was written, asked for explicitly by the composer's
@@ -43,6 +75,11 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     -- this (backend/routes/journal.py's _entry_coords fallback).
     latitude REAL,
     longitude REAL,
+    -- 'device' (that fix) or 'trail': an entry that arrived with no fix of its
+    -- own -- from the Watch, a standalone recording, a fix gone stale -- is
+    -- placed where the phone's location trail was at that moment
+    -- (backend/journal/location.py). The phone, Watch and iPad travel together.
+    location_source TEXT,
     -- The weather where and when the entry was written, as JSON
     -- (backend/weather/entry.py). Filled in by a sweep after the entry lands,
     -- so an offline capture uploaded hours later still gets the weather of its
@@ -110,6 +147,17 @@ CREATE TABLE IF NOT EXISTS journal_attachments (
     -- row predating this, reads as finished rather than as stuck importing.
     import_status TEXT NOT NULL DEFAULT 'ready',
     import_error TEXT,
+    -- When the photo or video was *taken*, as distinct from created_at (when it
+    -- was attached). The phone sends it (EXIF DateTimeOriginal with its offset,
+    -- or a movie's QuickTime creation date); failing that the server reads it
+    -- from the file. NULL means unknown — read it as created_at.
+    captured_at INTEGER,
+    -- A Live Photo is one image attachment plus the short clip that plays when
+    -- it is pressed. The still is `path` (and is what gets captioned); the clip
+    -- sits beside it at motion_path. NULL for everything that is not one.
+    motion_path TEXT,
+    motion_mime TEXT,
+    motion_size INTEGER,
     created_at INTEGER NOT NULL
 );
 
@@ -159,6 +207,21 @@ CREATE TABLE IF NOT EXISTS saved_places (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+-- Home and Work as dated roles over saved places (backend/place_roles.py).
+-- Half-open 4am-day ranges [started_on, ended_on); ended_on NULL is current.
+-- A move is a new place and a new period, so the old one keeps its history;
+-- RESTRICT so deleting a place cannot silently erase where the user lived.
+CREATE TABLE IF NOT EXISTS place_roles (
+    id TEXT PRIMARY KEY,
+    role TEXT NOT NULL CHECK (role IN ('home', 'work')),
+    place_id TEXT NOT NULL REFERENCES saved_places(id) ON DELETE RESTRICT,
+    started_on TEXT NOT NULL,
+    ended_on TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_place_roles_role ON place_roles(role, started_on);
 
 CREATE TABLE IF NOT EXISTS calendar_events (
     id TEXT PRIMARY KEY,
@@ -322,6 +385,49 @@ CREATE TABLE IF NOT EXISTS health_daily (
     PRIMARY KEY (date, type)
 );
 
+-- The iPhone's background location trail (backend/location/), uploaded in
+-- batches like Health. Keyed by an id the phone minted, so a batch replayed
+-- after a lost reply changes nothing -- and a visit, which iOS reports once on
+-- arrival and again on departure, is the same row both times. Times are REAL
+-- unix seconds read raw (`*_ts`), as in health_samples. `day_key` is the 4am
+-- day of the fix, stored because grouping millions of fixes by a computed day
+-- is the Journal card's whole query.
+CREATE TABLE IF NOT EXISTS location_points (
+    id TEXT PRIMARY KEY,
+    fix_ts REAL NOT NULL,
+    day_key TEXT NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    accuracy_m REAL,
+    altitude_m REAL,
+    speed_mps REAL,
+    kind TEXT NOT NULL,                   -- 'fine' | 'coarse' | 'visit'
+    departed_ts REAL,                     -- a visit's departure; NULL while still there
+    received_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_location_points_day ON location_points(day_key, fix_ts);
+-- "Where was the phone at this moment" (weather and meals without their own
+-- coordinates, backend/location/lookup.py) searches by time alone.
+CREATE INDEX IF NOT EXISTS idx_location_points_ts ON location_points(fix_ts);
+
+-- What backend/location/work_calendar.py wrote to the calendar for one 4am day
+-- of being at work: the occurrence of the recurring work event it moved to the
+-- real arrival/departure, or the one-off event it created when none was
+-- scheduled. `written_*` is what it last wrote, so a later edit by the user
+-- (the stored times no longer match) is noticed and the day is `released`:
+-- never touched again.
+CREATE TABLE IF NOT EXISTS work_attendance (
+    day_key TEXT PRIMARY KEY,
+    event_id TEXT REFERENCES calendar_events(id) ON DELETE SET NULL,
+    occurrence_date TEXT,           -- set when a recurring occurrence was moved
+    created_event INTEGER NOT NULL DEFAULT 0,
+    place_name TEXT NOT NULL,
+    written_time TEXT,
+    written_end_time TEXT,
+    released INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS mcp_servers (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
@@ -339,6 +445,11 @@ CREATE TABLE IF NOT EXISTS learning_folders (
     name TEXT UNIQUE NOT NULL,
     position INTEGER NOT NULL DEFAULT 0,
     evidence_provider_id TEXT REFERENCES mcp_servers(id) ON DELETE SET NULL,
+    -- Set on a folder the app owns ('review' = For review): it is created at
+    -- startup and cannot be renamed or deleted. NULL for the user's own.
+    -- Unique through idx_learning_folders_system, which connection.py makes
+    -- (ALTER TABLE ADD COLUMN cannot carry UNIQUE for an older database).
+    system_key TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -359,12 +470,28 @@ CREATE TABLE IF NOT EXISTS learning_cards (
     generation_context TEXT,
     fsrs_state TEXT,
     due INTEGER,
+    -- 'review' is a card with no back side: the pages of a journal entry the
+    -- user wrote (source_type 'journal_review', source_id = the entry), read
+    -- and self-rated. backend/learning/review_cards.py.
+    kind TEXT NOT NULL DEFAULT 'qa' CHECK(kind IN ('qa','review')),
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_learning_cards_due ON learning_cards(state, due);
 CREATE INDEX IF NOT EXISTS idx_learning_cards_folder ON learning_cards(folder_id, state);
+-- One review card per entry, so a replayed create cannot make a second.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_cards_journal_review
+    ON learning_cards(source_id) WHERE source_type = 'journal_review';
+
+-- A review card is the entry's pages; with the entry gone it has nothing to
+-- show. A trigger rather than a line in each of journal.py's delete paths.
+CREATE TRIGGER IF NOT EXISTS delete_review_card_with_journal_entry
+AFTER DELETE ON journal_entries
+BEGIN
+    DELETE FROM learning_cards
+    WHERE source_type = 'journal_review' AND source_id = OLD.id;
+END;
 
 CREATE TABLE IF NOT EXISTS learning_reviews (
     id TEXT PRIMARY KEY,
@@ -418,6 +545,34 @@ CREATE TABLE IF NOT EXISTS learning_revisions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_learning_revisions_new ON learning_revisions(new_card_id);
+
+-- One lesson a coding agent wrote into a daily learnings file (or one pasted
+-- by hand), on its way to becoming cards. backend/learning/lessons.py.
+--
+-- Deduplicated on the lesson's own text, not the file: a daily file is
+-- appended to all day, so re-importing it must add only the new sections.
+-- A lesson never becomes a card directly — the model first asks whether an
+-- existing card already covers it ('covered', with the card and the reason),
+-- and only otherwise generates pending cards into the approval queue.
+CREATE TABLE IF NOT EXISTS learning_lessons (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL CHECK(source IN ('upload','inbox')),
+    source_name TEXT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    content_hash TEXT NOT NULL UNIQUE,
+    folder_id TEXT REFERENCES learning_folders(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','carded','covered','error')),
+    covered_by TEXT REFERENCES learning_cards(id) ON DELETE SET NULL,
+    reason TEXT,
+    card_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    processed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_lessons_created ON learning_lessons(created_at);
 
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
@@ -617,12 +772,58 @@ CREATE TABLE IF NOT EXISTS writing_context_docs (
     title TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
     doc_type TEXT NOT NULL DEFAULT 'note',
+    -- Read into every turn of the project's discussions (backend/writing/discuss.py).
+    -- Replaced a checkbox set the browser held, which a second client could not see.
+    pinned INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_writing_chapters_project ON writing_chapters(project_id, position);
 CREATE INDEX IF NOT EXISTS idx_writing_context_docs_project ON writing_context_docs(project_id);
+
+-- Copy-on-write history for a writing note, the user_memory_revisions pattern:
+-- `content`/`title` are the note as it stood BEFORE the change, which is what
+-- Restore puts back. `source` is 'edit' (the editor, coalesced per minute),
+-- 'accept' (a discussion's proposed update the author confirmed, with the
+-- message it came from) or 'restore'.
+CREATE TABLE IF NOT EXISTS writing_context_doc_revisions (
+    id TEXT PRIMARY KEY,
+    doc_id TEXT NOT NULL REFERENCES writing_context_docs(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL,
+    message_id TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_writing_doc_revisions_doc ON writing_context_doc_revisions(doc_id, created_at DESC);
+
+-- A canon source: one Fandom (MediaWiki) wiki imported from its XML dump into a
+-- docpack-format SQLite file under CANON_ROOT (backend/writing/canon_import.py).
+-- Deliberately not a knowledge_docpacks row — those are searched by every chat,
+-- and a fandom wiki belongs only to the projects it is linked to.
+CREATE TABLE IF NOT EXISTS writing_canon_sources (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    wiki_host TEXT,
+    source_url TEXT,
+    filename TEXT,
+    status TEXT NOT NULL DEFAULT 'importing' CHECK(status IN ('importing', 'ready', 'error')),
+    pages INTEGER NOT NULL DEFAULT 0,
+    chunks INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    licence TEXT NOT NULL DEFAULT 'CC BY-SA 3.0',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS writing_project_canon (
+    project_id TEXT NOT NULL REFERENCES writing_projects(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES writing_canon_sources(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, source_id)
+);
 
 CREATE TABLE IF NOT EXISTS daily_tasks (
     id TEXT PRIMARY KEY,
@@ -733,6 +934,16 @@ CREATE TABLE IF NOT EXISTS recipe_media (
 
 CREATE INDEX IF NOT EXISTS idx_recipe_media_recipe ON recipe_media(recipe_id);
 
+-- A journal entry moved into the food log or the spending ledger by
+-- auto-filing (backend/journal/refile.py), under the same id. The journal row
+-- is gone; this is what lets a replayed upload from the phone, still addressed
+-- to the journal entry, be answered rather than recreate it.
+CREATE TABLE IF NOT EXISTS journal_refiles (
+    entry_id TEXT PRIMARY KEY,
+    target_collection TEXT NOT NULL CHECK (target_collection IN ('food_entries', 'spending_logs')),
+    refiled_at INTEGER NOT NULL
+);
+
 -- Food log: what was eaten, where, whether it was good, plus photos/videos.
 -- Shown in both the Food tab and the Journal feed; stored once here.
 CREATE TABLE IF NOT EXISTS food_entries (
@@ -811,6 +1022,11 @@ CREATE TABLE IF NOT EXISTS fics (
     last_checked_at INTEGER,
     rating INTEGER CHECK(rating BETWEEN 1 AND 5),
     review TEXT,
+    -- Where the user has put this fic: dropped/finished are the archive and
+    -- leave the default library list. shelved_at is when it last moved.
+    shelf TEXT NOT NULL DEFAULT 'reading'
+        CHECK(shelf IN ('to_read','reading','paused','finished','dropped')),
+    shelved_at INTEGER,
     last_opened_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -864,6 +1080,7 @@ CREATE TABLE IF NOT EXISTS fanfic_watched_scans (
     imported INTEGER NOT NULL DEFAULT 0,
     already_in_library INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
+    pass_started_at INTEGER,
     updated_at INTEGER NOT NULL
 );
 
@@ -874,6 +1091,7 @@ CREATE TABLE IF NOT EXISTS fanfic_bookmark_scans (
     imported INTEGER NOT NULL DEFAULT 0,
     already_in_library INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
+    pass_started_at INTEGER,
     updated_at INTEGER NOT NULL
 );
 
@@ -904,6 +1122,7 @@ CREATE TABLE IF NOT EXISTS fanfic_collection_scans (
     error TEXT,
     retry_after INTEGER NOT NULL DEFAULT 0,
     attempts INTEGER NOT NULL DEFAULT 0,
+    pass_started_at INTEGER,
     updated_at INTEGER NOT NULL,
     UNIQUE(site, collection, username)
 );
@@ -966,6 +1185,52 @@ CREATE TABLE IF NOT EXISTS fic_chapter_reads (
 );
 
 CREATE INDEX IF NOT EXISTS idx_fcr_fic ON fic_chapter_reads(fic_id);
+
+-- What the forum showed as the user's own reaction on a chapter's post, seen
+-- on a reader page fetched while logged in: the proof a chapter was read.
+-- reaction NULL with a checked_at is "checked, not reacted"; no row is
+-- unknown. A logged-out fetch writes nothing, so a lost session cannot erase
+-- proof. Its own table so a refresh never re-sends a chapter's HTML.
+CREATE TABLE IF NOT EXISTS fic_chapter_reactions (
+    chapter_id TEXT PRIMARY KEY REFERENCES fic_chapters(id) ON DELETE CASCADE,
+    fic_id TEXT NOT NULL REFERENCES fics(id) ON DELETE CASCADE,
+    reaction TEXT,
+    checked_at INTEGER NOT NULL,
+    -- Where `reaction` came from: 'site' (read off a logged-in page), 'app'
+    -- (asked for from the Library, pushed to the forum by likes.py) or
+    -- 'assumed' (the chapter was opened on the site, where the user presses
+    -- Like themselves). The next look at the page overwrites the last two.
+    source TEXT NOT NULL DEFAULT 'site' CHECK(source IN ('site','app','assumed')),
+    -- A like/unlike the server still has to make on the forum. While set, a
+    -- walk's reading of the page does not overwrite the row.
+    pending TEXT CHECK(pending IN ('like','unlike')),
+    push_error TEXT,
+    push_attempts INTEGER NOT NULL DEFAULT 0,
+    push_after INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_fcrx_fic ON fic_chapter_reactions(fic_id);
+
+-- Which of the user's own lists on the source a fic was last seen on:
+-- XenForo 'watched'/'bookmarks', or a collection scan's collection name
+-- (FF.net favorites/follows, AO3 bookmarks/subscriptions, ...). A fic on
+-- none of them, from a site whose lists have been walked, is the Backlog.
+CREATE TABLE IF NOT EXISTS fic_source_lists (
+    fic_id TEXT NOT NULL REFERENCES fics(id) ON DELETE CASCADE,
+    list TEXT NOT NULL,
+    seen_at INTEGER NOT NULL,
+    PRIMARY KEY(fic_id, list)
+);
+
+-- The last time each (site, list) was walked from its first page to its last
+-- without an error: the only moment it is safe to drop a fic from the list,
+-- and what lets a fic count as Backlog at all.
+CREATE TABLE IF NOT EXISTS fic_list_passes (
+    site TEXT NOT NULL,
+    list TEXT NOT NULL,
+    completed_at INTEGER NOT NULL,
+    PRIMARY KEY(site, list)
+);
 
 CREATE TABLE IF NOT EXISTS fic_bookmarks (
     id TEXT PRIMARY KEY,
@@ -1225,6 +1490,10 @@ CREATE TABLE IF NOT EXISTS workout_sessions (
                                           -- whatsoever" … 5 "I am going ham").
                                           -- Was a 1-10 RPE; old rows were folded
                                           -- once by _migrate_workout_intensity_to_stars.
+    intensity_source TEXT,                -- 'health': derived from heart rate or
+                                          -- energy, re-derived while samples arrive;
+                                          -- 'user': set by hand, never overwritten.
+                                          -- NULL: unrated, or rated before this column.
     raw_text TEXT,
     notes TEXT,
     parse_status TEXT NOT NULL DEFAULT 'pending',  -- pending|done|error|skipped
@@ -1296,17 +1565,51 @@ CREATE TABLE IF NOT EXISTS calorie_logs (
 
 CREATE INDEX IF NOT EXISTS idx_calorie_logs_date ON calorie_logs(date);
 
--- Voluntary purchases logged in Capture > Daily. Amounts are CAD cents,
--- never floating point; the client ID makes offline uploads replay-safe.
+-- Voluntary purchases. Amounts are CAD cents, never floating point; the client
+-- ID makes offline uploads replay-safe. Two ways in, one ledger: a line typed
+-- in Capture > Daily (category + amount, nothing else), and a capture shaped
+-- like a meal — a receipt photo and/or a clip spoken over it — which arrives
+-- with neither, so both are nullable until the structuring pass reads them out
+-- of the receipt and the transcript. A hand edit always wins over that pass,
+-- and a NULL amount is left out of every total rather than counted as zero.
+-- Widened from the typed-only shape by _migrate_spending_entries.
 CREATE TABLE IF NOT EXISTS spending_logs (
     id TEXT PRIMARY KEY,
-    date TEXT NOT NULL,
-    category TEXT NOT NULL,
-    amount_cents INTEGER NOT NULL CHECK(amount_cents > 0 AND amount_cents <= 100000000),
-    created_at INTEGER NOT NULL
+    date TEXT NOT NULL,                   -- 4am day of created_at, fixed at capture
+    category TEXT,
+    amount_cents INTEGER CHECK(amount_cents IS NULL OR (amount_cents > 0 AND amount_cents <= 100000000)),
+    merchant TEXT,
+    raw_content TEXT,                     -- exactly as typed/spoken
+    notes TEXT,
+    generated_notes TEXT,                 -- last AI version; manual edits win
+    latitude REAL,
+    longitude REAL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_spending_logs_date ON spending_logs(date);
+
+-- A receipt photo or a clip about a purchase; food_media's shape and rules.
+-- The receipt's reading (description) is what the structuring pass takes the
+-- merchant and the total from.
+CREATE TABLE IF NOT EXISTS spending_media (
+    id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL REFERENCES spending_logs(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,                   -- 'image' | 'audio'
+    path TEXT NOT NULL,
+    mime TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    transcript TEXT,
+    transcript_status TEXT NOT NULL DEFAULT 'idle',   -- idle|running|done|error
+    transcript_error TEXT,
+    description TEXT,
+    description_status TEXT NOT NULL DEFAULT 'idle',
+    description_error TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_spending_media_entry ON spending_media(entry_id);
 
 -- Pomodoro runs from the Watch: a 25-minute work block, the 5-minute break
 -- after one, or a 10-minute timeout. One row per run, under the id the Watch
@@ -2371,6 +2674,58 @@ CREATE INDEX IF NOT EXISTS idx_llm_jobs_pending
 -- same shape is fine, which is why this is partial rather than a plain UNIQUE.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_jobs_unique_pending
     ON llm_jobs(kind, target_id) WHERE status = 'pending';
+
+-- Server oddities: the recurring errors the nightly pass finds in the server's
+-- own journal and in failed llm_jobs rows (backend/oddities_job.py), reported
+-- at the end of the morning briefing. One row per *kind* of problem, keyed by
+-- the fingerprint backend/ops/oddities.py derives from it, so "the same error
+-- as yesterday" is a primary-key lookup rather than a model's judgement.
+--
+-- `status` moves on its own (new -> recurring -> quiet -> regressed); there is
+-- no UI to dismiss one. `note` is the model's one-line reading, written once
+-- and cleared only when the problem regresses -- a note revised nightly would
+-- drift, the same reason the life wiki renders from facts.
+CREATE TABLE IF NOT EXISTS server_oddities (
+    fingerprint TEXT PRIMARY KEY,
+    unit TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('traceback','error','warning')),
+    template TEXT NOT NULL,
+    sample TEXT NOT NULL,
+    -- JSON {file, line, function} of the last frame in our own code, or NULL.
+    frame TEXT,
+    status TEXT NOT NULL DEFAULT 'new'
+        CHECK(status IN ('new','recurring','quiet','regressed')),
+    total_count INTEGER NOT NULL DEFAULT 0,
+    -- How many times the most recent scan saw it; 0 when that scan did not.
+    last_scan_count INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    note_written_at INTEGER,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL
+);
+
+-- Per-day counts, for "seen on 3 of the last 7 days". Pruned after 30 days.
+CREATE TABLE IF NOT EXISTS server_oddity_days (
+    fingerprint TEXT NOT NULL REFERENCES server_oddities(fingerprint) ON DELETE CASCADE,
+    day_key TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (fingerprint, day_key)
+);
+
+-- One row per scan. The next scan starts where this one ended, and the
+-- briefing reads the newest row to say whether the check ran at all and
+-- whether the journal could be read -- a scan that silently read nothing must
+-- not look like a clean day.
+CREATE TABLE IF NOT EXISTS server_oddity_scans (
+    id TEXT PRIMARY KEY,
+    since_ts INTEGER NOT NULL,
+    until_ts INTEGER NOT NULL,
+    journal_available INTEGER NOT NULL DEFAULT 0,
+    event_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_server_oddity_scans_until
+    ON server_oddity_scans(until_ts DESC);
 
 -- What the offline knowledge library contains (backend/offline_knowledge/).
 --

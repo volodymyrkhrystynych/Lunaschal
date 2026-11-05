@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { api } from '../hooks/api';
 import { Newspapers } from './Newspapers';
 
@@ -34,7 +34,16 @@ function show() {
   );
 }
 
+// 10am on Sep 6: inside the download window, so today's paper is Sep 6.
+const TODAY = '2026-09-06';
+function setClock(hour: number, date = TODAY) {
+  const [y, m, d] = date.split('-').map(Number);
+  vi.setSystemTime(new Date(y, m - 1, d, hour, 0));
+}
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  setClock(10);
   vi.clearAllMocks();
   vi.mocked(api.newspapers.issues).mockResolvedValue({
     issues: [],
@@ -66,6 +75,10 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 it('automatically queues today once and can manually request an older date', async () => {
   const { container } = show();
   const button = await screen.findByText('Download Toronto Star issue');
@@ -76,7 +89,7 @@ it('automatically queues today once and can manually request an older date', asy
     expect(api.newspapers.downloadIssue).toHaveBeenCalledTimes(1)
   );
   expect(api.newspapers.downloadIssue).toHaveBeenCalledWith(
-    new Date().toLocaleDateString('en-CA'),
+    TODAY,
     expect.anything()
   );
   fireEvent.change(container.querySelector('input[type=date]')!, {
@@ -109,7 +122,7 @@ it('shows setup and disables downloads when no subscriber session is saved', asy
 });
 
 it('opens an archived issue when its Toronto Star cover is tapped', async () => {
-  const date = new Date().toLocaleDateString('en-CA');
+  const date = TODAY;
   vi.mocked(api.newspapers.issues).mockResolvedValue({
     archivePath: '/archive',
     issues: [{ date, pageCount: 38, byteSize: 1000, pdfUrl: '/issue.pdf' }],
@@ -128,7 +141,7 @@ it('does not queue a second download when today is already downloading', async (
     autoDownload: false,
     jobs: [
       {
-        date: new Date().toLocaleDateString('en-CA'),
+        date: TODAY,
         status: 'downloading',
         error: '',
       },
@@ -137,4 +150,16 @@ it('does not queue a second download when today is already downloading', async (
   show();
   await screen.findByText('Downloading issue…');
   expect(api.newspapers.downloadIssue).not.toHaveBeenCalled();
+});
+
+it('shows the previous day’s paper after midnight and does not download', async () => {
+  setClock(1, '2026-09-07');
+  show();
+  await screen.findByText('Issue date: 2026-09-06');
+  await screen.findByText('Today’s download opens at 4 am.');
+  const button = screen.getByText('Download Toronto Star issue');
+  expect((button as HTMLButtonElement).disabled).toBe(true);
+  await waitFor(() => expect(api.newspapers.pressreader).toHaveBeenCalled());
+  expect(api.newspapers.downloadIssue).not.toHaveBeenCalled();
+  expect(api.newspapers.sync).not.toHaveBeenCalled();
 });

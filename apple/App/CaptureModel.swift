@@ -3,6 +3,7 @@ import SwiftUI
 import LunaschalCore
 import AVFoundation
 import UIKit
+import UniformTypeIdentifiers
 
 @MainActor
 final class CaptureModel: ObservableObject {
@@ -29,6 +30,8 @@ final class CaptureModel: ObservableObject {
     /// The food log's meals in the feed, and each one's media.
     @Published private(set) var foodRecords: [SyncChange] = []
     @Published private(set) var foodMedia: [String: [JournalAttachmentItem]] = [:]
+    @Published private(set) var spendingRecords: [SyncChange] = []
+    @Published private(set) var spendingMedia: [String: [JournalAttachmentItem]] = [:]
     /// Calendar occurrences that can border a run of the journal feed, as on the web.
     @Published private(set) var journalOccurrences: [CalendarOccurrence] = []
     /// Series templates and their exceptions; the calendar expands them per view.
@@ -38,6 +41,8 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var calendarExceptions: [CalendarException] = []
     /// Wake and sleep per day key: the server's last answer with queued hand-set times on top.
     @Published private(set) var sleepDays: [String: SleepDay] = [:]
+    /// Each day's in-app reading, for the day view's reading rail.
+    @Published private(set) var readingDays: [String: [CalendarReadingSpan]] = [:]
     private var journalLimit = 200
     private var journalQuery = ""
     @Published private(set) var pendingEdits: [PendingEdit] = []
@@ -51,6 +56,9 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var ficErrors: [String: String] = [:]
     /// Bumped each time a fic page lands, so an open book redraws its chapters.
     @Published private(set) var ficDownloadRevision = 0
+    /// Bumped when this device files, rates, shelves or marks something read,
+    /// so library screens show it before any sync has run.
+    @Published private(set) var libraryRevision = 0
     /// The Daily tab: what this device has logged, and the server's record of today.
     @Published private(set) var dailyLogs: [DailyLog] = []
     @Published private(set) var dailyStatus: DailyStatus?
@@ -60,6 +68,12 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var sleepWeek: SleepWeek?
     @Published private(set) var sleepError: String?
     private var weatherFetchedAt: Date?
+    /// Saved places and the Home/Work periods over them (PlacesModel.swift),
+    /// the Journal's day cards, and the weekly patterns: all fetched, all kept
+    /// on disk so they show offline.
+    @Published var places = PlacesSnapshot()
+    @Published var locationDays: [LocationDay] = []
+    @Published var locationPatterns: LocationPatterns?
     let location = LocationProvider()
     /// The Workout page: queued sets, and the server's recent exercises and workouts.
     @Published private(set) var workoutLogs: [WorkoutLog] = []
@@ -108,7 +122,13 @@ final class CaptureModel: ObservableObject {
     let notebooks: NotebookStore
     let uploads: RecordingUploadStore
     let transfers: TransferStore
+    /// Journal videos and Live Photos the system is uploading in the background.
+    let backgroundUploads: BackgroundUploads
+    let journalUploader: JournalBackgroundUploader
+    private var uploaderReconciled = false
     let media: MediaStore
+    /// Pictures inside fic chapters; the library worker fills it too.
+    let ficImages: FicImageStore
     let daily: DailyStore
     let healthState: HealthStateStore
     @Published private(set) var healthStatus = HealthStateStore.Status()
@@ -117,6 +137,12 @@ final class CaptureModel: ObservableObject {
     private let syncer: CaptureSync
     private let dailySyncer: DailySync
     private let healthSyncer: HealthSync
+    /// The background location trail behind the Journal's daily map.
+    let trail: LocationTracker
+    private let trailSyncer: TrailSync
+    /// One upload at a time: two passes draining the same outbox would each
+    /// drop the batch the other had already dropped.
+    private var trailUploading = false
     private lazy var healthSource: HealthKitSource? = HealthKitSource.isAvailable ? HealthKitSource() : nil
     private let replicaSyncer: ReplicaSync
     private let libraryWorker: LibraryDownload
@@ -147,6 +173,8 @@ final class CaptureModel: ObservableObject {
         self.store = store
         uploads = try RecordingUploadStore(root: store.root.appendingPathComponent("recording-uploads", isDirectory: true))
         transfers = try TransferStore(root: store.root.appendingPathComponent("transfer-state", isDirectory: true))
+        backgroundUploads = try BackgroundUploads(root: store.root.appendingPathComponent("background-uploads", isDirectory: true))
+        journalUploader = JournalBackgroundUploader(ledger: backgroundUploads)
         drawings = try DrawingStore(root: store.root.appendingPathComponent("drawings", isDirectory: true))
         drawingPublications = try DrawingPublicationStore(root: store.root.appendingPathComponent("drawing-publications", isDirectory: true))
         notebooks = try NotebookStore(root: store.root.appendingPathComponent("notebooks", isDirectory: true))
@@ -156,10 +184,14 @@ final class CaptureModel: ObservableObject {
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
         reader = ReplicaReader(url: store.root.appendingPathComponent("replica.sqlite"))
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
+        ficImages = try FicImageStore(root: store.root.appendingPathComponent("fic-images", isDirectory: true))
         daily = try DailyStore(root: store.root.appendingPathComponent("daily", isDirectory: true))
         dailySyncer = DailySync(store: daily)
         healthState = try HealthStateStore(root: store.root.appendingPathComponent("apple-health", isDirectory: true))
         healthSyncer = HealthSync(store: healthState)
+        let trailOutbox = try TrailOutbox(root: store.root.appendingPathComponent("location-trail", isDirectory: true))
+        trail = LocationTracker(outbox: trailOutbox)
+        trailSyncer = TrailSync(outbox: trailOutbox)
         workouts = try WorkoutStore(root: store.root.appendingPathComponent("workouts", isDirectory: true))
         workoutSyncer = WorkoutSync(store: workouts)
         pomodoros = try PomodoroStore(root: store.root.appendingPathComponent("pomodoro-outbox", isDirectory: true))
@@ -183,9 +215,10 @@ final class CaptureModel: ObservableObject {
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store, pomodoros: pomodoros)
         syncer = CaptureSync(store: store, uploads: uploads, transfers: transfers)
+        syncer.backgroundUploads = backgroundUploads
         replicaSyncer = ReplicaSync(url: store.root.appendingPathComponent("replica.sqlite"))
         libraryWorker = LibraryDownload(replicaURL: store.root.appendingPathComponent("replica.sqlite"),
-                                        mediaURL: media.root)
+                                        mediaURL: media.root, imagesURL: ficImages.root)
         try store.recoverInterruptedRecordings()
         server = try store.server
         if let server { token = try SessionToken.read(server: server) }
@@ -208,6 +241,7 @@ final class CaptureModel: ObservableObject {
         try SleepWeekFixture.seedIfAsked(at: healthSleepCache)
         #endif
         sleepWeek = try? JSONDecoder().decode(SleepWeek.self, from: Data(contentsOf: healthSleepCache))
+        loadPlaceCaches()
         pendingEdits = try replica.edits().filter { Self.feedCollections.contains($0.operation.collection) }
         Task { await reloadJournal(); await reloadCalendar() }
         refreshLibraryBytes()
@@ -224,6 +258,32 @@ final class CaptureModel: ObservableObject {
         location.onFix = { [weak self] fix in
             self?.unsentFix = (fix.coordinate.latitude, fix.coordinate.longitude)
             self?.requestSync()
+        }
+        trail.onPoints = { [weak self] in self?.uploadTrailIfDue() }
+    }
+
+    /// Points arrive mostly while the app is in the background, woken by a
+    /// visit or a walk, where a full sync pass is far too much to start. So the
+    /// trail uploads on its own, when enough has piled up or it's been a while;
+    /// what's left is picked up by the next full pass.
+    private func uploadTrailIfDue() {
+        guard !trailUploading, let api = sharedAPI(cellular: allowCellular) else { return }
+        let status = trail.status
+        guard trail.pending >= 100 || status.lastAttempt.map({ Date().timeIntervalSince($0) > 10 * 60 }) ?? true
+        else { return }
+        Task { try? await syncTrail(using: api) }
+    }
+
+    private func syncTrail(using api: JournalAPI) async throws {
+        guard !trailUploading, TrailSync.isDue(trail.outbox) else { return }
+        trailUploading = true
+        defer { trailUploading = false; trail.refreshStatus() }
+        do {
+            try await trailSyncer.run(using: api)
+        } catch {
+            // The server refusing or garbling a batch is shown in Settings and
+            // doesn't fail the rest of the pass; being offline still does.
+            if Task.isCancelled || error is CancellationError || error is URLError || error is HTTPFailure { throw error }
         }
     }
 
@@ -327,11 +387,15 @@ final class CaptureModel: ObservableObject {
             let feed = try await reader.read { store in
                 let records = try store.newestRecords(collection: "journal_entries", query: query, limit: limit)
                 let meals = try store.newestRecords(collection: "food_entries", query: query, limit: limit)
+                let purchases = try store.newestRecords(collection: "spending_logs", query: query, limit: limit)
                 return JournalFeedRead(
                     records: records, count: try store.count(collection: "journal_entries", query: query),
                     attachments: try store.relatedRecords(collection: "journal_attachments", field: "entryId", values: records.map(\.id)),
                     meals: meals,
                     mealMedia: try store.relatedRecords(collection: "food_media", field: "entryId", values: meals.map(\.id)),
+                    purchases: purchases,
+                    purchaseMedia: try store.relatedRecords(collection: "spending_media", field: "entryId",
+                                                            values: purchases.map(\.id)),
                     edits: try store.edits().filter { collections.contains($0.operation.collection) })
             }
             guard load == journalLoads else { return }
@@ -340,16 +404,18 @@ final class CaptureModel: ObservableObject {
             journalAttachments = JournalAttachmentItem.grouped(feed.attachments)
             foodRecords = feed.meals
             foodMedia = JournalAttachmentItem.groupedFood(feed.mealMedia)
+            spendingRecords = feed.purchases
+            spendingMedia = JournalAttachmentItem.groupedSpending(feed.purchaseMedia)
             pendingEdits = feed.edits
             placeJournalOccurrences()
         } catch { message = error.localizedDescription }
     }
 
     /// The collections whose saved edits the Journal feed lists.
-    static let feedCollections: Set<String> = ["journal_entries", "food_entries"]
+    static let feedCollections: Set<String> = ["journal_entries", "food_entries", "spending_logs"]
 
     /// What a sync pass has to touch for the Journal feed to read again.
-    static let feedScope = Set(["journal_entries", "journal_attachments"] + FoodSync.collections)
+    static let feedScope = Set(["journal_entries", "journal_attachments"] + FoodSync.collections + SpendingSync.collections)
 
     /// The categorised calendar occurrences around the days the feed covers,
     /// for its borders. A search shows matches, not a day, so it has none, as
@@ -401,6 +467,25 @@ final class CaptureModel: ObservableObject {
         for stale in cache.keys.sorted().dropLast(60) { cache[stale] = nil }
         try? JSONEncoder().encode(cache).write(to: sleepCacheURL, options: .atomic)
         await reloadCalendar()
+    }
+
+    private var readingCacheURL: URL { calendarOutbox.root.appendingPathComponent("reading.json") }
+
+    /// Asks the server for a day's reading; offline, the cached answer stands.
+    func refreshReading(_ day: String) async {
+        if readingDays.isEmpty {
+            readingDays = (try? JSONDecoder().decode([String: [CalendarReadingSpan]].self,
+                                                     from: Data(contentsOf: readingCacheURL))) ?? [:]
+        }
+        #if DEBUG
+        if let seeded = CalendarReadingFixture.spans(day: day) { readingDays[day] = seeded; return }
+        #endif
+        guard let api = chatAPI(), let fetched = try? await api.reading(day: day) else { return }
+        var cache = readingDays
+        cache[day] = fetched
+        for stale in cache.keys.sorted().dropLast(60) { cache[stale] = nil }
+        readingDays = cache
+        try? JSONEncoder().encode(cache).write(to: readingCacheURL, options: .atomic)
     }
 
     private func refreshLibraryBytes() {
@@ -477,10 +562,13 @@ final class CaptureModel: ObservableObject {
     /// Synchronous on purpose: the composer's words are read the moment Save
     /// is tapped, so an async hop would let a last keystroke land after them.
     /// With notes in the draft a journal entry goes through `saveEntryWithNotes`.
-    func saveEntry(_ text: String, youtubeURLs: [String], kind: CaptureKind = .journal) -> Bool {
+    /// `autoFile` lets the server move it to the food log or the ledger.
+    func saveEntry(_ text: String, youtubeURLs: [String], kind: CaptureKind = .journal,
+                   autoFile: Bool = false) -> Bool {
         if recorder.activeID != nil { recorder.stop() }
         // A meal leaves the notes in the draft.
-        return commitComposer(text, youtubeURLs: youtubeURLs, kind: kind, notebook: nil, pages: [])
+        return commitComposer(text, youtubeURLs: youtubeURLs, kind: kind, notebook: nil, pages: [],
+                              autoFile: autoFile)
     }
 
     /// Save entry with the draft's notes: their pages are rendered from what
@@ -488,7 +576,8 @@ final class CaptureModel: ObservableObject {
     /// with everything else as one entry.
     func saveEntryWithNotes(_ text: String, youtubeURLs: [String], notebook: Notebook) async -> Bool {
         if recorder.activeID != nil { recorder.stop() }
-        let pages = NotebookEditorModel(store: notebooks, notebook: notebook)
+        // The editor left with Back may still be saving; it has the pages.
+        let pages = NotebookEditorModel.open(store: notebooks, notebook: notebook)
         guard pages.loaded else {
             message = pages.error ?? "Couldn't open the notes for this entry."
             return false
@@ -518,12 +607,16 @@ final class CaptureModel: ObservableObject {
     }
 
     private func commitComposer(_ text: String, youtubeURLs: [String], kind: CaptureKind, notebook: Notebook?,
-                                pages: [(data: Data, name: String)]) -> Bool {
+                                pages: [(data: Data, name: String)], autoFile: Bool = false) -> Bool {
         var links = youtubeURLs
         // The notes' own video goes with them.
         if let video = notebook?.youtubeURL, !links.contains(video) { links.append(video) }
         do {
+            // Read from the store, not the copy passed in: the switch may have
+            // been flipped in the editor since the composer last looked.
+            let forReview = notebook.map { (try? notebooks.notebook($0.id))?.isForReview ?? $0.isForReview } ?? false
             let capture = try store.commitDraft(text: text, youtubeURLs: links, kind: kind, images: pages,
+                                                forReview: forReview, autoFile: autoFile,
                                                 location: location.recent)
             if let notebook {
                 do { try notebooks.markSaved(notebook.id, captureID: capture.id) }
@@ -612,6 +705,7 @@ final class CaptureModel: ObservableObject {
             let capture = try store.commitImages(text: text, youtubeURLs: notebook.youtubeURL.map { [$0] } ?? [],
                                                  images: pages,
                                                  replaces: notebook.newspaperDate == nil ? [] : notebook.savedCaptureIDs,
+                                                 forReview: notebook.isForReview,
                                                  location: location.recent)
             let saved = try notebooks.markSaved(notebook.id, captureID: capture.id)
             reloadCaptures(); requestSync()
@@ -644,6 +738,24 @@ final class CaptureModel: ObservableObject {
             markOpened(issue)
             return notebook
         } catch { message = error.localizedDescription; return nil }
+    }
+
+    /// Queues today's issue on the server and waits for it to be archived,
+    /// checking every few seconds. Nil (with a message) offline, on a refusal,
+    /// or if it hasn't landed after a few minutes — the download carries on.
+    func downloadNewspaper(date: String) async -> NewspaperIssue? {
+        guard let api = chatAPI() else {
+            message = "Connect to your server to download today's paper."
+            return nil
+        }
+        do { try await api.downloadIssue(date: date) } catch { message = error.localizedDescription; return nil }
+        for _ in 0..<36 {
+            if let issue = try? await api.newspaperIssues().first(where: { $0.date == date }) { return issue }
+            try? await Task.sleep(for: .seconds(5))
+            if Task.isCancelled { return nil }
+        }
+        message = "Today's paper (\(date)) is still downloading. Try again in a bit."
+        return nil
     }
 
     private func markOpened(_ issue: NewspaperIssue) {
@@ -694,6 +806,7 @@ final class CaptureModel: ObservableObject {
         }
         if let api = apis[cellular] { return api }
         guard let api = try? JournalAPI(server: server, token: token, allowCellular: cellular, uploads: uploads) else { return nil }
+        api.background = (backgroundUploads, journalUploader)
         apis[cellular] = api
         return api
     }
@@ -715,7 +828,8 @@ final class CaptureModel: ObservableObject {
         // A WebM clip downloaded with the library is the original, which the
         // phone cannot play; the server's AAC copy is fetched instead.
         // A meal's media has no converted copy to ask for.
-        let playable = !thumbnail && item.media == .audio && !item.phonePlayable && item.collection != "food_media"
+        let playable = !thumbnail && item.media == .audio && !item.phonePlayable
+            && item.collection != "food_media" && item.collection != "spending_media"
         if !thumbnail, !playable,
            let saved = try? media.downloaded(collection: item.collection, id: item.id) { return saved }
         let name = item.id + (thumbnail ? ".poster" : playable ? ".m4a" : "")
@@ -726,6 +840,26 @@ final class CaptureModel: ObservableObject {
         let fetch = Task<URL?, Never> {
             do {
                 try await api.downloadAttachment(item, thumbnail: thumbnail, playable: playable, to: file)
+                return file
+            } catch { return nil }
+        }
+        journalMediaFetches[name] = fetch
+        defer { journalMediaFetches[name] = nil }
+        return await fetch.value
+    }
+
+    /// A Live Photo's clip on this device, fetched once and kept with the
+    /// other feed media. Nil offline when it was never fetched.
+    func journalMotionFile(_ item: JournalAttachmentItem) async -> URL? {
+        guard item.isLivePhoto, item.collection == "journal_attachments" else { return nil }
+        let name = item.id + ".motion.mov"
+        let file = journalMediaRoot.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: file.path) { return file }
+        if let running = journalMediaFetches[name] { return await running.value }
+        guard let api = chatAPI() else { return nil }
+        let fetch = Task<URL?, Never> {
+            do {
+                try await api.downloadJournalMotion(item.id, to: file)
                 return file
             } catch { return nil }
         }
@@ -862,15 +996,34 @@ final class CaptureModel: ObservableObject {
 
     @discardableResult
     private func sendCalendarEvents(using api: JournalAPI) async throws -> Bool {
-        guard !((try? calendarOutbox.list()) ?? []).isEmpty else { return false }
+        let pending = (try? calendarOutbox.list()) ?? []
+        guard !pending.isEmpty else { return false }
+        // What the day view shows for the queued sleep times, captured before they leave the outbox.
+        let shownSleep = CalendarSleep.overlay(sleepCache, pending: pending)
+        var failure: Error?
         do {
             let refused = try await calendarSyncer.run(using: api)
             if !refused.isEmpty { message = refused.joined(separator: "\n") }
         } catch {
-            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
-            if (error as? URLError) != nil { throw error }
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { failure = error }
+            else if (error as? URLError) != nil { failure = error }
         }
+        await keepSentSleep(pending, shown: shownSleep, refresh: failure == nil)
+        if let failure { throw failure }
         return true
+    }
+
+    /// A sent sleep time leaves the outbox, and with it the overlay that drew
+    /// it — the cache still holds the server's answer from before the change.
+    /// So the cache takes what was shown, neighbours included, and then the
+    /// server's own reading of the day replaces it.
+    private func keepSentSleep(_ sent: [CalendarOp], shown: [String: SleepDay], refresh: Bool) async {
+        let kept = CalendarSleep.keepSent(sleepCache, shown: shown, sent: sent,
+                                          stillQueued: (try? calendarOutbox.list()) ?? [])
+        guard !kept.landed.isEmpty else { return }
+        try? JSONEncoder().encode(kept.cache).write(to: sleepCacheURL, options: .atomic)
+        if refresh { for date in kept.landed { await refreshSleep(date) } }
+        await reloadCalendar()
     }
 
     func discard(_ item: ChatRecording) {
@@ -991,6 +1144,43 @@ final class CaptureModel: ObservableObject {
         reloadCaptures()
     }
 
+    /// A photo just taken with the camera, into the composer's draft (`entryID`
+    /// nil) or an edited entry's. Shared by the camera button and the Action Button.
+    /// `metadata` is what the camera wrote about the shot; kept in the JPEG,
+    /// so the server reads the same EXIF a photo from the library carries.
+    func stageCameraPhoto(_ image: UIImage, metadata: [String: Any]? = nil, into entryID: String? = nil) {
+        guard let data = MediaImport.cameraJPEG(image, metadata: metadata) else { return }
+        stage { try $0.stageFile(data: data, name: Self.photoName("jpg"), contentType: "image/jpeg",
+                                 into: entryID, capturedAt: Date()) }
+    }
+
+    /// A video from the camera or the library, dated by its own metadata.
+    /// `source` is a temporary copy, removed once staged.
+    func stageMovie(_ source: URL, contentType: String?, name: String? = nil, into entryID: String? = nil,
+                    capturedAt: Date? = nil) async {
+        defer { try? FileManager.default.removeItem(at: source) }
+        let taken = await MediaImport.creationDate(of: source, mime: contentType)
+        stage { try $0.stageFile(from: source, name: name ?? Self.videoName(source.pathExtension),
+                                 contentType: contentType ?? "video/quicktime", into: entryID,
+                                 capturedAt: taken ?? capturedAt) }
+    }
+
+    /// A Live Photo: its still and its clip, as one staged file.
+    func stageLivePhoto(_ live: MediaImport.LivePhotoFiles, into entryID: String? = nil) {
+        defer { try? FileManager.default.removeItem(at: live.motion.deletingLastPathComponent()) }
+        let ext = UTType(mimeType: live.stillType)?.preferredFilenameExtension ?? "heic"
+        stage { try $0.stageLivePhoto(still: live.still, stillType: live.stillType, motion: live.motion,
+                                      motionType: live.motionType, name: Self.photoName(ext), into: entryID) }
+    }
+
+    static func videoName(_ ext: String) -> String {
+        "Video \(Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))).\(ext.isEmpty ? "mov" : ext.lowercased())"
+    }
+
+    static func photoName(_ ext: String) -> String {
+        "Photo \(Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))).\(ext)"
+    }
+
     func discard(_ file: CaptureFile) {
         do { try store.discardStaged(file) } catch { message = error.localizedDescription }
         reloadCaptures()
@@ -1098,6 +1288,7 @@ final class CaptureModel: ObservableObject {
                 || !todoOutbox.list().isEmpty
                 || !jobStore.pending().isEmpty
                 || !screenshots.list().isEmpty
+                || TrailSync.isDue(trail.outbox)
                 || (healthSyncEnabled && HealthSync.isDue(healthState.status(), now: Date())), signedIn: signedIn,
             enabled: backgroundSyncEnabled, now: Date())
     }
@@ -1178,6 +1369,13 @@ final class CaptureModel: ObservableObject {
             if try await timed("calendar changes", { try await sendCalendarEvents(using: api) }) {
                 changed.formUnion(CalendarSync.collections)
             }
+            if !uploaderReconciled {
+                // Once per launch, before anything new can be handed off: a
+                // force-quit cancelled whatever the session was carrying.
+                uploaderReconciled = true
+                journalUploader.finished = { [weak self] in self?.requestSync() }
+                await journalUploader.reconcile()
+            }
             try await timed("uploads") { try await syncer.run(using: api) }
             try await timed("screenshots") { try await screenshots.run(using: api) }
             try await timed("daily") { try await dailySyncer.run(using: api) }
@@ -1189,13 +1387,18 @@ final class CaptureModel: ObservableObject {
             if full || hadWorkouts { await timed("workout history") { await refreshWorkouts(using: api) } }
             if full || hadDaily { await timed("daily status") { await refreshDaily(using: api) } }
             await timed("weather") { await refreshWeather(using: api) }
+            if full { await timed("places") { await refreshPlaces(using: api) } }
 
             // Pull.
             let caps = try await timed("capabilities") { try await serverCapabilities(api) }
             let calendar = CalendarSync.supported(by: caps.collections)
             let food = FoodSync.supported(by: caps.collections)
+            let spending = SpendingSync.supported(by: caps.collections)
             let libraryScope = LibraryDownload.collections(knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge"))
-            let scopes = [Self.journalScope, CalendarSync.collections, libraryScope, FoodSync.collections]
+            let tracking = FicLibrary.supported(by: caps.collections)
+            var scopes = [Self.journalScope, CalendarSync.collections, libraryScope, FoodSync.collections,
+                          SpendingSync.collections]
+            if tracking { scopes.append(FicLibrary.trackingCollections) }
             var pull = scopes.map { _ in true }
             if !full, caps.syncStatus {
                 pull = try await timed("check for changes") { try await replicaSyncer.scopesToPull(using: api, scopes: scopes) }
@@ -1210,6 +1413,17 @@ final class CaptureModel: ObservableObject {
             if food, pull[3] {
                 changed.formUnion(try await timed("food log") {
                     try await replicaSyncer.run(using: api, collections: FoodSync.collections)
+                })
+            }
+            // Read marks and forum reactions: their own scope, like food.
+            if tracking, pull[5] {
+                changed.formUnion(try await timed("reading marks") {
+                    try await replicaSyncer.run(using: api, collections: FicLibrary.trackingCollections)
+                })
+            }
+            if spending, pull[4] {
+                changed.formUnion(try await timed("spending") {
+                    try await replicaSyncer.run(using: api, collections: SpendingSync.collections)
                 })
             }
             if calendar, pull[1] {
@@ -1243,6 +1457,8 @@ final class CaptureModel: ObservableObject {
                 libraryRetryAt = Date().addingTimeInterval(600)
                 startLibraryDownload()
             }
+            try await timed("location") { try await syncTrail(using: api) }
+            if full { await timed("day maps") { await refreshLocationDays(using: api) } }
             try await timed("health") { try await syncHealth(using: api, force: full) }
             // Once per device, after everything else has synced: never at launch,
             // where building the indexes on a large library outlasted the watchdog.
@@ -1278,8 +1494,11 @@ final class CaptureModel: ObservableObject {
     private func tidyCaptures() {
         do {
             if try store.tidySynced(entry: { [replica] id in
-                guard let record = try replica.record(collection: "journal_entries", id: id) else { return .unknown }
-                return record.deleted ? .removed : .present
+                let elsewhere = try ["food_entries", "spending_logs"].contains {
+                    try replica.record(collection: $0, id: id).map { !$0.deleted } ?? false
+                }
+                return .of(journalDeleted: try replica.record(collection: "journal_entries", id: id)?.deleted,
+                           filedElsewhere: elsewhere)
             }) > 0 { reloadCaptures() }
         } catch { /* Tidying only: the next pass tries again. */ }
     }
@@ -1394,6 +1613,46 @@ final class CaptureModel: ObservableObject {
 
     /// Queues one fic for an update on the server, or takes it back out if it
     /// was already waiting. `deep` also re-reads chapters the author edited.
+    /// Change books' rating, review, shelf or folders on this device; they
+    /// sync when connected. False when it couldn't be saved.
+    @discardableResult
+    func editFics(_ ids: [String], _ changes: [String: JSONValue]) -> Bool {
+        do {
+            for id in ids { try replica.queueFicEdit(bookID: id, changes) }
+        } catch {
+            message = error.localizedDescription
+            return false
+        }
+        libraryRevision += 1
+        requestSync()
+        return true
+    }
+
+    /// Like a forum chapter, or take the like back; the server makes it on the
+    /// forum. `assumed` is opening it on the site: it shows as liked and the
+    /// server sends nothing, since the user presses Like there.
+    func likeChapter(bookID: String, chapterID: String, liked: Bool, assumed: Bool = false) {
+        do { try replica.setChapterLiked(bookID: bookID, chapterID: chapterID, liked: liked, assumed: assumed) }
+        catch { message = error.localizedDescription; return }
+        libraryRevision += 1
+        requestSync()
+    }
+
+    func refetchChapter(_ chapter: SyncChange) async {
+        guard let api = chatAPI() else { message = "Sign in to re-get chapters from the server."; return }
+        do {
+            try await api.refetchFicChapter(chapter.id)
+            message = "“\(chapter.title)” is being re-read from the site. The new text arrives with the next sync."
+        } catch { message = error.localizedDescription }
+    }
+
+    func markChapters(bookID: String, chapterIDs: [String], read: Bool) {
+        do { try replica.setChaptersRead(bookID: bookID, chapterIDs: chapterIDs, read: read) }
+        catch { message = error.localizedDescription; return }
+        libraryRevision += 1
+        requestSync()
+    }
+
     func checkFicForUpdates(_ book: SyncChange, deep: Bool) async {
         guard let api = chatAPI() else { message = "Sign in to update fics on the server."; return }
         do { message = try await api.checkFicForUpdates(book.id, deep: deep).summary(title: book.title) }
@@ -1437,6 +1696,16 @@ final class CaptureModel: ObservableObject {
         #endif
         guard let api = sharedAPI(cellular: true) else { return nil }
         return { api }
+    }
+
+    /// A chapter picture: the copy on the device, or fetched now and kept.
+    /// Nil offline, or when the server no longer has it.
+    func ficImage(_ image: FicImageReference) async -> URL? {
+        if let file = ficImages.file(image) { return file }
+        guard let transport = ficTransport() else { return nil }
+        guard let fetcher = try? transport() as? FicImageTransport,
+              let data = try? await fetcher.ficImage(image) else { return nil }
+        return try? ficImages.save(data, for: image)
     }
 
     func pauseFicDownloads() {
@@ -1497,6 +1766,7 @@ final class CaptureModel: ObservableObject {
         guard !downloadingLibrary else { return }
         do {
             try media.removeDownloadedCopies()
+            try ficImages.removeAll()
             libraryMessage = "Downloaded media removed. Captures and server originals are retained."
             refreshLibraryBytes()
         } catch { message = error.localizedDescription }
@@ -1526,15 +1796,16 @@ final class CaptureModel: ObservableObject {
     /// running is stopped into the entry's draft first.
     func saveEdit(_ record: SyncChange, changes: [String: JSONValue], youtubeURLs: [String] = []) -> Bool {
         if recorder.activeID != nil { recorder.stop() }
-        let kind: CaptureKind = record.collection == "food_entries" ? .food : .journal
+        let kind: CaptureKind = record.collection == "food_entries" ? .food
+            : record.collection == "spending_logs" ? .spending : .journal
         do {
             // Checked before anything is written, so a refused addition never
             // leaves the words queued without it, or the reverse.
             if !changes.isEmpty, try replica.edits().contains(where: {
                 $0.operation.collection == record.collection && $0.operation.recordId == record.id
             }) { throw ReplicaError.editAlreadyPending }
-            if kind == .food, try !store.draft(for: record.id).files.allSatisfy(\.isFoodMedia) {
-                throw CaptureError.notFoodMedia
+            if kind.isMediaLog, try !store.draft(for: record.id).files.allSatisfy(kind.accepts) {
+                throw kind == .spending ? CaptureError.notSpendingMedia : CaptureError.notFoodMedia
             }
             try store.commitAdditions(to: record.id, kind: kind, youtubeURLs: youtubeURLs)
             if !changes.isEmpty { _ = try replica.queue(record: record, data: changes) }
@@ -1554,6 +1825,19 @@ final class CaptureModel: ObservableObject {
         do {
             try store.editText(capture.id, to: text, attempt: transfers.load(capture.id))
             reload(); return true
+        } catch { message = error.localizedDescription; reload(); return false }
+    }
+
+    /// Chat's context sheet uses the same durable entry additions, without
+    /// needing a replicated journal row or changing its original date.
+    func commitJournalContextClips(_ entryID: String) -> Bool {
+        if let active = recorder.activeID,
+           entryDrafts[entryID]?.clips.contains(where: { $0.attachmentID == active }) == true {
+            recorder.stop()
+        }
+        do {
+            try store.commitAdditions(to: entryID, kind: .journal)
+            reload(); requestSync(); return true
         } catch { message = error.localizedDescription; reload(); return false }
     }
 
@@ -1647,5 +1931,7 @@ private struct JournalFeedRead {
     let attachments: [SyncChange]
     let meals: [SyncChange]
     let mealMedia: [SyncChange]
+    let purchases: [SyncChange]
+    let purchaseMedia: [SyncChange]
     let edits: [PendingEdit]
 }

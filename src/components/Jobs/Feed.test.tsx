@@ -60,6 +60,11 @@ function deferred<T>() {
 
 /** Everything the surrounding panels ask for, answered empty. */
 function stubSurroundings() {
+  vi.spyOn(api.jobs, 'distanceAnchor').mockResolvedValue({
+    label: 'Union Station',
+    latitude: 43.6453,
+    longitude: -79.3806,
+  });
   vi.spyOn(api.jobs.searches, 'list').mockResolvedValue([]);
   vi.spyOn(api.jobs.careerWatches, 'list').mockResolvedValue([]);
   vi.spyOn(api.jobs.workdayBoards, 'list').mockResolvedValue([]);

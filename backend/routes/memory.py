@@ -8,7 +8,7 @@ immediate write the user cannot see is one they cannot undo.
 """
 from flask import Blueprint, jsonify, request
 
-from backend import memory, observations
+from backend import memory, observations, place_roles
 import sqlite3
 import time
 from ulid import ULID
@@ -65,8 +65,70 @@ def save_place(place_id=None):
 @bp.delete('/places/<place_id>')
 def delete_place(place_id):
     db = get_db()
+    if db.execute('SELECT 1 FROM place_roles WHERE place_id=? LIMIT 1', (place_id,)).fetchone():
+        return jsonify({'error': 'This place has Home/Work history; delete those periods first'}), 409
     db.execute('DELETE FROM saved_places WHERE id=?', (place_id,))
     db.commit()
+    return jsonify({'ok': True})
+
+
+def _period_json(period: dict) -> dict:
+    return {'id': period['id'], 'role': period['role'], 'placeId': period['place_id'],
+            'placeName': period['name'], 'latitude': period['latitude'], 'longitude': period['longitude'],
+            'radiusM': period['radius_m'], 'startedOn': period['started_on'], 'endedOn': period['ended_on']}
+
+
+def _home_moved(db) -> None:
+    # The jobs commute is measured from the current Home; a posting's stored
+    # distance is only right for the anchor it was measured from.
+    from backend.jobs.sync import recompute_distances
+    recompute_distances(db)
+
+
+@bp.get('/places/roles')
+def place_role_periods():
+    return jsonify([_period_json(p) for p in place_roles.list_periods(get_db())])
+
+
+@bp.post('/places/roles')
+def assign_place_role():
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Period must be an object'}), 400
+    db = get_db()
+    try:
+        period = place_roles.assign(db, body.get('role'), body.get('placeId'), body.get('startedOn'))
+    except place_roles.PlaceRoleError as e:
+        return jsonify({'error': str(e)}), e.status
+    if period['role'] == 'home':
+        _home_moved(db)
+    return jsonify(_period_json(period))
+
+
+@bp.patch('/places/roles/<period_id>')
+def update_place_role(period_id):
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Period must be an object'}), 400
+    fields = {k: body[v] for k, v in (('started_on', 'startedOn'), ('ended_on', 'endedOn')) if v in body}
+    db = get_db()
+    try:
+        period = place_roles.update_period(db, period_id, **fields)
+    except place_roles.PlaceRoleError as e:
+        return jsonify({'error': str(e)}), e.status
+    if period['role'] == 'home':
+        _home_moved(db)
+    return jsonify(_period_json(period))
+
+
+@bp.delete('/places/roles/<period_id>')
+def delete_place_role(period_id):
+    db = get_db()
+    period = place_roles.delete_period(db, period_id)
+    if period is None:
+        return jsonify({'error': 'Period not found'}), 404
+    if period['role'] == 'home':
+        _home_moved(db)
     return jsonify({'ok': True})
 
 

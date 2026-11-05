@@ -48,11 +48,16 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
     private let token: String?
     let session: CancellableSession
     private let uploads: RecordingUploadStore?
+    private let allowCellular: Bool
+    /// Where videos and Live Photos go instead of this session's 15-minute
+    /// foreground upload. Nil sends everything inline, as before.
+    public var background: (ledger: BackgroundUploads, uploader: BackgroundUploading)?
 
     public init(server: URL, token: String?, allowCellular: Bool, uploads: RecordingUploadStore? = nil) throws {
         self.server = try ServerAddress.parse(server.absoluteString)
         self.token = token
         self.uploads = uploads
+        self.allowCellular = allowCellular
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
@@ -91,7 +96,10 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
     public func send(_ capture: Capture, audioURL: URL?, files: [URL], clips: [URL]) async throws {
         guard files.count == capture.files.count else { throw CaptureError.missingFile }
         guard clips.count == capture.clips.count else { throw CaptureError.missingAudio }
-        if capture.kind == .food { return try await sendFood(capture, files: files, clips: clips) }
+        if capture.kind.isMediaLog { return try await sendFood(capture, files: files, clips: clips) }
+        // Everything else in this capture landed before its video was handed
+        // off, so there is nothing to re-send until the system reports back.
+        if let background, try background.ledger.isWaiting(on: capture) { throw UploadDeferred() }
         if capture.entryID == nil {
             do { try await createEntry(capture, audioURL: audioURL) }
             catch let error as URLError where Self.neverConnected.contains(error.code) {
@@ -119,6 +127,29 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         (error as? URLError)?.userInfo[failedBeforeSendingKey] as? Bool == true
     }
 
+    /// `POST /api/journal`'s body for a text capture.
+    static func entryBody(_ capture: Capture) -> [String: String] {
+        // Fic commentary goes up as raw_content, as the desktop reader's
+        // does: that is what queues the journal's polish pass, so a
+        // misheard character name is fixed like any other entry's.
+        var body = [
+            "id": capture.id, capture.ficID == nil ? "content" : "raw_content": capture.text,
+            "capturedAt": ISO8601DateFormatter().string(from: capture.createdAt),
+            "pendingAttachments": String(capture.links.count + capture.files.count + capture.clips.count)
+        ]
+        if let latitude = capture.latitude, let longitude = capture.longitude {
+            body["latitude"] = String(latitude)
+            body["longitude"] = String(longitude)
+        }
+        // The entries this one supersedes; the server deletes them once it is in.
+        if !capture.replaces.isEmpty { body["replaces"] = capture.replaces.joined(separator: ",") }
+        // Saved For review: the server makes the entry's pages a learning card.
+        if capture.forReview { body["forReview"] = "true" }
+        // The server may file it as a meal or a purchase once it has read it.
+        if capture.autoFile { body["autoFile"] = "1" }
+        return body
+    }
+
     /// The entry itself, with the standalone recording if it is one. An
     /// addition to an entry already on the server skips this.
     private func createEntry(_ capture: Capture, audioURL: URL?) async throws {
@@ -127,21 +158,7 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         if capture.mode == .text {
             var req = request("api/journal", method: "POST")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            // Fic commentary goes up as raw_content, as the desktop reader's
-            // does: that is what queues the journal's polish pass, so a
-            // misheard character name is fixed like any other entry's.
-            var body = [
-                "id": capture.id, capture.ficID == nil ? "content" : "raw_content": capture.text,
-                "capturedAt": ISO8601DateFormatter().string(from: capture.createdAt),
-                "pendingAttachments": String(capture.links.count + capture.files.count + capture.clips.count)
-            ]
-            if let latitude = capture.latitude, let longitude = capture.longitude {
-                body["latitude"] = String(latitude)
-                body["longitude"] = String(longitude)
-            }
-            // The entries this one supersedes; the server deletes them once it is in.
-            if !capture.replaces.isEmpty { body["replaces"] = capture.replaces.joined(separator: ",") }
-            req.httpBody = try JSONEncoder().encode(body)
+            req.httpBody = try JSONEncoder().encode(Self.entryBody(capture))
             (data, response) = try await session.data(for: req)
         } else {
             guard let audioURL else { throw CaptureError.missingAudio }
@@ -200,7 +217,24 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         }
         // Same replay contract as links: the server recognises a re-POSTed
         // attachment id and answers without storing it twice.
+        var handOff: [(CaptureFile, URL)] = []
         for (file, url) in zip(capture.files, files) {
+            if let background {
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                if BackgroundUploads.shouldHandOff(file, size: size) {
+                    switch try background.ledger.state(file.attachmentID) {
+                    case .landed(let data):
+                        try Self.validateFileAcknowledgement(data, for: capture, file: file)
+                    case .failed(let status):
+                        // Cleared so a retryable status is handed off again next time.
+                        try background.ledger.reset(file.attachmentID)
+                        throw HTTPFailure(status: status)
+                    case .inFlight, .none:
+                        handOff.append((file, url))
+                    }
+                    continue
+                }
+            }
             let body = try AttachmentMultipart(capture: capture, file: file, fileURL: url)
             defer { try? FileManager.default.removeItem(at: body.url) }
             var req = request("api/journal/\(capture.targetID)/attachments", method: "POST")
@@ -209,6 +243,27 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
             try check(fileData, fileResponse)
             try Self.validateFileAcknowledgement(fileData, for: capture, file: file)
         }
+        // Last, so a hand-off means everything else has landed.
+        if let background, !handOff.isEmpty {
+            for (file, url) in handOff where try background.ledger.state(file.attachmentID) == .none {
+                let prepared = try background.ledger.prepare(capture, file: file, fileURL: url)
+                try background.uploader.handOff(attachmentRequest(capture, boundary: prepared.boundary),
+                                                body: prepared.body, taskID: file.attachmentID)
+            }
+            throw UploadDeferred()
+        }
+    }
+
+    /// The request a background upload of one attachment is sent as.
+    public func attachmentRequest(_ capture: Capture, boundary: String) -> URLRequest {
+        var req = request("api/journal/\(capture.targetID)/attachments", method: "POST")
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        // The background session is shared; the cellular setting rides on each request.
+        req.allowsCellularAccess = allowCellular
+        #if !os(Linux)
+        req.allowsExpensiveNetworkAccess = allowCellular
+        #endif
+        return req
     }
 
     /// The meal and its photos go up in one request, each photo under the id
@@ -221,7 +276,8 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         if capture.entryID == nil || !capture.files.isEmpty {
             let body = try FoodMultipart(capture: capture, files: files)
             defer { try? FileManager.default.removeItem(at: body.url) }
-            let path = capture.entryID == nil ? "api/food" : "api/food/\(capture.targetID)/media"
+            let route = capture.kind.route
+            let path = capture.entryID == nil ? route : "\(route)/\(capture.targetID)/media"
             var req = request(path, method: "POST")
             req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
             let (data, response) = try await session.upload(for: req, fromFile: body.url)
@@ -232,7 +288,7 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
             let body = try FoodRecordingMultipart(capture: capture, clip: clip,
                                                   position: capture.entryID == nil ? files.count + index : nil, audioURL: url)
             defer { try? FileManager.default.removeItem(at: body.url) }
-            var req = request("api/food/recordings", method: "POST")
+            var req = request("\(capture.kind.route)/recordings", method: "POST")
             req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
             let (clipData, clipResponse) = try await session.upload(for: req, fromFile: body.url)
             try check(clipData, clipResponse)
@@ -379,6 +435,14 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return try JSONDecoder().decode(SleepDay.self, from: data)
     }
 
+    /// A day's in-app reading, drawn on the day view's reading rail. Recorded
+    /// by the reader on whichever device, so it's fetched rather than replicated.
+    public func reading(day: String) async throws -> [CalendarReadingSpan] {
+        let (data, response) = try await session.data(for: request("api/calendar/reading/\(try Self.calendarPath(day))"))
+        try check(data, response)
+        return try JSONDecoder().decode([CalendarReadingSpan].self, from: data)
+    }
+
     public func mediaCollections() async throws -> [String] {
         let (data, response) = try await session.data(for: request("api/mobile/capabilities"))
         try check(data, response)
@@ -442,14 +506,28 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return parts.url ?? url
     }
 
+    /// A Live Photo's clip; its still is `journalAttachmentURL`.
+    public func journalMotionURL(_ id: String) throws -> URL {
+        guard ULID.isValid(id) else { throw CaptureError.invalidID }
+        return server.appendingPathComponent("api/journal/attachments/\(id)/motion")
+    }
+
+    /// Saves a Live Photo's clip to `destination`.
+    public func downloadJournalMotion(_ id: String, to destination: URL) async throws {
+        try await download(journalMotionURL(id), to: destination)
+    }
+
     /// Where a feed attachment's bytes are: a journal attachment's routes, or
-    /// a meal's media file, which has no poster or converted copy.
+    /// a meal's or a purchase's media file, which has no poster or converted copy.
     public func attachmentURL(_ item: JournalAttachmentItem, thumbnail: Bool = false, playable: Bool = false) throws -> URL {
-        guard item.collection == "food_media" else {
-            return try journalAttachmentURL(item.id, thumbnail: thumbnail, playable: playable)
+        let route: String
+        switch item.collection {
+        case "food_media": route = "api/food/media"
+        case "spending_media": route = "api/spending/media"
+        default: return try journalAttachmentURL(item.id, thumbnail: thumbnail, playable: playable)
         }
         guard ULID.isValid(item.id), !thumbnail else { throw CaptureError.invalidID }
-        return server.appendingPathComponent("api/food/media/\(item.id)")
+        return server.appendingPathComponent("\(route)/\(item.id)")
     }
 
     /// Saves a journal attachment's file, or its poster, to `destination`,
@@ -558,21 +636,23 @@ extension JournalAPI: DailyTransport {
         let selfies = try JSONDecoder().decode([Selfie].self, from: await get("api/lifestyle/selfies", ["limit": "1"]))
         let calories = try JSONDecoder().decode(Calories.self, from: await get("api/lifestyle/calories", ["date": day]))
         guard calories.date == day else { throw CaptureError.invalidResponse }
-        struct Spending: Decodable { let date: String; let entries: [DailyStatus.Spending] }
+        struct Spending: Decodable { let date: String; let entries: [DailyStatus.Spending]; let pendingCount: Int? }
         // A phone can be updated before its server. Keep the other Daily
         // sections readable until the new spending endpoint is deployed.
         var spending: [DailyStatus.Spending] = []
+        var pendingSpending: Int?
         do {
             let reply = try JSONDecoder().decode(Spending.self, from: await get("api/lifestyle/spending", ["date": day]))
             guard reply.date == day else { throw CaptureError.invalidResponse }
             spending = reply.entries
+            pendingSpending = reply.pendingCount
         } catch let error as HTTPFailure where error.status == 404 {}
         return DailyStatus(
             day: day,
             weight: weights.last { $0.date == day }?.weight,
             selfie: selfies.first { $0.date == day }.map { DailyStatus.Selfie(id: $0.id) },
             entries: calories.entries.map { DailyStatus.Entry(id: $0.id, description: $0.description, calories: $0.calories) },
-            spending: spending)
+            spending: spending, pendingSpending: pendingSpending)
     }
 
     /// Today's weather where the server last knew the user to be.
@@ -744,27 +824,41 @@ public struct AttachmentMultipart {
         guard (try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
             throw CaptureError.missingFile
         }
-        (url, boundary) = try writeMultipart(fields: [
-            ("attachmentId", file.attachmentID), ("name", file.name)
-        ], filename: file.name, contentType: file.contentType ?? "application/octet-stream", source: fileURL)
+        var fields = [("attachmentId", file.attachmentID), ("name", file.name)]
+        // When it was taken, so an old photo keeps its day on the server too.
+        if let taken = file.capturedAt {
+            fields.append(("capturedAt", ISO8601DateFormatter().string(from: taken)))
+        }
+        var parts = [MultipartFile(field: "file", filename: file.name,
+                                   contentType: file.contentType ?? "application/octet-stream", source: fileURL)]
+        if let motionType = file.motionContentType, file.isImage {
+            let motion = CaptureFile.motionURL(beside: fileURL)
+            guard (try motion.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
+                throw CaptureError.missingFile
+            }
+            parts.append(MultipartFile(field: "motion", filename: "motion.mov", contentType: motionType, source: motion))
+        }
+        (url, boundary) = try writeMultipart(fields: fields, files: parts)
     }
 }
 
-/// `POST /api/food`: the meal's text and capture time, how many clips will
+/// `POST /api/food` (or `/api/spending`): the text and capture time, how many clips will
 /// follow, and every photo with the id it was given on this device.
 public struct FoodMultipart {
     public let url: URL
     public let boundary: String
 
     public init(capture: Capture, files: [URL]) throws {
-        guard capture.kind == .food, ULID.isValid(capture.targetID), files.count == capture.files.count,
+        guard capture.kind.isMediaLog, ULID.isValid(capture.targetID), files.count == capture.files.count,
               capture.files.allSatisfy({ ULID.isValid($0.attachmentID) }) else { throw CaptureError.invalidID }
         var parts: [MultipartFile] = []
         for (file, source) in zip(capture.files, files) {
             guard (try source.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
                 throw CaptureError.missingFile
             }
-            guard file.isFoodMedia, let type = file.contentType else { throw CaptureError.notFoodMedia }
+            guard capture.kind.accepts(file), let type = file.contentType else {
+                throw capture.kind == .spending ? CaptureError.notSpendingMedia : CaptureError.notFoodMedia
+            }
             parts.append(MultipartFile(field: "media", filename: file.name, contentType: type, source: source))
         }
         let ids = String(decoding: try JSONEncoder().encode(capture.files.map(\.attachmentID)), as: UTF8.self)
@@ -872,6 +966,14 @@ extension JournalAPI {
         let destination = directory.appendingPathComponent("\(ULID.make()).pdf")
         try FileManager.default.moveItem(at: file, to: destination)
         return destination
+    }
+
+    /// Asks the server to fetch one issue from PressReader. It only queues the
+    /// download; the issue appears in `newspaperIssues()` once it has landed.
+    public func downloadIssue(date: String) async throws {
+        guard NewspaperIssue.isDate(date) else { throw NotebookError.invalidIssue }
+        let (data, response) = try await session.data(for: request("api/newspapers/issues/\(date)/download", method: "POST"))
+        try check(data, response)
     }
 
     /// Tells the server the issue is being read, which moves its Journal card

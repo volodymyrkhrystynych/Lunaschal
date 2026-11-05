@@ -161,6 +161,38 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
     enabled: !!chapterId,
   });
 
+  const chapterSummary = chapters?.find(c => c.id === chapterId);
+  const likeChapter = useMutation({
+    mutationFn: (v: { chapterId: string; liked: boolean; assumed?: boolean }) =>
+      api.fanfic.likeChapter(v.chapterId, v.liked, v.assumed),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: ['fanfic', 'chapters', ficId],
+      }),
+  });
+  const [refetchNote, setRefetchNote] = useState<string | null>(null);
+  useEffect(() => setRefetchNote(null), [chapterId]);
+  const refetchChapter = useMutation({
+    mutationFn: async (id: string) => {
+      await api.fanfic.refetchChapter(id);
+      // One post: a few seconds at most, paced behind any other fetch.
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        const status = await api.fanfic.refetchStatus(id);
+        if (status.done) return status;
+      }
+      return { done: false, error: 'Still waiting on the site' };
+    },
+    onMutate: () => setRefetchNote('re-getting…'),
+    onSuccess: (status, id) => {
+      setRefetchNote(
+        status.error ? `re-get failed: ${status.error}` : 're-got'
+      );
+      queryClient.invalidateQueries({ queryKey: ['fanfic', 'chapter', id] });
+    },
+    onError: (e: Error) => setRefetchNote(`re-get failed: ${e.message}`),
+  });
+
   // Offline-queueable: idempotent progress/read writes; invalidation lives in
   // the registered mutation defaults (keyed off ficId in the variables).
   const saveProgress = useFanficProgress();
@@ -720,9 +752,55 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                             target="_blank"
                             rel="noreferrer"
                             className="underline hover:text-[var(--color-text)]"
+                            onClick={() => {
+                              // Going to the forum is going there to like it.
+                              if (
+                                chapterSummary?.likeable &&
+                                !chapterSummary.reaction
+                              )
+                                likeChapter.mutate({
+                                  chapterId: chapter.id,
+                                  liked: true,
+                                  assumed: true,
+                                });
+                            }}
                           >
                             view on forum
                           </a>
+                        )}
+                        {chapterSummary?.likeable && (
+                          <>
+                            <button
+                              type="button"
+                              className="underline hover:text-[var(--color-text)]"
+                              title={
+                                chapterSummary.reactionPending
+                                  ? 'Waiting to be sent to the forum'
+                                  : undefined
+                              }
+                              onClick={() =>
+                                likeChapter.mutate({
+                                  chapterId: chapter.id,
+                                  liked: !chapterSummary.reaction,
+                                })
+                              }
+                            >
+                              {chapterSummary.reaction
+                                ? `♥ ${chapterSummary.reaction}`
+                                : '♡ like'}
+                              {chapterSummary.reactionPending
+                                ? ' (sending)'
+                                : ''}
+                            </button>
+                            <button
+                              type="button"
+                              className="underline hover:text-[var(--color-text)]"
+                              disabled={refetchChapter.isPending}
+                              onClick={() => refetchChapter.mutate(chapter.id)}
+                            >
+                              {refetchNote ?? 're-get chapter'}
+                            </button>
+                          </>
                         )}
                       </div>
                       <div

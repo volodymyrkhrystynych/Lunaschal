@@ -2,10 +2,8 @@
 day-scoped, ephemeral to-dos written instantly by the chat delegate's
 add_todos tool and the morning briefing — this file exercises the CRUD/
 promote surface directly, not those two writers."""
-import time
 
 from backend.db import connection
-from backend.day_boundary import day_key_for
 
 
 def test_add_writes_rows_instantly_with_no_confirm_step(client):
@@ -47,19 +45,21 @@ def test_add_skips_a_title_already_in_todays_bar(client):
     assert len(client.get('/api/tasks/chat-todos').get_json()) == 1
 
 
-def test_list_only_shows_todays_day_key(client):
-    """A row seeded under yesterday's day_key doesn't show up today — the bar
-    resets at the day boundary by construction, no purge needed."""
-    yesterday = day_key_for(int(time.time()) - 86400)
+def test_list_is_today_only_so_yesterdays_items_never_mix_into_the_bar(client, monkeypatch):
+    # Yesterday's unfinished items come back as briefing suggestion cards
+    # (backend/briefing_job.py's stage_carryover_todos), not as bar rows.
+    from backend.routes import tasks
+    monkeypatch.setattr(tasks, '_today', lambda: '2026-03-09')
     db = connection.get_db()
-    db.execute(
-        'INSERT INTO chat_todos(id, day_key, title, priority, done, created_at, updated_at)'
-        " VALUES ('old', ?, 'Stale item', 3, 0, 0, 0)",
-        (yesterday,),
-    )
+    for key in ('2026-03-08', '2026-03-09', '2026-03-10'):
+        db.execute(
+            'INSERT INTO chat_todos(id, day_key, title, done, created_at, updated_at) '
+            'VALUES (?, ?, ?, 0, 0, 0)', (key, key, key),
+        )
     db.commit()
-
-    assert client.get('/api/tasks/chat-todos').get_json() == []
+    listed = client.get('/api/tasks/chat-todos').get_json()
+    assert [t['dayKey'] for t in listed] == ['2026-03-09']
+    assert 'previousDay' not in listed[0]
 
 
 def test_update_title(client):

@@ -20,6 +20,8 @@ from backend.ai.chat_title import generate_conversation_title
 from backend.delegate import chat as delegate_chat
 from backend.delegate import runs
 from backend.todo_recurrence import parse_due_date
+from backend.writing import discuss as writing_discuss
+from backend.writing import notes as writing_notes
 
 bp = Blueprint('chat', __name__, url_prefix='/api/chat')
 
@@ -781,6 +783,40 @@ def _accept_calendar(db, data: dict, ctx: dict) -> dict:
     return {'id': id}
 
 
+def _accept_todo(db, data: dict, ctx: dict) -> dict:
+    """A carried-over to-do card from the morning briefing: yesterday's
+    unfinished bar item, kept into *today's* bar. Idempotent on title, since the
+    plan or a chat turn may have added the same thing in the meantime."""
+    from backend.routes.tasks import _parse_due
+    from backend.todo_recurrence import parse_priority
+    title = (data.get('title') or '').strip()
+    if not title:
+        raise _AcceptRejected('title required')
+    if len(title) > 500:
+        raise _AcceptRejected('title is too long')
+    priority, err = parse_priority(data.get('priority'))
+    if err:
+        raise _AcceptRejected(err)
+    due, err = _parse_due(data.get('due'))
+    if err:
+        raise _AcceptRejected(err)
+    notes = data.get('notes')
+    notes = (notes.strip() or None) if isinstance(notes, str) else None
+
+    today = day_key_for()
+    for row in db.execute('SELECT id, title FROM chat_todos WHERE day_key=?', (today,)):
+        if (row['title'] or '').strip().lower() == title.lower():
+            return {'id': row['id']}
+    now = int(time.time())
+    id = str(ULID())
+    db.execute(
+        'INSERT INTO chat_todos(id, day_key, title, notes, due, priority, done, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,0,?,?)',
+        (id, today, title, notes, due, priority, now, now),
+    )
+    return {'id': id}
+
+
 def _accept_calorie(db, data: dict, ctx: dict) -> dict:
     description = (data.get('description') or '').strip()
     if not description:
@@ -1059,13 +1095,48 @@ def _accept_food(db, data: dict, ctx: dict) -> dict:
 # `flashcard_draft` is the one kind that never reaches here — it drafts
 # flashcards immediately with no accept/dismiss step, and backend/delegate/
 # runs.py filters it out before a proposal ever gets a persisted id.
+def _accept_writing_note(db, data: dict, ctx: dict) -> dict:
+    """A new note in the project the discussion belongs to. The project comes
+    from the message's conversation, never from the card: the card is
+    editable, and a project id on it would be a field that files a note into
+    another book."""
+    project_id = writing_notes.project_for_message(db, ctx.get('messageId'))
+    if not project_id:
+        raise _AcceptRejected('this discussion is no longer attached to a project')
+    try:
+        note_id = writing_notes.create(
+            db, project_id, title=data.get('title') or '',
+            content=data.get('content') or '', doc_type=data.get('docType'))
+    except writing_notes.NoteRejected as e:
+        raise _AcceptRejected(str(e)) from e
+    return {'id': note_id}
+
+
+def _accept_writing_note_update(db, data: dict, ctx: dict) -> dict:
+    project_id = writing_notes.project_for_message(db, ctx.get('messageId'))
+    if not project_id:
+        raise _AcceptRejected('this discussion is no longer attached to a project')
+    try:
+        return writing_notes.apply_update(
+            db, project_id, note_id=str(data.get('noteId') or ''),
+            mode=str(data.get('mode') or 'append'),
+            content=data.get('content') or '',
+            base_updated_at=data.get('baseUpdatedAt'),
+            message_id=ctx.get('messageId'))
+    except writing_notes.NoteRejected as e:
+        raise _AcceptRejected(str(e)) from e
+
+
 _ACCEPT_HANDLERS = {
+    'writing_note': _accept_writing_note,
+    'writing_note_update': _accept_writing_note_update,
     'calendar': _accept_calendar,
     'calorie': _accept_calorie,
     'food': _accept_food,
     'recipe': _accept_recipe,
     'recipe_link': _accept_recipe_link,
     'flashcards': _accept_flashcards,
+    'todo': _accept_todo,
 }
 
 
@@ -1246,6 +1317,14 @@ def stream():
     conversation_id = body.get('conversationId')
     toolset = _toolset_for(body, system_prompt)
     writing_project_id = _writing_scope_for(body, toolset)
+    # A Writing discussion's conversation row says which project it is, so the
+    # server builds its prompt, picks its tools and asserts its scope — and
+    # whatever the client sent for any of the three is ignored. That is what
+    # lets the iOS app take part without a copy of the prompt, and what makes
+    # the scope a server fact rather than a field in a request body.
+    writing = writing_discuss.run_config(conversation_id)
+    if writing:
+        toolset, system_prompt, writing_project_id = writing
 
     if conversation_id:
         message_id = str(ULID())

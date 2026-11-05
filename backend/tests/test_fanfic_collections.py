@@ -126,6 +126,78 @@ def test_list_addition_dates_are_not_story_updates(added, expected):
     assert refs[0].favorited_at is None and refs[0].followed_at is None
 
 
+@pytest.mark.parametrize('field,expected', [
+    ('09-12-2026', 1789257599),
+    ('<span data-xutime="1700000000">yesterday</span>', 1700000000),
+    ('unknown', None),
+])
+def test_ffn_updated_column_is_separate_from_added(field, expected):
+    html = dated_list('03-14-2019').replace('09-12-2026', field)
+    refs, _ = sites.parse_collection(html, 'https://www.fanfiction.net/alert/story.php')
+    assert refs[0].updated_at == expected
+    assert refs[0].followed_at == 1552521600
+
+
+@pytest.mark.parametrize('updated,checked,pending', [
+    (100, 101, 0), (102, 101, 1), (101, 101, 1), (100, None, 1),
+])
+def test_ffn_collection_queues_only_uncovered_updates(updated, checked, pending):
+    from dataclasses import replace
+    ref = sites.parse_work_url('https://www.fanfiction.net/s/123/1/')
+    fic_id, _ = collections.queue_work(ref)
+    db = get_db()
+    db.execute("UPDATE fics SET download_status='complete',update_pending=0,last_checked_at=? WHERE id=?",
+               (checked, fic_id))
+    db.commit()
+    collections.queue_work(replace(ref, updated_at=updated))
+    assert db.execute('SELECT update_pending FROM fics WHERE id=?', (fic_id,)).fetchone()[0] == pending
+
+
+def test_ffn_updated_header_can_move_columns():
+    html = '''<table id="gui_table1"><tr><th>Story</th><th>Added</th><th>Updated</th></tr>
+    <tr><td><a href="/s/123/1/">Story</a></td><td>03-14-2019</td>
+    <td data-xutime="1700000000">Yesterday</td></tr></table>'''
+    refs, _ = sites.parse_collection(html, 'https://www.fanfiction.net/alert/story.php')
+    assert refs[0].updated_at == 1700000000
+    assert refs[0].followed_at == 1552521600
+
+
+def test_ffn_missing_update_date_checks_conservatively():
+    ref = sites.parse_work_url('https://www.fanfiction.net/s/123/1/')
+    fic_id, _ = collections.queue_work(ref)
+    db = get_db()
+    db.execute('UPDATE fics SET update_pending=0,last_checked_at=1700000000 WHERE id=?', (fic_id,))
+    db.commit()
+    collections.queue_work(ref, check_updates=True)
+    assert db.execute('SELECT update_pending FROM fics WHERE id=?', (fic_id,)).fetchone()[0] == 1
+
+
+def test_ffn_scan_downloads_new_chapter_then_skips_same_update(monkeypatch):
+    clock = [1700000000]
+    monkeypatch.setattr(collections.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(collections, '_fetch', lambda url: response(ffn(), url))
+    fic_id, _ = collections.queue_work(sites.parse_work_url('https://www.fanfiction.net/s/123/1/'))
+    download.run_drain_pending()
+    clock[0] += 100
+    listing = dated_list('03-14-2019').replace('09-12-2026',
+                                             '<span data-xutime="1700000050">New</span>')
+    calls = []
+    def fetch(url):
+        calls.append(url)
+        if '/story.php' in url:
+            return response(listing, url)
+        return response(ffn(3).replace('</select>', '<option value="3">Third</option></select>'), url)
+    monkeypatch.setattr(collections, '_fetch', fetch)
+    scan_id = collections.create_scan('fanfiction.net', 'follows', '')
+    collections.run_scan(scan_id)
+    download.run_drain_pending()
+    assert get_db().execute('SELECT chapter_count FROM fics WHERE id=?', (fic_id,)).fetchone()[0] == 3
+    calls.clear()
+    collections.run_scan(collections.create_scan('fanfiction.net', 'follows', ''))
+    download.run_drain_pending()
+    assert calls == ['https://www.fanfiction.net/alert/story.php']
+
+
 def test_list_dates_enrich_existing_story_without_redownload(client, monkeypatch):
     ref = sites.parse_work_url('https://www.fanfiction.net/s/123/1/')
     fic_id, _ = collections.queue_work(ref)

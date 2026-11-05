@@ -7,11 +7,15 @@ import type {
   TaskEvent,
   JournalNewspaper,
   JournalStudySource,
+  JournalLocationDay,
+  SpendingEntry,
 } from '../hooks/api';
 
 // A journal feed item: a real entry, an interleaved STT transcription, a saved
 // chat day, an archived paper (drawings), a food-log entry, a task event, an
-// archived newspaper issue, or a filed study source. `entryIndex` preserves the
+// archived newspaper issue, a filed study source, a day's location map, or a
+// purchase.
+// `entryIndex` preserves the
 // entry's position in the original entries array so keyboard navigation
 // (selIndex) keeps indexing entries only — the other kinds are not selectable.
 export type FeedItem =
@@ -22,7 +26,9 @@ export type FeedItem =
   | { kind: 'food'; food: FoodJournalItem }
   | { kind: 'taskEvent'; taskEvent: TaskEvent }
   | { kind: 'newspaper'; newspaper: JournalNewspaper }
-  | { kind: 'study'; study: JournalStudySource };
+  | { kind: 'study'; study: JournalStudySource }
+  | { kind: 'location'; location: JournalLocationDay }
+  | { kind: 'spending'; spending: SpendingEntry };
 
 // `undefined` because JournalEntry.createdAt is optional — an optimistically
 // inserted row exists before the server has stamped one. Such a row sorts to
@@ -46,11 +52,12 @@ function source<T>(
 }
 
 // Merge entries, transcriptions, saved chats, archived papers, food-log
-// entries, task events, archived newspaper issues and filed study sources into
-// one feed sorted by time descending (conversations sort by updatedAt,
+// entries, task events, archived newspaper issues, filed study sources,
+// location maps and purchases into one feed sorted by time descending (conversations sort by updatedAt,
 // newspapers by the moment the issue was archived, papers and study sources by
 // the moment they were last worked on inside the day they were filed under —
-// see backend/journal_moment.py — the rest by createdAt). All inputs are
+// see backend/journal_moment.py — location maps by their day's last second, the
+// rest by createdAt). All inputs are
 // already newest-first.
 //
 // An n-way merge over a list of sources rather than a cascade of comparisons:
@@ -67,7 +74,9 @@ export function buildFeed(
   food: FoodJournalItem[] = [],
   taskEvents: TaskEvent[] = [],
   newspapers: JournalNewspaper[] = [],
-  studySources: JournalStudySource[] = []
+  studySources: JournalStudySource[] = [],
+  locationDays: JournalLocationDay[] = [],
+  spending: SpendingEntry[] = []
 ): FeedItem[] {
   const sources = [
     source(
@@ -109,6 +118,16 @@ export function buildFeed(
       studySources,
       s => ms(s.archivedAt),
       study => ({ kind: 'study', study })
+    ),
+    source(
+      locationDays,
+      l => ms(l.archivedAt),
+      location => ({ kind: 'location', location })
+    ),
+    source(
+      spending,
+      p => ms(p.createdAt),
+      purchase => ({ kind: 'spending', spending: purchase })
     ),
   ];
   const cursors = sources.map(() => 0);

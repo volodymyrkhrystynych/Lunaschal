@@ -18,6 +18,7 @@ import {
 } from '@tanstack/react-query';
 import { api } from '../hooks/api';
 import { ulid } from '../lib/ulid';
+import { commuteLine, whereaboutsLine } from '../lib/whereabouts';
 import {
   enqueueJournalLink,
   useJournalCreate,
@@ -54,10 +55,12 @@ import type {
   DatedConversation,
   JournalEntry,
   JournalNewspaper,
+  JournalLocationDay,
   JournalPaper,
   JournalStudySource,
   JournalVoiceDraft,
   FoodJournalItem,
+  SpendingEntry,
   TaskEvent,
 } from '../hooks/api';
 import {
@@ -71,9 +74,12 @@ import { useShortcutScope } from '../shortcuts/ShortcutProvider';
 import { useListSelection } from '../shortcuts/useListSelection';
 import { useClipStage } from '../hooks/useClipStage';
 import { ClipStrip } from './ClipRecorder';
-import { LocationButton, useLocationAsk } from './LocationButton';
-import type { Coords } from '../lib/geo';
 import { MealClips, visualMedia } from './Food/MealClips';
+import {
+  isCompactSpending,
+  spendingAmountLabel,
+  spendingTitle,
+} from '../lib/spending';
 import { LoadingState, ErrorBanner } from './LoadStates';
 
 // Opened straight from the feed rather than by sending the user to the
@@ -298,6 +304,15 @@ export function Journal({
       hasRunningMealTranscript(q.state.data) ? 4000 : false,
   });
 
+  // Purchases, typed or captured as receipts, under the same rule as food. A
+  // receipt is read on a background worker, so poll while one is.
+  const { data: journalSpending } = useQuery({
+    queryKey: ['spending', 'journal'],
+    queryFn: () => api.spending.journal(),
+    enabled: foodVisible,
+    refetchInterval: q => (q.state.data?.some(p => p.reading) ? 4000 : false),
+  });
+
   // Study sources filed into the Journal: one card per sitting, carrying the
   // source, its paper's pages and its Notebook note together.
   const studyVisible = !searchQuery && !selectedCuratedTagId;
@@ -314,6 +329,15 @@ export function Journal({
     queryFn: () => api.newspapers.journalIssues(),
     enabled: newspapersVisible,
   });
+  // A map per day the phone recorded where you went, pinned with that day's
+  // located entries (backend/location/days.py).
+  const locationVisible = !searchQuery && !selectedCuratedTagId;
+  const { data: journalLocation } = useQuery({
+    queryKey: ['location', 'journal'],
+    queryFn: () => api.location.journal(),
+    enabled: locationVisible,
+  });
+
   const [readingIssue, setReadingIssue] = useState<JournalNewspaper | null>(
     null
   );
@@ -450,8 +474,7 @@ export function Journal({
     content: string,
     staged: StagedFile[],
     clipCount: number,
-    links: string[] = [],
-    coords: Coords | null = null
+    links: string[] = []
   ) => {
     // Fired first, so it is first into JOURNAL_LANE and the entry exists before
     // anything is hung off it — online *and* on a queue replayed after a
@@ -468,12 +491,9 @@ export function Journal({
       // out to be about, so the title waits for the download and the summary
       // that follows it (backend/routes/journal.py's `_attachments_settled`).
       pendingAttachments: staged.length + clipCount + links.length || undefined,
-      // Sent with the create rather than with each file, because it is the
-      // *entry's* location: the server hands it down to any attachment whose
-      // own EXIF has none (backend/routes/journal.py's `_entry_coords`), which
-      // covers every photo taken through the camera and every voice clip.
-      latitude: coords?.latitude,
-      longitude: coords?.longitude,
+      // No location: the server places the entry where the phone's trail was
+      // at that moment (backend/journal/location.py), which is where the
+      // desktop is too — the phone is always beside it.
     });
     setStagedUploadError(null);
     setShowNewEntry(false);
@@ -660,7 +680,9 @@ export function Journal({
         foodVisible ? (journalFood ?? []) : [],
         taskEventsVisible ? (taskEvents ?? []) : [],
         newspapersVisible ? (journalNewspapers ?? []) : [],
-        studyVisible ? (journalStudy ?? []) : []
+        studyVisible ? (journalStudy ?? []) : [],
+        locationVisible ? (journalLocation ?? []) : [],
+        foodVisible ? (journalSpending ?? []) : []
       ),
     [
       entries,
@@ -678,6 +700,9 @@ export function Journal({
       journalNewspapers,
       studyVisible,
       journalStudy,
+      locationVisible,
+      journalLocation,
+      journalSpending,
     ]
   );
   // Calendar events whose window covers a run of feedItems, rendered as a
@@ -718,6 +743,19 @@ export function Journal({
     }
     if (item.kind === 'food') {
       return <JournalFoodItem key={item.food.id} food={item.food} />;
+    }
+    if (item.kind === 'spending') {
+      return (
+        <JournalSpendingItem key={item.spending.id} entry={item.spending} />
+      );
+    }
+    if (item.kind === 'location') {
+      return (
+        <JournalLocationItem
+          key={`location-${item.location.date}`}
+          day={item.location}
+        />
+      );
     }
     if (item.kind === 'newspaper') {
       return (
@@ -1194,8 +1232,7 @@ function NewEntryComposer({
     content: string,
     files: StagedFile[],
     clipCount: number,
-    links: string[],
-    coords: Coords | null
+    links: string[]
   ) => void;
   onCancel: () => void;
 }) {
@@ -1219,11 +1256,6 @@ function NewEntryComposer({
   // did not exist yet and there was nowhere server-side for the text to go.
   // Minting the id up front is what removed that constraint.
   const clips = useClipStage({ kind: 'journal' });
-
-  // Nothing is asked of the device until the button is pressed — see
-  // LocationButton for why the Journal asks out loud where Food and Chat grab
-  // the fix silently.
-  const location = useLocationAsk();
 
   const stage = (transfer: DataTransfer | null, e: React.SyntheticEvent) => {
     const { accepted, rejected } = filesFromTransfer(transfer);
@@ -1249,14 +1281,7 @@ function NewEntryComposer({
       clips.clips.length === 0
     )
       return;
-    onSubmit(
-      clips.claimId(),
-      content,
-      files,
-      clips.clips.length,
-      links,
-      location.coords
-    );
+    onSubmit(clips.claimId(), content, files, clips.clips.length, links);
     // Not awaited: the clips are on the device, and the queue lands them behind
     // the create in JOURNAL_LANE whenever the backend is next reachable.
     void clips.commit();
@@ -1264,7 +1289,6 @@ function NewEntryComposer({
     setFiles([]);
     setLinks([]);
     clips.reset();
-    location.reset();
   };
 
   return (
@@ -1375,7 +1399,6 @@ function NewEntryComposer({
         </div>
       )}
       <div className="flex items-center justify-end gap-2 mt-2">
-        <LocationButton ask={location} testId="journal-new-entry-location" />
         <div className="flex-1" />
         <button
           onClick={() => {
@@ -1387,7 +1410,6 @@ function NewEntryComposer({
             setFiles([]);
             setLinks([]);
             setContent('');
-            location.reset();
             onCancel();
           }}
           className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
@@ -1963,6 +1985,74 @@ const JournalNewspaperItem = memo(function JournalNewspaperItem({
   );
 });
 
+// A day's map in the journal feed: where the phone went, with an orange pin
+// wherever an entry was written. The picture is drawn server-side on first view
+// and its URL changes whenever the day does, so a card for today stays current
+// without anything here having to know. Non-selectable, like the other
+// derived cards.
+const JournalLocationItem = memo(function JournalLocationItem({
+  day,
+}: {
+  day: JournalLocationDay;
+}) {
+  const lightbox = useLightbox();
+  const dayLabel = formatDay(day.date + 'T00:00:00');
+  const spent = whereaboutsLine(day.whereabouts);
+  const summary = [
+    day.placeCount
+      ? `${day.placeCount} place${day.placeCount === 1 ? '' : 's'}`
+      : null,
+    day.entryCount
+      ? `${day.entryCount} ${day.entryCount === 1 ? 'entry' : 'entries'} pinned`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  return (
+    <ItemCard
+      title={
+        <div className="flex items-baseline justify-between gap-2 mb-2">
+          <span className="text-[var(--color-text)] truncate">
+            🗺️ Where you went — {dayLabel}
+          </span>
+          {summary && (
+            <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+              {summary}
+            </span>
+          )}
+        </div>
+      }
+      body={
+        <>
+          {spent && (
+            <p className="text-sm text-[var(--color-text-muted)] mb-2">
+              {spent}
+            </p>
+          )}
+          {day.commutes?.map((trip, i) => (
+            <p key={i} className="text-xs text-[var(--color-text-muted)] mb-1">
+              {commuteLine(trip)}
+            </p>
+          ))}
+          <button
+            type="button"
+            className="block w-full"
+            onClick={() => lightbox.open(day.imageUrl)}
+          >
+            <img
+              src={day.imageUrl}
+              alt={`Map of where you went on ${dayLabel}`}
+              loading="lazy"
+              className="w-full max-h-72 object-cover rounded-md"
+            />
+          </button>
+          <ImageLightbox src={lightbox.src} onClose={lightbox.close} />
+        </>
+      }
+    />
+  );
+});
+
 const TASK_LIST_LABELS: Record<string, string> = {
   todo: 'To-Do',
   chores: 'Chores',
@@ -2023,6 +2113,94 @@ function JournalTaskEventItem({
     </button>
   );
 }
+
+// A purchase in the journal feed. A line typed on the Daily page is one row,
+// as small as a task event; a receipt or a clip gets a card with the photo and
+// what was said. View-only, like a meal.
+const JournalSpendingItem = memo(function JournalSpendingItem({
+  entry,
+}: {
+  entry: SpendingEntry;
+}) {
+  const lightbox = useLightbox();
+  const title = spendingTitle(entry);
+  const amount = spendingAmountLabel(entry);
+  const dayLabel = formatDayTime(entry.createdAt);
+
+  if (isCompactSpending(entry)) {
+    return (
+      <div className="flex items-baseline gap-2 px-3 py-1.5 text-xs text-[var(--color-text-muted)]">
+        <span aria-hidden>💳</span>
+        <span className="min-w-0 truncate text-[var(--color-text)]">
+          {title}
+        </span>
+        <span className="tabular-nums text-[var(--color-text)]">{amount}</span>
+        <span className="ml-auto shrink-0 opacity-70">{dayLabel}</span>
+      </div>
+    );
+  }
+
+  const geoLink = mapLink(entry.latitude, entry.longitude);
+  const photos = visualMedia(entry.media).filter(m => m.kind === 'image');
+  return (
+    <ItemCard
+      title={
+        <span className="text-[var(--color-text)] truncate">
+          🧾 {title}
+          {geoLink && (
+            <a
+              href={geoLink}
+              target="_blank"
+              rel="noreferrer"
+              onClick={e => e.stopPropagation()}
+              className="text-[var(--color-text-muted)] underline hover:text-[var(--color-text)]"
+            >
+              {' '}
+              · 🗺️ map
+            </a>
+          )}
+        </span>
+      }
+      meta={
+        <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+          <span className="tabular-nums text-[var(--color-text)] mr-2">
+            {amount}
+          </span>
+          {dayLabel}
+        </span>
+      }
+      body={
+        <>
+          {entry.notes && (
+            <div className="text-sm text-[var(--color-text)] whitespace-pre-wrap mb-2">
+              {entry.notes}
+            </div>
+          )}
+          <MealClips media={entry.media} />
+          {photos.length > 0 && (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {photos.map(m => (
+                <button
+                  key={m.id}
+                  onClick={() => lightbox.open(m.url)}
+                  className="shrink-0 h-28 rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
+                  title="View receipt"
+                >
+                  <img
+                    src={m.url}
+                    alt="Receipt"
+                    className="h-full w-auto object-contain"
+                  />
+                </button>
+              ))}
+            </div>
+          )}
+          <ImageLightbox src={lightbox.src} onClose={lightbox.close} />
+        </>
+      }
+    />
+  );
+});
 
 // A food-log entry in the journal feed: dish/place/rating with a media
 // filmstrip. View-only here — editing happens in the Food tab.

@@ -15,7 +15,7 @@ import type {
 } from '../../hooks/api';
 
 // prettier-ignore
-const { CARD1, CARD2, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks } = vi.hoisted(() => {
+const { CARD1, CARD2, REVIEW_CARD, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks } = vi.hoisted(() => {
   const CARD1: LearningCard = {
     id: 'c1',
     folderId: null,
@@ -28,6 +28,7 @@ const { CARD1, CARD2, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks } = vi.hoist
     derivedFrom: null,
     revisedFrom: null,
     due: '2026-07-17T00:00:00Z',
+    kind: 'qa',
     createdAt: '2026-07-01T00:00:00Z',
     updatedAt: '2026-07-01T00:00:00Z',
   };
@@ -36,6 +37,24 @@ const { CARD1, CARD2, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks } = vi.hoist
     id: 'c2',
     question: 'What is hoisting?',
     answer: 'Declarations are moved to the top of their scope.',
+  };
+  // A notebook saved For review: no back side, just its pages.
+  const REVIEW_CARD: LearningCard = {
+    ...CARD1,
+    id: 'r1',
+    question: 'For review',
+    answer: '',
+    kind: 'review',
+    sourceType: 'journal_review',
+    sourceId: 'e1',
+    review: {
+      entryId: 'e1',
+      title: 'Fern life cycle',
+      pages: [
+        { id: 'p1', name: 'Notes p1.jpg', url: '/api/journal/attachments/p1/file' },
+        { id: 'p2', name: 'Notes p2.jpg', url: '/api/journal/attachments/p2/file' },
+      ],
+    },
   };
   const GRADE: GradeResult = {
     coverage: {
@@ -85,8 +104,9 @@ const { CARD1, CARD2, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks } = vi.hoist
     generate: vi.fn(),
     chat: vi.fn(),
     listMcpServers: vi.fn(),
+    retireCard: vi.fn(),
   };
-  return { CARD1, CARD2, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks };
+  return { CARD1, CARD2, REVIEW_CARD, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks };
 });
 
 vi.mock('../../hooks/api', () => ({
@@ -148,6 +168,7 @@ beforeEach(() => {
   mocks.listAttempts.mockResolvedValue([]);
   mocks.saveAttempt.mockResolvedValue({ success: true, id: 'a1' });
   mocks.review.mockResolvedValue({ due: 'later', state: 'active' });
+  mocks.retireCard.mockResolvedValue({ success: true });
   mocks.listMcpServers.mockResolvedValue([
     {
       id: 'srv1',
@@ -278,6 +299,45 @@ describe('ReviewSession', () => {
 
     // Session over and nothing due anymore.
     expect(await screen.findByText('All caught up!')).toBeTruthy();
+  });
+
+  describe('retiring from the rating slide', () => {
+    it('retires the card instead of rating it and moves on', async () => {
+      mocks.getDue.mockResolvedValue([CARD1, CARD2]);
+      renderSession();
+      await screen.findByText('What is a closure?');
+      fireEvent.click(screen.getByText('Flip'));
+      await screen.findByText('What is hoisting?');
+      fireEvent.click(screen.getByText('Flip'));
+
+      expect(await screen.findByText('Result 1 of 2')).toBeTruthy();
+      fireEvent.click(screen.getByText('Retire card'));
+      await waitFor(() => expect(mocks.retireCard.mock.calls[0][0]).toBe('c1'));
+      expect(await screen.findByText('Result 2 of 2')).toBeTruthy();
+      expect(mocks.review).not.toHaveBeenCalled();
+    });
+
+    it('stays on the card when the retire fails', async () => {
+      mocks.retireCard.mockRejectedValue(new Error('offline'));
+      renderSession();
+      await screen.findByText('What is a closure?');
+      fireEvent.click(screen.getByText('Flip'));
+      fireEvent.click(await screen.findByText('Retire card'));
+      expect(
+        await screen.findByText('Could not retire the card.')
+      ).toBeTruthy();
+      expect(screen.getByText('Result 1 of 1')).toBeTruthy();
+    });
+
+    it("is offered under a review card's pages too", async () => {
+      mocks.getDue.mockResolvedValue([REVIEW_CARD, CARD1]);
+      renderSession();
+      await screen.findByText('Fern life cycle');
+      fireEvent.click(screen.getByText('Retire card'));
+      await waitFor(() => expect(mocks.retireCard.mock.calls[0][0]).toBe('r1'));
+      expect(await screen.findByText('What is a closure?')).toBeTruthy();
+      expect(mocks.review).not.toHaveBeenCalled();
+    });
   });
 
   it('shows the typed answer on the result while grading is pending', async () => {
@@ -615,6 +675,56 @@ describe('ReviewSession', () => {
       const input = await openChatAfterGrading();
       fireEvent.keyDown(input, { code: 'Digit1' });
       expect(mocks.review).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('review cards', () => {
+    it('shows the pages stacked with the ratings and no answer box', async () => {
+      mocks.getDue.mockResolvedValue([REVIEW_CARD]);
+      renderSession();
+      expect(await screen.findByText('Fern life cycle')).toBeTruthy();
+      const pages = screen.getAllByRole('img') as HTMLImageElement[];
+      expect(pages.map(p => p.getAttribute('src'))).toEqual([
+        '/api/journal/attachments/p1/file',
+        '/api/journal/attachments/p2/file',
+      ]);
+      expect(screen.queryByPlaceholderText(/Type your answer/)).toBeNull();
+      expect(screen.queryByText('Flip')).toBeNull();
+      expect(screen.getByText('How well do you remember this?')).toBeTruthy();
+    });
+
+    it('rates straight from the pages, self-rated, without an attempt', async () => {
+      mocks.getDue.mockResolvedValue([REVIEW_CARD, CARD1]);
+      renderSession();
+      await screen.findByText('Fern life cycle');
+      fireEvent.click(screen.getByText('Hard'));
+      await waitFor(() =>
+        expect(mocks.review).toHaveBeenCalledWith(
+          'r1',
+          expect.objectContaining({ rating: 2, answerMode: 'self' })
+        )
+      );
+      expect(mocks.saveAttempt).not.toHaveBeenCalled();
+      // On to the ordinary card, which still asks for an answer.
+      expect(await screen.findByText('What is a closure?')).toBeTruthy();
+      expect(screen.getByText('Card 2 of 2')).toBeTruthy();
+    });
+
+    it('a deck of only review cards starts over once rated', async () => {
+      mocks.getDue.mockResolvedValue([REVIEW_CARD]);
+      renderSession();
+      await screen.findByText('Fern life cycle');
+      mocks.getDue.mockResolvedValue([]);
+      fireEvent.click(screen.getByText('Good'));
+      expect(await screen.findByText('All caught up!')).toBeTruthy();
+    });
+
+    it('says so when the pages have not uploaded yet', async () => {
+      mocks.getDue.mockResolvedValue([
+        { ...REVIEW_CARD, review: { entryId: 'e1', title: null, pages: [] } },
+      ]);
+      renderSession();
+      expect(await screen.findByText(/pages haven't arrived yet/)).toBeTruthy();
     });
   });
 });

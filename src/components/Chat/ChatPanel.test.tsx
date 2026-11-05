@@ -22,6 +22,7 @@ vi.mock('../../hooks/api', () => ({
       deny: vi.fn(),
     },
     notes: { due: vi.fn().mockResolvedValue([]) },
+    journal: { contextPrompts: vi.fn().mockResolvedValue([]) },
     chatTodos: { list: vi.fn().mockResolvedValue([]) },
   },
 }));
@@ -109,6 +110,15 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+it('keeps the empty-chat composer near the top instead of filling the transcript height', async () => {
+  renderChat();
+  const welcome = await screen.findByText('Welcome to Lunaschal');
+  const transcript = welcome.parentElement!.parentElement!;
+  expect(transcript.classList.contains('flex-1')).toBe(false);
+  expect(transcript.classList.contains('shrink-0')).toBe(true);
+  expect(screen.getByPlaceholderText('Type a message...')).toBeTruthy();
 });
 
 describe('delegate proposals are durable confirm cards', () => {

@@ -28,45 +28,71 @@ what each device can currently do and which work remains device-only.
 
 - **iPad notebooks** (Capture → **Notes** or **Newspaper**, top right). A
   full-window PaperKit canvas with the tab bar hidden: Pencil ink,
-  pictures that can be moved and resized, text boxes and shapes from the tool
-  picker's **+**.
+  pictures that can be moved and resized, text boxes and shapes from **All tools →
+  Insert shape or text**. A slim 44-point favorites bar replaces the native palette:
+  Undo/Redo, saved color/width presets, and All tools (all eight inks, object/pixel
+  erasers, selection, ruler and insertion). Use the star beside a tool to add a
+  favorite; hold a favorite to edit, reorder or remove it. Tap the selected tool
+  for five size presets, a size slider and ink color; changes apply immediately
+  and saved favorites retain them. The eraser offers Object/Pixel modes and pixel
+  size. Pencil double-tap and squeeze follow the system action preference,
+  including switching back to the exact previous tool. Drag the handle to any
+  edge, or choose an edge in All tools. Favorites and position persist on this
+  device; long lists scroll inside the bar. The initial favorite is applied on
+  open, with light-page ink colors even when the app uses dark mode. PaperKit's
+  child controller is pinned to light appearance so SwiftUI's dark environment
+  cannot swap black and white ink on the white page.
   **Notes** are A4 pages, one at a time, each fitted whole to the window so
-  nothing scrolls. **Only a finger that lands at a side of the screen** (within
-  44 pt) turns a page: in from the right edge for the next page, in from the
-  left for the previous one, and a deliberate swipe (a third of the page's
-  width) turns it; short of that it springs back. Anywhere else one finger moves
-  nothing — PaperKit's scroll views need two fingers on a notes page — so a palm
-  that palm rejection misses can't slide the page from under the Pencil. Two
-  fingers still pinch, and pan when zoomed in. The system's swipe-back is off
-  while notes are open (the Back button stays), so the left edge turns pages.
-  Swiping on past the last page shows a **+ New page** marker and adding the
-  page is what finishing the swipe does; backwards from the first page nothing
-  moves. The top bar's arrows still work.
+  nothing scrolls. **Nothing on a notes page moves sideways**: pages turn and are
+  added only from the top bar (arrows, the page menu, **Add page**). One finger
+  moves nothing — PaperKit's scroll views need two fingers on a notes page — so
+  a palm that palm rejection misses can't slide the page from under the Pencil.
+  Two fingers still pinch, and pan when zoomed in. The system's swipe-back is
+  off while notes are open (the Back button stays), for the same stray palm.
   **Newspaper** opens today's archived issue (by the 4am day; the newest is offered if
-  today's isn't in) as **one continuous scroll**: a single canvas with every PDF
-  page stacked down it at its own shape, so ink can cross from one page to the
-  next. It is always fitted to the width, either way up, so nothing scrolls
-  sideways unless zoomed in and the paper reads by scrolling down. An issue's
-  pages share that one canvas, so they can't be deleted (Add page puts a blank
-  A4 sheet at the foot). An issue opened by an earlier build (one markup per
-  page) is converted on open, each page's ink moved down to its place in the
-  column; the paged original stays as the previous checkpoint. It downloads the PDF once
+  today's isn't in) as **one continuous scroll** of its PDF pages, each at its
+  own shape and each **its own canvas and its own saved markup**, stacked in a
+  scroll view of the app's that fits them to the width (and, with Zoom on, zooms
+  them). Only the pages near the screen have canvases, plus any written on this
+  session, which are kept until the notebook closes. An autosave encodes only the
+  pages written on since the last one, and a page's own markup says whether it
+  carries ink, with nothing drawn to find out; the single canvas this replaced
+  re-encoded the whole issue's ink on every save, which heated the iPad. Issue
+  pages can't be deleted (Add page puts a blank A4 sheet at the foot, which can).
+  An issue from before columns (a markup per page) opens as the stack as it is;
+  one saved as a column stays one, since ink can't be cut out of a PaperKit
+  markup by region. Passed in simulator; Pencil writing at the stack's zoom
+  needs checking on the iPad. It downloads the PDF once
   from `GET /api/newspapers/issues/<date>/pdf`, since mobile sync doesn't carry
   issue PDFs, and reopens that issue's notebook — filed or not — instead of making
   a second one, so a paper is written on through the day in one place.
   The web reader's own markup is untouched. Back autosaves (current + previous
   checkpoint, like drawings) and the notebook is listed under Draw → Notebooks to
-  continue. Ink the canvas hasn't reported yet is taken into the notebook before
-  any page turn, added page, lock or paste replaces the canvas, and before every
-  checkpoint and Save.
+  continue. **Each notes page has its own canvas** while the notebook is open: a
+  turn or an added page hides the page's canvas instead of loading the next page
+  into it, so ink PaperKit hands over late (seen on the iPad: a page written,
+  another added, most of the first gone) still lands on its own page. Every
+  page's canvas is read before each checkpoint, Save, lock or paste. A stroke no longer re-runs the editor's SwiftUI
+  body. **Ink log** (the notebook's ⋯ menu) lists turns, added pages, where each
+  page's ink came from (the canvas on screen, a turned-away page's canvas, or only
+  the read before a save), save timings and what an entry filed; Copy puts it on
+  the clipboard for a bug report. Passed in simulator, not yet verified with a
+  Pencil. While writing, ink is checkpointed at most every 5 seconds,
+  off the main thread; only touched pages are encoded and written, and untouched
+  ones are hard-linked from the previous checkpoint. The cover preview and a
+  newspaper's inked-page scan wait for Back, leaving the app, or Save, which save at
+  once, with background time requested so a suspension can't cut the write short.
+  Passed in simulator; the energy saving itself still needs checking on the iPad.
   **Notes belong to the entry draft**: Notes reopens the draft's notebook until the
   entry is saved, and the composer lists it under Attachments (tap to reopen,
-  swipe to take it out of the entry; it stays in Draw). **Save entry** — in the
-  composer, or **Save entry** inside the notes — files the typed text, links,
+  swipe to take it out of the entry; it stays in Draw). **Save** — in the
+  composer, or **Save** inside the notes — files the typed text, links,
   clips, files and the notes' pages (as JPEGs, blank pages dropped) as one journal
-  entry. Save food entry leaves the notes in the draft.
-  A **newspaper's Save** files its cover plus the pages written on (found from the
-  ink itself) and the notebook's one YouTube link. Saving the same issue again
+  entry. Food leaves the notes in the draft.
+  A **newspaper's Save** files its cover plus the pages written on (each page's
+  own markup; for a column issue, each page under some ink drawn at half size: a
+  whole-issue drawing at a tenth of its size lost fine pen and light pencil lines,
+  and with them the page; passed in simulator) and the notebook's one YouTube link. Saving the same issue again
   (**Update entry**) files every page written on so far and **replaces** the
   earlier entry: the capture carries `replaces`, sync holds it until the entry it
   replaces has gone up, and `POST /api/journal` deletes that entry once the new one
@@ -92,7 +118,11 @@ what each device can currently do and which work remains device-only.
   is iPhone-only); with no notebook open, its screenshot waits for the next one.
 
 - The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
-  default) is the composer below; **Daily** logs the day's selfie (front camera),
+  default on launch and when returning from another tab) is the composer below.
+  Capture and Daily show the same remaining count: one each for fewer than
+  2,000 calories, no selfie, and no body weight in the current 4am day.
+  Saved offline logs count immediately. **Daily** logs the day's selfie (front camera,
+  flash initially off),
   body weight, calorie entries and voluntary spending. Each is saved on the device
   first, keyed by the
   4am day it was logged on, and uploads to the Lifestyle routes on the next sync.
@@ -102,12 +132,32 @@ what each device can currently do and which work remains device-only.
   Calories take one line, split as the desktop card does it (`CalorieLine`, a port
   of `parseCalorieEntry`): "chicken and rice, ~600" becomes the food and its count.
   Swipe a calorie row left to delete it, including entries already on the server.
-  **Voluntary spending** takes only an amount in CAD and a free-text category
-  (for example, `15` and `McDonald's` or `30` and `Groceries`), shows today's total,
+  **Voluntary spending** takes one line with a free-text category followed by
+  an amount in CAD (for example, `McDonald's 15` or `Groceries 30.25`), shows today's total,
   and supports the same swipe deletion. Purchases and deletes queue offline and
   survive relaunch. Amounts are stored as integer cents in `spending_logs`.
   The backend and portable Swift tests cover replay and deletion during an upload;
-  the new simulator tests have not been run locally.
+  single-line spending capture, relaunch and deletion passed in the iPhone simulator.
+  A purchase can also be **captured like a meal**: the composer's **Spent** button
+  (beside Food) files the draft's words, receipt photos and clips under
+  `/api/spending`, where the server reads the merchant, category and amount out
+  of the receipt and the transcript. Until it has, the purchase shows a dash in
+  the Journal and Daily counts it as "being read" beside the total, never as $0.
+  Purchases replicate as `spending_logs`/`spending_media` into the Journal feed,
+  where merchant, category, amount and notes can be corrected offline. Videos are
+  refused (the server keeps photos and voice only). Composer layout and an offline
+  purchase reaching the feed passed in the iPhone simulator; camera capture of a real
+  receipt and the server's reading of it have not been verified on device.
+  **Save, the rightmost button, may file the draft as a meal or a purchase.**
+  It is pressed for everything out of habit, so a draft that Food or Spent could
+  also take (no links, no notes, no non-media files) is sent with `autoFile`.
+  Once its photos are captioned and its clips transcribed, the server classifies
+  it, and if it is clearly a meal or a purchase moves it there under the same id
+  (`backend/journal/refile.py`); anything uncertain stays in the journal. Replayed
+  uploads after the move are still acknowledged, and Transfers does not report
+  the moved entry as removed. The flag, the request body and the tidy rule pass
+  the portable Swift tests, and the composer passed in the iPhone simulator; the
+  server's sorting of a real photo has not been verified on device.
 - **Workout** (the third Capture page) is the desktop's workout log: one set or
   activity per line ("bicep curls 20, 10" in lb, "squats 10" bodyweight, bare
   "20, 10" for the selected pill, "walking 30" minutes), recent-exercise pills,
@@ -140,6 +190,40 @@ what each device can currently do and which work remains device-only.
   on the simulator (`HealthKitSourceTests`); reading real data with permission,
   and the permission sheet itself, are not yet verified on device. Background
   delivery (being woken when the Watch syncs) is not implemented.
+- **Location trail** (Settings → Location → Record where I go, off until turned
+  on). Needs **Always**, which the app now declares
+  (`NSLocationAlwaysAndWhenInUseUsageDescription`, `location` background mode)
+  and asks for; the section says what is missing (While Using, denied, Precise
+  Location off) and links to iOS Settings. Adaptive: visits and
+  significant-change monitoring all day, live GPS only while Core Motion says
+  walking, running or cycling (`TrailPolicy`, `LocationTracker`). Points queue
+  in a JSON-lines outbox and post to `/api/location/points` in batches, on their
+  own when enough piles up and inside every sync pass; the server draws a map of
+  each day for the web Journal feed (`backend/location/`). Core logic tested in
+  `LocationTrailTests`; the Settings flow passed in simulator
+  (`testLocationTrailAsksForLocationAndExplainsTheAnswer`). Background wakes,
+  the Always upgrade prompt and battery cost are not yet verified on device.
+  Each fix also carries Core Motion's current activity, which is how the
+  server tells a commute by bike from one by car.
+- **Places, Home & Work** (More → Places, or Settings → Places, Home & Work;
+  `PlacesScreen`). The server's saved places and the dated Home/Work periods
+  over them (`backend/place_roles.py`): add or edit a place with "Use current
+  location", set Home or a Work from a date, edit or remove a period in the
+  Home/Work history, and see the last eight weeks: office days of recorded
+  days, average commute each way and how it was made, and a bar per weekday.
+  The snapshot is cached, so the screen and the geofences work offline; edits
+  need the server. While the trail is on, the current Home and every current
+  Work are watched with `CLMonitor` (`RegionPlan`, at most 20, radius at least
+  100 m), and each stay inside one becomes a `region` trail point whose exit
+  updates the same id (`RegionLedger`). The server moves that day's recurring
+  work occurrence to the real arrival and departure, or creates an
+  "At <place>" event, and stops touching a day once it is edited by hand
+  (`backend/location/work_calendar.py`). The Journal feed shows a card per
+  recorded day: the server's map, time at Home and Work, and each commute.
+  Core logic tested in `PlacesTests`; the Places screen offline passed in
+  simulator (`testPlacesOpensOfflineAndSaysEditsNeedTheServer`). Geofence
+  events, relaunch on an exit and the day card against a real server are not
+  yet verified on device.
 - Weather. The Entry page shows the conditions now at its top left; tapping them
   shows feels-like (Open-Meteo's apparent temperature: wind chill and humidity),
   wind and gusts ("windy" from 30 km/h sustained or 50 km/h gusts), and whether
@@ -147,7 +231,7 @@ what each device can currently do and which work remains device-only.
   forecast is cached so it shows offline. With location permission, the Capture
   tab takes a fix when shown and sends it to `POST /api/lifestyle/weather/location`,
   so the forecast is for where the phone is.
-- Weather on entries. Save entry and Save food entry attach the fix if it is under
+- Weather on entries. Save and Food attach the fix if it is under
   15 minutes old; Save never waits for GPS. The server's entry-weather sweep
   (`backend/weather/entry.py`, woken by each save) looks the weather up for the
   entry's own place and capture hour, so an entry saved offline still gets the
@@ -156,7 +240,7 @@ what each device can currently do and which work remains device-only.
   after saving, at most every ten minutes).
 - Offline typed journal entries. On the phone, **Transcribe** and **Record**
   add clips to the Capture tab's draft; stopping keeps the clip there, and
-  only **Save entry** turns the draft into one entry. Clips upload through the
+  only **Save** turns the draft into one entry. Clips upload through the
   recordings route under that entry's id, in recorded order, so the server
   appends Transcribe clips' words after the typed text. Both modes retain the
   original mono AAC file. The draft (text, links, clips, photos, files)
@@ -169,13 +253,57 @@ what each device can currently do and which work remains device-only.
   staged into the same draft and uploaded after the entry is
   created, each under its own client-minted attachment ID. Passed in
   simulator for the library picker; the camera needs a device.
-- **Save food entry** (bottom middle, between Discard and **Save entry**) files
+- **Live Photos and videos on a journal entry.** Choose photo offers Live
+  Photos and videos as well as stills (`preferredItemEncoding: .current`, so
+  the original file arrives rather than a re-encoded copy), and Take photo
+  can record video. A Live Photo is one attachment: its still and its clip
+  are exported from the picked object itself (`MediaImport.export`, no
+  photo-library permission) and staged side by side (`CaptureStore.stageLivePhoto`).
+  In the feed it carries a Live Photo mark and plays in a `PHLivePhotoView`
+  once its clip has been fetched from `/api/journal/attachments/<id>/motion`;
+  an uploaded video shows the poster and length the server read off it with
+  ffmpeg, and streams rather than riding the bulk media sync.
+- **Every photo and video keeps the date it was taken.** It is read on the
+  device (EXIF with its offset; a movie's QuickTime creation date) and sent as
+  the upload's `capturedAt`; the camera's photo is written with the metadata
+  the camera produced instead of through `jpegData`, which stripped it. An
+  entry with no words, clips or links — only pictures and videos — is dated by
+  the earliest of them (`CaptureStore.entryDate`), so an old photo lands on
+  the day it was taken; anything with words keeps the time it was written. The
+  feed says "taken …" when that is a different day from the entry's.
+- **Videos and Live Photos upload in the background.** Once everything else in
+  the capture has landed they are handed to a background `URLSession`
+  (`JournalBackgroundUploader`) that keeps sending after the app is closed;
+  `BackgroundUploads` records what the server answered, and the outbox only
+  marks the capture synced after validating that answer as it would an inline
+  one. A force-quit cancels the system's uploads, which the next launch
+  notices and hands off again. Core logic passed in `LiveVideoCaptureTests`;
+  the feed's Live Photo mark, taken date, poster and length passed in
+  simulator (`testJournalFeedShowsMediaInsideTheCalendarBorder`). Picking a
+  real Live Photo or video, the camera's video, Live Photo playback and a
+  background upload finishing with the app closed are not yet verified on
+  device.
+- **Take Photo from the Action Button** (iPhone): Settings → Action Button →
+  Shortcut → Lunaschal → Take Photo. A press opens the app on the camera, even
+  from a cold launch; the photo goes into the Capture draft exactly as the
+  composer's Take photo would, and closing the camera leaves you on Capture →
+  Entry to add words or press Save, Food or Spent. One photo per press. It is an
+  App Shortcut (`App/QuickPhoto.swift`), so it is in Shortcuts and Siri too. The
+  intent and the tab switch passed in simulator; the button itself and the
+  camera have not been verified on device.
+- **The iPhone is portrait only**; the iPad still turns every way. Passed in
+  simulator (both). Full-screen video on the phone no longer rotates either.
+- **Food** (bottom middle, between Discard and **Save**) files
   the same draft in the food log instead: text, photos/videos and clips, under
-  client-minted meal and media IDs, with the capture time the server now keeps.
+  client-minted meal and media IDs. A photo's original capture time dates the
+  meal locally and on upload; without photo metadata it uses the save time.
   YouTube links stay in the composer for the next journal entry, and the
   button is disabled while a non-media file is attached. Clips go through the
   food recordings route, which transcribes each one into the meal's note.
   Passed in simulator offline; uploading to a real server is untested.
+  The YouTube field's Paste button validates and adds the copied link in one tap.
+  Pasting images into the entry text box stages them as photo attachments;
+  existing words stay intact and the images survive closing the app.
 - **Editing a server entry or a meal** (Journal → open it → Edit) offers the
   Capture tab's own buttons: Transcribe, Record, Take photo, Choose photo and
   Attach file, plus YouTube links for a journal entry. What they make waits in
@@ -199,6 +327,10 @@ what each device can currently do and which work remains device-only.
   edited like any other once it has synced. Typed journal entries only, not
   meals or recordings, and not their attachments. Passed in simulator offline;
   the offline-retry path is covered by `CaptureEditTests` only.
+- Saved morning briefings show a Server oddities button when a report is present.
+  It opens a large sheet with expandable explanations and selectable log text,
+  using the cached message so past reports remain readable offline. iOS sheet
+  verification requires the simulator; Linux tests cover report extraction.
 - Chat works like the desktop's: today's one conversation, the streamed reply
   with its steps and reasoning, sources, Markdown, New chat / Clean slate, the
   delegate's editable confirm cards (calendar, calories, food, recipe, recipe
@@ -209,6 +341,17 @@ what each device can currently do and which work remains device-only.
   transcribes and answers it when it lands. A reply that outlives its stream is
   picked up by polling, as on the desktop. Passed in simulator, offline and
   against a local test server with a stand-in model; not yet verified on device.
+- Journal → Context (the speech-bubble page right of Calendar; the bubble
+  fills while any are waiting) offers journal-context cards for yesterday's image/audio-only
+  entries, filled to three from older entries when needed. The server owns
+  the daily batch and permanent dismissals, shared with the web. Each sheet
+  previews photos and plays audio, accepts typed context, and stages transcribed
+  recordings on the original entry. Typed saves and dismissals need a connection;
+  recording clips persist locally and queue for upload on Save or Close.
+  Failed saves retain the words and clips. Original entry dates are preserved.
+  Three iPhone simulator tests cover save/dismiss, failed-save recovery, and
+  recording/relaunch/offline queuing; physical-device behavior is unverified.
+  The web shows the same cards in Chat.
 - Todo is the desktop Lifestyle tab's tasks card: up to four daily tasks (tick
   for today, add, rename, reorder and delete under Edit) above the To-Do and
   Archive lists, ordered and filtered as on the desktop (soonest due first,
@@ -234,6 +377,20 @@ what each device can currently do and which work remains device-only.
   the screen. The last feed loaded is kept, so it still reads offline.
   Passed in simulator offline; not yet run against a server or verified on
   device.
+- More → Writing (its own tab on iPad) is the desktop Writing tab's notes and
+  discussions, over `/api/writing` and the Chat tab's routes. A book's notes
+  can be read, edited (debounced save), retyped, pinned (a pinned note is read
+  into every discussion turn, on any device) and restored from their history.
+  A discussion is an ordinary chat conversation the server knows belongs to
+  the book, so typed turns stream through `/api/chat/stream`, a spoken turn
+  queues in the Chat tab's recording outbox and is answered by the server, and
+  the notes the agent proposes arrive as the same editable confirm cards.
+  Fetched, not replicated: everything but a queued voice message needs the
+  server. New books can be started from the + on the book list (title and
+  description). Chapters and canon imports stay on the desktop.
+  Screens and the card passed in simulator against a fixture
+  (`testWritingShowsPinnedNotesAndANoteCard`); not yet run against a server
+  or verified on device.
 - Learning (More → Learning) is the desktop Learning tab's Review, Queue and
   Browse over the same `/api/learning` routes, filtered by folder and tag.
   Review runs the desktop's two passes: answer each due card (typed, or
@@ -258,14 +415,28 @@ what each device can currently do and which work remains device-only.
   in-memory stand-in with sample folders, tags, due and queued cards and a
   word-match grader, so the screen can be seen without one; a UI test runs a
   whole review against it.
+- Review cards: on the iPad notebook, the menu beside the picture button holds
+  the notebook's YouTube video and a **For review** switch, kept per notebook.
+  Saving with it on files the entry as usual and sends `forReview`, and the
+  server makes a learning card in the built-in For review folder, first due at
+  the next 4am. It has no back side: in Review its pages are stacked down one
+  scroll with Again/Hard/Good/Easy after the last, rated straight from there
+  with no answer and no grade, in the same deck as every other card. Menu,
+  switch and reading/rating against `-learningFixture -learningReviewCard`
+  passed in simulator (iPad and iPhone); not yet run against a server or
+  verified on device.
 - Offline YouTube links attached to an entry (any number per entry), with
   optional commentary kept separate from the attachments. A link-only entry has
   an empty text body, just like the web composer. Drafts and stable entry and
   per-link attachment IDs are preserved. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
-- Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
-  Study and Draw. Journal's toolbar has Sync on the left and a Journal/Calendar
+- Native Capture / Journal / Chat / Todo / More tabs on iPhone. iPad has
+  Capture, Journal, Chat, Todo, Study, Draw, Library, Jobs, Learning and Settings
+  as individual tabs when the window is wide. A compact window (Split View,
+  Slide Over) gets the iPhone's five tabs, with Study and Draw at the top of More:
+  left to iPadOS, the overflow nested every tab inside its own More list and
+  Library showed two back buttons. Journal's toolbar has Sync on the left and a Journal/Calendar
   switch on the right. The Journal page is the desktop's feed: one newest-first timeline
   with inline photos, playable voice clips (desktop WebM clips arrive as an AAC copy),
   videos and YouTube posters, and calendar events' category-coloured borders around the
@@ -276,7 +447,11 @@ what each device can currently do and which work remains device-only.
   their colours, overlapping events side by side,
   optional drag editing (the bottom-left button cycles **Off → Move → Resize → Off**,
   starting Off each visit; taps still open events), and shaded
-  wake/sleep bands with an editor; changes are saved on the device and replayed in order on the next sync. More
+  wake/sleep bands with an editor, plus a reading rail on the right edge showing the
+  day's in-app reading (fetched from `/api/calendar/reading/<date>`, cached for offline;
+  a fic's chapters read back to back — breaks of 30 minutes or less — share one label, titles wrap to two lines
+  and are fitted around event labels so neither overlaps, a tapped title opens in full with each chapter's
+  times, and tapping the rail hides them — passed in simulator); changes are saved on the device and replayed in order on the next sync. More
   holds Library, Learning and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
   Library/Folders switch. Library mode has provider pills and sorts by the site's latest
   chapter date (`latest_activity`), not the download time. Folders mode lists folders and Unsorted,
@@ -284,7 +459,16 @@ what each device can currently do and which work remains device-only.
   Favorite/Continue-reading filters, and recent/title sorting; there is no tag filter, since
   fics carry hundreds of user tags. The toolbar's refresh calls `POST /api/fanfic/refresh-alerts`,
   and long-pressing a site's fic calls `POST /api/fanfic/<id>/check-updates` (shallow or deep);
-  both only queue work for the server, and new chapters arrive by sync. Importing goes through
+  both only queue work for the server, and new chapters arrive by sync. A book's rating, review,
+  shelf (`fics.shelf`; finished/dropped are the archive, hidden by default) and folders are
+  edited through the outbox as `fics` operations, and chapter read marks as
+  `fic_chapter_reads` create/delete. Both are last-write-wins
+  (`backend/mobile_sync/fic_edits.py`), and a book has at most one waiting edit
+  (`ReplicaStore.queueFicEdit` merges). `fic_chapter_reads` and `fic_chapter_reactions` sync
+  as their own scope, keyed by chapter id, only when the server advertises them. A like is a
+  `fic_chapter_reactions` update (`{ficId, liked, assumed}`); the server pushes it to the forum,
+  except an `assumed` one (Open on site). Re-get chapter calls
+  `POST /api/fanfic/chapters/<id>/refetch`, and the Backlog folder reads each book's `backlog` flag. Importing goes through
   `POST /api/fanfic/import` from two places: the share extension (`Share/`, a link shared from
   any app) and Settings → Library downloads → Import a fic. A link sent while the server is
   unreachable waits in `FicImportOutbox`, in the App Group container the two share, and the
@@ -295,12 +479,21 @@ what each device can currently do and which work remains device-only.
   tests only; the hand-off needs a signed build (an unsigned one has no App
   Group, and the extension says so). Sharing up to 20 images on iPhone or iPad
   sends them as journal screenshots. Original files first enter a durable App Group
-  outbox, then upload immediately or retry on the app's next sync. The existing
+  outbox, then upload immediately. An unreachable server (a VPN or MagicDNS
+  name not answering yet as the phone wakes) is retried for a few seconds, then
+  the images go to a background `URLSession` in the App Group
+  (`Shared/ScreenshotBackgroundUpload.swift`) that sends them once the server is
+  reachable, without the app being opened; the app's next sync still reconciles
+  the outbox, and the server de-duplicates by attachment id. The existing
   desktop screenshot endpoint groups consecutive uploads into one entry until
   other journal activity intervenes; screenshots do not become entry text.
   Grouping follows server arrival order, including offline retries. Timestamps
   record when each image was shared. Core and backend tests cover persistence,
-  retries and grouping; native share-sheet verification remains pending.
+  retries and grouping. Image intake tries alternate representations if a
+  source cannot supply its first image format, with data and UIKit-image
+  fallbacks; these paths pass simulator unit tests. Sharing from the system
+  screenshot preview on a signed device, and the background handoff, remain
+  unverified on device (retry and request shape pass core tests).
   Other saved material is grouped
   under Study. Download controls remain in More → Settings → Library downloads.
   Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:
@@ -312,7 +505,15 @@ what each device can currently do and which work remains device-only.
   download state (on the device, half on it, not on it, a PDF book, one the server can't
   send) and download from an in-app stand-in server slowly enough to watch, so the Library
   and its download states can be seen without a server. Each launch resets them,
-  and the reader moves between chapters with Previous/Next. The reader's bottom-left menu has Text and
+  and the reader moves between chapters with Previous/Next, shown above and below the
+  text and kept within the chapter's threadmark category. A book with more than one
+  category (Threadmarks, Sidestory, Informational…) lists each under its own tab, opening
+  on the continue point's tab, and a forum/FFN/AO3/Patreon fic can be asked for its
+  latest chapters from its book page and the reader's menu, not only by long-pressing it
+  in the library. A chapter shows its pictures — the server's copies, saved with the fic
+  (`fic-images/`, cleared by "Remove downloaded media") or fetched on first view — and
+  the post's colours, fonts, sizes and centring, with colours lightened as needed to stay
+  legible in dark mode (passed in simulator). The reader's bottom-left menu has Text and
   Transcribe commentary (a journal capture carrying `ficID`/`chapterID`: typed text
   is posted as `raw_content` and then linked, a recording links in its upload),
   and Continue and Bookmark. User scrolling is logged as reading spans
@@ -398,7 +599,7 @@ what each device can currently do and which work remains device-only.
   script-disabled WebKit view with remote resources blocked. Knowledge article
   text is opt-in. Archive videos and ZIM packages are not bulk-downloaded.
 - Downloaded Knowledge articles are browsable and searchable in Library, with
-  Load more support and a selectable plain-text reader. Turning off future
+  infinite scrolling and a selectable plain-text reader. Turning off future
   Knowledge downloads keeps existing articles readable. Markdown source is
   shown as text; remote images and embedded pages are not loaded. This reads
   replicated Knowledge articles, not Wikipedia ZIM packages.
@@ -491,8 +692,9 @@ publicly to make CI work: simulator capture tests never contact it.
   termination, the manifest is marked interrupted; the audio is retained for
   playback/export and explicit recovery. An AAC container killed before
   finalization may not be playable. We do not claim crash-proof in-flight audio.
-- Journal initially shows 200 records; each Library category starts with 50, with Load more
-  controls to reveal further records already stored on the device. Library search
+- Journal initially shows 200 records, with a Load more control; each Library list
+  (books and every category) starts with 50 and loads 50 more of the records already
+  stored on the device each time it is scrolled to the end. Library search
   filters the selected category and can expand beyond 50 matches. Counts and
   results share the same filter and stable revision/ID ordering. Loading more
   does not contact the server. Attachment imports remain outstanding.
@@ -535,8 +737,10 @@ publicly to make CI work: simulator capture tests never contact it.
 - The Watch has a pomodoro timer: Focus (25 minutes, then Continue, a 5-minute
   Break, or Cancel) and Timeout (10 minutes, then Continue or Cancel). Rules are
   `PomodoroTimer` in LunaschalCore; the state is saved, so a relaunch resumes from
-  the end time. A local notification carries the same buttons, since the app is
-  suspended with the wrist down. Each finished or cancelled run goes to the phone
+  the end time. At the end the Watch buzzes until Continue, Break or Cancel, by
+  the same alarm as Workout (below); a local notification just after the end
+  carries the same buttons, as the fallback for a run a Control started while
+  the app was asleep, which gets no alarm until the app next comes forward. Each finished or cancelled run goes to the phone
   by `transferUserInfo` and is deleted from the Watch only after the phone replies
   `pomodoroStored`; the phone's `pomodoro-outbox` uploads it to
   `POST /api/lifestyle/pomodoro/sessions`, and Lifestyle shows it on the Focus card.
@@ -545,6 +749,36 @@ publicly to make CI work: simulator capture tests never contact it.
   checking the simulator without tapping. The countdown, end-of-timer choices and
   relaunch passed in the watchOS simulator; notification buttons and the
   Watch-to-phone transfer need paired devices.
+- The Watch opens on full-screen pages swiped horizontally: Focus, Timeout,
+  Workout, Record, Transcribe, then the recordings log. Each complication (and
+  each launcher button) opens its own page and acts at once; the app opens on
+  whichever timer is already going.
+- Workout is a 90-second rest timer (`RestTimer` in LunaschalCore), separate
+  from the pomodoro and never logged. When it ends the Watch buzzes every 1.5 s
+  until Stop or Restart, using a smart-alarm `WKExtendedRuntimeSession`
+  (`WKBackgroundModes: alarm`), with a notification as fallback. An app gets
+  one such session at a time, so `WatchAlarm` keeps one for every timer,
+  scheduled for the earliest end, buzzing while any timer that rang is
+  unanswered; dismissing it from the system's alarm screen stops Workout and
+  only silences a finished pomodoro. Debug builds take `-RestSeconds 5`. The pages, the
+  countdown, the ringing screen and the repeating haptic (in the system log)
+  passed in the watchOS simulator, **but only with an ad-hoc (`-`) signature**:
+  an unsigned `CODE_SIGNING_ALLOWED=NO` build gets "client is not entitled"
+  from the alarm service and shows "Couldn't set the alarm". The buzz with the
+  wrist down, and Stop/Restart ending it, need the device. A 6-second Focus run
+  (`-PomodoroSeconds 6`) scheduled the same session and repeated the haptic in
+  the simulator too.
+- A running timer (Focus, Break, Timeout, Workout) shows on every timer
+  complication as the system Timer draws one: a ring round the whole edge that
+  empties, with the time left centred inside it, the time with a gauge in a corner. A recording turns its launcher
+  button and Control red, and its Record or Transcribe complication into the
+  elapsed time (a full ring round it on the circular one, "Recording" or
+  "Transcribing" along a corner) — red alone vanished on faces drawn tinted or
+  accented, where an active mic looked exactly like an idle one. The launcher
+  row is Focus, Timeout, Record and Transcribe; Workout has its own complication. Every change reloads all complications and Controls, and the app reloads
+  them again as the face comes back; before this, timer changes never reloaded
+  the launcher row. Builds in the watchOS simulator; how it looks on the face
+  needs the device.
 - Settings checks the actual Foundation Models text-model and locale availability,
   including disabled/ineligible/not-ready states. Generation and local speech
   recognition remain optional later layers. Server transcription is the only

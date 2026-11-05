@@ -32,6 +32,7 @@ from backend.ai.provider import is_ai_configured
 from backend.chat.compaction import _segment_rows
 from backend.db.connection import get_db, mapping_to_dict
 from backend.delegate import runs
+from backend.writing import discuss as writing_discuss
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,15 @@ def start_reply(conversation_id: str, user_message_id: str) -> str | None:
     # No queue to relay: nobody asked for this over a connection. The run
     # checkpoints the row as it goes and the Chat tab's poll is what picks it up
     # — the same path a browser takes after its stream drops.
-    runs.start(message_id, messages, '', toolset='chat',
-               conversation_id=conversation_id)
+    # A clip dictated into a Writing discussion is a Writing turn: its prompt,
+    # its project's tools, and none of the Chat tab's life wiki.
+    writing = writing_discuss.run_config(conversation_id)
+    if writing:
+        toolset, system_prompt, project_id = writing
+        runs.start(message_id, messages, system_prompt, toolset=toolset,
+                   conversation_id=conversation_id, writing_project_id=project_id)
+    else:
+        runs.start(message_id, messages, '', toolset='chat',
+                   conversation_id=conversation_id)
     logger.info('Auto-replying to %s as %s', user_message_id, message_id)
     return message_id

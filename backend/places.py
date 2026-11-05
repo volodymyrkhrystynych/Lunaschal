@@ -11,11 +11,26 @@ def list_places(db) -> list[dict]:
 
 def format_places_context() -> str:
     from backend.db.connection import get_db
-    places = list_places(get_db())
+    from backend.day_boundary import day_key_for
+    from backend.place_roles import active_on, list_periods
+    db = get_db()
+    places = list_places(db)
     if not places:
         return ''
+    today = day_key_for()
+    periods = list_periods(db)
+    out = []
+    for p in places:
+        item = {k: p[k] for k in ('name', 'notes', 'latitude', 'longitude', 'radius_m')}
+        mine = [r for r in periods if r['place_id'] == p['id']]
+        current = next((r['role'] for r in mine if active_on(r, today)), None)
+        if current:
+            item['role'] = f'current {current}'
+        elif mine:
+            item['role'] = 'former ' + '/'.join(sorted({r['role'] for r in mine}))
+        out.append(item)
     return 'User-saved places (names and context, not evidence of current whereabouts):\n' + json.dumps(
-        [{k: p[k] for k in ('name', 'notes', 'latitude', 'longitude', 'radius_m')} for p in places], ensure_ascii=False)
+        out, ensure_ascii=False)
 
 
 def nearby_places(latitude, longitude, places: list[dict]) -> list[str]:

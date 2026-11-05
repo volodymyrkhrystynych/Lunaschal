@@ -81,12 +81,21 @@ export function Folders() {
                       </option>
                     ))}
                   </select>
-                  <button
-                    onClick={() => deleteFolder.mutate(f.id)}
-                    className="text-xs text-red-400 hover:text-red-300"
-                  >
-                    Delete
-                  </button>
+                  {f.system ? (
+                    <span
+                      className="text-xs text-[var(--color-text-muted)]"
+                      title="Notebooks saved For review land here"
+                    >
+                      Built in
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => deleteFolder.mutate(f.id)}
+                      className="text-xs text-red-400 hover:text-red-300"
+                    >
+                      Delete
+                    </button>
+                  )}
                 </>
               }
             />

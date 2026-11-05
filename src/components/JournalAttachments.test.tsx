@@ -148,6 +148,59 @@ describe('JournalAttachments', () => {
     ).toBeNull();
   });
 
+  it('plays a Live Photo clip over its still only while pointed at', () => {
+    const { container } = renderIt(
+      [
+        attachment({
+          kind: 'image',
+          hasMotion: true,
+          motionUrl: '/api/journal/attachments/a1/motion',
+        }),
+      ],
+      false
+    );
+    expect(screen.getByText('LIVE')).toBeTruthy();
+    expect(container.querySelector('video')).toBeNull();
+    fireEvent.pointerEnter(screen.getByRole('img').parentElement!);
+    expect(container.querySelector('video')?.getAttribute('src')).toBe(
+      '/api/journal/attachments/a1/motion'
+    );
+    fireEvent.pointerLeave(screen.getByRole('img').parentElement!);
+    expect(container.querySelector('video')).toBeNull();
+  });
+
+  it('says when a photo was taken on another day than it was attached', () => {
+    const { unmount } = renderIt(
+      [attachment({ kind: 'image', capturedAt: '2024-07-01T12:00:00Z' })],
+      false
+    );
+    expect(screen.getByTitle('When this was taken').textContent).toMatch(
+      /2024/
+    );
+    unmount();
+    renderIt(
+      [attachment({ kind: 'image', capturedAt: '2026-07-30T11:00:00Z' })],
+      false
+    );
+    expect(screen.queryByTitle('When this was taken')).toBeNull();
+  });
+
+  it('gives an uploaded video its poster', () => {
+    const { container } = renderIt(
+      [
+        attachment({
+          kind: 'video',
+          mime: 'video/quicktime',
+          thumbnailUrl: '/api/journal/attachments/a1/thumbnail',
+        }),
+      ],
+      false
+    );
+    expect(container.querySelector('video')?.getAttribute('poster')).toBe(
+      '/api/journal/attachments/a1/thumbnail'
+    );
+  });
+
   it('takes a picked file, naming it after the filename', async () => {
     const { container } = renderIt([]);
 

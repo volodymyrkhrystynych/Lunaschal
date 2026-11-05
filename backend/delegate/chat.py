@@ -39,8 +39,11 @@ from backend.chat.context import expand_attachments
 from backend.delegate import limits, research_tools, tools as proposal_tools
 from backend.lifewiki import tools as life_tools
 from backend.lifewiki.tools import LifeTools
+from backend.goals import tools as goal_tools
 from backend.research import agent as tool_loop
 from backend.research import wiki as wiki_tools
+from backend.writing import canon_tools
+from backend.writing import proposals as writing_proposals
 from backend.writing import tools as writing_tools
 
 logger = logging.getLogger(__name__)
@@ -63,14 +66,23 @@ _LIFE_WIKI_TOOLS = [t for t in wiki_tools.TOOLS
 _LIFE_WIKI_NAMES = {t['function']['name'] for t in _LIFE_WIKI_TOOLS}
 
 TOOLS = (research_tools.TOOLS + proposal_tools.TOOLS + life_tools.TOOLS
-         + _LIFE_WIKI_TOOLS)
+         + _LIFE_WIKI_TOOLS + goal_tools.TOOLS)
 
 DECISION_NOTE = """Right now your only job is to decide which of your tools this \
 message needs, if any — your reply comes afterwards, in a separate turn.
 
 Use the propose_ tools to record something the user asked you to record, and \
-fill in every detail they actually gave: the deadline, the time, how important \
-it is. Do not drop a detail because it was not the main point of the sentence.
+fill in every detail they actually gave: the deadline, the time, how long it \
+took, how important it is. Do not drop a detail because it was not the main point of the sentence.
+
+Act on the latest user message only. Earlier messages are context, not new \
+requests to execute again. Use add_todos only for newly requested items. \
+When asked to add to-dos, call add_todos with all the requested items. Writing \
+"added" in prose does not save anything. \
+Previously saved to-dos listed in assistant messages have already been \
+handled: do not recreate them, even with a different title, unless the user \
+explicitly asks to add them again. A follow-up may refer to earlier details; \
+use those details without repeating earlier actions.
 
 Where they clearly meant a detail but were too vague for you to act on it — \
 "soon", "before the trip", an event with no date you can work out — call \
@@ -96,6 +108,12 @@ this turn is discarded."""
 # discussions: this turn's wording is the only thing that decides whether the
 # library gets searched before the web, and three hand-kept copies drift.
 DECISION_NOTE = DECISION_NOTE.format(research_note=research_tools.RESEARCH_NOTE)
+DECISION_NOTE += '\n\nFor daily goals and prizes use create_goal, list_goals, check_goal and update_goal. '
+DECISION_NOTE += ('Save only goals the user asks to track. Check saved goals before recreating one. '
+                  'When asked about progress or whether a prize is earned, call check_goal: '
+                  'it includes today and can award immediately, even early in the day. '
+                  'Never calculate an award from memory. Uncertain evidence is unresolved, not a missed day. '
+                  'Only mark a reward redeemed when the user says they used it.')
 
 # The Writing discussion's decision turn. Same research rule, none of the Chat
 # tab's paragraphs about staging, asking or remembering — it has no confirm
@@ -120,6 +138,30 @@ full, and writing_search finds a name or a phrase across all of them.
 Anything the author attached to this conversation is already above. Use these \
 for what they did not attach — before asking them to paste something in, and \
 before inventing a detail the story has already settled."""
+
+# The server-driven Writing discussion's decision turn (toolset 'writing').
+# The research turn's rule, the project recall note, and the one thing the
+# inline 'research' path could never have: staging notes onto confirm cards.
+WRITING_NOTEBOOK_NOTE = """When the author settles something in this message — \
+a decision about a character, a rule of the world, a change to the plan — use \
+propose_note to record it as a new note, or propose_note_update to add it to \
+the note that already covers it (check writing_list if unsure which exists). \
+The author confirms each card; nothing is saved until they do. Do not propose \
+for ideas still being floated, and do not propose the same thing twice."""
+
+WRITING_CANON_NOTE = """This story is set in an existing work. canon_search \
+and canon_read reach the original's wiki: use them when a detail of the source \
+material matters and you are not certain of it, before the general library or \
+the web."""
+
+
+def _writing_decision_note(has_canon: bool) -> str:
+    note = (f'{RESEARCH_TURN_NOTE}\n\n{WRITING_RECALL_NOTE}\n\n'
+            f'{WRITING_NOTEBOOK_NOTE}')
+    if has_canon:
+        note += f'\n\n{WRITING_CANON_NOTE}'
+    return note
+
 
 ANSWER_INSTRUCTION = (
     'Reply to the user now, in your own voice. If the knowledge tools or web delegate found '
@@ -156,6 +198,39 @@ def _system_prompt(messages: list[dict], system_prompt: str = '') -> str:
     return system
 
 
+def _with_saved_todos(messages: list[dict]) -> list[dict]:
+    """Keep durable action receipts in history, including compaction input.
+
+    The answer prose may not enumerate every item. The persisted tool trace
+    does, so later turns must see it to know which requests were handled.
+    """
+    result = []
+    for message in messages:
+        item = dict(message)
+        if item.get('role') == 'assistant':
+            meta = item.get('metadata') or {}
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except (ValueError, TypeError):
+                    meta = {}
+            steps = meta.get('steps', []) if isinstance(meta, dict) else []
+            saved = []
+            if isinstance(steps, list):
+                saved = [
+                    step['arg'] for step in steps
+                    if isinstance(step, dict) and step.get('tool') == 'add_todos'
+                    and step.get('ok') is True and isinstance(step.get('arg'), str)
+                ]
+            if saved:
+                item['content'] = (item.get('content') or '') + (
+                    '\n\n[Previously saved to-dos; do not add again: '
+                    + '; '.join(saved) + ']'
+                )
+        result.append(item)
+    return result
+
+
 def _main_dispatch(*, life: LifeTools, life_wiki, checkpoint, deadline):
     """Bind conversation-scoped tools and the nested web delegate for one run."""
     action_calls: set[tuple[str, str]] = set()
@@ -180,6 +255,7 @@ def _main_dispatch(*, life: LifeTools, life_wiki, checkpoint, deadline):
 
     dispatch.update({name: life_wiki for name in _LIFE_WIKI_NAMES})
     dispatch.update({name: life for name in life_tools.TOOL_NAMES})
+    dispatch.update({name: goal_tools for name in goal_tools.TOOL_NAMES})
     proposal_dispatch = SimpleNamespace(run_tool=run_proposal)
     dispatch.update({
         tool['function']['name']: proposal_dispatch for tool in proposal_tools.TOOLS
@@ -202,6 +278,10 @@ def _toolbox(toolset: str, *, conversation_id, checkpoint, deadline,
                    confirm cards exist on that screen to accept a proposal on,
                    and the life wiki is about the user rather than the piece
                    they are writing.
+    - 'writing'  — a Writing discussion on the durable path: research,
+                   recall over its project, note proposals, and its canon
+                   when one is linked. Only ever chosen by the server, from
+                   the conversation row (backend/writing/discuss.py).
     - 'none'     — the voice listener, task nudges, the morning check-in: they
                    speak their replies aloud, so a gathering turn is latency
                    before the first word with no UI to show a step in.
@@ -212,6 +292,25 @@ def _toolbox(toolset: str, *, conversation_id, checkpoint, deadline,
     LifeTools built unconditionally would leave a Writing run one dispatch-map
     typo away from the user's journal, and the same holds in reverse.
     """
+    if toolset == 'writing':
+        # Server-derived scope only (backend/writing/discuss.run_config): this
+        # toolset is never chosen from a request body, so a project id here is
+        # one the conversation row asserted, not one a client claimed.
+        if not writing_project_id:
+            return None
+        tools, dispatch, _state = research_tools.build(
+            checkpoint=checkpoint, deadline=deadline)
+        recall = writing_tools.WritingTools(writing_project_id)
+        proposals = writing_proposals.WritingProposals(writing_project_id)
+        tools = tools + writing_tools.TOOLS + writing_proposals.TOOLS
+        dispatch.update({n: recall for n in writing_tools.TOOL_NAMES})
+        dispatch.update({n: proposals for n in writing_proposals.TOOL_NAMES})
+        canon = canon_tools.CanonTools(writing_project_id)
+        has_canon = canon.available
+        if has_canon:
+            tools = tools + canon_tools.TOOLS
+            dispatch.update({n: canon for n in canon_tools.TOOL_NAMES})
+        return tools, dispatch, _writing_decision_note(has_canon)
     if toolset == 'research':
         tools, dispatch, _state = research_tools.build(
             checkpoint=checkpoint, deadline=deadline)
@@ -274,7 +373,7 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     timed_out = False
     system = _system_prompt(messages, system_prompt)
     messages, rolling_context = compaction.compact_for_prompt(
-        messages, conversation_id,
+        _with_saved_todos(messages), conversation_id,
     )
     context_blocks = [
         compaction.handoff_context(conversation_id),
@@ -315,11 +414,31 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
                 yield ('step', payload)
             else:
                 gathered = payload
-        conversation = gathered.get('messages', conversation)
+        # The loop's closing prose is an unexecuted draft, not evidence of a
+        # write. Keeping "I've added them" here taught the answer to repeat a
+        # success even when the decision turn never called a tool.
+        gathered_messages = gathered.get('messages', [])
+        conversation += [
+            dict(message, content=None) if message.get('role') == 'assistant'
+            else message
+            for message in gathered_messages[len(conversation) + 1:]
+            if message.get('role') != 'assistant' or message.get('tool_calls')
+        ]
         sources = gathered.get('sources', [])
         evidence = gathered.get('evidence', [])
 
-    conversation.append({'role': 'user', 'content': ANSWER_INSTRUCTION})
+    answer_instruction = ANSWER_INSTRUCTION
+    if toolset == 'chat' and box:
+        receipts = [step.get('arg', '') for step in steps
+                    if step.get('tool') == 'add_todos' and step.get('ok') is True]
+        answer_instruction += (
+            '\n\nTo-dos saved in this turn: ' + json.dumps(receipts, ensure_ascii=False)
+            + '. Only these successful tool receipts establish that you added to-dos. '
+            'If this list is empty, no new to-dos were saved this turn. '
+            'If the user asked for them, explain that they were not added; never claim success. '
+            'Saved items appear in Chat → Today\'s to-dos.'
+        )
+    conversation.append({'role': 'user', 'content': answer_instruction})
     truncated = False
     for kind, delta in chat_stream_events(conversation):
         # Rides out on `done` rather than as its own live event: it is only

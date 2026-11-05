@@ -87,6 +87,38 @@ final class NotebookDraftTests: XCTestCase {
         XCTAssertEqual(try CaptureStore(root: root).load(evening.id).replaces, [morning.id])
     }
 
+    // MARK: For review
+
+    func testForReviewTravelsWithTheCaptureAndReachesTheCreate() throws {
+        let saved = try store.commitImages(text: "", youtubeURLs: [], images: [(Data("p1".utf8), "p1.jpg")],
+                                           forReview: true)
+        let reloaded = try CaptureStore(root: root).load(saved.id)
+        XCTAssertTrue(reloaded.forReview)
+        XCTAssertEqual(JournalAPI.entryBody(reloaded)["forReview"], "true")
+
+        let plain = try store.commitImages(text: "", youtubeURLs: [], images: [(Data("p1".utf8), "p1.jpg")])
+        XCTAssertFalse(plain.forReview)
+        XCTAssertNil(JournalAPI.entryBody(plain)["forReview"], "Off sends nothing, as before")
+    }
+
+    func testTheComposersNotesCarryForReviewButAMealDoesNot() throws {
+        let entry = try store.commitDraft(text: "Notes", youtubeURLs: [], images: [(Data("p".utf8), "p.jpg")],
+                                          forReview: true)
+        XCTAssertTrue(entry.forReview)
+        let meal = try store.commitDraft(text: "Lunch", youtubeURLs: [], kind: .food, forReview: true)
+        XCTAssertFalse(meal.forReview)
+    }
+
+    func testAManifestFromBeforeForReviewIsNotForReview() throws {
+        let capture = try store.commitImages(text: "", youtubeURLs: [], images: [(Data("a".utf8), "a.jpg")],
+                                             forReview: true)
+        let url = root.appendingPathComponent(capture.id + ".json")
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        json.removeValue(forKey: "forReview")
+        try JSONSerialization.data(withJSONObject: json).write(to: url)
+        XCTAssertFalse(try CaptureStore(root: root).load(capture.id).forReview)
+    }
+
     func testAManifestFromBeforeReplacementsStillLoads() throws {
         let capture = try store.commitDraft(text: "Old", youtubeURLs: [])
         let url = root.appendingPathComponent(capture.id + ".json")

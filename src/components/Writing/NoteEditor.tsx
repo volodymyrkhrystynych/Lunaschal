@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { useWritingNoteUpdate } from '../../offline/mutationDefaults';
 import { DOC_TYPE_LABELS, type DocType } from './WritingNav';
+import { NoteHistory } from './NoteHistory';
 
 interface Props {
   noteId: string;
@@ -14,6 +15,7 @@ export function NoteEditor({ noteId }: Props) {
   const [content, setContent] = useState('');
   const [title, setTitle] = useState('');
   const [editingTitle, setEditingTitle] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>(
     'saved'
   );
@@ -129,9 +131,35 @@ export function NoteEditor({ noteId }: Props) {
               )
             )}
           </select>
+          <button
+            onClick={() => setShowHistory(v => !v)}
+            aria-pressed={showHistory}
+            className={`px-2 py-1 rounded border transition-colors ${
+              showHistory
+                ? 'border-[var(--color-primary)] text-[var(--color-primary)]'
+                : 'border-white/20 hover:text-[var(--color-text)]'
+            }`}
+            title="Earlier versions of this note"
+          >
+            History
+          </button>
           <span className={statusColor}>{statusLabel}</span>
         </div>
       </div>
+
+      {showHistory && (
+        <div className="max-h-[40%] flex flex-col border-b border-white/10 shrink-0">
+          <NoteHistory
+            noteId={noteId}
+            onRestored={restored => {
+              if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+              setContent(restored.content);
+              setTitle(restored.title);
+              setSaveStatus('saved');
+            }}
+          />
+        </div>
+      )}
 
       <textarea
         data-note-editor

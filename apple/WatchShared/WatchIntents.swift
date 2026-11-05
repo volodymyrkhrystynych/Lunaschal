@@ -12,6 +12,14 @@ enum TimerChoice: String, AppEnum {
     ]
 
     var kind: PomodoroKind { self == .focus ? .work : .timeout }
+    var title: String { self == .focus ? "Focus" : "Timeout" }
+
+    /// The run this button owns: focus owns its breaks, since pressing Focus
+    /// during one should show the timer, not start another.
+    func owns(_ kind: PomodoroKind) -> Bool {
+        self == .focus ? kind != .timeout : kind == .timeout
+    }
+    func owns(_ run: PomodoroTimer.Run) -> Bool { owns(run.kind) }
 }
 
 /// Focus or Timeout from Control Center, the Smart Stack or the Action
@@ -46,6 +54,8 @@ enum RecordingChoice: String, AppEnum {
     ]
 
     var mode: CaptureMode { self == .record ? .record : .transcribe }
+    var symbol: String { self == .record ? "mic.fill" : "waveform" }
+    var title: String { self == .record ? "Record" : "Transcribe" }
 }
 
 /// Record or Transcribe as a toggle: on starts a clip, off stops and saves

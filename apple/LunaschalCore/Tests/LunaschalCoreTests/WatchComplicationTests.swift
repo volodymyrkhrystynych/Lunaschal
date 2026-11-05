@@ -5,14 +5,15 @@ final class WatchComplicationTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     func testLinksRoundTrip() {
-        for link in [WatchLink.timer, .start(.work), .start(.timeout), .record, .transcribe] {
+        for link in [WatchLink.timer, .start(.work), .start(.timeout), .record, .transcribe, .workout] {
             XCTAssertEqual(WatchLink(url: link.url), link)
         }
     }
 
     func testRejectsForeignAndMalformedLinks() {
         for text in ["https://timer", "lunaschal-watch://timer/break", "lunaschal-watch://timer/nap",
-                     "lunaschal-watch://record/now", "lunaschal-watch://elsewhere", "lunaschal-watch://timer/work/extra"] {
+                     "lunaschal-watch://record/now", "lunaschal-watch://elsewhere", "lunaschal-watch://timer/work/extra",
+                     "lunaschal-watch://workout/90"] {
             XCTAssertNil(WatchLink(url: URL(string: text)!), text)
         }
     }

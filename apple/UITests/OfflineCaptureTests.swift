@@ -2,6 +2,190 @@ import XCTest
 import UIKit
 
 final class OfflineCaptureTests: XCTestCase {
+    func testMarkAllChaptersReadRequiresConfirmationAndIncludesOtherCategories() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+
+        let markAll = app.buttons["book-mark-all-read"]
+        XCTAssertTrue(markAll.waitForExistence(timeout: 10))
+        let initialProgress = app.staticTexts["2 of 5 chapters read · reacted on 1"]
+        XCTAssertTrue(initialProgress.exists)
+        markAll.tap()
+        let confirmation = app.alerts.buttons.matching(identifier: "confirm-book-mark-all-read").firstMatch
+        XCTAssertTrue(app.staticTexts["Are you sure?"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(initialProgress.exists, "Cancelling must leave reading progress unchanged")
+        XCTAssertTrue(markAll.isEnabled)
+
+        markAll.tap()
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        confirmation.tap()
+        XCTAssertTrue(app.staticTexts["5 of 5 chapters read · reacted on 1"].waitForExistence(timeout: 5))
+        XCTAssertFalse(markAll.isEnabled, "Every category is now read")
+
+        let sidestory = app.buttons["chapter-tab-Sidestory"]
+        for _ in 0..<6 where !sidestory.isHittable { app.swipeUp() }
+        XCTAssertTrue(sidestory.isHittable)
+        sidestory.tap()
+        let sideRow = app.buttons["chapter-row-01K8BBBBBBBBBBBBBBBBBB0105"]
+        XCTAssertTrue(sideRow.waitForExistence(timeout: 5))
+        XCTAssertEqual(sideRow.value as? String, "Read", "Mark all includes chapters outside the selected tab")
+    }
+
+    func testChapterOrganizationControlsHaveSeparateCompactRows() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+
+        let shelf = app.buttons["book-shelf-menu"]
+        let review = app.buttons["book-review"]
+        let folders = app.buttons["Folders"]
+        XCTAssertTrue(shelf.waitForExistence(timeout: 10))
+        XCTAssertTrue(review.exists)
+        XCTAssertLessThan(shelf.frame.height, 80, "Shelf must remain a single compact row")
+        XCTAssertLessThan(review.frame.height, 80, "An empty review must remain a single compact row")
+        XCTAssertLessThanOrEqual(shelf.frame.maxY, review.frame.minY)
+        XCTAssertLessThanOrEqual(review.frame.maxY, folders.frame.minY)
+        attach(app, "chapter organization rows")
+
+        shelf.tap()
+        let reading = app.buttons["shelf-reading"]
+        XCTAssertTrue(reading.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["fic-review-save"].exists)
+        reading.tap()
+        XCTAssertTrue(shelf.waitForExistence(timeout: 5))
+
+        review.tap()
+        XCTAssertTrue(app.buttons["fic-review-save"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["fic-folders-save"].exists)
+        app.buttons["Cancel"].tap()
+        folders.tap()
+        XCTAssertTrue(app.buttons["fic-folders-save"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["fic-review-save"].exists)
+    }
+
+    func testJournalContextRecordingSurvivesRelaunchAndQueuesOffline() {
+        let app = XCUIApplication()
+        let entryID = "01K" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(23)
+        app.launchEnvironment["JOURNAL_CONTEXT_RECORDING_ID"] = entryID
+        addUIInterruptionMonitor(withDescription: "Microphone") { alert in
+            guard alert.buttons["Allow"].exists else { return false }
+            alert.buttons["Allow"].tap(); return true
+        }
+        app.launchArguments.append("-journalContextFixture")
+        app.launch()
+        openContextPage(app)
+        let open = app.buttons["journal-context-open-\(entryID)"]
+        XCTAssertTrue(open.waitForExistence(timeout: settle))
+        open.tap()
+        let record = app.buttons["journal-context-record"]
+        record.tap()
+        let stopped = NSPredicate(format: "label == 'Stop'")
+        if XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: stopped, object: record)], timeout: 3) != .completed {
+            app.tap()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: stopped, object: record)], timeout: settle), .completed)
+        Thread.sleep(forTimeInterval: 1.5)
+        record.tap()
+        XCTAssertTrue(app.staticTexts["Transcription"].waitForExistence(timeout: settle))
+        app.terminate(); app.launch()
+        openContextPage(app)
+        XCTAssertTrue(open.waitForExistence(timeout: settle))
+        open.tap()
+        XCTAssertTrue(app.staticTexts["Transcription"].waitForExistence(timeout: settle))
+        app.swipeUp()
+        app.buttons["journal-context-save"].tap()
+        XCTAssertTrue(waitForSheetToClose(app))
+        XCTAssertFalse(open.exists)
+        app.terminate(); app.launch()
+        openContextPage(app)
+        XCTAssertTrue(app.buttons["journal-context-open-01K00000000000000000000001"].waitForExistence(timeout: settle))
+        XCTAssertFalse(open.exists, "the queued audio suppresses this prompt across restart")
+    }
+
+    func testJournalContextSuggestionsSaveAndDismissInJournal() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-journalContextFixture")
+        app.launch()
+        openContextPage(app)
+        let photoID = "01K00000000000000000000001"
+        let audioID = "01K00000000000000000000002"
+        let openPhoto = app.buttons["journal-context-open-\(photoID)"]
+        XCTAssertTrue(openPhoto.waitForExistence(timeout: settle))
+        attach(app, "journal context page")
+        openPhoto.tap()
+        XCTAssertTrue(app.buttons["journal-photo"].waitForExistence(timeout: settle))
+        XCTAssertTrue(app.buttons["journal-context-record"].exists)
+        let text = app.textViews["journal-context-text"]
+        text.tap()
+        text.typeText("Won with friends")
+        app.swipeUp()
+        app.buttons["journal-context-save"].tap()
+        XCTAssertTrue(waitForSheetToClose(app))
+        XCTAssertFalse(openPhoto.exists)
+        app.buttons["journal-context-open-\(audioID)"].tap()
+        XCTAssertTrue(app.buttons["journal-audio-play"].waitForExistence(timeout: settle))
+        app.navigationBars["Add journal context"].buttons["Close"].tap()
+        app.buttons["journal-context-dismiss-\(audioID)"].tap()
+        let gone = NSPredicate(format: "exists == false")
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: gone,
+            object: app.buttons["journal-context-open-\(audioID)"])], timeout: settle), .completed)
+        app.segmentedControls["journal-page"].buttons["Journal"].tap()
+        openContextPage(app)
+        XCTAssertFalse(openPhoto.exists)
+        XCTAssertFalse(app.buttons["journal-context-open-\(audioID)"].exists)
+    }
+
+    func testJournalContextSaveFailureKeepsTypedWords() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-journalContextFixture")
+        app.launch()
+        openContextPage(app)
+        let open = app.buttons["journal-context-open-01K00000000000000000000001"]
+        XCTAssertTrue(open.waitForExistence(timeout: settle))
+        open.tap()
+        let text = app.textViews["journal-context-text"]
+        text.tap(); text.typeText("fail")
+        app.swipeUp()
+        app.buttons["journal-context-save"].tap()
+        XCTAssertTrue(app.staticTexts["journal-context-error"].waitForExistence(timeout: settle))
+        XCTAssertEqual(text.value as? String, "fail")
+        app.navigationBars["Add journal context"].buttons["Close"].tap()
+        XCTAssertTrue(open.waitForExistence(timeout: settle))
+    }
+
+    /// Journal → Context, the page to the right of Calendar. Its segment
+    /// carries a count while anything is waiting, so it is found by prefix.
+    private func openContextPage(_ app: XCUIApplication) {
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: settle))
+        let segment = pages.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Context'")).firstMatch
+        XCTAssertTrue(segment.waitForExistence(timeout: settle))
+        segment.tap()
+    }
+
+    private func waitForSheetToClose(_ app: XCUIApplication) -> Bool {
+        let gone = NSPredicate(format: "exists == false")
+        return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: gone,
+            object: app.navigationBars["Add journal context"])], timeout: settle) == .completed
+    }
+
     /// How long to wait for the chrome (tabs, the More menu) after a launch or
     /// a navigation. CI's simulators answer each query in seconds, so a 10 s
     /// wait could give up after two looks; waits return as soon as they're met.
@@ -31,6 +215,15 @@ final class OfflineCaptureTests: XCTestCase {
 
     private func selectTab(_ app: XCUIApplication, _ name: String,
                            file: StaticString = #filePath, line: UInt = #line) {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            for _ in 0..<3 where !reachable(tab(app, name)) {
+                let next = app.buttons["Next Page"].firstMatch
+                let previous = app.buttons["Previous Page"].firstMatch
+                if reachable(next) { next.tap() }
+                else if reachable(previous) { previous.tap() }
+                else { tab(app, "More").tap() }
+            }
+        }
         let item = tab(app, name)
         let hittable = NSPredicate(format: "exists == true AND hittable == true")
         guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: item)],
@@ -42,7 +235,7 @@ final class OfflineCaptureTests: XCTestCase {
         // Retry once only when the requested screen has not appeared.
         for _ in 0..<2 {
             item.tap()
-            if app.navigationBars[name].waitForExistence(timeout: 5) { return }
+            if app.navigationBars[name == "Draw" ? "Drawings" : name].waitForExistence(timeout: 5) { return }
         }
         XCTFail("Tab \(name) did not open", file: file, line: line)
     }
@@ -75,10 +268,14 @@ final class OfflineCaptureTests: XCTestCase {
         XCTFail("\(field) did not take keyboard focus", file: file, line: line)
     }
 
-    // Library and Settings live behind the More tab. Re-selecting
-    // More keeps whatever was pushed, so step back to the menu before choosing.
+    // iPad destinations are native tabs; its tab bar can page or overflow.
+    // iPhone's app More tab keeps whatever was pushed, so pop back first.
     private func openMore(_ app: XCUIApplication, _ name: String,
                           file: StaticString = #filePath, line: UInt = #line) {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            selectTab(app, name, file: file, line: line)
+            return
+        }
         let more = tab(app, "More")
         let hittable = NSPredicate(format: "exists == true AND hittable == true")
         guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: more)],
@@ -112,6 +309,7 @@ final class OfflineCaptureTests: XCTestCase {
     }
 
     func testBottomBarIsCaptureJournalChatTodoMore() {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
         let app = XCUIApplication()
         app.launch()
         for name in ["Capture", "Journal", "Chat", "Todo", "More"] {
@@ -128,6 +326,65 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(app.buttons["more-Workout log"].exists)
         openMore(app, "Settings")
         XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
+    }
+
+    func testThePhoneStaysPortraitWhenTurned() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone)
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(tab(app, "Capture").waitForExistence(timeout: 10))
+        XCUIDevice.shared.orientation = .landscapeLeft
+        addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+        sleep(1)
+        let window = app.windows.firstMatch.frame
+        XCTAssertGreaterThan(window.height, window.width, "the iPhone app does not rotate: \(window)")
+        XCTAssertTrue(tab(app, "Capture").isHittable)
+    }
+
+    func testIPadDestinationsOpenWithoutAnAppMoreMenu() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad)
+        let app = XCUIApplication()
+        app.launch()
+        for name in ["Study", "Draw", "Library", "Jobs", "Learning", "Settings"] {
+            openMore(app, name)
+            XCTAssertFalse(app.buttons["more-Library"].exists)
+            XCTAssertFalse(app.buttons["more-Settings"].exists)
+            XCTAssertFalse(app.navigationBars["More"].exists)
+        }
+        XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
+    }
+
+    func testPlacesOpensOfflineAndSaysEditsNeedTheServer() {
+        let app = XCUIApplication()
+        app.launch()
+        openMore(app, "Places")
+        // The cached snapshot: nothing set yet, and nothing to make Home.
+        XCTAssertTrue(app.staticTexts["Home & Work"].waitForExistence(timeout: 5)
+                      || app.staticTexts["HOME & WORK"].waitForExistence(timeout: 1))
+        let home = app.descendants(matching: .any)["places-home"]
+        XCTAssertTrue(home.waitForExistence(timeout: 5))
+        XCTAssertTrue("\(home.label) \(home.value ?? "")".contains("Not set"), "Home row: \(home.label)")
+        XCTAssertFalse(app.buttons["places-assign"].isEnabled, "Set Home or Work needs a place with a pin")
+
+        app.buttons["places-add"].tap()
+        let name = app.textFields["place-name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap()
+        name.typeText("Home")
+        let latitude = app.textFields["place-latitude"]
+        latitude.tap()
+        latitude.typeText("43.6677")
+        let save = app.buttons["place-save"]
+        // Half a pin is not a pin.
+        XCTAssertFalse(save.isEnabled)
+        let longitude = app.textFields["place-longitude"]
+        longitude.tap()
+        longitude.typeText("-79.3948")
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        // No server in UI tests: the edit is refused, and says why.
+        XCTAssertTrue(app.alerts["Places"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.alerts["Places"].staticTexts["Connect to your server to change places."].exists)
     }
 
     func testLearningOpensFromMoreAndAsksForTheServer() {
@@ -199,6 +456,68 @@ final class OfflineCaptureTests: XCTestCase {
         snapshot(app, "5-browse")
     }
 
+    /// Retiring takes a card out of the sitting on both passes: the deck
+    /// shrinks while answering, and a result being rated moves to the next.
+    func testLearningCardsCanBeRetiredDuringReview() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-learningFixture")
+        app.launch()
+        openMore(app, "Learning")
+
+        XCTAssertTrue(app.textFields["learning-answer"].waitForExistence(timeout: settle), "No card to answer")
+        XCTAssertTrue(app.staticTexts["Card 1 of 6"].exists)
+        let retire = app.buttons["learning-retire"]
+        for _ in 0..<4 where !reachable(retire) { app.swipeUp() }
+        retire.tap()
+        let confirm = app.buttons["Retire"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "No confirmation")
+        snapshot(app, "retire-confirm")
+        confirm.tap()
+        XCTAssertTrue(app.staticTexts["Card 1 of 5"].waitForExistence(timeout: 5), "The retired card is still in the deck")
+
+        for _ in 0..<5 { app.buttons["learning-flip"].tap(); RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+        XCTAssertTrue(app.staticTexts["Result 1 of 5"].waitForExistence(timeout: 5))
+        for _ in 0..<4 where !reachable(retire) { app.swipeUp() }
+        retire.tap()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+        XCTAssertTrue(app.staticTexts["Result 1 of 4"].waitForExistence(timeout: 5), "The result didn't move on")
+
+        // Retired cards leave the deck's count and the browser.
+        app.segmentedControls["learning-page"].buttons["Browse"].tap()
+        XCTAssertTrue(app.staticTexts["Due"].firstMatch.waitForExistence(timeout: 5))
+    }
+
+    /// A notebook saved For review comes up as a card with no back side: its
+    /// pages one under another, then the ratings at the end of the scroll.
+    func testLearningReviewCardIsReadThenRated() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-learningFixture", "-learningReviewCard"]
+        app.launch()
+        openMore(app, "Learning")
+
+        let card = app.scrollViews["learning-review-card"]
+        XCTAssertTrue(card.waitForExistence(timeout: settle), "The review card didn't come first")
+        XCTAssertTrue(app.staticTexts["Card 1 of 7"].exists)
+        XCTAssertTrue(app.staticTexts["Fern life cycle"].exists)
+        XCTAssertFalse(app.textFields["learning-answer"].exists, "A review card has nothing to answer")
+        XCTAssertFalse(app.buttons["learning-flip"].exists)
+        XCTAssertTrue(app.images["learning-review-page-1"].waitForExistence(timeout: 10), "The first page didn't load")
+        snapshot(app, "review-card-top")
+
+        // The ratings are below the last page.
+        let good = app.buttons["learning-rate-Good"]
+        for _ in 0..<8 where !reachable(good) { card.swipeUp() }
+        XCTAssertTrue(app.images["learning-review-page-3"].exists, "Not every page is in the scroll")
+        XCTAssertTrue(reachable(good), "No ratings at the end of the pages")
+        snapshot(app, "review-card-ratings")
+        good.tap()
+
+        // Rated in place: on to an ordinary card, still answered as before.
+        XCTAssertTrue(app.textFields["learning-answer"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Card 2 of 7"].exists)
+    }
+
     /// Speech mode is switched in Settings, and an answer given with it on
     /// comes back with a summary to read aloud and a Replay button.
     func testLearningSpeechModeIsASettingAndOffersReplay() {
@@ -226,6 +545,40 @@ final class OfflineCaptureTests: XCTestCase {
         app.buttons["learning-rate-Good"].tap()
         XCTAssertTrue(app.staticTexts["Result 2 of 6"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["learning-replay"].exists)
+    }
+
+    /// The location trail is switched on in Settings, which asks iOS for
+    /// location, and the section then says what the answer means: recording,
+    /// or what is still missing for Always and how to get there.
+    func testLocationTrailAsksForLocationAndExplainsTheAnswer() {
+        let app = XCUIApplication()
+        app.resetAuthorizationStatus(for: .location)
+        app.launch()
+        openMore(app, "Settings")
+        let toggle = app.switches["settings-location-trail"]
+        for _ in 0..<6 where !reachable(toggle) { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "No location trail switch in Settings")
+        // Settings survive between runs on one simulator; start from off.
+        if (toggle.value as? String) == "1" { toggle.switches.firstMatch.tap() }
+        XCTAssertEqual(toggle.value as? String, "0")
+        toggle.switches.firstMatch.tap()
+
+        // The Capture tab asks for While Using at launch, and XCTest's own
+        // interruption handler may already have answered that; iOS then holds
+        // the Always upgrade back until the app uses location in the
+        // background. So a prompt here is possible, not certain.
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        if alert.waitForExistence(timeout: 5) {
+            let allow = alert.buttons["Allow While Using App"]
+            (allow.exists ? allow : alert.buttons.element(boundBy: 1)).tap()
+        }
+
+        XCTAssertEqual(toggle.value as? String, "1")
+        let outcome = NSPredicate(format:
+            "label CONTAINS 'choose Always' OR label CONTAINS 'Choose Always' OR label CONTAINS 'low-power mode'")
+        XCTAssertTrue(app.staticTexts.containing(outcome).firstMatch.waitForExistence(timeout: 10),
+                      "The section doesn't say what the permission means for the trail")
+        snapshot(app, "location-trail-settings")
     }
 
     func testDailyLogsWeightAndCaloriesWithoutAServer() {
@@ -313,6 +666,23 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
     }
 
+    func testReturningToCaptureAlwaysOpensEntryAndDailyShowsItsCount() {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        let daily = app.segmentedControls.buttons["Daily"]
+        XCTAssertTrue(daily.exists)
+        XCTAssertNotNil(daily.label.range(of: #"^Daily, [0-3] remaining$"#, options: .regularExpression))
+        daily.tap()
+        XCTAssertTrue(app.staticTexts["Weather"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["Journal"].tap()
+        app.tabBars.buttons["Capture"].tap()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.segmentedControls.buttons["Entry"].isSelected)
+        daily.tap()
+        XCTAssertTrue(app.staticTexts["Weather"].waitForExistence(timeout: 5))
+    }
+
     func testSleepWeekSelectsNightsAndSurvivesOfflineRelaunch() {
         let app = XCUIApplication()
         app.launchArguments = ["-sleepWeekFixture"]
@@ -343,20 +713,16 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: settle))
         app.segmentedControls.buttons["Daily"].tap()
         let category = "Groceries " + UUID().uuidString.prefix(8)
-        let categoryField = app.textFields["Spending category"]
+        let categoryField = app.textFields["Spending"]
         for _ in 0..<10 where !categoryField.exists || !categoryField.isHittable { app.swipeUp() }
         XCTAssertTrue(categoryField.exists)
         categoryField.tap()
         if let old = categoryField.value as? String, old != categoryField.placeholderValue {
             categoryField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
         }
-        categoryField.typeText(category)
-        let amount = app.textFields["Spending amount"]
-        amount.tap()
-        if let old = amount.value as? String, old != amount.placeholderValue {
-            amount.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count))
-        }
-        amount.typeText("30.25")
+        XCTAssertFalse(app.textFields["Spending category"].exists)
+        XCTAssertFalse(app.textFields["Spending amount"].exists)
+        categoryField.typeText(category + " 30.25")
         app.buttons["Add spending"].tap()
         XCTAssertTrue(app.staticTexts[category].waitForExistence(timeout: settle))
         app.terminate()
@@ -480,53 +846,120 @@ final class OfflineCaptureTests: XCTestCase {
             .matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch.exists)
     }
 
-    func testCalendarEventsOverlapTakeCategoriesAndDragWithoutAServer() {
-        let tag = String(UUID().uuidString.prefix(6))
+    func testCalendarReadingRailMergesChaptersAndFitsTitles() {
         let app = XCUIApplication()
+        app.launchArguments += ["-calendarReadingFixture"]
         app.launch()
         selectTab(app, "Journal")
         let pages = app.segmentedControls["journal-page"]
         XCTAssertTrue(pages.waitForExistence(timeout: 5))
         pages.buttons["Calendar"].tap()
-        // Tomorrow, so "+" puts both at 8am rather than near the clock.
+        let rail = app.buttons["calendar-reading-rail"]
+        XCTAssertTrue(rail.waitForExistence(timeout: 5))
+        // On the right edge, not in the event lanes by the hour labels.
+        XCTAssertGreaterThan(rail.frame.midX, app.windows.firstMatch.frame.width * 0.8)
+        let labels = app.descendants(matching: .any).matching(identifier: "calendar-reading-label")
+        XCTAssertTrue(labels.firstMatch.waitForExistence(timeout: 5), "titles show by default")
+        // Two chapters of Worm back to back are one label; the crossover is its own.
+        XCTAssertEqual(labels.count, 2)
+        XCTAssertTrue(labels.firstMatch.label.contains("Worm"))
+        XCTAssertTrue(labels.firstMatch.label.contains("Ch. 12–13"), labels.firstMatch.label)
+        XCTAssertEqual(rail.value as? String, "titles shown")
+        // Nothing drawn over anything else: the labels stack, and stay left of the rail.
+        let first = labels.element(boundBy: 0).frame, second = labels.element(boundBy: 1).frame
+        XCTAssertFalse(first.intersects(second), "\(first) overlaps \(second)")
+        XCTAssertLessThanOrEqual(first.maxX, rail.frame.minX + 1)
+        // Wider than the old fixed 130pt, now that nothing shares its row.
+        XCTAssertGreaterThan(second.width, 140)
+        // A forum-length title is shown whole when its label is tapped.
+        labels.element(boundBy: 1).tap()
+        let detail = app.descendants(matching: .any)["calendar-reading-detail"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["The Long Way Round (Worm/Pact crossover, Taylor-centric, slow burn) [Thread 2]"].exists)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.95)).tap()
+        XCTAssertTrue(detail.waitForNonExistence(timeout: 5))
+        // The rail runs the whole waking day, so its middle may be scrolled
+        // away; tap it level with the first chapter, which is on screen.
+        let level = labels.firstMatch.frame.minY + 6
+        func tapRail() {
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: rail.frame.midX, dy: level)).tap()
+        }
+        tapRail()
+        XCTAssertTrue(labels.firstMatch.waitForNonExistence(timeout: 5), "tapping the rail hides them")
+        XCTAssertEqual(rail.value as? String, "titles hidden")
+        tapRail()
+        XCTAssertTrue(labels.firstMatch.waitForExistence(timeout: 5))
+    }
+
+    // The overlap, drag and sleep checks were one test, and on a slow runner
+    // it outgrew the five-minute allowance; split, each has room to spare.
+
+    /// Opens tomorrow's day view, so "+" puts new events at 8am rather than near the clock.
+    private func openTomorrowsCalendar(_ app: XCUIApplication) {
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        pages.buttons["Calendar"].tap()
         let next = app.buttons["Next day"]
         XCTAssertTrue(next.waitForExistence(timeout: 5))
         next.tap()
+    }
 
-        func create(_ name: String, category: String?) {
-            app.buttons["calendar-new-event"].tap()
-            let title = app.textFields["calendar-event-title"]
-            XCTAssertTrue(title.waitForExistence(timeout: 5))
-            focus(title)
-            title.typeText(name)
-            if let category {
-                let box = app.buttons["calendar-category-\(category)"]
-                for _ in 0..<6 where !box.isHittable { app.swipeUp() }
-                box.tap()
-                XCTAssertTrue(box.isSelected)
-            }
-            saveForm(app, "New event")
+    private func createCalendarEvent(_ app: XCUIApplication, _ name: String, category: String? = nil) {
+        app.buttons["calendar-new-event"].tap()
+        let title = app.textFields["calendar-event-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        focus(title)
+        title.typeText(name)
+        if let category {
+            let box = app.buttons["calendar-category-\(category)"]
+            for _ in 0..<6 where !box.isHittable { app.swipeUp() }
+            box.tap()
+            XCTAssertTrue(box.isSelected)
         }
-        func event(_ name: String) -> XCUIElement {
-            app.buttons.matching(identifier: "calendar-event").matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        saveForm(app, "New event")
+    }
+
+    private func calendarEvent(_ app: XCUIApplication, _ name: String) -> XCUIElement {
+        app.buttons.matching(identifier: "calendar-event").matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+    }
+
+    /// The line itself, near its foot: an event's frame also takes in its
+    /// label, which can sit over a neighbouring event.
+    private func eventLine(_ element: XCUIElement) -> XCUICoordinate {
+        element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 14, dy: element.frame.height - 16))
+    }
+
+    /// Leave the day as it was found: the simulator keeps what runs queue.
+    /// Off-mode swipes scroll the timeline. Restore its 8am position before
+    /// using coordinates: an offscreen event's frame can lie over the tabs.
+    private func deleteCalendarEvents(_ app: XCUIApplication, _ names: [String]) {
+        app.buttons["Previous day"].tap()
+        app.buttons["Next day"].tap()
+        for name in names {
+            eventLine(calendarEvent(app, name)).tap()
+            XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: settle))
+            deleteFromEdit(app, title: name)
         }
-        // The line itself, near its foot: an event's frame also takes in its
-        // label, which can sit over a neighbouring event.
-        func line(_ element: XCUIElement) -> XCUICoordinate {
-            element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 14, dy: element.frame.height - 16))
-        }
+    }
+
+    func testCalendarEventsOverlapAndTakeCategoriesWithoutAServer() {
+        let tag = String(UUID().uuidString.prefix(6))
+        let app = XCUIApplication()
+        app.launch()
+        openTomorrowsCalendar(app)
         let long = "Long " + tag, short = "Short " + tag
-        create(long, category: "work")
-        create(short, category: nil)
-        XCTAssertTrue(event(long).waitForExistence(timeout: 5))
-        XCTAssertTrue(event(short).waitForExistence(timeout: 5))
+        createCalendarEvent(app, long, category: "work")
+        createCalendarEvent(app, short)
+        XCTAssertTrue(calendarEvent(app, long).waitForExistence(timeout: 5))
+        XCTAssertTrue(calendarEvent(app, short).waitForExistence(timeout: 5))
         // Same hours, side by side: the lines end on the same row, in different lanes.
-        XCTAssertEqual(event(long).frame.maxY, event(short).frame.maxY, accuracy: 1)
-        XCTAssertNotEqual(event(long).frame.minX, event(short).frame.minX)
+        XCTAssertEqual(calendarEvent(app, long).frame.maxY, calendarEvent(app, short).frame.maxY, accuracy: 1)
+        XCTAssertNotEqual(calendarEvent(app, long).frame.minX, calendarEvent(app, short).frame.minX)
 
         // The category ticked in the New form is on the event, and the
         // event's own page ticks more without opening Edit.
-        line(event(long)).tap()
+        eventLine(calendarEvent(app, long)).tap()
         let work = app.buttons["calendar-category-work"]
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         XCTAssertTrue(work.isSelected)
@@ -545,25 +978,39 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(outside.isSelected)
         app.navigationBars[long].buttons.firstMatch.tap()
 
+        deleteCalendarEvents(app, [long, short])
+    }
+
+    func testCalendarDragModesStartOffAndCycleWithoutAServer() {
+        let tag = String(UUID().uuidString.prefix(6))
+        let app = XCUIApplication()
+        app.launch()
+        openTomorrowsCalendar(app)
+        let long = "Long " + tag, short = "Short " + tag
+        createCalendarEvent(app, long)
+        createCalendarEvent(app, short)
+        XCTAssertTrue(calendarEvent(app, long).waitForExistence(timeout: 5))
+        XCTAssertTrue(calendarEvent(app, short).waitForExistence(timeout: 5))
+
         // Drag editing starts off; touching and scrolling across an event
         // must not change its time or open it as if the swipe were a tap.
         let mode = app.buttons["calendar-drag-mode"]
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
         XCTAssertEqual(mode.value as? String, "off")
-        let original = event(long).label
-        line(event(long)).press(forDuration: 0.3, thenDragTo: line(event(long)).withOffset(CGVector(dx: 0, dy: 120)))
+        let original = calendarEvent(app, long).label
+        eventLine(calendarEvent(app, long)).press(forDuration: 0.3, thenDragTo: eventLine(calendarEvent(app, long)).withOffset(CGVector(dx: 0, dy: 120)))
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
-        XCTAssertEqual(event(long).label, original, "Off leaves the event's start and end unchanged")
+        XCTAssertEqual(calendarEvent(app, long).label, original, "Off leaves the event's start and end unchanged")
 
         // One tap enables Move; the next enables Resize.
         mode.tap()
         XCTAssertEqual(mode.value as? String, "moves it")
         mode.tap()
         XCTAssertEqual(mode.value as? String, "changes its length")
-        let target = event(long)
+        let target = calendarEvent(app, long)
         let before = target.frame
-        line(target).press(forDuration: 0.3, thenDragTo: line(target).withOffset(CGVector(dx: 0, dy: 120)))
-        let longer = event(long)
+        eventLine(target).press(forDuration: 0.3, thenDragTo: eventLine(target).withOffset(CGVector(dx: 0, dy: 120)))
+        let longer = calendarEvent(app, long)
         XCTAssertTrue(longer.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(longer.frame.maxY, before.maxY + 100, "a length drag moves the end")
         XCTAssertTrue(longer.label.contains("08:00 – 09:"), longer.label)
@@ -571,40 +1018,20 @@ final class OfflineCaptureTests: XCTestCase {
         // Resize cycles back to Off, then another tap enables Move.
         mode.tap()
         XCTAssertEqual(mode.value as? String, "off")
-        let shortBefore = event(short).label
-        line(event(short)).press(forDuration: 0.3, thenDragTo: line(event(short)).withOffset(CGVector(dx: 0, dy: 60)))
-        XCTAssertEqual(event(short).label, shortBefore)
+        let shortBefore = calendarEvent(app, short).label
+        eventLine(calendarEvent(app, short)).press(forDuration: 0.3, thenDragTo: eventLine(calendarEvent(app, short)).withOffset(CGVector(dx: 0, dy: 60)))
+        XCTAssertEqual(calendarEvent(app, short).label, shortBefore)
         mode.tap()
         XCTAssertEqual(mode.value as? String, "moves it")
-        let moving = event(short)
+        let moving = calendarEvent(app, short)
         let beforeMoving = moving.frame
-        line(moving).press(forDuration: 0.3, thenDragTo: line(moving).withOffset(CGVector(dx: 0, dy: 120)))
+        eventLine(moving).press(forDuration: 0.3, thenDragTo: eventLine(moving).withOffset(CGVector(dx: 0, dy: 120)))
         let moved = app.buttons.matching(identifier: "calendar-event")
             .matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", short, "09:")).firstMatch
-        XCTAssertTrue(moved.waitForExistence(timeout: 5), event(short).label)
+        XCTAssertTrue(moved.waitForExistence(timeout: 5), calendarEvent(app, short).label)
         XCTAssertGreaterThan(moved.frame.maxY, beforeMoving.maxY + 100)
 
-        // Wake time set by hand, offline: the morning is shaded at once.
-        app.buttons["calendar-sleep"].tap()
-        let wake = app.switches["sleep-set-wake"]
-        XCTAssertTrue(wake.waitForExistence(timeout: 5))
-        if (wake.value as? String) != "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
-        saveForm(app, "Sleep")
-        XCTAssertTrue(app.descendants(matching: .any)["sleep-band-morning"].waitForExistence(timeout: 5))
-
-        // Leave the day as it was found: the simulator keeps what runs queue.
-        // Off-mode swipes scroll the timeline. Restore its 8am position before
-        // using coordinates: an offscreen event's frame can lie over the tabs.
-        app.buttons["Previous day"].tap()
-        app.buttons["Next day"].tap()
-        for name in [long, short] {
-            line(event(name)).tap()
-            XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: settle))
-            deleteFromEdit(app, title: name)
-        }
-        app.buttons["calendar-sleep"].tap()
-        if (wake.value as? String) == "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
-        saveForm(app, "Sleep")
+        deleteCalendarEvents(app, [long, short])
 
         // Enabling a mode is temporary, never a preference restored on launch.
         XCTAssertEqual(mode.value as? String, "off")
@@ -613,10 +1040,34 @@ final class OfflineCaptureTests: XCTestCase {
         app.terminate()
         app.launch()
         selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
         XCTAssertTrue(pages.waitForExistence(timeout: 5))
         if !app.buttons["calendar-new-event"].exists { pages.buttons["Calendar"].tap() }
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
         XCTAssertEqual(mode.value as? String, "off")
+    }
+
+    func testCalendarWakeTimeShadesTheMorningWithoutAServer() {
+        let app = XCUIApplication()
+        app.launch()
+        openTomorrowsCalendar(app)
+        // Wake time set by hand, offline: the morning is shaded at once.
+        // There is no Save — tapping above the sheet to close it keeps the change.
+        app.buttons["calendar-sleep"].tap()
+        let wake = app.switches["sleep-set-wake"]
+        XCTAssertTrue(wake.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["Sleep"].buttons["Save"].exists)
+        if (wake.value as? String) != "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap()
+        XCTAssertTrue(app.navigationBars["Sleep"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["sleep-band-morning"].waitForExistence(timeout: 5))
+
+        // Leave the day as it was found.
+        app.buttons["calendar-sleep"].tap()
+        XCTAssertTrue(wake.waitForExistence(timeout: 5))
+        if (wake.value as? String) == "1" { wake.switches.firstMatch.exists ? wake.switches.firstMatch.tap() : wake.tap() }
+        app.navigationBars["Sleep"].buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Sleep"].waitForNonExistence(timeout: 5))
     }
 
     func testWorkoutLogsSetsLikeTheDesktopWithoutAServer() {
@@ -662,7 +1113,10 @@ final class OfflineCaptureTests: XCTestCase {
         app.launch()
         openMore(app, "Jobs")
         XCTAssertTrue(app.segmentedControls["jobs-sort"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Sign in under More → Settings to load new postings."].waitForExistence(timeout: 5))
+        let signIn = UIDevice.current.userInterfaceIdiom == .pad
+            ? "Sign in under Settings to load new postings."
+            : "Sign in under More → Settings to load new postings."
+        XCTAssertTrue(app.staticTexts[signIn].waitForExistence(timeout: 5))
         app.segmentedControls["jobs-sort"].buttons["Nearest"].tap()
         XCTAssertTrue(app.staticTexts["Remote first, then nearest."].waitForExistence(timeout: 5))
     }
@@ -688,6 +1142,45 @@ final class OfflineCaptureTests: XCTestCase {
         for _ in 0..<4 where !waiting.exists { app.swipeUp() }
         XCTAssertTrue(waiting.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["The rest (2)"].exists)
+    }
+
+    // The fixture's one project: a pinned character note, and a discussion
+    // whose reply staged an addition to that note. With no server nothing is
+    // fetched; this checks the screens and the card render from a reply.
+    func testWritingShowsPinnedNotesAndANoteCard() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        openMore(app, "Writing")
+        let project = app.buttons["writing-project"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        project.tap()
+        XCTAssertTrue(app.staticTexts["Mara Vell"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.images["Pinned"].exists)
+
+        app.buttons["Discussions"].tap()
+        let discussion = app.buttons["writing-discussion"].firstMatch
+        XCTAssertTrue(discussion.waitForExistence(timeout: 5))
+        discussion.tap()
+        XCTAssertTrue(app.staticTexts["Update this note?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Update Note"].exists)
+    }
+
+    func testWritingStartsANewBookAndOpensIt() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        openMore(app, "Writing")
+        let add = app.buttons["writing-new-project"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        add.tap()
+        let title = app.textFields["writing-new-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.tap()
+        title.typeText("Tide Charts")
+        app.buttons["writing-new-create"].tap()
+        XCTAssertTrue(app.navigationBars["Tide Charts"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["No notes yet"].exists)
     }
 
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
@@ -775,6 +1268,129 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["Re-read edited chapters"].exists)
     }
 
+    /// A left swipe drops a fic with a rating and a review: it leaves the
+    /// library at once, offline, and waits under the Archived shelf filter
+    /// beside the fixture's already-dropped book.
+    func testDroppingAFicWithAReviewMovesItToTheArchive() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let row = app.staticTexts["Quiet Hours"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Abandoned Quest"].exists)
+        row.swipeLeft()
+        let drop = app.buttons["Drop"]
+        XCTAssertTrue(drop.waitForExistence(timeout: 5))
+        drop.tap()
+        XCTAssertTrue(app.navigationBars["Drop this fic"].waitForExistence(timeout: 5))
+        app.buttons["rating-star-2"].tap()
+        let review = app.textFields["fic-review-text"].exists ? app.textFields["fic-review-text"] : app.textViews["fic-review-text"]
+        review.tap()
+        review.typeText("Stopped caring about the cast.")
+        app.buttons["fic-review-save"].tap()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5))
+
+        app.buttons["Filter books"].tap()
+        let shelf = app.buttons["Shelf"]
+        XCTAssertTrue(shelf.waitForExistence(timeout: 5))
+        shelf.tap()
+        let archived = app.buttons["Archived (finished & dropped)"]
+        XCTAssertTrue(archived.waitForExistence(timeout: 5))
+        archived.tap()
+        XCTAssertTrue(app.staticTexts["Quiet Hours"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Abandoned Quest"].exists)
+        XCTAssertTrue(app.staticTexts["Dropped"].exists)
+    }
+
+    /// A book's chapter list says which chapters were read and what the forum
+    /// showed as the user's reaction, lists every tag, and a swipe marks one read.
+    func testChapterListShowsReadMarksReactionsAndTags() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == '3 unread'")).firstMatch.exists)
+        book.tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        XCTAssertTrue(app.staticTexts["2 of 5 chapters read · reacted on 1"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Slice of Life"].exists)
+        let list = app.collectionViews.firstMatch
+        let liked = app.staticTexts["Like"]
+        for _ in 0..<4 where !liked.isHittable { list.swipeUp() }
+        XCTAssertTrue(liked.exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Not reacted'")).firstMatch.exists)
+        // The fixture's chapter ids: the book id's prefix, its last two characters, the index.
+        let third = app.buttons["chapter-row-01K8BBBBBBBBBBBBBBBBBB0102"]
+        for _ in 0..<4 where !third.isHittable { list.swipeUp() }
+        third.swipeRight()
+        let markRead = app.buttons["Read"]
+        XCTAssertTrue(markRead.waitForExistence(timeout: 5))
+        markRead.tap()
+        for _ in 0..<4 where !app.staticTexts["3 of 5 chapters read · reacted on 1"].exists { list.swipeDown() }
+        XCTAssertTrue(app.staticTexts["3 of 5 chapters read · reacted on 1"].waitForExistence(timeout: 5))
+    }
+
+    /// A forum chapter can be liked from the reader: it shows liked at once,
+    /// waiting to be sent, and the chapter list says so too.
+    func testAForumChapterCanBeLikedFromTheReader() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let like = app.buttons["reader-like"]
+        XCTAssertTrue(like.waitForExistence(timeout: 10))
+        XCTAssertEqual(like.value as? String, "Not liked")
+        like.tap()
+        XCTAssertEqual(like.value as? String, "Liked, waiting to send")
+        XCTAssertTrue(app.staticTexts["Liked · Sent to the forum when connected"].waitForExistence(timeout: 5))
+        app.buttons["reader-menu"].tap()
+        XCTAssertTrue(app.buttons["reader-refetch-chapter"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["reader-open-on-site"].exists)
+    }
+
+    /// A book on none of the user's lists on its site is under Backlog.
+    func testTheBacklogFolderHoldsBooksOnNoSiteList() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let mode = app.segmentedControls["library-mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 10))
+        mode.buttons["Folders"].tap()
+        let backlog = app.buttons["folder-backlog"]
+        XCTAssertTrue(backlog.waitForExistence(timeout: 5))
+        backlog.tap()
+        XCTAssertTrue(app.staticTexts["Field Notes on Dragons"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["The Long Way Round"].exists)
+        app.navigationBars["Backlog"].buttons.firstMatch.tap()
+        app.segmentedControls["library-mode"].buttons["Library"].tap()
+    }
+
+    /// The book list pages itself as it is scrolled: the 70th book, past the
+    /// first page of 50, is reached by scrolling alone, with no button to press.
+    func testLibraryLoadsTheNextPageWhenScrolledToTheEnd() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-libraryFixture", "-libraryManyBooks"]
+        app.launch()
+        openMore(app, "Library")
+        XCTAssertTrue(app.staticTexts["The Long Way Round"].waitForExistence(timeout: 10))
+
+        // Oldest of all, so last in the default sort.
+        let last = app.staticTexts["Filler Book 62"]
+        for _ in 0..<30 where !(last.exists && last.isHittable) { app.swipeUp() }
+        XCTAssertTrue(last.waitForExistence(timeout: 5), "Scrolling reached the second page")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Load more")).firstMatch.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["load-more"].exists, "Nothing left to load")
+    }
+
     /// Settings → Library downloads imports a fic by its link: a page that
     /// isn't one is turned away on the phone, and a fic link needs a server.
     func testSettingsImportsAFicByLink() {
@@ -820,7 +1436,10 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(progress.waitForExistence(timeout: 10), "The book says it is downloading")
         let finished = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: progress)
         XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 60), .completed, "The download finishes")
-        XCTAssertTrue(app.staticTexts["Chapter 1"].exists, "and its chapters are there to read")
+        // Below the book's shelf, review and tags.
+        let first = app.staticTexts["Chapter 1"]
+        for _ in 0..<4 where !first.exists { app.collectionViews.firstMatch.swipeUp() }
+        XCTAssertTrue(first.exists, "and its chapters are there to read")
 
         // Back in the list it is marked as downloaded, as the one already on
         // the device is, and the half-downloaded one isn't.
@@ -863,6 +1482,147 @@ final class OfflineCaptureTests: XCTestCase {
         }
     }
 
+    /// A book with more than one threadmark category lists each under its own
+    /// tab, and Next/Previous sit above the chapter as well as below it.
+    func testChapterCategoriesAreTabsAndNextIsAtTheTopToo() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+
+        // It opens partway into chapter 4, the continue point; its list
+        // opens on that chapter's tab.
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        let threadmarks = app.buttons["chapter-tab-Threadmarks"]
+        let sidestory = app.buttons["chapter-tab-Sidestory"]
+        // Below the book's shelf, review and tags.
+        XCTAssertTrue(app.buttons["book-shelf-menu"].waitForExistence(timeout: 10))
+        for _ in 0..<4 where !threadmarks.isHittable { app.collectionViews.firstMatch.swipeUp() }
+        XCTAssertTrue(threadmarks.waitForExistence(timeout: 10))
+        XCTAssertTrue(sidestory.exists)
+        XCTAssertTrue(app.staticTexts["Chapter 2"].exists)
+        XCTAssertFalse(app.staticTexts["Sidestory: Market Day"].exists)
+        attach(app, "threadmarks tab")
+
+        sidestory.tap()
+        let omake = app.staticTexts["Sidestory: Market Day"]
+        XCTAssertTrue(omake.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Chapter 2"].exists)
+        attach(app, "sidestory tab")
+        omake.tap()
+        XCTAssertTrue(app.navigationBars["Sidestory: Market Day"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["chapter-next-top"].exists, "a lone sidestory has nothing either side")
+        XCTAssertFalse(app.buttons["chapter-previous-top"].exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        threadmarks.tap()
+        let second = app.staticTexts["Chapter 2"]
+        for _ in 0..<6 where !(second.exists && second.isHittable) { app.swipeUp() }
+        XCTAssertTrue(second.isHittable)
+        second.tap()
+        // A chapter opens where it was last left; other tests read this one.
+        let topNext = app.buttons["chapter-next-top"]
+        XCTAssertTrue(app.navigationBars["Chapter 2"].waitForExistence(timeout: 10))
+        for _ in 0..<15 where !(topNext.exists && topNext.isHittable) { app.swipeDown() }
+        XCTAssertTrue(topNext.isHittable, "Next is at the top of the chapter")
+        XCTAssertTrue(app.buttons["chapter-previous-top"].isHittable)
+        attach(app, "top of chapter")
+        topNext.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 3"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        let fifth = app.staticTexts["Chapter 5"]
+        for _ in 0..<6 where !(fifth.exists && fifth.isHittable) { app.swipeUp() }
+        XCTAssertTrue(fifth.isHittable)
+        fifth.tap()
+        XCTAssertTrue(app.buttons["chapter-previous-top"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["chapter-next-top"].exists, "the last threadmark doesn't run on into the sidestory")
+    }
+
+    /// A chapter's picture shows (fetched from the stand-in server and kept),
+    /// and its coloured and monospaced lines read as text of their own.
+    func testChapterShowsItsPictureAndStyledText() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        let second = app.staticTexts["Chapter 2"]
+        for _ in 0..<6 where !(second.exists && second.isHittable) { app.swipeUp() }
+        second.tap()
+
+        // An earlier run may have left this chapter's reading position at its end.
+        let top = app.buttons["chapter-next-top"]
+        XCTAssertTrue(app.navigationBars["Chapter 2"].waitForExistence(timeout: 10))
+        for _ in 0..<15 where !(top.exists && top.isHittable) { app.swipeDown() }
+        XCTAssertTrue(top.isHittable)
+        // It loads a moment after its chapter: give it time before each swipe.
+        let picture = app.images["A map of the coast"]
+        for _ in 0..<4 where !picture.waitForExistence(timeout: 3) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(picture.exists, "the picture is drawn, not its alt text")
+        XCTAssertFalse(app.staticTexts["Picture not on this device"].exists)
+        for _ in 0..<3 where !picture.isHittable || picture.frame.maxY > app.frame.height * 0.6 { app.swipeUp(velocity: .slow) }
+        XCTAssertGreaterThan(picture.frame.height, 60)
+        let red = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "The bell rang out red")).firstMatch
+        let typed = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "SYSTEM: Quest accepted.")).firstMatch
+        XCTAssertTrue(red.exists)
+        XCTAssertTrue(typed.exists)
+        attach(app, "picture and styled text")
+    }
+
+    /// A forum fic can be asked for its latest chapters from inside it — the
+    /// reader's menu and the book page — not only from the library's long
+    /// press. With no server, asking says to sign in. An EPUB has no source.
+    func testLatestChaptersCanBeAskedForFromInsideTheFic() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+
+        let menu = app.buttons["reader-menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        menu.tap()
+        let fromReader = app.buttons["reader-check-updates"]
+        XCTAssertTrue(fromReader.waitForExistence(timeout: 5))
+        fromReader.tap()
+        let signIn = app.staticTexts["Sign in to update fics on the server."]
+        XCTAssertTrue(signIn.waitForExistence(timeout: 5))
+        app.alerts.buttons.firstMatch.tap()
+
+        app.buttons["Chapters"].tap()
+        let fromBook = app.buttons["fic-check-updates"]
+        XCTAssertTrue(fromBook.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["fic-reread-chapters"].exists)
+        attach(app, "book page")
+        fromBook.tap()
+        XCTAssertTrue(signIn.waitForExistence(timeout: 5))
+        app.alerts.buttons.firstMatch.tap()
+
+        app.terminate()
+        app.launch()
+        openMore(app, "Library")
+        let epub = app.staticTexts["The Lighthouse Keeper"]
+        for _ in 0..<6 where !epub.isHittable { app.swipeUp() }
+        epub.tap()
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        menu.tap()
+        XCTAssertTrue(app.buttons["Bookmark"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["reader-check-updates"].exists, "an EPUB has nowhere to update from")
+    }
+
     /// A chapter reads as formatted text, its size is kept on the device,
     /// and the end of the chapter clears the floating menu and the tab bar.
     func testChapterIsFormattedSizedAndClearsTheBottomControls() {
@@ -899,13 +1659,13 @@ final class OfflineCaptureTests: XCTestCase {
         for _ in 0..<12 where !sceneBreak.exists { app.swipeUp() }
         XCTAssertTrue(sceneBreak.exists)
 
-        let next = app.buttons["Next chapter"]
+        let next = app.buttons["chapter-next-bottom"]
         for _ in 0..<40 where !(next.exists && next.isHittable) { app.swipeUp() }
         app.swipeUp(); app.swipeUp()
         XCTAssertTrue(next.isHittable)
         let menu = app.buttons["reader-menu"]
         XCTAssertFalse(next.frame.intersects(menu.frame), "Next clears the menu button")
-        let previous = app.buttons["Previous"]
+        let previous = app.buttons["chapter-previous-bottom"]
         if previous.exists { XCTAssertFalse(previous.frame.intersects(menu.frame), "Previous clears the menu button") }
         if app.tabBars.firstMatch.exists {
             XCTAssertLessThanOrEqual(next.frame.maxY, app.tabBars.firstMatch.frame.minY, "Next clears the tab bar")
@@ -931,13 +1691,16 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(newDrawing.waitForExistence(timeout: 10))
         newDrawing.tap()
         let page = app.staticTexts["Untitled drawing"].firstMatch
+        // Existing notebooks can push Drawings below the List's loaded rows.
+        for _ in 0..<12 where !page.exists { app.swipeUp() }
         XCTAssertTrue(page.waitForExistence(timeout: 5))
         page.tap()
         XCTAssertTrue(app.buttons["Save locally"].waitForExistence(timeout: 5))
         app.terminate()
         app.launch()
         tab(app, "Draw").tap()
-        XCTAssertTrue(app.staticTexts["Untitled drawing"].firstMatch.waitForExistence(timeout: 5))
+        for _ in 0..<12 where !page.exists { app.swipeUp() }
+        XCTAssertTrue(page.waitForExistence(timeout: 5))
     }
 
     func testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal() {
@@ -961,12 +1724,22 @@ final class OfflineCaptureTests: XCTestCase {
 
         app.buttons["notebook-add-page"].tap()
         XCTAssertEqual(app.buttons["notebook-page"].label, "2 / 2")
+        // The video and For review live in the menu beside the picture one.
+        let more = app.buttons["notebook-more"]
+        more.tap()
+        XCTAssertTrue(app.buttons["notebook-youtube"].waitForExistence(timeout: 5))
         app.buttons["notebook-youtube"].tap()
         let link = app.alerts.textFields["YouTube video URL"]
         XCTAssertTrue(link.waitForExistence(timeout: 5))
         link.typeText("https://youtu.be/M7lc1UVf-VE")
         app.alerts.buttons["Add"].tap()
+        more.tap()
         XCTAssertTrue(app.buttons["YouTube video added"].waitForExistence(timeout: 5))
+        let forReview = app.buttons["notebook-for-review"]
+        XCTAssertTrue(forReview.exists)
+        XCTAssertFalse(forReview.isSelected, "For review starts off")
+        snapshot(app, "notebook-menu")
+        forReview.tap()
 
         // Back saves it; Draw lists it to continue, as the entry draft's notes.
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -977,6 +1750,14 @@ final class OfflineCaptureTests: XCTestCase {
         row.tap()
         XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["notebook-page"].label, "1 / 2")
+        // The switch is kept with the notebook.
+        app.buttons["notebook-more"].tap()
+        XCTAssertTrue(app.buttons["notebook-for-review"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["notebook-for-review"].isSelected, "For review didn't stay on")
+        app.buttons["notebook-for-review"].tap()
+        app.buttons["notebook-more"].tap()
+        XCTAssertFalse(app.buttons["notebook-for-review"].isSelected)
+        app.buttons["notebook-for-review"].tap()
         app.buttons["notebook-save"].tap()
         // Saving goes back to Draw, where it now reads as filed.
         XCTAssertTrue(app.staticTexts["Saved to journal"].firstMatch.waitForExistence(timeout: 10)
@@ -1008,7 +1789,7 @@ final class OfflineCaptureTests: XCTestCase {
         notes.tap()
         XCTAssertTrue(app.buttons["notebook-save"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["notebook-page"].label.hasSuffix("/ 2"), true)
-        XCTAssertEqual(app.buttons["notebook-save"].label, "Save entry")
+        XCTAssertEqual(app.buttons["notebook-save"].label, "Save")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         // The row opens them too.
         XCTAssertTrue(row.waitForExistence(timeout: 10))
@@ -1022,7 +1803,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
         editor.typeText("Evening notes")
-        app.buttons["Save entry"].tap()
+        app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 10))
         XCTAssertFalse(row.exists)
         notes.tap()
@@ -1038,7 +1819,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
         editor.typeText(text)
-        app.buttons["Save entry"].tap()
+        app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
         app.terminate()
         app.launch()
@@ -1118,6 +1899,17 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(done.waitForExistence(timeout: 5), "a photo opens full screen")
         done.tap()
 
+        // The entry's own photo is a Live Photo taken long before it was attached.
+        let river = app.buttons.matching(identifier: "journal-photo")
+            .matching(NSPredicate(format: "label == %@", "River")).firstMatch
+        XCTAssertTrue(river.waitForExistence(timeout: 5))
+        XCTAssertEqual(river.value as? String, "Live Photo", "a Live Photo is marked as one")
+        river.tap()
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Taken ")).firstMatch
+            .waitForExistence(timeout: 5), "a photo taken on another day says when")
+        done.tap()
+
         // Short drags: a full swipe flings a lazily drawn row off the far edge.
         func nudge(until element: XCUIElement) {
             for _ in 0..<8 where !element.isHittable {
@@ -1139,7 +1931,16 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.links["Open on YouTube"].exists || app.buttons["Open on YouTube"].exists)
         XCTAssertTrue(app.staticTexts["A film about rivers."].exists, "the video's summary shows open")
 
-        for _ in 0..<8 where !later.isHittable {
+        // A video filmed on the phone: its poster, its length, and when it was filmed.
+        let filmed = app.buttons.matching(NSPredicate(format: "label == %@", "Play Ducks")).firstMatch
+        nudge(until: filmed)
+        XCTAssertTrue(filmed.waitForExistence(timeout: 5))
+        XCTAssertEqual(filmed.value as? String, "0:14", "an uploaded video shows its length")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "taken ")).firstMatch.exists,
+                      "and the day it was filmed")
+
+        // Further than the clip: the filmed video sits below it.
+        for _ in 0..<16 where !later.isHittable {
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
             start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 200)))
         }
@@ -1259,7 +2060,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
         editor.typeText(first)
-        app.buttons["Save entry"].tap()
+        app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
 
         selectTab(app, "Journal")
@@ -1290,7 +2091,7 @@ final class OfflineCaptureTests: XCTestCase {
     func testYouTubeLinksAttachToTheEntryAndSaveStaysPinned() {
         let app = XCUIApplication()
         app.launch()
-        let save = app.buttons["Save entry"]
+        let save = app.buttons["Save"]
         XCTAssertTrue(save.waitForExistence(timeout: 10))
         let window = app.windows.firstMatch.frame
         XCTAssertGreaterThan(save.frame.midX, window.midX, "Save sits on the right")
@@ -1323,10 +2124,60 @@ final class OfflineCaptureTests: XCTestCase {
                       || app.buttons["https://www.youtube.com/watch?v=dQw4w9WgXcQ"].exists)
     }
 
+    func testEntryBoxPastesImagesIntoThePersistentDraft() {
+        let app = XCUIApplication()
+        app.launch()
+        let discard = app.buttons["Discard draft"]
+        XCTAssertTrue(discard.waitForExistence(timeout: 10))
+        if discard.isEnabled {
+            discard.tap()
+            app.alerts["Discard this draft?"].buttons["Discard"].tap()
+        }
+        let editor = app.textViews["Journal text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.tap()
+        editor.typeText("Pasted lunch photo")
+        UIPasteboard.general.image = UIGraphicsImageRenderer(size: CGSize(width: 20, height: 20)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 20, height: 20))
+        }
+        editor.press(forDuration: 1.2)
+        let menuPaste = app.menuItems["Paste"]
+        let paste = menuPaste.exists ? menuPaste : app.buttons["Paste"].firstMatch
+        XCTAssertTrue(paste.waitForExistence(timeout: 5))
+        paste.tap()
+        let allow = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Allow Paste'")).firstMatch
+        if allow.waitForExistence(timeout: 2) { allow.tap() }
+        let attachment = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Pasted image '")).firstMatch
+        XCTAssertTrue(attachment.waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, "Pasted lunch photo")
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(attachment.waitForExistence(timeout: 10), "the pasted image survives relaunch")
+        XCTAssertTrue(app.buttons["Save"].isEnabled)
+        XCTAssertTrue(app.buttons["Food"].isEnabled)
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
+    }
+
+    func testPasteYouTubeLinkAddsItWithoutAnotherTap() {
+        let app = XCUIApplication()
+        app.launch()
+        let paste = app.buttons["youtube-paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 10))
+        UIPasteboard.general.string = "https://youtu.be/aircAruvnKk"
+        paste.tap()
+        let allow = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Allow Paste'")).firstMatch
+        if allow.waitForExistence(timeout: 2) { allow.tap() }
+        XCTAssertTrue(app.staticTexts["https://www.youtube.com/watch?v=aircAruvnKk"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["YouTube video URL"].value as? String, "YouTube video URL")
+        XCTAssertTrue(app.buttons["Save"].isEnabled)
+    }
+
     func testYouTubeOnlyEntryHasAttachmentsWithoutOriginalText() {
         let app = XCUIApplication()
         app.launch()
-        let save = app.buttons["Save entry"]
+        let save = app.buttons["Save"]
         XCTAssertTrue(save.waitForExistence(timeout: settle))
         let field = app.textFields["YouTube video URL"]
         field.tap()
@@ -1390,17 +2241,17 @@ final class OfflineCaptureTests: XCTestCase {
     func testSaveFoodEntrySitsLeftOfSaveEntryAndLeavesTheLinks() {
         let app = XCUIApplication()
         app.launch()
-        let food = app.buttons["Save food entry"]
-        let save = app.buttons["Save entry"]
+        let food = app.buttons["Food"]
+        let save = app.buttons["Save"]
         XCTAssertTrue(food.waitForExistence(timeout: 10))
         let window = app.windows.firstMatch.frame
         let discard = app.buttons["Discard draft"]
         XCTAssertTrue(discard.exists)
-        // Discard · Save food entry · Save entry, left to right.
-        XCTAssertLessThan(discard.frame.maxX, food.frame.minX, "Discard sits left of Save food entry")
-        XCTAssertLessThan(food.frame.maxX, save.frame.minX, "Save food entry sits left of Save entry")
+        // Discard · Food · Save, left to right.
+        XCTAssertLessThan(discard.frame.maxX, food.frame.minX, "Discard sits left of Food")
+        XCTAssertLessThan(food.frame.maxX, save.frame.minX, "Food sits left of Save")
         XCTAssertLessThan(discard.frame.midX, window.midX, "Discard sits on the left")
-        XCTAssertGreaterThan(save.frame.midX, window.midX, "Save entry sits on the right")
+        XCTAssertGreaterThan(save.frame.midX, window.midX, "Save sits on the right")
         XCTAssertEqual(food.frame.midY, save.frame.midY, accuracy: 4)
         XCTAssertEqual(discard.frame.midY, save.frame.midY, accuracy: 4)
         XCTAssertGreaterThan(food.frame.midY, window.midY, "Both sit at the bottom")
@@ -1433,14 +2284,53 @@ final class OfflineCaptureTests: XCTestCase {
 
         // Leave the draft empty for the next test: the link goes in a journal entry.
         selectTab(app, "Capture")
-        app.buttons["Save entry"].tap()
+        app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts[link].exists)
+    }
+
+    func testSaveSpendingSitsBetweenFoodAndSaveAndFilesAPurchase() {
+        let app = XCUIApplication()
+        app.launch()
+        let food = app.buttons["Food"]
+        let spending = app.buttons["Save spending"]
+        let save = app.buttons["Save"]
+        XCTAssertTrue(spending.waitForExistence(timeout: 10))
+        // Discard · Food · Spent · Save, on one line.
+        XCTAssertLessThan(food.frame.maxX, spending.frame.minX, "Food sits left of Spent")
+        XCTAssertLessThan(spending.frame.maxX, save.frame.minX, "Spent sits left of Save")
+        XCTAssertEqual(spending.frame.midY, save.frame.midY, accuracy: 4)
+        XCTAssertLessThanOrEqual(save.frame.maxX, app.windows.firstMatch.frame.maxX, "All four fit on the phone")
+        XCTAssertFalse(spending.isEnabled, "Nothing to file yet")
+
+        let purchase = "Coffee with Sam 4.50 \(UUID().uuidString.prefix(8))"
+        let editor = app.textViews["Journal text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.tap()
+        editor.typeText(purchase)
+        XCTAssertTrue(spending.isEnabled)
+        spending.tap()
+        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
+
+        selectTab(app, "Journal")
+        XCTAssertTrue(app.staticTexts[purchase].waitForExistence(timeout: 10))
+        app.staticTexts[purchase].tap()
+        XCTAssertTrue(app.staticTexts["Spending entry"].waitForExistence(timeout: 5))
     }
 
     func testCaptureActionsShareOneLineAndAPhotoAttachesToTheEntry() {
         let app = XCUIApplication()
         app.launch()
+        // Drafts survive launches, including a failed CI attempt. This test
+        // owns its entry and must not append to another test's unfinished words.
+        let discard = app.buttons["Discard draft"]
+        XCTAssertTrue(discard.waitForExistence(timeout: 10))
+        if discard.isEnabled {
+            discard.tap()
+            let confirmation = app.alerts["Discard this draft?"]
+            XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+            confirmation.buttons["Discard"].tap()
+        }
         let names = ["Attach file", "Choose photo", "Take photo", "Record", "Transcribe"]
         let first = app.buttons[names[0]]
         XCTAssertTrue(first.waitForExistence(timeout: 10))
@@ -1469,12 +2359,31 @@ final class OfflineCaptureTests: XCTestCase {
         done.tap()
         // ...and to hand the picked photo over (CI has stalled ~40 s on Add).
         XCTAssertTrue(app.staticTexts["Attachments"].waitForExistence(timeout: 60))
-        app.buttons["Save entry"].tap()
-        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
+        // Words, so the entry keeps the time it was written: a pictures-only
+        // entry is dated by when its picture was taken, and the simulator's
+        // sample photos are years old — far down a newest-first feed.
+        let words = "With a photo \(UUID().uuidString.prefix(8))"
+        let editor = app.textViews["Journal text"]
+        focus(editor)
+        XCTAssertEqual(editor.value as? String, "")
+        editor.typeText(words)
+        // Wait for the full text before Save: CI saved only "W" on one
+        // attempt and left the remaining words in the draft for its retry.
+        guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", words), object: editor)],
+            timeout: settle) == .completed else {
+            return XCTFail("The complete entry text did not reach the editor before Save")
+        }
+        app.buttons["Save"].tap()
+        guard app.staticTexts["Saved on this device"].waitForExistence(timeout: settle) else {
+            return XCTFail("The photo entry was not saved")
+        }
         XCTAssertFalse(app.staticTexts["Attachments"].exists)
-        tab(app, "Journal").tap()
-        let entry = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Photo '")).firstMatch
-        XCTAssertTrue(entry.waitForExistence(timeout: 10))
+        selectTab(app, "Journal")
+        let entry = app.staticTexts[words]
+        guard entry.waitForExistence(timeout: settle) else {
+            return XCTFail("The saved photo entry did not appear in Journal")
+        }
         entry.tap()
         XCTAssertTrue(app.staticTexts["Attachments"].waitForExistence(timeout: 5))
     }
@@ -1504,13 +2413,13 @@ final class OfflineCaptureTests: XCTestCase {
         let clip = app.staticTexts["Transcription"]
         XCTAssertTrue(clip.waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Saved on this device"].exists)
-        XCTAssertTrue(app.buttons["Save entry"].isEnabled)
+        XCTAssertTrue(app.buttons["Save"].isEnabled)
 
         app.terminate()
         app.launch()
         XCTAssertTrue(app.staticTexts["Transcription"].waitForExistence(timeout: 10), "The draft survives a relaunch")
 
-        app.buttons["Save entry"].tap()
+        app.buttons["Save"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Transcription"].exists)
     }
@@ -1674,9 +2583,41 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(waitForLabel(counter, equalTo: "p. 4 / 4"))
     }
 
-    /// A notes page turns sideways on a swipe, and finishing that swipe on
-    /// the last page makes a new one; backwards from the first does nothing.
-    func testNotesPagesTurnWithASwipe() {
+    /// Nothing on a notes page moves sideways: a drag from either side, or
+    /// anywhere else, neither turns nor adds a page. The toolbar does both.
+    func testDrawingToolSizesApplyImmediatelyAndSurviveReopening() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        notes.tap()
+        let tools = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'drawing-favorite-' AND label == 'Pen'"))
+        let pen = tools.firstMatch
+        XCTAssertTrue(pen.waitForExistence(timeout: 10))
+        if !pen.isSelected { pen.tap() }
+        pen.tap()
+        let small = app.buttons["drawing-size-0"]
+        let large = app.buttons["drawing-size-4"]
+        XCTAssertTrue(large.waitForExistence(timeout: 5))
+        small.tap()
+        let thinWidth = pen.value as? String
+        large.tap()
+        XCTAssertNotEqual(pen.value as? String, thinWidth, "Size is applied before closing the popover")
+        let savedWidth = pen.value as? String
+        XCTAssertTrue(app.sliders["drawing-size-slider"].exists)
+        attach(app, "Compact tool size controls")
+        app.buttons["drawing-attributes-done"].tap()
+        XCTAssertTrue(large.waitForNonExistence(timeout: 5))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        notes.tap()
+        XCTAssertTrue(pen.waitForExistence(timeout: 10))
+        XCTAssertEqual(pen.value as? String, savedWidth)
+    }
+
+    func testNotesPagesDoNotTurnWithASwipe() {
         guard UIDevice.current.userInterfaceIdiom == .pad else { return }
         let app = XCUIApplication()
         app.launch()
@@ -1694,31 +2635,33 @@ final class OfflineCaptureTests: XCTestCase {
 
         let window = app.windows.firstMatch
         let shown = app.otherElements["notebook-visible-frame"]
-        // Turning happens only from a side of the screen: a finger anywhere
-        // else may be a palm, and moves nothing at all.
         let rightEdge = window.coordinate(withNormalizedOffset: CGVector(dx: 0.985, dy: 0.5))
         let leftEdge = window.coordinate(withNormalizedOffset: CGVector(dx: 0.015, dy: 0.5))
         let right = window.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
         let left = window.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5))
         let before = shown.value as? String
+        // Off the last page from the right edge: no new page.
+        rightEdge.press(forDuration: 0.05, thenDragTo: left)
         right.press(forDuration: 0.05, thenDragTo: left)
-        XCTAssertEqual(counter.label, "\(total) / \(total)", "a drag mid-page is not a page turn")
+        sleep(1)
+        XCTAssertEqual(counter.label, "\(total) / \(total)", "a swipe never adds a page")
+        XCTAssertFalse(app.otherElements["notebook-new-page-marker"].exists)
         let middle = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         middle.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)))
         middle.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.8)))
         sleep(1)
         XCTAssertEqual(shown.value as? String, before, "one finger never scrolls a notes page")
-        // A short drag from the side springs back.
-        rightEdge.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
-        XCTAssertEqual(counter.label, "\(total) / \(total)")
-        // A deliberate one off the last page adds a page.
-        rightEdge.press(forDuration: 0.05, thenDragTo: left)
+        // The button is how a page is added.
+        app.buttons["notebook-add-page"].tap()
         XCTAssertTrue(waitForLabel(counter, equalTo: "\(total + 1) / \(total + 1)"))
         attach(app, "notes new page")
-        // And back, from the other side.
+        // Back from the left edge: neither a page turn nor Back.
         leftEdge.press(forDuration: 0.05, thenDragTo: right)
+        sleep(1)
+        XCTAssertEqual(counter.label, "\(total + 1) / \(total + 1)", "a swipe never turns a page")
+        XCTAssertTrue(app.buttons["notebook-save"].exists, "the left edge doesn't leave the notebook")
+        app.buttons["Previous page"].tap()
         XCTAssertTrue(waitForLabel(counter, equalTo: "\(total) / \(total + 1)"))
-        XCTAssertTrue(app.buttons["notebook-save"].exists, "the left edge turns the page, not Back")
         // A page fits whole either way up: no vertical scrolling sideways on.
         XCUIDevice.shared.orientation = .landscapeLeft
         addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
@@ -1729,12 +2672,73 @@ final class OfflineCaptureTests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         XCTAssertTrue(waitForValue(shown) { frame in frame[1] + frame[3] >= 1753.5 && frame[0] + frame[2] >= 1239.5 })
 
-        // Backwards from the first page: nothing.
-        for _ in 1..<max(total, 1) { app.buttons["Previous page"].tap() }
-        XCTAssertEqual(counter.label, "1 / \(total + 1)")
-        leftEdge.press(forDuration: 0.05, thenDragTo: right)
-        XCTAssertEqual(counter.label, "1 / \(total + 1)")
         // Leave no notes in the entry draft for the next test.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        detachDraftNotes(app)
+    }
+
+    /// The drawing toolbar is the only way to change tools on a notes page,
+    /// so it has to outlive every way of moving between pages.
+    func testDrawingToolbarStaysThroughPageChanges() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        detachDraftNotes(app)
+        notes.tap()
+        let counter = app.buttons["notebook-page"]
+        XCTAssertTrue(counter.waitForExistence(timeout: 10))
+        let tools = app.buttons["drawing-all-tools"]
+        XCTAssertTrue(tools.waitForExistence(timeout: 5))
+        XCTAssertTrue(tools.isHittable, "toolbar shown on the first page")
+
+        app.buttons["notebook-add-page"].tap()
+        XCTAssertTrue(waitForLabel(counter, equalTo: "2 / 2"))
+        sleep(1)
+        attach(app, "toolbar after adding a page")
+        XCTAssertTrue(tools.exists && tools.isHittable, "toolbar shown after adding a page")
+
+        app.buttons["Previous page"].tap()
+        XCTAssertTrue(waitForLabel(counter, equalTo: "1 / 2"))
+        sleep(1)
+        attach(app, "toolbar after turning back")
+        XCTAssertTrue(tools.exists && tools.isHittable, "toolbar shown after turning back")
+
+        counter.tap()
+        app.buttons["Page 2"].tap()
+        XCTAssertTrue(waitForLabel(counter, equalTo: "2 / 2"))
+        sleep(1)
+        XCTAssertTrue(tools.exists && tools.isHittable, "toolbar shown after picking a page")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        detachDraftNotes(app)
+    }
+
+    /// The ink log, in the notebook's menu, reads what the editor did: here
+    /// the page added. On the iPad it is how a Pencil-only fault is seen.
+    func testNotebookInkLogShowsWhatHappened() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        detachDraftNotes(app)
+        notes.tap()
+        let counter = app.buttons["notebook-page"]
+        XCTAssertTrue(counter.waitForExistence(timeout: 10))
+        app.buttons["notebook-add-page"].tap()
+        XCTAssertTrue(waitForLabel(counter, equalTo: "2 / 2"))
+
+        app.buttons["notebook-more"].tap()
+        let open = app.buttons["notebook-ink-log"]
+        XCTAssertTrue(open.waitForExistence(timeout: 5))
+        open.tap()
+        let text = app.staticTexts["notebook-ink-log-text"]
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        XCTAssertTrue(text.label.contains("add p2 after p1"), text.label)
+        app.buttons["Done"].tap()
+
         app.navigationBars.buttons.element(boundBy: 0).tap()
         detachDraftNotes(app)
     }
@@ -1742,6 +2746,46 @@ final class OfflineCaptureTests: XCTestCase {
     /// Notes reopen the entry draft's notebook until the entry is saved, so a
     /// test that wants a fresh one first takes any left over by an earlier
     /// test (or an earlier try of this one) out of the draft. They stay in Draw.
+    /// A pinch does nothing to a notes page until Zoom is switched on in the
+    /// menu: a palm the Pencil misses lands as one. Off again, the page fits.
+    func testNotebookZoomIsOffUntilSwitchedOn() {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { return }
+        let app = XCUIApplication()
+        app.launch()
+        let notes = app.buttons["capture-notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 10))
+        detachDraftNotes(app)
+        notes.tap()
+        let shown = app.otherElements["notebook-visible-frame"]
+        XCTAssertTrue(shown.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForValue(shown) { $0[2] >= 1239.5 }, "starts fitted: \(shown.value ?? "nil")")
+        let fitted = shown.value as? String
+        let window = app.windows.firstMatch
+
+        window.pinch(withScale: 3, velocity: 1)
+        sleep(1)
+        XCTAssertEqual(shown.value as? String, fitted, "a pinch with zoom off leaves the page fitted")
+
+        let more = app.buttons["notebook-more"]
+        more.tap()
+        let zoom = app.buttons["notebook-zoom"]
+        XCTAssertTrue(zoom.waitForExistence(timeout: 5))
+        XCTAssertFalse(zoom.isSelected, "Zoom starts off")
+        zoom.tap()
+        window.pinch(withScale: 3, velocity: 1)
+        XCTAssertTrue(waitForValue(shown) { $0[2] < 1200 }, "zoomed in: \(shown.value ?? "nil")")
+        attach(app, "notebook zoomed")
+
+        more.tap()
+        XCTAssertTrue(zoom.waitForExistence(timeout: 5))
+        XCTAssertTrue(zoom.isSelected)
+        zoom.tap()
+        XCTAssertTrue(waitForValue(shown) { $0[2] >= 1239.5 }, "back to the fit: \(shown.value ?? "nil")")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        detachDraftNotes(app)
+    }
+
     private func detachDraftNotes(_ app: XCUIApplication) {
         let row = app.buttons["capture-draft-notes"]
         guard row.waitForExistence(timeout: 3) else { return }
@@ -1770,6 +2814,83 @@ final class OfflineCaptureTests: XCTestCase {
         let format = value != nil ? "label == %@" : "label != %@"
         let predicate = NSPredicate(format: format, value ?? other ?? "")
         return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 5) == .completed
+    }
+
+    /// A book opens at its chapter, Chapters goes back to the list rather
+    /// than pushing another one, so however many chapters are picked, Back
+    /// is always chapter → list → library.
+    func testChapterBackGoesToTheChapterListOnce() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 4"].waitForExistence(timeout: 10), "opens where it was left")
+
+        let list = app.navigationBars["The Long Way Round"]
+        for chapter in ["Chapter 2", "Chapter 5", "Chapter 1"] {
+            app.navigationBars.buttons["Chapters"].tap()
+            XCTAssertTrue(list.waitForExistence(timeout: 5), "Chapters goes back to the list")
+            let row = app.staticTexts[chapter]
+            for _ in 0..<6 where !reachable(row) { app.swipeUp() }
+            row.tap()
+            XCTAssertTrue(app.navigationBars[chapter].waitForExistence(timeout: 10))
+        }
+        attach(app, "third chapter")
+
+        app.navigationBars["Chapter 1"].buttons.firstMatch.tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 5), "Back from a chapter is the chapter list")
+        list.buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Library"].waitForExistence(timeout: 5), "and then the library")
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+        // Coming back out and in again resumes once more, with no stale reader:
+        // at the Continue bookmark, which outranks the chapter last read.
+        book.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 4"].waitForExistence(timeout: 10), "reopens at the Continue point")
+        app.navigationBars["Chapter 4"].buttons.firstMatch.tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+    }
+
+    /// An iPad window in Split View or Slide Over has the iPhone's five-slot
+    /// bottom bar. With every destination a tab, iPadOS put the rest in its own
+    /// More list, nesting each one's navigation stack inside it: Library and the
+    /// reader had two bars and two Backs. A compact iPad gets the iPhone's tabs.
+    func testCompactIPadKeepsOneNavigationBar() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad)
+        let app = XCUIApplication()
+        app.launchArguments += ["-libraryFixture", "-compactWidth"]
+        app.launch()
+        let bar = app.tabBars.firstMatch
+        XCTAssertTrue(bar.waitForExistence(timeout: settle))
+        XCTAssertEqual(bar.buttons.allElementsBoundByIndex.map(\.label),
+                       ["Capture", "Journal", "Chat", "Todo", "More"])
+
+        bar.buttons["More"].tap()
+        XCTAssertTrue(app.navigationBars["More"].waitForExistence(timeout: 10))
+        for row in ["Study", "Draw", "Library", "Jobs", "Writing", "Learning", "Settings"] {
+            XCTAssertTrue(app.buttons["more-\(row)"].exists, "\(row) is in More")
+        }
+        app.buttons["more-Library"].tap()
+        XCTAssertTrue(app.navigationBars["Library"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.navigationBars.count, 1, "one bar over Library")
+
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 4"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.navigationBars.count, 1, "one bar over the reader")
+        attach(app, "compact reader")
+
+        // Back walks chapter → chapter list → Library → More, one bar each.
+        app.navigationBars["Chapter 4"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["The Long Way Round"].waitForExistence(timeout: 5))
+        app.navigationBars["The Long Way Round"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Library"].waitForExistence(timeout: 5))
+        app.navigationBars["Library"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["More"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.navigationBars.count, 1)
     }
 
     private func attach(_ app: XCUIApplication, _ name: String) {

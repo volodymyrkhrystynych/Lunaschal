@@ -579,6 +579,13 @@ const journalRecordingCfg = (
         // entry and its attachment share one id and a replay a no-op.
         id: vars.entryId ?? vars.id,
         attachmentId: vars.id,
+        capturedAt: new Date(rec.startedAt).toISOString(),
+        // Recovery finalizes at restart, which may be hours after capture
+        // stopped. Let the server probe the actual audio in that case.
+        durationSeconds:
+          !rec.recovered && rec.endedAt != null && rec.endedAt > rec.startedAt
+            ? (rec.endedAt - rec.startedAt) / 1000
+            : undefined,
         name: vars.name,
         transcribe: rec.mode === 'transcribe',
         ideaId: vars.ideaId,
@@ -839,10 +846,13 @@ const fanficProgressCfg = (
 });
 
 // Heartbeats only move a span forward server-side, so replaying them in any
-// order is harmless; nothing on screen reads spans, so nothing to invalidate.
-const fanficReadingSpanCfg = (): Cfg<{ success: boolean }, ReadingSpan> => ({
+// order is harmless. The calendar rail and derived sleep bounds read spans.
+const fanficReadingSpanCfg = (
+  qc: QueryClient
+): Cfg<{ success: boolean }, ReadingSpan> => ({
   ...ONLINE,
   mutationFn: span => api.fanfic.saveReadingSpan(span),
+  onSuccess: () => qc.invalidateQueries({ queryKey: ['calendar'] }),
 });
 
 const fanficSetReadCfg = (
@@ -1107,7 +1117,7 @@ export function registerOfflineMutationDefaults(qc: QueryClient): void {
     [MUTATION_KEYS.fanficSetRead, fanficSetReadCfg(qc) as Cfg<unknown, never>],
     [
       MUTATION_KEYS.fanficReadingSpan,
-      fanficReadingSpanCfg() as Cfg<unknown, never>,
+      fanficReadingSpanCfg(qc) as Cfg<unknown, never>,
     ],
     [
       MUTATION_KEYS.writingChapterUpdate,

@@ -1,5 +1,37 @@
 import { describe, it, expect } from 'vitest';
-import { stepLabel, parseAgentMeta, countChatTodoWrites } from './agentSteps';
+import {
+  stepLabel,
+  parseAgentMeta,
+  countChatTodoWrites,
+  parseDelegateProposals,
+} from './agentSteps';
+
+it('hides old pending reading-only suggestions but preserves other cards and resolved history', () => {
+  const reading = {
+    id: 'reading',
+    kind: 'calendar',
+    status: 'pending',
+    reconstructionDay: '2026-07-13',
+    sources: [{ id: 'reading:a' }],
+    data: {},
+  };
+  const accepted = { ...reading, id: 'accepted', status: 'accepted' };
+  const mixed = {
+    ...reading,
+    id: 'mixed',
+    sources: [{ id: 'reading:a' }, { id: 'journal:b' }],
+  };
+  const ordinary = {
+    ...reading,
+    id: 'ordinary',
+    sources: [{ id: 'journal:b' }],
+  };
+  expect(
+    parseDelegateProposals(
+      JSON.stringify({ proposals: [reading, accepted, mixed, ordinary] })
+    )
+  ).toEqual([accepted, mixed, ordinary]);
+});
 
 describe('stepLabel', () => {
   it('labels offline library searches', () => {

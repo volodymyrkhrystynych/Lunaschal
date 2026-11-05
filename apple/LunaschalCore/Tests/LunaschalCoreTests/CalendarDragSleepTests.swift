@@ -206,4 +206,29 @@ final class CalendarDragSleepTests: XCTestCase {
         XCTAssertEqual(shown["2026-10-04"]?.nextWakeAt, start + 3 * 3600)
         XCTAssertEqual(shown["2026-10-06"]?.previousSleepAt, start + 18 * 3600)
     }
+
+    func testASentSleepChangeStaysOnTheDayViewOnceItLeavesTheOutbox() {
+        let before = SleepDay(date: "2026-10-05", wakeAt: 1, wakeSource: "auto")
+        let cache = ["2026-10-04": SleepDay(date: "2026-10-04"), "2026-10-05": before,
+                     "2026-10-06": SleepDay(date: "2026-10-06"), "2026-10-09": SleepDay(date: "2026-10-09")]
+        let sent = CalendarOp(change: .sleep(date: "2026-10-05", wake: "07:00", sleep: nil))
+        let queued = CalendarOp(change: .sleep(date: "2026-10-09", wake: "08:00", sleep: nil))
+        let shown = CalendarSleep.overlay(cache, pending: [sent, queued], calendar: utc)
+
+        let kept = CalendarSleep.keepSent(cache, shown: shown, sent: [sent, queued], stillQueued: [queued])
+        XCTAssertEqual(kept.landed, ["2026-10-05"])
+        XCTAssertEqual(kept.cache["2026-10-05"], shown["2026-10-05"])
+        XCTAssertEqual(kept.cache["2026-10-05"]?.wakeSource, "manual")
+        XCTAssertEqual(kept.cache["2026-10-04"]?.nextWakeAt, shown["2026-10-05"]?.wakeAt, "the neighbour's night ends there too")
+        XCTAssertEqual(kept.cache["2026-10-09"], cache["2026-10-09"], "a change still queued is drawn by the overlay, not cached")
+        // With nothing left queued, the overlay of the new cache draws the same day.
+        XCTAssertEqual(CalendarSleep.overlay(kept.cache, pending: [queued], calendar: utc)["2026-10-05"], shown["2026-10-05"])
+    }
+
+    func testNoSleepChangeSentLeavesTheCacheAlone() {
+        let cache = ["2026-10-05": SleepDay(date: "2026-10-05")]
+        let kept = CalendarSleep.keepSent(cache, shown: [:], sent: [CalendarOp(change: .delete(id: "e"))], stillQueued: [])
+        XCTAssertTrue(kept.landed.isEmpty)
+        XCTAssertEqual(kept.cache, cache)
+    }
 }

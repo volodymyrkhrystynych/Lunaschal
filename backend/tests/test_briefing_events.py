@@ -125,6 +125,28 @@ def test_proposals_edit_accept_dismiss_and_rerun(client, monkeypatch):
     assert db.execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 1
 
 
+
+def test_model_picks_categories_and_the_user_can_untick_them(client, monkeypatch):
+    from backend.briefing_events import EVENT_SCHEMA
+    assert 'categoryTags' in EVENT_SCHEMA['items']['required']
+    picked = {**event(), 'categoryTags': ['family', 'outside', 'family', 'astral', 'work', 'leisure']}
+    result, proposals = prepare(monkeypatch, [picked])
+    p = proposals[0]
+    # Off-vocabulary dropped, duplicates folded, capped at three: pre-ticked on the card.
+    assert p['data']['categoryTags'] == ['family', 'outside', 'work']
+    url = f"/api/chat/proposals/{result['messageId']}/{p['id']}"
+    assert client.post(url, json={'action': 'accept', 'data': {**p['data'], 'categoryTags': ['family']}}).status_code == 200
+    row = get_db().execute('SELECT category_tags, classified_at FROM calendar_events').fetchone()
+    assert json.loads(row['category_tags']) == ['family']
+    assert row['classified_at'] is not None
+
+
+def test_categories_absent_stay_absent_and_garbage_is_rejected():
+    assert 'categoryTags' not in validate_event(event(), DAY)
+    assert validate_event({**event(), 'categoryTags': None}, DAY)['categoryTags'] == []
+    with pytest.raises(ValueError):
+        validate_event({**event(), 'categoryTags': 'family'}, DAY)
+
 # {'time': '03:00'} rolls to the small hours of TODAY (see the roll test) and is
 # then rejected for running to 09:00, past the 04:00 boundary -- still a bad edit.
 @pytest.mark.parametrize('patch', [{'date': TODAY}, {'time': '99:00'}, {'time': '03:00'},
@@ -285,3 +307,24 @@ def test_two_untimed_activities_can_cite_one_evening_recap(client):
     ctx = gather_day(db, TODAY)
     proposals = stage_events(db, [{**event(title), 'time': None, 'endTime': None} for title in ('Cooking', 'Family time')], ctx)
     assert len(proposals) == 2
+
+
+def test_stays_at_home_and_work_reach_the_briefing(client):
+    from backend import place_roles
+    db = get_db()
+    for pid, name, lat in (('H', 'Home', 43.65), ('O', 'Office', 43.70)):
+        db.execute('INSERT INTO saved_places(id,name,latitude,longitude,radius_m,created_at,updated_at)'
+                   ' VALUES (?,?,?,?,150,0,0)', (pid, name, lat, -79.38))
+    db.commit()
+    place_roles.assign(db, 'home', 'H', '2026-01-01')
+    place_roles.assign(db, 'work', 'O', '2026-01-01')
+    for vid, lat, arrive, depart in (('v1', 43.70, START + 5 * 3600, START + 13 * 3600),
+                                     ('v2', 43.65, START + 14 * 3600, None),
+                                     ('v3', 43.80, START + 13 * 3600, START + 13.5 * 3600)):
+        db.execute("INSERT INTO location_points(id,fix_ts,day_key,latitude,longitude,accuracy_m,kind,departed_ts,received_at)"
+                   " VALUES (?,?,?,?,?,20,'visit',?,0)", (vid, arrive, DAY, lat, -79.38, depart))
+    db.commit()
+    ctx = gather_day(db, TODAY)
+    assert ctx['placeRoles'] == {'home': 'Home', 'work': ['Office']}
+    assert [(s['role'], s['place']) for s in ctx['stays']] == [('work', 'Office'), (None, None), ('home', 'Home')]
+    assert ctx['stays'][-1]['departed'] is None

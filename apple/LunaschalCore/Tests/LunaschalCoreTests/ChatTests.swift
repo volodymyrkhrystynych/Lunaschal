@@ -125,6 +125,12 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(card(#"{"id": "1", "kind": "flashcards", "data": {}, "status": "accepted", "result": {"count": 1}}"#).resolvedLabel,
                        "Queued 1 card for review in Learning")
         XCTAssertEqual(card(#"{"id": "1", "kind": "calorie", "data": {}, "status": "dismissed"}"#).resolvedLabel, "Dismissed")
+        let carried = card(#"{"id": "1", "kind": "todo", "carriedFrom": "2026-10-12", "data": {"title": "Call the dentist"}, "status": "pending"}"#)
+        XCTAssertEqual(carried.carriedFrom, "2026-10-12")
+        XCTAssertEqual(carried.acceptLabel, "Add to today")
+        XCTAssertEqual(carried.headline, "Keep this for today?")
+        XCTAssertEqual(card(#"{"id": "1", "kind": "todo", "data": {"title": "Call the dentist"}, "status": "accepted"}"#).resolvedLabel,
+                       "Added to today: Call the dentist")
     }
 
     func testEditedCardsGoOutWithWholeNumbers() throws {

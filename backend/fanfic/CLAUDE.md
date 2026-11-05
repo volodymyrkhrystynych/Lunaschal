@@ -1,6 +1,6 @@
 # Fanfic library (`backend/routes/fanfic.py`, `backend/fanfic/`, `src/components/Fanfic/`)
 
-Personal fanfiction library + reader ("Library" in the UI). Imports from XenForo forums (SpaceBattles / Sufficient Velocity / Questionable Questing) by scraping threadmark reader pages — `xenforo.py` is a **pure parser** (no network/DB; tests feed fixture HTML), `download.py` streams chapters into the DB one reader page at a time (resumable; in-memory progress registry; 2 s request delay; browser UA + per-domain cookies from `site_cookies` for Cloudflare). Also imports epub/docx uploads and stores PDFs. Chapters keep sanitized HTML + plain text (FTS). Per-fic: folders (ordered), site tags, per-chapter read tracking, last-read position, rating/review, update checking (`check-updates` / `refresh-alerts` set `update_pending`; a single drain worker walks the flags one fic at a time). Journal entries can reference fics/chapters (`journal_entry_fic_refs`) — reading commentary shows up in the Journal feed and deep-links back into the reader.
+Personal fanfiction library + reader ("Library" in the UI). Imports from XenForo forums (SpaceBattles / Sufficient Velocity / Questionable Questing) by scraping threadmark reader pages — `xenforo.py` is a **pure parser** (no network/DB; tests feed fixture HTML), `download.py` streams chapters into the DB one reader page at a time (resumable; in-memory progress registry; 2 s request delay; browser UA + per-domain cookies from `site_cookies` for Cloudflare). Also imports epub/docx uploads and stores PDFs. Chapters keep sanitized HTML + plain text (FTS). The sanitizer keeps an inline `style` limited to colour, background, font family/size/weight/style, decoration and alignment (`_STYLE_PROPERTIES`) — XenForo's [COLOR]/[FONT]/[SIZE]/[CENTER] — so chapters stored before that change have lost their styling, and only a re-import brings it back: "Re-read edited chapters" rewrites only posts whose edit time moved. Per-fic: folders (ordered), site tags, per-chapter read tracking, last-read position, rating/review, update checking (`check-updates` / `refresh-alerts` set `update_pending`; a single drain worker walks the flags one fic at a time). Journal entries can reference fics/chapters (`journal_entry_fic_refs`) — reading commentary shows up in the Journal feed and deep-links back into the reader.
 
 **FanFiction.net, AO3 and Patreon** use pure parsers in `sites.py` and the jobs in
 `collections.py`. Library → Import → From website accepts a single story/work/post;
@@ -132,8 +132,128 @@ existing chapter bodies or changing their IDs and reading state.
 - A **deep** check walks every reader page and compares each post against the saved chapter. `fic_chapters.edited_at` holds XenForo's "Last edited" timestamp — parsed from `.message-lastEdit`, which sits in the same `<article>` the body does, so it costs no extra request. A changed chapter is rewritten **in place**: `position` is never touched, or a typo fix would reshuffle reading order and the last-read pointer.
 - **Deep only ever runs when asked** (`{"deep": true}`, the Deep button; `fics.deep_pending` carries the request to the drain worker). There is deliberately no cadence and no auto-escalation: authors revising already-published chapters is rare, so re-walking every fic on a timer would spend far more requests than it recovers.
 - **`edited_at` is left NULL by the migration on purpose.** A post with no edit notice also parses to `None`, so unchanged chapters compare equal and a first deep scan doesn't rewrite the whole library.
-- **`refresh-alerts` no longer skips a fic for being fetched more recently than its alert.** That comparison assumed an alert is the only way a thread changes; with edits raising none, "checked since the alert" regularly meant reporting a fic current while a revised chapter sat unread.
+- **Alert refreshes skip activity already covered by a successful check**
+  (`alerts.py`, shared by the route and `alert_scheduler.py`). For all three
+  forums, the newest alert per thread must be older than `last_checked_at`
+  and the fic must be complete before it is skipped. Missing timestamps,
+  same-second alerts and failed downloads remain eligible. Manual Update
+  and Deep bypass this gate; ordinary checks never recovered silent edits
+  anyway. Refresh reports `skippedFresh` and the Library displays it.
+- **`last_checked_at` records the start of the last successful check**, not
+  its completion: an alert arriving while chapters download must remain
+  eligible. Failed/cancelled checks do not advance it. FF.net browser retries
+  use the oldest cached request's creation time, since those pages can be
+  older than the worker attempt that finally completes.
+- **The server polls after one startup minute, then every randomized 30–90
+  minutes**, within `LUNASCHAL_NO_SCHEDULERS`. Forum alert pagination is
+  followed so a busy hour does not hide page-two activity. Saved forum
+  sessions are required. FF.net uses both followed/favorite account lists
+  when a cookie or browser mode is configured, through the existing durable
+  collection scans; active checkpoints and site pauses/cooldowns are
+  preserved. Browser mode still needs its connected extension tabs.
+- **FF.net collection scans compare the Updated column**, independently of
+  Added/Favorited/Followed. Precise timestamps skip covered updates;
+  date-only values use the end of that UTC day so another same-day update
+  cannot be skipped. Missing dates conservatively queue an ordinary check.
+  This can recheck today's updates, but older completed stories incur no
+  story requests. AO3 and Patreon collection behavior is unchanged.
+
+## Shelves, read marks and reaction proof
+
+**A fic sits on one shelf** (`fics.shelf`: `to_read`/`reading`/`paused`/`finished`/`dropped`,
+with `shelved_at`), and finished/dropped are the archive the phone's list hides by default.
+The migration put never-opened, never-read fics on `to_read`. `library.py` holds the rules
+both callers share (`PATCH /<id>/shelf`, `/review`, `/read`, the folder routes, and the
+phone's `mobile_sync/fic_edits.py`). The phone's edits are **last write wins**: a fic's
+record moves on every chapter download, so a revision check would turn a review written
+offline into a conflict for nothing.
+
+**Your own forum reaction on each chapter is kept as proof it was read**
+(`fic_chapter_reactions`). `parse_reader_page` reads the viewer's react button
+(`a.actionBar-action--reaction`, `has-reaction` once reacted, `.reaction-text` for which
+one) and `<html data-logged-in>`. Every reader page any walk fetches records it, the deep
+check included, at no extra request. Two rules: **only a logged-in page writes**, so a
+lapsed session can't turn proof into "reacted to nothing"; and a row with a NULL reaction
+is "checked, not reacted", while no row is unknown (the author's own posts carry no
+button). `checked_at` moves on every look, which is how the phone says how fresh the
+evidence is. The markup is XenForo 2's default and unverified per theme: check a real
+thread with `python -m backend.fanfic.reaction_probe <reader url>`.
+
+## Likes, re-getting one chapter, and the Backlog
+
+**A like from the Library is made on the forum by the server** (`likes.py`). The tap
+writes the chapter's `fic_chapter_reactions` row at once — `reaction='Like'`,
+`source='app'`, `pending='like'` — so every client shows it, and a single worker pushes
+it: GET the post (`ref.post_url`, which lands on the thread page holding it), read the
+viewer's button and `<html data-csrf>`, and **POST `/posts/<id>/react` only if the page
+disagrees**. XenForo's react endpoint toggles, so a blind POST replayed after a lost
+reply would un-like the post; reading first is what makes a retry safe. Un-liking sends
+back the user's own `reaction_id` from the button, since that is what toggles it off.
+While `pending` is set, `_record_reaction` leaves the row alone: the page a walk just
+read predates the tap. A logged-out page or a challenge parks the push (`push_error`
+shown, no timer — it wants cookies); a transient failure retries on `RETRY_SCHEDULE`;
+asking again resets both. `download._post_form` is the library's one write to a site:
+same lock, pacing and session as `_fetch`, never retried blind. The phone sends likes
+as `fic_chapter_reactions` outbox operations (`mobile_sync/fic_edits.py`, last write
+wins); the web posts `POST /api/fanfic/chapters/<id>/like`.
+
+**Opening a chapter on the site assumes a like and sends nothing** (`assumed: true`,
+`source='assumed'`): the user is going there to press Like themselves. It never
+overrides a reaction the forum showed or a pending request, and the next walk over that
+page replaces it with the truth either way.
+
+**Finding out which chapters are liked is the deep check.** Reactions live on reader
+pages, so `POST /api/fanfic/reactions/recheck` just queues a deep check of every forum
+fic whose site has a saved session; it costs what Deep costs and picks up silent edits
+on the way. Its button is in the web app's Settings → Fanfic site cookies, beside the
+other per-site scans, since it is server work rather than library browsing.
+
+**Re-getting one chapter** (`POST /api/fanfic/chapters/<id>/refetch`, status on GET)
+fetches that one post and rewrites the chapter in place **whether or not** its edit
+time moved — the case Deep's edit-time comparison can miss. Id, position, read mark and
+bookmarks stay; the reaction is read too. Forum chapters only.
+
+**Backlog is derived from which of your site lists a fic is on** (`source_lists.py`,
+`fic_source_lists`, `fic_list_passes`). The watched and bookmark scans mark `watched` /
+`bookmarks`; collection scans mark their collection name (`favorites`, `follows`,
+`bookmarks`, `subscriptions`, `feed`). Only a pass that walked a list from page 1 to its
+last page without an error may take a fic off it, by dropping marks older than the
+pass's `pass_started_at` (persisted on the scan row, so a resumed pass keeps the start it
+had). A fic is Backlog when it is an online source the user doesn't follow, **and its site
+has had a complete pass over a list that counts** — before the first watched walk
+finishes, "on no list" only means "not looked yet". **A forum bookmark doesn't count**
+(`_follows`): its labels become folders, and a bookmark labelled "backlog" is the very
+thing this list is for, so it neither keeps a fic out nor vouches for the site by
+finishing a pass. AO3's `bookmarks` are its favourites and do count. `GET
+/api/fanfic?folderId=backlog` sorts **newest-added first** unless a `sort` is given
+(`sort=added` works anywhere); the phone reads the snapshot's `backlog` flag, opens
+the folder on the same order, and offers it as a Library filter. Local uploads are
+never Backlog. Changing this rule changes every snapshot's flag, which is why it bumped
+`mobile_sync/registry.py`'s projection tag.
 
 ## Reading spans (`fic_reading_spans`)
 
-A chapter open **and being scrolled** is recorded as reading time, so the briefing's day reconstruction (`backend/briefing_events.py`, `reading:` sources) can propose a leisure-reading block with no commentary written at all. One span is one continuous stretch of scrolling in one chapter: `src/lib/readingSpans.ts` holds the rules (five idle minutes end a span, each pause adds at most three minutes of active time — `GAP_CAP_SECONDS`, mirrored as `_SPAN_GAP_CAP` in the route), `src/components/Fanfic/useReadingSpans.ts` feeds it. Only scrolls within three seconds of a wheel/touch/key/pointer input count, because the reader scrolls itself (to the top on a chapter change, to a bookmark on restore) and that proves nothing; a hidden tab counts nothing either. Spans are client-minted ids sent through the offline queue to `PUT /api/fanfic/<fic>/reading-spans/<id>`, which only ever moves a span forward, so a replayed or out-of-order heartbeat is harmless. Spans under a minute of active time are left out of the briefing as accidental opens.
+A chapter open **and being scrolled** is recorded as reading time. Calendar's day
+view projects these spans directly through `GET /api/calendar/reading/<date>`
+onto a leisure rail down the right edge, bounded by the existing wake/sleep
+times (unknown ends use the 4am day edges). Titles and chapter positions hang to
+its left and show by default; clicking the rail (or a title) hides them, for when
+they cover an event. The iOS day view draws the same rail natively
+(`apple/LunaschalCore/.../CalendarReading.swift`, a port of
+`src/lib/calendarReading.ts`), caching each day's answer for offline. No event rows
+or approval steps are needed, and existing spans appear retrospectively. The
+briefing keeps `reading:` sources as chronology anchors but cannot stage events
+citing them, or proposals based solely on chapter commentary. Older pending
+reading-only reconstruction cards are hidden; resolved history is preserved.
+
+One span is one continuous stretch of scrolling in one chapter:
+`src/lib/readingSpans.ts` holds the rules (five idle minutes end a span, each pause
+adds at most three minutes of active time — `GAP_CAP_SECONDS`, mirrored as
+`_SPAN_GAP_CAP` in the route), `src/components/Fanfic/useReadingSpans.ts` feeds it.
+Only scrolls within three seconds of a wheel/touch/key/pointer input count,
+because restored scroll positions prove nothing; a hidden tab counts nothing
+either. Spans are client-minted ids sent through the offline queue to
+`PUT /api/fanfic/<fic>/reading-spans/<id>`, which only moves a span forward, so
+replayed or out-of-order heartbeats are harmless. Successful writes invalidate
+Calendar queries. Spans under a minute of active time are omitted as accidental
+opens. PDF reading has no chapter spans and is not tracked by this mechanism.

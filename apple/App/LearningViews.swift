@@ -124,6 +124,9 @@ private struct LearningReviewPane: View {
             } else if let result = session.result {
                 LearningResultCard(learning: learning, session: session, result: result)
                     .id(result.id)
+            } else if let card = session.card, card.isReview {
+                LearningReadCard(learning: learning, session: session, card: card)
+                    .id(card.id)
             } else if let card = session.card {
                 LearningAnswerCard(learning: learning, session: session, card: card)
                     .id(card.id)
@@ -148,16 +151,14 @@ private struct LearningProgress: View {
     }
 }
 
-/// The answering pass: type an answer (the keyboard's mic dictates) or flip
-/// past the card. Grading happens in the background; results come after the
-/// last card.
+/// The answering pass: type an answer, speak one (Stop sends it and moves
+/// on), or flip past the card. Grading happens in the background; results
+/// come after the last card.
 private struct LearningAnswerCard: View {
     @ObservedObject var learning: LearningModel
     let session: LearningSession
     let card: LearningCard
     @State private var answer = ""
-    /// Any of the answer came through the mic, so it's saved as spoken.
-    @State private var usedVoice = false
     @StateObject private var dictation: LearningDictation
     @FocusState private var focused: Bool
 
@@ -191,7 +192,7 @@ private struct LearningAnswerCard: View {
                 }
                 HStack {
                     Button {
-                        Task { if await learning.submit(answer, voice: usedVoice) { answer = ""; usedVoice = false } }
+                        Task { if await learning.submit(answer) { answer = "" } }
                     } label: {
                         Text("Check Answer").frame(maxWidth: .infinity)
                     }
@@ -201,9 +202,8 @@ private struct LearningAnswerCard: View {
                     LearningMicButton(status: dictation.status) {
                         focused = false
                         Task {
-                            await dictation.toggle { text in
-                                answer = answer.isEmpty ? text : "\(answer) \(text)"
-                                usedVoice = true
+                            await dictation.toggle { clip in
+                                learning.submitRecording(clip, typed: answer)
                             }
                         }
                     }
@@ -213,8 +213,9 @@ private struct LearningAnswerCard: View {
                         .accessibilityIdentifier("learning-flip")
                 }
                 .controlSize(.large)
-                Text("Answers are checked in the background — results after the last card. Flip skips a card; its answer is shown at the end.")
+                Text("Answers are checked in the background — results after the last card. Stopping a recording sends it and moves on. Flip skips a card; its answer is shown at the end.")
                     .font(.footnote).foregroundStyle(.secondary)
+                LearningRetireButton(learning: learning, card: card)
             }
             .padding()
         }
@@ -240,12 +241,13 @@ private struct LearningResultCard: View {
                     .font(.title3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 LearningBox(title: "Answer") { MarkdownText(text: result.card.answer) }
-                if let text = result.text {
+                if let text = learning.text(of: result) {
                     LearningBox(title: "Your answer") { Text(text).textSelection(.enabled) }
                 }
                 switch grade {
                 case .pending:
-                    Label("Checking your answer…", systemImage: "hourglass")
+                    Label(sendingClip ? "Sending your recording…" : result.voice && learning.text(of: result) == nil
+                          ? "Transcribing your answer…" : "Checking your answer…", systemImage: "hourglass")
                         .font(.subheadline).foregroundStyle(.secondary)
                 case .error:
                     Label("Automatic grading failed — rate yourself.", systemImage: "exclamationmark.triangle")
@@ -278,9 +280,10 @@ private struct LearningResultCard: View {
                         LearningRatingButton(rating: rating, suggested: suggestion(grade) == rating) {
                             Task { await learning.rate(rating) }
                         }
-                        .disabled(learning.sending)
+                        .disabled(learning.sending || sendingClip)
                     }
                 }
+                LearningRetireButton(learning: learning, card: result.card)
             }
             .padding()
         }
@@ -290,14 +293,104 @@ private struct LearningResultCard: View {
         .onDisappear { learning.stopSpeaking() }
     }
 
+    /// Its clip hasn't reached the server: a rating now would be undone by it.
+    private var sendingClip: Bool { learning.uploading[result.id] != nil }
+
     private func suggestion(_ grade: LearningGrade?) -> LearningRating? {
         if case let .done(_, suggested, _) = grade { return suggested }
         return nil
     }
 }
 
+/// A review card: the pages of the notebook it was saved from, stacked down
+/// one scroll, and the ratings at the bottom once they've been read. There is
+/// no back side and nothing to answer.
+private struct LearningReadCard: View {
+    @ObservedObject var learning: LearningModel
+    let session: LearningSession
+    let card: LearningCard
+
+    var body: some View {
+        let pages = card.review?.pages ?? []
+        // Not lazy: a review card is a few notebook pages whose images stay
+        // cached anyway, and a lazy row dropped mid-swipe came back as a short
+        // spinner and regrew, changing the scroll's height under the gesture.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                LearningStatsLine(stats: learning.stats)
+                LearningProgress(label: "Card", position: session.position, total: session.total, tint: .accentColor)
+                Label(card.review?.title ?? "For review", systemImage: "book.pages")
+                    .font(.title3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if pages.isEmpty {
+                    ContentUnavailableView("Pages still uploading", systemImage: "icloud.and.arrow.up",
+                                           description: Text("This entry's pages haven't reached the server yet."))
+                }
+                ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
+                    LearningReviewPage(learning: learning, page: page)
+                        .accessibilityLabel("Page \(index + 1) of \(pages.count)")
+                        .accessibilityIdentifier("learning-review-page-\(index + 1)")
+                }
+                Text("How well do you remember this?")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                HStack(spacing: 8) {
+                    ForEach(LearningRating.allCases) { rating in
+                        LearningRatingButton(rating: rating, suggested: false) {
+                            Task { await learning.rateReview(rating) }
+                        }
+                        .disabled(learning.sending)
+                    }
+                }
+                LearningRetireButton(learning: learning, card: card)
+            }
+            .padding()
+        }
+        .accessibilityIdentifier("learning-review-card")
+    }
+}
+
+/// One page, fit to the width, fetched when it scrolls near.
+private struct LearningReviewPage: View {
+    @ObservedObject var learning: LearningModel
+    let page: LearningReviewPages.Page
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    init(learning: LearningModel, page: LearningReviewPages.Page) {
+        self.learning = learning
+        self.page = page
+        // A page already fetched is drawn at its own size from the first frame.
+        _image = State(initialValue: learning.cachedReviewPage(page))
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else if failed {
+                Label("Couldn't load this page", systemImage: "exclamationmark.triangle")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, minHeight: 240)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .task(id: page.id) {
+            guard image == nil else { return }
+            image = await learning.reviewPage(page)
+            failed = image == nil
+        }
+    }
+}
+
 /// The desktop's 🎤: red with Stop while recording, a spinner while the
-/// server transcribes.
+/// microphone is being set up.
 private struct LearningMicButton: View {
     let status: LearningDictation.Status
     let action: () -> Void
@@ -306,16 +399,40 @@ private struct LearningMicButton: View {
         Button(action: action) {
             switch status {
             case .recording: Label("Stop", systemImage: "stop.fill")
-            case .starting, .transcribing: ProgressView()
+            case .starting: ProgressView()
             case .idle: Label("Dictate", systemImage: "mic")
             }
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.bordered)
         .tint(status == .recording ? .red : nil)
-        .disabled(status == .starting || status == .transcribing)
-        .accessibilityLabel(status == .recording ? "Stop" : status == .transcribing ? "Transcribing" : "Dictate")
+        .disabled(status == .starting)
+        .accessibilityLabel(status == .recording ? "Stop" : "Dictate")
         .accessibilityIdentifier("learning-mic")
+    }
+}
+
+/// Takes the card out of review for good. It is kept, with its history, but
+/// never comes due again.
+private struct LearningRetireButton: View {
+    @ObservedObject var learning: LearningModel
+    let card: LearningCard
+    @State private var confirming = false
+
+    var body: some View {
+        Button(role: .destructive) { confirming = true } label: {
+            Label("Retire card", systemImage: "archivebox")
+        }
+        .font(.footnote)
+        .buttonStyle(.borderless)
+        .disabled(learning.sending)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("learning-retire")
+        .confirmationDialog("Retire this card?", isPresented: $confirming, titleVisibility: .visible) {
+            Button("Retire", role: .destructive) { Task { await learning.retire(card) } }
+        } message: {
+            Text("It won't come up for review again. Its history is kept.")
+        }
     }
 }
 
@@ -496,7 +613,8 @@ private struct LearningBrowsePane: View {
                     .listRowBackground(Color.clear)
             }
             ForEach(learning.cards) { card in
-                Button { editing = card } label: { LearningBrowseRow(card: card) }
+                // A review card has no wording to edit; it can still be deleted.
+                Button { if !card.isReview { editing = card } } label: { LearningBrowseRow(card: card) }
                     .buttonStyle(.plain)
                     .swipeActions {
                         Button("Delete", role: .destructive) { deleting = card }
@@ -531,8 +649,13 @@ private struct LearningBrowseRow: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Text(card.question).font(.body).lineLimit(3)
-            Text(card.answer).font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
+            if card.isReview {
+                Label(card.review?.title ?? "For review", systemImage: "book.pages").font(.body).lineLimit(2)
+                Text("\(card.review?.pages.count ?? 0) pages to read").font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                Text(card.question).font(.body).lineLimit(3)
+                Text(card.answer).font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
+            }
             if !card.tags.isEmpty {
                 Text(card.tags.map { "#\($0)" }.joined(separator: " ")).font(.caption).foregroundStyle(.secondary)
             }

@@ -4,8 +4,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type ChatAttachment, type DraftCard } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
 import { MessageMarkdown } from '../MessageMarkdown';
+import { BriefingContent } from './BriefingContent';
 import { AgentSteps } from './AgentSteps';
 import { DelegateProposals } from './DelegateProposals';
+import { JournalContextPrompts } from './JournalContextPrompts';
 import { ChatTodoBar } from './ChatTodoBar';
 import { ChatClips, clipAttachments, photoAttachments } from './ChatClips';
 import { ThinkingLabel } from './ThinkingLabel';
@@ -719,7 +721,7 @@ export function ChatPanel() {
       <div
         ref={scrollContainerRef}
         onScroll={handleTranscriptScroll}
-        className="flex-1 overflow-y-auto p-4 space-y-4"
+        className={`${hasChat || isStreaming ? 'flex-1' : 'shrink-0'} overflow-y-auto p-4 space-y-4`}
       >
         {!isConfigured && (
           <div className="bg-yellow-900/30 border border-yellow-600/50 rounded-lg p-4 text-yellow-200">
@@ -842,7 +844,10 @@ export function ChatPanel() {
                         {message.content}
                       </div>
                     ) : (
-                      <MessageMarkdown content={message.content} />
+                      <BriefingContent
+                        content={message.content}
+                        metadata={message.metadata}
+                      />
                     )}
                   </div>
                 )}
@@ -984,6 +989,7 @@ export function ChatPanel() {
               </div>
             </div>
           )}
+        <JournalContextPrompts />
         <div ref={messagesEndRef} />
         {/* Room for a fresh segment to pin to the top of the viewport after a
             "New chat" break. Rendered only while the break is still the last

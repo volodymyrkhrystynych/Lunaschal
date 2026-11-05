@@ -5,6 +5,7 @@ the desktop machine that doubles as a dev box.
 
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -132,3 +133,52 @@ def test_staged_new_file_is_dirt_once_tracked(repo):
 def test_deleted_tracked_file_is_dirt(repo):
     (repo / 'tracked.txt').unlink()
     assert _porcelain(repo, untracked=False) != ''
+
+
+# --- The watcher's own state: what it last saw running, what it gave up on ----
+
+
+def test_no_state_file_yet_is_up_to_date():
+    # The first tick after installing this watcher must not rebuild anything.
+    assert needs_deploy('main', False, 'aaa', 'aaa', deployed_sha=None) == 'up-to-date'
+
+
+def test_pulled_but_never_seen_healthy_is_finished():
+    """The regression: the pull moved HEAD, the build or restart died, and every
+    tick after that compared HEAD with origin, called it up to date, and never
+    retried."""
+    assert needs_deploy('main', False, 'bbb', 'bbb', deployed_sha='aaa') == 'finish'
+
+
+def test_finish_never_builds_a_dirty_tree():
+    assert needs_deploy('main', True, 'bbb', 'bbb', deployed_sha='aaa') == 'skip-dirty'
+
+
+def test_a_commit_that_failed_is_not_retried():
+    # Rolled back to aaa; origin still at the broken bbb. Retrying it every
+    # 5 minutes would restart production into a crash loop each time.
+    assert needs_deploy('main', False, 'aaa', 'bbb', deployed_sha='aaa',
+                        failed_sha='bbb') == 'skip-failed'
+
+
+def test_a_new_commit_after_a_failure_deploys():
+    assert needs_deploy('main', False, 'aaa', 'ccc', deployed_sha='aaa',
+                        failed_sha='bbb') == 'deploy'
+
+
+def test_a_failed_head_that_was_never_rolled_back_is_not_finished():
+    assert needs_deploy('main', False, 'bbb', 'bbb', deployed_sha='aaa',
+                        failed_sha='bbb') == 'skip-failed'
+
+
+def test_cli_exit_code_lets_both_deploy_paths_through():
+    def run(*args):
+        return subprocess.run(
+            [sys.executable, '-m', 'backend.ops.deploy', '--branch', 'main', *args],
+            capture_output=True, text=True,
+        )
+
+    finish = run('--local', 'b', '--remote', 'b', '--deployed', 'a')
+    assert (finish.stdout.strip(), finish.returncode) == ('finish', 0)
+    failed = run('--local', 'a', '--remote', 'b', '--deployed', 'a', '--failed', 'b')
+    assert (failed.stdout.strip(), failed.returncode) == ('skip-failed', 1)

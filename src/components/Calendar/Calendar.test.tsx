@@ -11,6 +11,7 @@ vi.mock('../../hooks/api', () => ({
       listByRange: vi.fn(),
       listByWeek: vi.fn(),
       listByDate: vi.fn(),
+      reading: vi.fn().mockResolvedValue([]),
       sleep: { get: vi.fn() },
       moveOccurrence: vi.fn(),
       transcribe: vi.fn(),

@@ -99,6 +99,66 @@ def test_an_ordinary_message_runs_no_tools_at_all(monkeypatch, answered):
                              'truncated': False, 'timedOut': False}
 
 
+def test_unexecuted_todo_claim_does_not_become_answer_evidence(monkeypatch, answered, client):
+    _main_script(monkeypatch, [
+        SimpleNamespace(content="I've added milk and laundry.", tool_calls=None),
+    ])
+    _drain([{'role': 'user', 'content': 'Add milk and laundry to my todos'}])
+    assert not any("I've added milk and laundry." in (m.get('content') or '')
+                   for m in answered['messages'])
+    assert 'To-dos saved in this turn: []' in answered['messages'][-1]['content']
+    assert client.get('/api/tasks/chat-todos').get_json() == []
+
+
+def test_todo_receipts_match_items_visible_through_the_api(monkeypatch, answered, client):
+    _main_script(monkeypatch, [
+        SimpleNamespace(content="I'll add three.", tool_calls=[
+            _call('add_todos', {'items': [{'title': 'Milk'}, {'title': 'Laundry'}]}),
+        ]),
+        SimpleNamespace(content="Added milk, laundry and an invented third item.", tool_calls=None),
+    ])
+    events = _drain([{'role': 'user', 'content': 'Add milk and laundry'}])
+    rows = client.get('/api/tasks/chat-todos').get_json()
+    assert [row['title'] for row in rows] == ['Milk', 'Laundry']
+    assert all(row['done'] is False for row in rows)
+    assert events[-1][1]['steps'][0]['ok'] is True
+    prompt = answered['messages']
+    assert not any('invented third item' in (m.get('content') or '') for m in prompt)
+    assert 'To-dos saved in this turn: ["Milk; Laundry"]' in prompt[-1]['content']
+    assert any(m['role'] == 'tool' and 'already saved' in m['content'] for m in prompt)
+
+
+def test_refused_todos_are_not_reported_as_saved(monkeypatch, answered):
+    _decides(monkeypatch, [_call('add_todos', {'items': []})])
+    events = _drain()
+    assert events[-1][1]['steps'][0]['ok'] is False
+    assert 'To-dos saved in this turn: []' in answered['messages'][-1]['content']
+
+
+def test_followup_sees_saved_todo_receipts_without_mutating_history(monkeypatch, answered):
+    messages = [
+        {'role': 'user', 'content': 'Add buy milk'},
+        {'role': 'assistant', 'content': 'Done.', 'metadata': json.dumps({
+            'steps': [{'tool': 'add_todos', 'ok': True, 'arg': 'Buy milk'},
+                      {'tool': 'add_todos', 'ok': False, 'arg': 'Refused item'}],
+        })},
+        {'role': 'user', 'content': 'Also call the dentist'},
+    ]
+    seen = _main_script(monkeypatch, [SimpleNamespace(content='', tool_calls=None)])
+    _drain(messages)
+    receipt = next(m['content'] for m in seen[0] if m['role'] == 'assistant')
+    assert 'Previously saved to-dos; do not add again: Buy milk' in receipt
+    assert 'Refused item' not in receipt
+    assert 'Act on the latest user message only' in seen[0][-1]['content']
+    assert messages[1]['content'] == 'Done.'
+
+
+@pytest.mark.parametrize('metadata', ['invalid json', '[]', {'steps': None}, None])
+def test_saved_todo_receipts_tolerate_legacy_metadata(metadata):
+    message = {'role': 'assistant', 'content': 'Hello', 'metadata': metadata}
+    assert delegate_chat._with_saved_todos([message]) == [message]
+
+
 def test_a_proposal_tool_runs_on_this_turn_and_stages_a_card(monkeypatch, answered):
     """It used to take a delegate round-trip to get here, and the detail the
     user gave had to survive being paraphrased into a task string on the way."""
@@ -351,7 +411,8 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
                        'draft_flashcard', 'propose_flashcards',
                        'create_note_to_self', 'ask_user', 'remember',
                        'search_conversations', 'search_journal', 'read_day',
-                       'wiki_read', 'wiki_search'}
+                       'wiki_read', 'wiki_search', 'create_goal', 'list_goals',
+                       'check_goal', 'update_goal'}
 
 
 def test_the_research_toolset_is_research_and_nothing_else(monkeypatch, answered):

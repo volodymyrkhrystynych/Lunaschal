@@ -110,7 +110,9 @@ private struct SessionRow: View {
                 Button("Rate / location", action: rate).font(.caption).buttonStyle(.borderless)
             }
             let meta = [session.durationMinutes.map { "\($0) min" },
-                        session.intensityRating.map { "\(String(repeating: "★", count: $0)) \(WorkoutLabels.intensity[$0] ?? "")" }]
+                        session.intensityRating.map { "\(String(repeating: "★", count: $0)) \(WorkoutLabels.intensity[$0] ?? "")" },
+                        // Rate / location replaces an estimate with a rating of your own.
+                        session.intensityIsEstimated ? "from Health" : nil]
                 .compactMap { $0 }
             if !meta.isEmpty { Text(meta.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
             if let notes = session.notes, !notes.isEmpty {

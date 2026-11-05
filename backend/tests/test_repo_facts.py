@@ -144,6 +144,22 @@ def _write(root, rel, text):
     path.write_text(textwrap.dedent(text), encoding='utf-8')
 
 
+@pytest.mark.parametrize('path', ['docs/ROADMAP.md', 'docs/TODO.md'])
+def test_doc_facts_preserve_status_markers_and_bullet_details(tmp_path, path):
+    items = [
+        '✅ **Local backup**: nightly snapshots are implemented.',
+        '🟡 **Tested restore path** — manual verification only.',
+        '⬜ **Encryption** — still planned.',
+        '**Legacy heading**: keep the description too.',
+        'Plain-format export without a bold title.',
+    ]
+    _write(tmp_path, path, '# Plan\n\n' + '\n'.join(f'- {item}' for item in items))
+    docs = {doc['path']: doc for doc in rf.doc_facts(tmp_path)}
+    assert docs[path]['items'] == items
+    digest = rf.render_digest({'docs': list(docs.values())})
+    assert all(item in digest for item in items)
+
+
 def test_route_facts_handle_prefixes_methods_and_broken_files(tmp_path):
     _write(tmp_path, 'backend/routes/good.py', """
         from flask import Blueprint

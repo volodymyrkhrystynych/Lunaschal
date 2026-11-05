@@ -25,6 +25,8 @@ const { mocks } = vi.hoisted(() => {
     createFolder: vi.fn(),
     updateFolder: vi.fn(),
     deleteFolder: vi.fn(),
+    scanLessons: vi.fn(),
+    listLessons: vi.fn(),
   };
   return { mocks };
 });
@@ -78,6 +80,17 @@ beforeEach(() => {
   mocks.getDue.mockResolvedValue([]);
   mocks.listCards.mockResolvedValue([]);
   mocks.listMcpServers.mockResolvedValue([]);
+  mocks.scanLessons.mockResolvedValue({
+    state: 'unset',
+    files: 0,
+    added: 0,
+    alreadyImported: 0,
+    skipped: [],
+  });
+  mocks.listLessons.mockResolvedValue({
+    lessons: [],
+    config: { inboxPath: '', folderId: null, inboxState: 'unset' },
+  });
 });
 
 describe('Learning', () => {
@@ -101,10 +114,18 @@ describe('Learning', () => {
     expect(await screen.findByText('The approval queue is empty')).toBeTruthy();
     fireEvent.click(screen.getByText('+ Create'));
     expect(await screen.findByText('Generate Cards')).toBeTruthy();
+    fireEvent.click(screen.getByText('Import'));
+    expect(await screen.findByText('No lessons imported yet.')).toBeTruthy();
     fireEvent.click(screen.getByText('Folders'));
     expect(
       await screen.findByText('Evidence providers (MCP servers)')
     ).toBeTruthy();
+  });
+
+  it('scans the learnings inbox once when the tab opens', async () => {
+    renderLearning();
+    await screen.findByText('Review (3)');
+    expect(mocks.scanLessons).toHaveBeenCalledTimes(1);
   });
 
   it('cycles modes with the keyboard after drilling in', async () => {

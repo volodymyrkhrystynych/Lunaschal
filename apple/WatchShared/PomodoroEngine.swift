@@ -45,7 +45,9 @@ struct PomodoroEngine {
         return (timer, result, closed)
     }
 
-    /// One pending notification at most, for the run going now.
+    /// One pending notification at most, for the run going now. A few
+    /// seconds after the end, so the app's alarm, when it has one, can take
+    /// it back before it shows.
     static func schedule(_ timer: PomodoroTimer) {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [notificationID])
@@ -56,15 +58,17 @@ struct PomodoroEngine {
         content.body = run.kind == .work ? "Continue, take a break, or stop." : "Continue or stop."
         content.sound = .default
         content.categoryIdentifier = run.kind.rawValue
-        let wait = max(1, run.endsAt.timeIntervalSinceNow)
+        let wait = max(1, run.endsAt.timeIntervalSinceNow + 3)
         center.add(UNNotificationRequest(identifier: notificationID, content: content,
                                          trigger: UNTimeIntervalNotificationTrigger(timeInterval: wait, repeats: false)))
     }
 
+    /// Redraws every complication and Control. They all read one entry,
+    /// so reloading only the kinds a change "belongs" to is how the launcher
+    /// row went on showing a bare Focus button through a whole run.
     static func redraw() {
-        for kind in WatchComplication.timerKinds { WidgetCenter.shared.reloadTimelines(ofKind: kind) }
-        ControlCenter.shared.reloadControls(ofKind: WatchComplication.focusControl)
-        ControlCenter.shared.reloadControls(ofKind: WatchComplication.timeoutControl)
+        WidgetCenter.shared.reloadAllTimelines()
+        ControlCenter.shared.reloadAllControls()
     }
 
     /// Moves a timer kept in the app's own container, from a build before the

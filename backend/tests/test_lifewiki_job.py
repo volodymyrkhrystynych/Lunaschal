@@ -432,6 +432,7 @@ def test_the_briefing_runs_even_when_the_wiki_pass_explodes(client, monkeypatch)
 
     ran = {}
     monkeypatch.setattr('backend.lifewiki.job.run_life_wiki_pass', explode)
+    monkeypatch.setattr('backend.oddities_job.run_oddities_pass', explode)
     monkeypatch.setattr(briefing_scheduler, 'run_briefing',
                         lambda: ran.setdefault('briefing', True))
 
@@ -439,7 +440,7 @@ def test_the_briefing_runs_even_when_the_wiki_pass_explodes(client, monkeypatch)
     assert ran['briefing'] is True
 
 
-def test_the_wiki_pass_runs_before_the_briefing(client, monkeypatch):
+def test_the_wiki_pass_and_oddities_scan_run_before_the_briefing(client, monkeypatch):
     """The whole reason they share a thread: the briefing reads what the pass
     writes, so a wiki mid-rewrite is the failure two daemons would produce."""
     from backend import briefing_scheduler
@@ -448,11 +449,15 @@ def test_the_wiki_pass_runs_before_the_briefing(client, monkeypatch):
     monkeypatch.setattr('backend.lifewiki.job.run_life_wiki_pass',
                         lambda **k: order.append('wiki') or {'facts': 0, 'articles': 0,
                                                              'observationsFolded': 0})
+    # The server-oddities scan sits between them: after the night's passes, so
+    # their failures are in its window, and before the briefing that reports it.
+    monkeypatch.setattr('backend.oddities_job.run_oddities_pass',
+                        lambda: order.append('oddities') or {'clusters': 0})
     monkeypatch.setattr(briefing_scheduler, 'run_briefing',
                         lambda: order.append('briefing'))
 
     briefing_scheduler.run_nightly()
-    assert order == ['wiki', 'briefing']
+    assert order == ['wiki', 'oddities', 'briefing']
 
 
 def test_the_briefing_is_shown_what_the_wiki_knows(client, monkeypatch):

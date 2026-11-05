@@ -5,7 +5,9 @@ from flask import Blueprint, jsonify, request
 from ulid import ULID
 
 from backend.db.connection import build_update, get_db, row_to_dict
+from backend.learning import storage as learning_storage
 from backend.learning.dedup import embed_answer
+from backend.learning.review_cards import SOURCE_TYPE as REVIEW_SOURCE, review_payloads
 from backend.tags import tags_json
 
 bp = Blueprint('learning', __name__, url_prefix='/api/learning')
@@ -26,6 +28,26 @@ def _card_to_dict(row) -> dict:
         d.pop(key, None)
     d['tags'] = json.loads(d['tags']) if d.get('tags') else []
     return d
+
+
+def _cards_to_dicts(rows) -> list[dict]:
+    """`_card_to_dict` for each row, with a review card's pages attached."""
+    cards = [_card_to_dict(r) for r in rows]
+    entry_ids = [c['sourceId'] for c in cards if c.get('sourceType') == REVIEW_SOURCE and c.get('sourceId')]
+    payloads = review_payloads(get_db(), entry_ids)
+    for card in cards:
+        if card.get('kind') == 'review':
+            card['review'] = payloads.get(card.get('sourceId')) or {
+                'entryId': card.get('sourceId'), 'title': None, 'pages': []}
+    return cards
+
+
+def _no_back_side(row):
+    """The 400 for a route that needs an answer to work on, given a review
+    card (which has none), else None."""
+    if row['kind'] == 'review':
+        return jsonify({'error': 'A review card has no answer to work on'}), 400
+    return None
 
 
 def _get_card(id):
@@ -70,7 +92,15 @@ def list_folders():
         """,
         (int(time.time()),),
     ).fetchall()
-    return jsonify([row_to_dict(r) for r in rows])
+    folders = [row_to_dict(r) for r in rows]
+    for folder in folders:
+        folder['system'] = folder.pop('systemKey', None) is not None
+    return jsonify(folders)
+
+
+def _system_folder(db, id) -> bool:
+    row = db.execute('SELECT system_key FROM learning_folders WHERE id=?', (id,)).fetchone()
+    return bool(row and row['system_key'])
 
 
 @bp.post('/folders')
@@ -102,6 +132,8 @@ def update_folder(id):
         return jsonify({'error': 'Not found'}), 404
     updates: dict = {}
     if 'name' in body and (body['name'] or '').strip():
+        if _system_folder(db, id):
+            return jsonify({'error': 'This folder belongs to the app and keeps its name'}), 409
         updates['name'] = body['name'].strip()
     if 'position' in body:
         updates['position'] = int(body['position'])
@@ -122,6 +154,8 @@ def update_folder(id):
 @bp.delete('/folders/<id>')
 def delete_folder(id):
     db = get_db()
+    if _system_folder(db, id):
+        return jsonify({'error': 'This folder belongs to the app and cannot be deleted'}), 409
     db.execute('DELETE FROM learning_folders WHERE id=?', (id,))
     db.commit()
     return jsonify({'success': True})
@@ -276,6 +310,8 @@ def verify_card(id):
     row = _get_card(id)
     if not row or row['state'] != 'active':
         return jsonify({'error': 'Not found'}), 404
+    if refused := _no_back_side(row):
+        return refused
     return _run_verification(row)
 
 
@@ -288,6 +324,8 @@ def verify_followup(id):
     row = _get_card(id)
     if not row or row['state'] != 'active':
         return jsonify({'error': 'Not found'}), 404
+    if refused := _no_back_side(row):
+        return refused
     return _run_verification(row, followup=question,
                              transcript=body.get('transcript') or None)
 
@@ -312,6 +350,8 @@ def chat_card(id):
     row = _get_card(id)
     if not row or row['state'] != 'active':
         return jsonify({'error': 'Not found'}), 404
+    if refused := _no_back_side(row):
+        return refused
 
     if 'mcpServerId' in body:
         server_id = body['mcpServerId']
@@ -484,7 +524,7 @@ def list_queue():
     rows = get_db().execute(
         "SELECT * FROM learning_cards WHERE state='pending' ORDER BY created_at"
     ).fetchall()
-    return jsonify([_card_to_dict(r) for r in rows])
+    return jsonify(_cards_to_dicts(rows))
 
 
 @bp.post('/queue/<id>/approve')
@@ -601,7 +641,57 @@ def list_cards():
         ' ORDER BY created_at DESC LIMIT ? OFFSET ?',
         [*params, limit, offset],
     ).fetchall()
-    return jsonify([_card_to_dict(r) for r in rows])
+    cards = _cards_to_dicts(rows)
+    if state == 'retired':
+        # Two kinds of retired card: one the user took out of the deck, and
+        # an old version a revision replaced. Only the first can come back.
+        for card in cards:
+            card['superseded'] = _superseded(card['id'])
+    return jsonify(cards)
+
+
+def _superseded(id) -> bool:
+    return get_db().execute(
+        'SELECT 1 FROM learning_cards WHERE revised_from=?', (id,)
+    ).fetchone() is not None
+
+
+@bp.post('/cards/<id>/retire')
+def retire_card(id):
+    """Take a card out of review while keeping it and its history. Its FSRS
+    state is kept, so unretiring resumes the schedule rather than starting over.
+
+    The same state a revision leaves its old version in, so every list that
+    already skips retired cards (due, stats, tags, browse) skips this one.
+    Retiring a retired card succeeds: both the web and the iOS offline queues
+    replay it. Any open attempt goes with it, clip included, or a resumed
+    session would offer to rate it afterwards.
+    """
+    row = _get_card(id)
+    if not row or row['state'] == 'pending':
+        return jsonify({'error': 'Not found'}), 404
+    db = get_db()
+    if row['state'] == 'active':
+        db.execute("UPDATE learning_cards SET state='retired', updated_at=? WHERE id=?",
+                   (int(time.time()), id))
+    _close_attempts(db, id)
+    db.commit()
+    return jsonify({'success': True})
+
+
+@bp.post('/cards/<id>/unretire')
+def unretire_card(id):
+    row = _get_card(id)
+    if not row or row['state'] != 'retired':
+        return jsonify({'error': 'Not found'}), 404
+    if _superseded(id):
+        return jsonify({'error': 'A revision replaced this card; it cannot come back'}), 409
+    now = int(time.time())
+    db = get_db()
+    db.execute("UPDATE learning_cards SET state='active', due=COALESCE(due, ?),"
+               ' updated_at=? WHERE id=?', (now, now, id))
+    db.commit()
+    return jsonify({'success': True})
 
 
 @bp.get('/cards/<id>')
@@ -609,7 +699,7 @@ def get_card(id):
     row = _get_card(id)
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(_card_to_dict(row))
+    return jsonify(_cards_to_dicts([row])[0])
 
 
 @bp.post('/cards')
@@ -690,6 +780,8 @@ def revise_card(id):
     row = _get_card(id)
     if not row or row['state'] != 'active':
         return jsonify({'error': 'Not found'}), 404
+    if refused := _no_back_side(row):
+        return refused
 
     new_question = (body.get('question') or '').strip() or row['question']
     old_answer = row['answer']
@@ -785,7 +877,7 @@ def get_due():
         f' ORDER BY (a.id IS NULL), due LIMIT {DECK_SIZE}',
         [int(time.time()), *params],
     ).fetchall()
-    return jsonify([_card_to_dict(r) for r in rows])
+    return jsonify(_cards_to_dicts(rows))
 
 
 @bp.get('/stats')
@@ -835,36 +927,14 @@ def _queue_grade(attempt_id: str, *, now: bool = False) -> None:
         _grading_queued.discard(attempt_id)
 
 
-@bp.post('/attempts')
-def save_attempt():
-    """Record an answered (or flipped-past) card so the session can be resumed.
-
-    Returns without waiting on the grader — the AI coverage is filled in by a
-    background worker and picked up by the next GET.
-    """
-    body = request.json or {}
-    card_id = body.get('cardId')
-    mode = body.get('mode')
-    if mode not in ('answered', 'skipped'):
-        return jsonify({'error': "mode must be 'answered' or 'skipped'"}), 400
-    row = _get_card(card_id) if card_id else None
-    if not row or row['state'] != 'active':
-        return jsonify({'error': 'Not found'}), 404
-
-    answer = (body.get('answer') or '').strip() or None
-    if mode == 'answered' and not answer:
-        return jsonify({'error': 'answer required'}), 400
-    # A flipped card is always self-rated; a typed answer is the default.
-    answer_mode = (body.get('answerMode') or 'typed') if mode == 'answered' else 'self'
-    grade_status = 'pending' if mode == 'answered' else 'skipped'
-    # Stamped from the client's live toggle at submit time, not at grade time —
-    # re-answering re-stamps it, which is what makes turning speech mode on
-    # mid-session only affect cards answered after that point.
-    speech_requested = 1 if body.get('speechMode') else 0
-
-    id = body.get('id') or str(ULID())
+def _upsert_attempt(id, card_id, *, mode, answer, answer_mode, grade_status,
+                    speech_requested):
+    """Write a card's one open attempt and queue its grade; returns the stored row."""
     now = int(time.time())
     db = get_db()
+    replaced = db.execute(
+        'SELECT id FROM learning_attempts WHERE card_id=? AND id != ?', (card_id, id)
+    ).fetchone()
     # One open attempt per card: re-answering the same card replaces it, and a
     # replayed (offline-queued) save with the same id is a no-op.
     db.execute(
@@ -881,12 +951,111 @@ def save_attempt():
         (id, card_id, mode, answer, answer_mode, grade_status, speech_requested, now, now),
     )
     db.commit()
+    if replaced:
+        # A spoken answer re-answered before it was heard: its clip goes with it.
+        learning_storage.delete_attempt_dir(replaced['id'])
     stored = db.execute(
         'SELECT * FROM learning_attempts WHERE card_id=?', (card_id,)
     ).fetchone()
     if (stored['id'] == id and stored['grade_status'] == 'pending'
             and id not in _grading_queued):
         _queue_grade(id)
+    return stored
+
+
+def _close_attempts(db, card_id: str) -> None:
+    """Delete a card's open attempt, and any clip still waiting with it.
+    Commits are the caller's: the rating closes it in the same transaction."""
+    for row in db.execute('SELECT id FROM learning_attempts WHERE card_id=?', (card_id,)).fetchall():
+        learning_storage.delete_attempt_dir(row['id'])
+    db.execute('DELETE FROM learning_attempts WHERE card_id=?', (card_id,))
+
+
+@bp.post('/attempts')
+def save_attempt():
+    """Record an answered (or flipped-past) card so the session can be resumed.
+
+    Returns without waiting on the grader — the AI coverage is filled in by a
+    background worker and picked up by the next GET.
+    """
+    body = request.json or {}
+    card_id = body.get('cardId')
+    mode = body.get('mode')
+    if mode not in ('answered', 'skipped'):
+        return jsonify({'error': "mode must be 'answered' or 'skipped'"}), 400
+    row = _get_card(card_id) if card_id else None
+    if not row or row['state'] != 'active':
+        return jsonify({'error': 'Not found'}), 404
+    # Rated straight from the page: an attempt would queue a grade of nothing.
+    if refused := _no_back_side(row):
+        return refused
+
+    answer = (body.get('answer') or '').strip() or None
+    if mode == 'answered' and not answer:
+        return jsonify({'error': 'answer required'}), 400
+    # A flipped card is always self-rated; a typed answer is the default.
+    answer_mode = (body.get('answerMode') or 'typed') if mode == 'answered' else 'self'
+    grade_status = 'pending' if mode == 'answered' else 'skipped'
+    # Stamped from the client's live toggle at submit time, not at grade time —
+    # re-answering re-stamps it, which is what makes turning speech mode on
+    # mid-session only affect cards answered after that point.
+    speech_requested = 1 if body.get('speechMode') else 0
+
+    id = body.get('id') or str(ULID())
+    stored = _upsert_attempt(id, card_id, mode=mode, answer=answer, answer_mode=answer_mode,
+                             grade_status=grade_status, speech_requested=speech_requested)
+    return jsonify({'success': True, 'id': stored['id']})
+
+
+# A spoken answer. The phone stops recording and is on the next card at once,
+# so the clip itself is the answer: it is stored here and the grading job
+# transcribes it before grading (backend/learning/attempts.py). The attempt id
+# is the client's, and a replay is a no-op checked before the file is read —
+# the rule every recording route in the app keeps.
+
+MAX_AUDIO_BYTES = 50 * 1024 * 1024
+
+
+@bp.post('/attempts/recording')
+def save_recorded_attempt():
+    audio = request.files.get('audio')
+    if audio is None or not audio.filename:
+        return jsonify({'error': 'Missing audio file'}), 400
+    id = (request.form.get('id') or '').strip()
+    card_id = (request.form.get('cardId') or '').strip()
+    if not id or not card_id:
+        return jsonify({'error': 'id and cardId are required'}), 400
+
+    db = get_db()
+    if db.execute('SELECT 1 FROM learning_attempts WHERE id=?', (id,)).fetchone():
+        return jsonify({'success': True, 'id': id})
+    row = _get_card(card_id)
+    if not row or row['state'] != 'active':
+        return jsonify({'error': 'Not found'}), 404
+    if refused := _no_back_side(row):
+        return refused
+
+    ext = learning_storage.resolve_audio_ext(audio.mimetype, audio.filename)
+    path = learning_storage.clip_path(id, ext) if ext else None
+    if path is None:
+        return jsonify({'error': 'Unsupported file type — audio only'}), 400
+    # The file before the row: a row that exists is one the grader may pick up
+    # (listing self-heals pending grades), and it must find its clip there.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    audio.save(path)
+    size = path.stat().st_size
+    if size == 0 or size > MAX_AUDIO_BYTES:
+        learning_storage.delete_attempt_dir(id)
+        return jsonify({
+            'error': 'That recording was empty' if size == 0 else 'That recording is too large'
+        }), 400 if size == 0 else 413
+
+    # Anything typed before the mic was tapped comes first; the transcript is
+    # appended to it.
+    typed = (request.form.get('answer') or '').strip() or None
+    stored = _upsert_attempt(id, card_id, mode='answered', answer=typed, answer_mode='voice',
+                             grade_status='pending',
+                             speech_requested=1 if request.form.get('speechMode') == 'true' else 0)
     return jsonify({'success': True, 'id': stored['id']})
 
 
@@ -934,7 +1103,7 @@ def review_card(id):
     if review_id and db.execute(
         'SELECT 1 FROM learning_reviews WHERE id=?', (review_id,)
     ).fetchone():
-        db.execute('DELETE FROM learning_attempts WHERE card_id=?', (id,))
+        _close_attempts(db, id)
         db.commit()
         cur_due = row['due']
         return jsonify({
@@ -960,12 +1129,105 @@ def review_card(id):
     )
     # The rating closes the attempt: same transaction, so a session can never
     # be left showing a card that has already been scheduled.
-    db.execute('DELETE FROM learning_attempts WHERE card_id=?', (id,))
+    _close_attempts(db, id)
     db.commit()
     return jsonify({
         'due': datetime.fromtimestamp(due, tz=timezone.utc).isoformat(),
         'state': 'active',
     })
+
+
+# ---------------------------------------------------------------- lessons
+# A coding agent's learnings files → lessons → cards. backend/learning/lessons.py.
+
+def _lessons_config(db) -> dict:
+    from backend.learning.lessons import inbox_state, settings
+    cfg = settings(db)
+    return {**cfg, 'inboxState': inbox_state(cfg['inboxPath'])}
+
+
+@bp.get('/lessons')
+def list_lessons():
+    db = get_db()
+    limit = min(int(request.args.get('limit', 100)), 500)
+    rows = db.execute(
+        'SELECT l.*, c.question AS covered_question FROM learning_lessons l'
+        ' LEFT JOIN learning_cards c ON c.id = l.covered_by'
+        ' ORDER BY l.created_at DESC, l.id DESC LIMIT ?', (limit,),
+    ).fetchall()
+    lessons = []
+    for row in rows:
+        d = row_to_dict(row)
+        d.pop('contentHash', None)
+        lessons.append(d)
+    return jsonify({'lessons': lessons, 'config': _lessons_config(db)})
+
+
+@bp.post('/lessons/import')
+def import_lessons():
+    from backend.learning.lessons import MAX_FILE_BYTES, import_text, settings
+    body = request.json or {}
+    text = body.get('text') or ''
+    if not text.strip():
+        return jsonify({'error': 'text required'}), 400
+    if len(text.encode('utf-8')) > MAX_FILE_BYTES:
+        return jsonify({'error': 'File too large for a learnings file'}), 413
+    db = get_db()
+    folder_id = body['folderId'] if 'folderId' in body else settings(db)['folderId']
+    if folder_id and not db.execute(
+        'SELECT 1 FROM learning_folders WHERE id=?', (folder_id,)
+    ).fetchone():
+        return jsonify({'error': 'Unknown folder'}), 400
+    result = import_text(db, text, source='upload',
+                         source_name=(body.get('sourceName') or '').strip() or None,
+                         folder_id=folder_id or None)
+    if result['added'] == 0 and result['alreadyImported'] == 0:
+        return jsonify({'error': 'No lessons found in that text'}), 400
+    return jsonify(result)
+
+
+@bp.post('/lessons/scan')
+def scan_lessons():
+    from backend.learning.lessons import scan_inbox
+    return jsonify(scan_inbox(get_db()))
+
+
+@bp.put('/lessons/config')
+def update_lessons_config():
+    body = request.json or {}
+    db = get_db()
+    updates = {}
+    if 'inboxPath' in body:
+        updates['learnings_inbox_path'] = (body.get('inboxPath') or '').strip() or None
+    if 'folderId' in body:
+        folder_id = body.get('folderId') or None
+        if folder_id and not db.execute(
+            'SELECT 1 FROM learning_folders WHERE id=?', (folder_id,)
+        ).fetchone():
+            return jsonify({'error': 'Unknown folder'}), 400
+        updates['learnings_folder_id'] = folder_id
+    if updates:
+        build_update(db, 'settings', updates, 'id=1', ())
+        db.commit()
+    return jsonify(_lessons_config(db))
+
+
+@bp.post('/lessons/<id>/force')
+def force_lesson(id):
+    """Card a lesson the coverage judge said was already covered (or one that
+    failed). Skips the judge: the user has read its verdict."""
+    from backend.ai import jobs
+    from backend.learning.lessons import JOB_KIND
+    db = get_db()
+    row = db.execute('SELECT status FROM learning_lessons WHERE id=?', (id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if row['status'] == 'pending':
+        return jsonify({'error': 'Already being processed'}), 409
+    db.execute("UPDATE learning_lessons SET status='pending', error=NULL WHERE id=?", (id,))
+    db.commit()
+    jobs.enqueue(JOB_KIND, id, {'force': True})
+    return jsonify({'success': True})
 
 
 @bp.get('/tags')

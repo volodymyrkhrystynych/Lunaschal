@@ -99,7 +99,7 @@ def _parse_float(value, name, low, high):
 
 _SESSION_COLS = (
     'capture_kind, started_at, ended_at, '
-    'id, date, location_type, duration_minutes, intensity_rating, raw_text, '
+    'id, date, location_type, duration_minutes, intensity_rating, intensity_source, raw_text, '
     'notes, parse_status, created_at, updated_at'
 )
 
@@ -422,6 +422,8 @@ def update_workout(session_id):
         if err:
             return jsonify({'error': err}), 400
         updates['intensity_rating'] = intensity
+        # A hand rating outranks one derived from Health, cleared or not.
+        updates['intensity_source'] = 'user'
     if 'notes' in body:
         updates['notes'] = (body['notes'] or '').strip() or None
 
@@ -947,8 +949,20 @@ def list_spending():
     rows = get_db().execute(
         'SELECT * FROM spending_logs WHERE date=? ORDER BY created_at, id', (day,),
     ).fetchall()
-    entries = [row_to_dict(row) for row in rows]
-    return jsonify({'date': day, 'entries': entries,
+    # Shipped phones decode every entry as a non-null category and amount, and
+    # one that fails takes the whole Daily page down with it. So a receipt that
+    # has not been read yet is counted, not listed, and a read one whose
+    # category is still empty is named by its merchant. The full rows,
+    # nulls and all, are /api/spending's.
+    entries, pending = [], 0
+    for row in rows:
+        if row['amount_cents'] is None:
+            pending += 1
+            continue
+        entry = row_to_dict(row)
+        entry['category'] = row['category'] or row['merchant'] or 'Purchase'
+        entries.append(entry)
+    return jsonify({'date': day, 'entries': entries, 'pendingCount': pending,
                     'totalCents': sum(entry['amountCents'] for entry in entries)})
 
 
@@ -979,8 +993,8 @@ def log_spending():
     created_at = min(captured_at, clock) if captured_at is not None else clock
     db = get_db()
     db.execute(
-        'INSERT OR IGNORE INTO spending_logs (id, date, category, amount_cents, created_at)'
-        ' VALUES (?,?,?,?,?)', (entry_id, day, category.strip(), cents, created_at),
+        'INSERT OR IGNORE INTO spending_logs (id, date, category, amount_cents, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?)', (entry_id, day, category.strip(), cents, created_at, created_at),
     )
     db.commit()
     return jsonify(row_to_dict(db.execute('SELECT * FROM spending_logs WHERE id=?', (entry_id,)).fetchone())), 201

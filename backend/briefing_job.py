@@ -11,13 +11,25 @@ afterward. `_seed_chat_todos` skips anything already tracked (an open todo, a
 pending daily task, or something already added to today's bar) so the same
 item never shows up twice.
 
+Yesterday's *unfinished* bar items are the one thing that does not go straight
+in. They come back as `todo` suggestion cards on the briefing message, in the
+same queue as yesterday's reconstructed calendar events (`stage_carryover_todos`),
+so a carried-over item is something the user chooses to keep rather than one
+more row mixed in with the day's own plan. Accepting one
+(`backend/routes/chat.py`'s `_accept_todo`) writes it into today's bar.
+
 The plan is the part the user actually needs, so it never comes back empty while
 they have something pending: a model that returns no items (or no usable
 completion at all) falls back to `fallback_plan`, built from their own lists.
+
+The message ends with the server-oddities section (backend/oddities_job.py),
+appended to the stored content rather than asked of the model, so it is there
+whatever the model wrote and the day's chat can be asked about it.
 """
 import json
 import time
 import threading
+from datetime import date, timedelta
 
 from ulid import ULID
 
@@ -33,6 +45,7 @@ from backend.ai.briefing import (
 )
 from backend.ai.llm import EmptyCompletion
 from backend.briefing_events import stage_events
+from backend.oddities_job import briefing_report, render_markdown as render_oddities
 from backend.routes.tasks import (
     _parse_priority, _parse_due, _today_chat_todo_titles,
 )
@@ -105,6 +118,66 @@ def _seed_chat_todos(db, proposed: list, today: str, now: int) -> int:
     return inserted
 
 
+def _carried_titles(db, conv_id: str, day: str) -> set[str]:
+    """Lowercased titles already offered as carry-overs from `day` in this
+    conversation, whatever became of them — a forced re-run must neither
+    duplicate a pending card nor re-offer one the user already dropped."""
+    taken: set[str] = set()
+    rows = db.execute(
+        "SELECT metadata FROM messages WHERE conversation_id=? AND role='assistant'",
+        (conv_id,),
+    ).fetchall()
+    for r in rows:
+        try:
+            meta = json.loads(r['metadata']) if r['metadata'] else {}
+        except (ValueError, TypeError):
+            continue
+        for p in meta.get('proposals', []) if isinstance(meta, dict) else []:
+            if isinstance(p, dict) and p.get('kind') == 'todo' and p.get('carriedFrom') == day:
+                taken.add(((p.get('data') or {}).get('title') or '').strip().lower())
+    return taken
+
+
+def stage_carryover_todos(db, conv_id: str, today: str) -> list[dict]:
+    """Yesterday's unfinished bar items as pending `todo` proposals.
+
+    They are suggestions rather than rows: the bar is today's plan, and an item
+    the user didn't get to yesterday is a decision (keep it, or let it go), not
+    something to silently re-add beside the daily tasks. Skips anything already
+    in today's bar — the plan may have restated it — and anything offered
+    earlier today."""
+    yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
+    taken = _today_chat_todo_titles(db, today) | _carried_titles(db, conv_id, yesterday)
+    rows = db.execute(
+        'SELECT id, title, notes, due, priority FROM chat_todos'
+        ' WHERE day_key=? AND done=0 ORDER BY created_at, id',
+        (yesterday,),
+    ).fetchall()
+    proposals = []
+    for r in rows:
+        title = (r['title'] or '').strip()
+        if not title or title.lower() in taken:
+            continue
+        taken.add(title.lower())
+        proposals.append({
+            'id': str(ULID()), 'kind': 'todo', 'status': 'pending',
+            'carriedFrom': yesterday,
+            'data': {'title': title, 'notes': r['notes'], 'due': r['due'],
+                     'priority': r['priority'] or 3},
+        })
+    return proposals
+
+
+def _oddities_report(now: int) -> dict:
+    """The server-oddities section never costs the briefing: a broken read of
+    its tables reports the check as not having run, which is what it amounts to."""
+    try:
+        return briefing_report(now)
+    except Exception as e:
+        print(f'Server oddities report failed: {e}')
+        return {'ran': False, 'journalAvailable': False, 'items': [], 'more': 0}
+
+
 _briefing_lock = threading.Lock()
 
 
@@ -154,13 +227,23 @@ def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         # prose and then returns an empty array, which renders as nothing at all.
         # Their own lists are a better answer than silence.
         inserted = _seed_chat_todos(db, fallback_plan(context), context['today'], now)
-    if degraded and not inserted:
-        # No prose *and* nothing added: there's no briefing to leave.
+    # After the seed, so a title the plan already put back in the bar isn't
+    # also offered as a card.
+    carried = stage_carryover_todos(db, conv_id, context['today'])
+    oddities = _oddities_report(now)
+    if degraded and not inserted and not carried and not oddities['items']:
+        # No prose, nothing added, nothing carried over and nothing wrong with
+        # the server: there's no briefing to leave. A server problem alone is
+        # still worth waking to.
         db.commit()
         return None
 
+    content = f"{briefing}\n\n{render_oddities(oddities)}"
     metadata = {'briefing': True}
-    proposals = stage_events(db, result.get('events', []), context.get('yesterday'))
+    if oddities['items']:
+        metadata['oddities'] = [i['fingerprint'] for i in oddities['items']]
+    events = stage_events(db, result.get('events', []), context.get('yesterday'))
+    proposals = events + carried
     if proposals:
         metadata['proposals'] = proposals
     if degraded:
@@ -169,7 +252,7 @@ def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
     db.execute(
         'INSERT INTO messages(id, conversation_id, role, content, metadata, created_at)'
         ' VALUES (?,?,?,?,?,?)',
-        (message_id, conv_id, 'assistant', briefing, json.dumps(metadata), now),
+        (message_id, conv_id, 'assistant', content, json.dumps(metadata), now),
     )
     db.execute('UPDATE conversations SET updated_at=? WHERE id=?', (now, conv_id))
     db.commit()
@@ -178,6 +261,8 @@ def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         'messageId': message_id,
         'briefing': briefing,
         'todosAdded': inserted,
-        'eventsSuggested': len(proposals),
+        'eventsSuggested': len(events),
+        'todosCarried': len(carried),
+        'oddities': len(oddities['items']),
         'degraded': degraded,
     }

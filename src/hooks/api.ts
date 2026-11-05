@@ -163,13 +163,25 @@ export interface JournalAttachment {
   exif: Record<string, unknown> | null;
   /** The canonical watch URL, `youtube` only. */
   sourceUrl?: string | null;
-  /** Runtime in seconds, `youtube` only. Known before the download finishes. */
+  /**
+   * Runtime in seconds, for `youtube` (known before the download finishes) and
+   * for an uploaded `video` when ffprobe could read it.
+   */
   durationSeconds?: number | null;
   /**
-   * The poster. Served from the SSD even though the video is on the archive
-   * drive, so the card still draws when the drive is unplugged.
+   * The poster: a `youtube` video's, or a frame of an uploaded `video`. Served
+   * from the SSD, so the card still draws when the archive drive is unplugged.
    */
   thumbnailUrl?: string;
+  /**
+   * When the photo or video was taken, as distinct from `createdAt` (when it
+   * was attached). Null when nothing said — read it as `createdAt`.
+   */
+  capturedAt?: string | null;
+  /** A Live Photo: an `image` whose short clip plays from `motionUrl`. */
+  hasMotion?: boolean;
+  motionUrl?: string;
+  motionMime?: string | null;
   /**
    * The download's own lifecycle, `youtube` only — separate from
    * `transcriptStatus`, which means "is a model reading this".
@@ -255,6 +267,10 @@ export interface Fic {
   folderIds?: string[];
   tags?: string[];
   readCount?: number;
+  /** The user's own lists on the site this fic was last seen on. */
+  sourceLists?: string[];
+  /** On none of them, from a site whose lists have been walked. */
+  backlog?: boolean;
 }
 
 export interface FicBookmark {
@@ -287,6 +303,7 @@ export interface RefreshAlertsResult {
   flagged: number;
   newImports: number;
   skippedActive: number;
+  skippedFresh: number;
   alertsSeen: number;
   errors: Record<string, string>;
 }
@@ -302,6 +319,21 @@ export interface FicChapterSummary {
   createdAt: string;
   updatedAt: string;
   isRead: boolean;
+  /** The user's own reaction on the forum post, null when none or unknown. */
+  reaction?: string | null;
+  /** 'like'/'unlike' while the server has still to make it on the forum. */
+  reactionPending?: 'like' | 'unlike' | null;
+  /** A forum chapter: the server can like and re-get it. */
+  likeable?: boolean;
+}
+
+export interface FicLikeState {
+  chapterId: string;
+  reaction: string | null;
+  checked: boolean;
+  source: 'site' | 'app' | 'assumed' | null;
+  pending: 'like' | 'unlike' | null;
+  error: string | null;
 }
 
 export interface FicChapter extends FicChapterSummary {
@@ -491,8 +523,56 @@ export interface LearningCard {
   derivedFrom: string | null;
   revisedFrom: string | null;
   due: string | null;
+  /** 'review' has no back side: its pages are read and self-rated. */
+  kind: 'qa' | 'review';
+  /** A review card's journal entry and its pages, in order. */
+  review?: LearningReviewPages;
+  /** On `state=retired` listings only: a revision replaced this card, so it
+   *  cannot be unretired. */
+  superseded?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+/** One lesson from a coding agent's learnings file, on its way to cards. */
+export interface LearningLesson {
+  id: string;
+  source: 'upload' | 'inbox';
+  sourceName: string | null;
+  title: string;
+  body: string;
+  folderId: string | null;
+  status: 'pending' | 'carded' | 'covered' | 'error';
+  /** The existing card the judge said already teaches this lesson. */
+  coveredBy: string | null;
+  coveredQuestion: string | null;
+  reason: string | null;
+  cardCount: number;
+  error: string | null;
+  createdAt: string;
+}
+
+export interface LearningLessonsConfig {
+  inboxPath: string;
+  folderId: string | null;
+  inboxState: 'unset' | 'missing' | 'ok';
+}
+
+export interface LessonImportResult {
+  added: number;
+  alreadyImported: number;
+}
+
+export interface LessonScanResult extends LessonImportResult {
+  state: LearningLessonsConfig['inboxState'];
+  files: number;
+  skipped: string[];
+}
+
+export interface LearningReviewPages {
+  entryId: string;
+  title: string | null;
+  pages: { id: string; name: string; url: string }[];
 }
 
 export interface LearningStats {
@@ -517,6 +597,8 @@ export interface LearningFolder {
   activeCount: number;
   pendingCount: number;
   dueCount: number;
+  /** The app's own For review folder: cannot be renamed or deleted. */
+  system: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -723,11 +805,23 @@ export interface ProposedTodo {
 // place `status` ever changes, so a card survives a reload until it actually is.
 export interface DelegateProposalRecord {
   reconstructionDay?: string;
+  // Set on a briefing's carried-over to-do: the day key it was left
+  // unfinished on (backend/briefing_job.py's stage_carryover_todos).
+  carriedFrom?: string;
   evidence?: string;
   sources?: { id: string; label: string; recordedAt: string }[];
   id: string;
   kind:
-    'calendar' | 'calorie' | 'food' | 'recipe' | 'recipe_link' | 'flashcards';
+    | 'calendar'
+    | 'calorie'
+    | 'food'
+    | 'recipe'
+    | 'recipe_link'
+    | 'flashcards'
+    | 'todo'
+    // A Writing discussion's note cards (backend/writing/proposals.py).
+    | 'writing_note'
+    | 'writing_note_update';
   data: Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
   resolvedAt?: number;
@@ -739,6 +833,7 @@ export interface DelegateProposalRecord {
     count?: number;
     photos?: number;
     calorieLogId?: string;
+    revisionId?: string | null;
   };
 }
 
@@ -855,8 +950,6 @@ export interface AppSettings {
   transcribePolishEnabled: boolean;
   preventSleep: boolean;
   meetingEchoCancel: boolean;
-  nudgeEnabled: boolean;
-  nudgeIntervalMinutes: number;
   briefingEnabled: boolean;
   briefingHour: number;
   briefingModel: string | null;
@@ -1483,12 +1576,43 @@ export interface WritingNoteSummary {
   projectId: string;
   title: string;
   docType: 'character' | 'outline' | 'worldbuilding' | 'note';
+  // 0/1 from SQLite. A pinned note rides in every turn of the project's
+  // discussions (backend/writing/discuss.py).
+  pinned?: number | boolean;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface WritingNote extends WritingNoteSummary {
   content: string;
+}
+
+// A note as it stood before a change: 'edit' (autosave, one a minute),
+// 'accept' (a discussion proposal the author confirmed) or 'restore'.
+export interface WritingNoteRevision {
+  id: string;
+  docId: string;
+  title: string;
+  content: string;
+  source: 'edit' | 'accept' | 'restore';
+  messageId: string | null;
+  createdAt: string;
+}
+
+// A Fandom wiki imported from its XML dump (backend/writing/canon_import.py).
+export interface CanonSource {
+  id: string;
+  name: string;
+  wikiHost: string | null;
+  sourceUrl: string | null;
+  status: 'importing' | 'ready' | 'error';
+  pages: number;
+  chunks: number;
+  error: string | null;
+  licence: string;
+  progress?: { stage?: string; pages?: number; chunks?: number };
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface DailyTask {
@@ -1551,8 +1675,8 @@ export interface TodoPayload {
 // A day-scoped, ephemeral to-do shown in the Chat tab's bar above the input
 // box. Written instantly by the chat delegate's add_todos tool or the morning
 // briefing — there is no accept step. Resets at the next day boundary: the
-// list endpoint only ever returns today's rows, so an unfinished item from a
-// prior day just stops showing rather than needing to be purged.
+// list endpoint only ever returns today's rows. Yesterday's unfinished items
+// come back as suggestion cards on the morning briefing, never in the bar.
 export interface ChatTodoItem {
   id: string;
   dayKey: string;
@@ -1614,6 +1738,72 @@ export interface JournalNewspaper extends NewspaperIssue {
   archivedAt: string;
   markedPages: number;
   pages: NewspaperPageImage[];
+}
+
+/** A day the phone recorded a location trail, as the Journal feed's map card.
+ *  Sits at the day's last second (`archivedAt`), as the day's summary. The
+ *  image URL carries a version, so it changes whenever a late point or a new
+ *  located entry would change the picture (backend/location/days.py). */
+export interface JournalLocationDay {
+  date: string;
+  archivedAt: string;
+  pointCount: number;
+  placeCount: number;
+  entryCount: number;
+  imageUrl: string;
+  /** Time at the Home and Work in force that day, or null when no visit was
+   *  at one (backend/location/whereabouts.py). */
+  whereabouts?: Whereabouts | null;
+  /** Home↔Work trips read off the trail (backend/location/commute.py). */
+  commutes?: Commute[];
+}
+
+export interface Commute {
+  direction: 'toWork' | 'toHome';
+  from: string;
+  to: string;
+  departed: string | null;
+  arrived: string | null;
+  seconds: number;
+  meters: number;
+  mode: 'walking' | 'running' | 'cycling' | 'automotive';
+  modeSource: 'motion' | 'speed';
+}
+
+interface CommuteStats {
+  toWork: { count: number; avgSeconds: number | null };
+  toHome: { count: number; avgSeconds: number | null };
+  modes: Record<string, number>;
+}
+
+/** Office days, hours at work and commute times (backend/location/patterns.py). */
+export interface LocationPatterns {
+  weeks: {
+    weekStart: string;
+    observedDays: number;
+    officeDays: number;
+    workSeconds: number;
+    homeSeconds: number;
+    avgArrival: string | null;
+    avgDeparture: string | null;
+    commute: CommuteStats;
+  }[];
+  weekdays: { weekday: string; observedDays: number; officeDays: number }[];
+  commute: CommuteStats;
+  observedDays: number;
+  officeDays: number;
+  days: number;
+  since: string;
+}
+
+export interface Whereabouts {
+  home: { seconds: number; lastArrival: string | null; here: boolean } | null;
+  work: {
+    name: string;
+    seconds: number;
+    firstArrival: string | null;
+    lastDeparture: string | null;
+  }[];
 }
 
 export interface NewspaperDownload {
@@ -2491,6 +2681,37 @@ export interface FoodJournalItem {
   media: FoodMedia[];
 }
 
+// A purchase, typed on the Daily page or captured as a receipt/clip. Media is
+// food's shape exactly, so the feed draws both with the same components.
+export type SpendingMedia = FoodMedia;
+
+export interface SpendingEntry {
+  id: string;
+  /** 4am day key the purchase is filed under. */
+  date: string;
+  category: string | null;
+  merchant: string | null;
+  /** CAD cents; null until a receipt or clip has been read. */
+  amountCents: number | null;
+  rawContent: string | null;
+  notes: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  /** A receipt, a clip or the structuring pass is still queued. */
+  reading: boolean;
+  media: SpendingMedia[];
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface SpendingDay {
+  date: string;
+  totalCents: number;
+  /** Purchases on this day whose amount is not known yet — not in the total. */
+  pendingCount: number;
+  byCategory: Record<string, number>;
+}
+
 // --- Lifestyle (workouts, heatmap, trends, body weight, selfies, calories) ---
 // Tasks are deliberately absent: the Lifestyle tab renders daily tasks and
 // to-dos through api.tasks/api.todos rather than a parallel list of its own.
@@ -2699,13 +2920,13 @@ export interface WeatherHour {
   isActual: boolean;
   latitude: number;
   longitude: number;
-  locationSource: 'geolocation' | 'default';
+  locationSource: 'geolocation' | 'trail' | 'home' | 'default';
 }
 
 export interface WeatherLocation {
   latitude: number;
   longitude: number;
-  source: 'geolocation' | 'default';
+  source: 'geolocation' | 'trail' | 'home' | 'default';
 }
 
 export interface WeatherToday {
@@ -3059,7 +3280,60 @@ export interface SavedPlace extends SavedPlaceInput {
   id: string;
 }
 
+export type PlaceRole = 'home' | 'work';
+
+/** A saved place holding Home or Work over a range of 4am days
+ *  (backend/place_roles.py). `endedOn` is exclusive; null means current. */
+export interface PlaceRolePeriod {
+  id: string;
+  role: PlaceRole;
+  placeId: string;
+  placeName: string;
+  latitude: number;
+  longitude: number;
+  radiusM: number;
+  startedOn: string;
+  endedOn: string | null;
+}
+
+/** Where commute distances are measured from: the current Home, else
+ *  Union Station. */
+export interface DistanceAnchor {
+  label: string;
+  latitude: number;
+  longitude: number;
+}
+
+export interface Goal {
+  id: string;
+  title: string;
+  criteria: string;
+  reward: string;
+  startDate: string;
+  targetDays: number;
+  status: 'active' | 'earned' | 'redeemed' | 'cancelled' | 'needs_review';
+  earnedAt: string | null;
+  redeemedAt: string | null;
+  lastCheckedAt: string | null;
+  currentStreak: number;
+  bestStreak: number;
+  needsReview: boolean;
+  days: {
+    date: string;
+    verdict: 'met' | 'not_met' | 'uncertain';
+    evidence: { kind: 'journal' | 'workout'; id: string; text: string }[];
+    error: string | null;
+  }[];
+}
+
 export const api = {
+  goals: {
+    list: () => get<Goal[]>('/api/goals'),
+    check: (id: string) =>
+      post<Goal>(`/api/goals/${encodeURIComponent(id)}/check`, {}),
+    update: (id: string, action: 'cancel' | 'redeem') =>
+      post<Goal>(`/api/goals/${encodeURIComponent(id)}/${action}`, {}),
+  },
   auth: {
     status: () => get<AuthStatus>('/api/auth/status'),
     login: (password: string, code: string) =>
@@ -3199,6 +3473,17 @@ export const api = {
   },
 
   journal: {
+    contextPrompts: () =>
+      post<JournalEntry[]>('/api/journal/context-prompts/prepare', {}),
+    resolveContextPrompt: (
+      id: string,
+      action: 'save' | 'dismiss',
+      content?: string
+    ) =>
+      post<{ success: boolean }>(`/api/journal/${id}/context-prompt`, {
+        action,
+        content,
+      }),
     list: (params?: {
       limit?: number;
       offset?: number;
@@ -3259,6 +3544,8 @@ export const api = {
       opts: {
         id?: string;
         attachmentId?: string;
+        capturedAt?: string;
+        durationSeconds?: number;
         name?: string;
         transcribe?: boolean;
         /** Also open an idea for this clip — the Ideas tab's Record button. */
@@ -3281,6 +3568,9 @@ export const api = {
       if (opts.name?.trim()) form.append('name', opts.name.trim());
       if (opts.id) form.append('id', opts.id);
       if (opts.attachmentId) form.append('attachmentId', opts.attachmentId);
+      if (opts.capturedAt) form.append('capturedAt', opts.capturedAt);
+      if (opts.durationSeconds != null)
+        form.append('durationSeconds', String(opts.durationSeconds));
       if (opts.transcribe) form.append('transcribe', 'true');
       if (opts.ideaId) form.append('ideaId', opts.ideaId);
       if (opts.repoId) form.append('repoId', opts.repoId);
@@ -3535,6 +3825,12 @@ export const api = {
       del<{ success: boolean }>(`/api/cookbook/media/${mediaId}`),
   },
 
+  spending: {
+    journal: () => get<SpendingEntry[]>('/api/spending/journal'),
+    trends: (days = 30) =>
+      get<SpendingDay[]>(`/api/spending/trends?days=${days}`),
+  },
+
   food: {
     list: (params?: { limit?: number; offset?: number; tag?: string }) => {
       const qp = new URLSearchParams();
@@ -3703,6 +3999,23 @@ export const api = {
       get<FicChapterSummary[]>(`/api/fanfic/${ficId}/chapters`),
     chapter: (chapterId: string) =>
       get<FicChapter>(`/api/fanfic/chapters/${chapterId}`),
+    /** Like on the forum (sent by the server), or `assumed` when opening it
+     * on the site, where the user presses Like themselves. */
+    likeChapter: (chapterId: string, liked: boolean, assumed = false) =>
+      post<FicLikeState>(`/api/fanfic/chapters/${chapterId}/like`, {
+        liked,
+        assumed,
+      }),
+    refetchChapter: (chapterId: string) =>
+      post<{ chapterId: string; queued: boolean }>(
+        `/api/fanfic/chapters/${chapterId}/refetch`
+      ),
+    refetchStatus: (chapterId: string) =>
+      get<{ done: boolean; error: string | null }>(
+        `/api/fanfic/chapters/${chapterId}/refetch`
+      ),
+    recheckReactions: () =>
+      post<{ queued: number }>('/api/fanfic/reactions/recheck'),
     importUrl: (url: string) =>
       post<{ id: string; alreadyExists?: boolean }>('/api/fanfic/import', {
         url,
@@ -3807,6 +4120,10 @@ export const api = {
   },
 
   calendar: {
+    reading: (date: string) =>
+      get<import('../lib/calendarReading').CalendarReadingSpan[]>(
+        `/api/calendar/reading/${date}`
+      ),
     listByRange: (start: string, end: string) =>
       get<CalendarEvent[]>(`/api/calendar?start=${start}&end=${end}`),
     listByDate: (date: string) =>
@@ -3930,6 +4247,27 @@ export const api = {
     ) => patch<{ success: boolean }>(`/api/learning/cards/${id}`, data),
     deleteCard: (id: string) =>
       del<{ success: boolean }>(`/api/learning/cards/${id}`),
+    retireCard: (id: string) =>
+      post<{ success: boolean }>(`/api/learning/cards/${id}/retire`, {}),
+    unretireCard: (id: string) =>
+      post<{ success: boolean }>(`/api/learning/cards/${id}/unretire`, {}),
+
+    listLessons: () =>
+      get<{ lessons: LearningLesson[]; config: LearningLessonsConfig }>(
+        '/api/learning/lessons'
+      ),
+    importLessons: (data: {
+      text: string;
+      sourceName?: string;
+      folderId?: string | null;
+    }) => post<LessonImportResult>('/api/learning/lessons/import', data),
+    scanLessons: () => post<LessonScanResult>('/api/learning/lessons/scan', {}),
+    updateLessonsConfig: (data: {
+      inboxPath?: string;
+      folderId?: string | null;
+    }) => put<LearningLessonsConfig>('/api/learning/lessons/config', data),
+    forceLesson: (id: string) =>
+      post<{ success: boolean }>(`/api/learning/lessons/${id}/force`, {}),
     getDue: (params?: { tag?: string; folderId?: string }) => {
       const qp = new URLSearchParams();
       if (params?.tag) qp.set('tag', params.tag);
@@ -4226,6 +4564,19 @@ export const api = {
         : post<SavedPlace>('/api/memory/places', place),
     deletePlace: (id: string) =>
       del<{ ok: boolean }>(`/api/memory/places/${id}`),
+    placeRoles: () => get<PlaceRolePeriod[]>('/api/memory/places/roles'),
+    assignRole: (role: PlaceRole, placeId: string, startedOn?: string) =>
+      post<PlaceRolePeriod>('/api/memory/places/roles', {
+        role,
+        placeId,
+        ...(startedOn ? { startedOn } : {}),
+      }),
+    updateRole: (
+      id: string,
+      changes: { startedOn?: string; endedOn?: string | null }
+    ) => patch<PlaceRolePeriod>(`/api/memory/places/roles/${id}`, changes),
+    deleteRole: (id: string) =>
+      del<{ ok: boolean }>(`/api/memory/places/roles/${id}`),
     get: () => get<UserMemory>('/api/memory'),
     update: (content: string) => put<UserMemory>('/api/memory', { content }),
     revisions: () => get<MemoryRevision[]>('/api/memory/revisions'),
@@ -4669,8 +5020,19 @@ export const api = {
       get<WritingNote>(`/api/writing/notes/${noteId}`),
     updateNote: (
       noteId: string,
-      data: { title?: string; content?: string; docType?: string }
+      data: {
+        title?: string;
+        content?: string;
+        docType?: string;
+        pinned?: boolean;
+      }
     ) => patch<{ success: boolean }>(`/api/writing/notes/${noteId}`, data),
+    noteRevisions: (noteId: string) =>
+      get<WritingNoteRevision[]>(`/api/writing/notes/${noteId}/revisions`),
+    restoreNoteRevision: (noteId: string, revisionId: string) =>
+      post<WritingNote>(
+        `/api/writing/notes/${noteId}/revisions/${revisionId}/restore`
+      ),
     deleteNote: (noteId: string) =>
       del<{ success: boolean }>(`/api/writing/notes/${noteId}`),
 
@@ -4683,6 +5045,33 @@ export const api = {
       ),
     summarizeDiscussion: (discussionId: string) =>
       post<WritingNote>(`/api/writing/conversations/${discussionId}/summarize`),
+
+    listCanon: () => get<CanonSource[]>('/api/writing/canon'),
+    uploadCanon: async (file: File, name?: string) => {
+      const form = new FormData();
+      form.append('file', file);
+      if (name) form.append('name', name);
+      const res = await fetch('/api/writing/canon', {
+        method: 'POST',
+        body: form,
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Upload failed (${res.status})`);
+      }
+      return (await res.json()) as { id: string };
+    },
+    fetchCanon: (url: string, name?: string) =>
+      post<{ id: string }>('/api/writing/canon/fetch', { url, name }),
+    deleteCanon: (id: string) =>
+      del<{ success: boolean }>(`/api/writing/canon/${id}`),
+    projectCanon: (projectId: string) =>
+      get<{ sourceIds: string[] }>(`/api/writing/projects/${projectId}/canon`),
+    setProjectCanon: (projectId: string, sourceIds: string[]) =>
+      put<{ sourceIds: string[] }>(`/api/writing/projects/${projectId}/canon`, {
+        sourceIds,
+      }),
   },
 
   curatedTags: {
@@ -4828,6 +5217,11 @@ export const api = {
     purge: () => post<{ purged: number }>('/api/torrents/purge'),
   },
 
+  location: {
+    journal: () => get<JournalLocationDay[]>('/api/location/journal'),
+    patterns: (days = 56) =>
+      get<LocationPatterns>(`/api/location/patterns?days=${days}`),
+  },
   newspapers: {
     pressreader: () => get<PressReaderStatus>('/api/newspapers/pressreader'),
     setAutoDownload: (autoDownload: boolean) =>
@@ -5227,6 +5621,7 @@ export const api = {
   },
 
   jobs: {
+    distanceAnchor: () => get<DistanceAnchor>('/api/jobs/distance-anchor'),
     profile: {
       get: () => get<JobProfileBundle>('/api/jobs/profile'),
       update: (data: Partial<JobProfileContact>) =>

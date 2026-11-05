@@ -4,10 +4,29 @@ public enum CaptureMode: String, Codable, CaseIterable {
     case text, record, transcribe
 }
 
-/// Where a typed capture is filed: the journal, or the food log. Recordings
-/// made on their own (the Watch) are always journal entries.
+/// Where a typed capture is filed: the journal, the food log, or spending.
+/// Recordings made on their own (the Watch) are always journal entries.
 public enum CaptureKind: String, Codable {
-    case journal, food
+    case journal, food, spending
+
+    /// The food log and spending are the same shape — words, pictures and
+    /// clips, no links and no notebook pages — at different routes.
+    public var isMediaLog: Bool { self != .journal }
+
+    /// The route a media-log capture is created at; additions go to
+    /// `<route>/<id>/media` and clips to `<route>/recordings`.
+    public var route: String { self == .spending ? "api/spending" : "api/food" }
+
+    /// Whether a staged file can go with a capture of this kind. Spending keeps
+    /// receipts and voice: the server drops a video, and a dropped file is one
+    /// the upload would wait to be acknowledged forever.
+    public func accepts(_ file: CaptureFile) -> Bool {
+        switch self {
+        case .journal: return true
+        case .food: return file.isFoodMedia
+        case .spending: return file.isSpendingMedia
+        }
+    }
 }
 
 public enum CaptureState: String, Codable {
@@ -48,18 +67,40 @@ public struct CaptureFile: Codable, Equatable, Identifiable {
     public let attachmentID: String
     public let name: String
     public let contentType: String?
+    /// When the photo or video was taken, read off the file itself (EXIF, or a
+    /// movie's QuickTime date) — not when it was picked.
+    public let capturedAt: Date?
+    /// A Live Photo is one attachment: this file is its still, and the short
+    /// clip of that type sits beside it (`CaptureStore.motionURL`). Nil for
+    /// everything else, and for every file staged before Live Photos.
+    public let motionContentType: String?
 
     public var id: String { attachmentID }
     public var isImage: Bool { contentType?.hasPrefix("image/") == true }
+    public var isVideo: Bool { contentType?.hasPrefix("video/") == true }
+    public var isLivePhoto: Bool { isImage && motionContentType != nil }
     /// The food log keeps pictures, videos and voice memos, nothing else.
     public var isFoodMedia: Bool {
         ["image/", "video/", "audio/"].contains { contentType?.hasPrefix($0) == true }
     }
+    /// Spending keeps receipt photos and voice memos.
+    public var isSpendingMedia: Bool {
+        ["image/", "audio/"].contains { contentType?.hasPrefix($0) == true }
+    }
 
-    public init(name: String, contentType: String?, now: Date = Date()) {
+    public init(name: String, contentType: String?, capturedAt: Date? = nil,
+                motionContentType: String? = nil, now: Date = Date()) {
         attachmentID = ULID.make(now: now)
         self.name = name
         self.contentType = contentType
+        self.capturedAt = capturedAt
+        self.motionContentType = motionContentType
+    }
+
+    /// Where a Live Photo's clip lives, given where its still does: one name,
+    /// so the store, the uploader and cleanup cannot disagree about it.
+    public static func motionURL(beside still: URL) -> URL {
+        still.appendingPathExtension("motion")
     }
 }
 
@@ -143,6 +184,13 @@ public struct Capture: Codable, Identifiable, Equatable {
     /// once this one lands, and sync holds this one back until they have
     /// landed themselves, so the old one cannot arrive after its replacement.
     public internal(set) var replaces: [String] = []
+    /// A notebook saved with For review on: the server makes the entry a
+    /// learning card whose front is these pages.
+    public internal(set) var forReview = false
+    /// Saved with the Capture tab's Save button while it could also have been
+    /// a meal or a purchase: the server reads it once its photos and clips are
+    /// in, and may file it in the food log or the ledger under the same id.
+    public internal(set) var autoFile = false
 
     /// The entry everything here is filed under.
     public var targetID: String { entryID ?? id }
@@ -197,7 +245,8 @@ public struct Capture: Codable, Identifiable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, attachmentID, createdAt, mode, kind, text, links, files, clips, state, lastError, snapshot
-        case latitude, longitude, weather, ficID, chapterID, entryID, mayBeOnServer, replaces
+        case latitude, longitude, weather, ficID, chapterID, entryID, mayBeOnServer, replaces, forReview
+        case autoFile
     }
 
     // Manifests written before an entry could hold several links stored one
@@ -224,6 +273,8 @@ public struct Capture: Codable, Identifiable, Equatable {
         entryID = try c.decodeIfPresent(String.self, forKey: .entryID)
         mayBeOnServer = try c.decodeIfPresent(Bool.self, forKey: .mayBeOnServer)
         replaces = try c.decodeIfPresent([String].self, forKey: .replaces) ?? []
+        forReview = try c.decodeIfPresent(Bool.self, forKey: .forReview) ?? false
+        autoFile = try c.decodeIfPresent(Bool.self, forKey: .autoFile) ?? false
         files = try c.decodeIfPresent([CaptureFile].self, forKey: .files) ?? []
         clips = try c.decodeIfPresent([CaptureClip].self, forKey: .clips) ?? []
         if let links = try c.decodeIfPresent([CaptureLink].self, forKey: .links) {
@@ -303,7 +354,7 @@ public enum ULID {
 }
 
 public enum CaptureError: LocalizedError {
-    case invalidID, emptyText, nothingToAdd, missingAudio, missingFile, notFoodMedia, stillRecording, invalidServer, differentServer, invalidResponse
+    case invalidID, emptyText, nothingToAdd, missingAudio, missingFile, notFoodMedia, notSpendingMedia, stillRecording, invalidServer, differentServer, invalidResponse
     case alreadySent
 
     public var errorDescription: String? {
@@ -314,6 +365,7 @@ public enum CaptureError: LocalizedError {
         case .missingAudio: return "The recording is missing or empty. Its saved entry has been kept."
         case .missingFile: return "The attached file is missing or empty."
         case .notFoodMedia: return "A food entry can hold photos, videos and recordings only. Remove other files first."
+        case .notSpendingMedia: return "A spending entry can hold photos and recordings only. Remove other files first."
         case .stillRecording: return "Stop the recording before saving."
         case .invalidServer: return "Enter an HTTPS server address without a path, credentials, or query."
         case .differentServer: return "This device's captures are bound to a different server."

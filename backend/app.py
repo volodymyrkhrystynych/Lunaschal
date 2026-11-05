@@ -83,7 +83,7 @@ def create_app():
         }), 503
 
     from backend.auth import NETWORK_MODE, COOKIE_NAME, is_localhost, decode_token
-    from backend.routes import journal, calendar, learning, settings, chat, files, writing, stt, tasks, curated_tags, shortcuts, transcriptions, cookbook, food, fanfic, newspapers, meetings, notebook, paper, lifestyle, ideas, practice, memory, email, notes, weather, jobs, backup, logs, repos, life_wiki, piano, torrent, knowledge, study, apple_health
+    from backend.routes import journal, calendar, learning, settings, chat, files, writing, stt, tasks, curated_tags, shortcuts, transcriptions, cookbook, food, spending, fanfic, newspapers, meetings, notebook, paper, lifestyle, ideas, practice, memory, email, notes, weather, jobs, backup, logs, repos, life_wiki, piano, torrent, knowledge, study, apple_health, location
     from backend.routes.settings import _get_settings, _set_sleep_inhibitor, measure_base_gpu_vram
     s = _get_settings()
     if s and s.get('prevent_sleep'):
@@ -95,7 +95,9 @@ def create_app():
     from backend.routes import auth as auth_routes
     from backend.routes import mobile_sync
     app.register_blueprint(mobile_sync.bp)
-    for bp in (auth_routes.bp, journal.bp, calendar.bp, learning.bp, settings.bp, chat.bp, files.bp, writing.bp, stt.bp, tasks.bp, curated_tags.bp, shortcuts.bp, transcriptions.bp, cookbook.bp, food.bp, fanfic.bp, newspapers.bp, meetings.bp, notebook.files_bp, notebook.bp, paper.bp, lifestyle.bp, ideas.bp, practice.bp, memory.bp, email.bp, notes.bp, weather.bp, jobs.bp, backup.bp, logs.bp, repos.bp, life_wiki.bp, piano.bp, torrent.bp, knowledge.bp, study.bp, apple_health.bp):
+    from backend.routes import goals
+    app.register_blueprint(goals.bp)
+    for bp in (auth_routes.bp, journal.bp, calendar.bp, learning.bp, settings.bp, chat.bp, files.bp, writing.bp, stt.bp, tasks.bp, curated_tags.bp, shortcuts.bp, transcriptions.bp, cookbook.bp, food.bp, spending.bp, fanfic.bp, newspapers.bp, meetings.bp, notebook.files_bp, notebook.bp, paper.bp, lifestyle.bp, ideas.bp, practice.bp, memory.bp, email.bp, notes.bp, weather.bp, jobs.bp, backup.bp, logs.bp, repos.bp, life_wiki.bp, piano.bp, torrent.bp, knowledge.bp, study.bp, apple_health.bp, location.bp):
         app.register_blueprint(bp)
 
     # Unlike scheduler loops, this is crash recovery for durable rows. It is a
@@ -144,6 +146,8 @@ def create_app():
         from backend.fanfic.pacing import start_scheduler
         start_scheduler()
         start_scans()
+        from backend.fanfic.alert_scheduler import start_scheduler as start_alert_scheduler
+        start_alert_scheduler()
         from backend.ai.jobs import start_job_worker
         start_job_worker()
         from backend.newspapers.scheduler import start_newspaper_scheduler
@@ -179,4 +183,6 @@ def create_app():
         # no model, woken by each save (backend/weather/entry.py).
         from backend.weather.entry import start_entry_weather_scheduler
         start_entry_weather_scheduler()
+        from backend.goals.scheduler import start_scheduler as start_goal_scheduler
+        start_goal_scheduler()
     return app

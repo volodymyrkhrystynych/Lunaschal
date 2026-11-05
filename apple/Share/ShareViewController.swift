@@ -7,7 +7,10 @@ import LunaschalCore
 /// it waits in the App Group's outbox and the app sends it on its next sync.
 /// A YouTube link goes into the Capture composer's draft instead, through the
 /// App Group's shared-links inbox, and needs no server at all.
-/// Shared images use the desktop screenshot endpoint after durable local saving.
+/// Shared images use the desktop screenshot endpoint after durable local saving,
+/// so consecutive shares group into one entry exactly as desktop captures do;
+/// a server still unreachable after a short retry gets them via a background
+/// upload (`ScreenshotBackgroundUpload`).
 final class ShareViewController: UIViewController {
     private let model = ShareModel()
 
@@ -77,14 +80,25 @@ final class ShareModel: ObservableObject {
                 try await SharedScreenshotLoader.save(provider, to: outbox)
                 saved += 1
             }
-            if let session = SharedSignIn.read() {
-                let api = try JournalAPI(server: session.server, token: session.token, allowCellular: true)
-                try await outbox.run(using: api)
+            guard let session = SharedSignIn.read() else {
+                return finish("Screenshots saved. Open Lunaschal to sign in and sync them to your journal.", imported: true)
+            }
+            let api = try JournalAPI(server: session.server, token: session.token, allowCellular: true)
+            do {
+                try await outbox.runRetrying(using: api)
                 if try outbox.list().isEmpty {
                     return finish("Screenshots added to your journal.", imported: true)
                 }
+            } catch let error as URLError where error.isUnreachable {
+                // Still out of reach after a few seconds: let the system send
+                // them once it can, instead of waiting for the app to open.
+                if (try? ScreenshotBackgroundUpload.handOff(outbox, api: api)) != nil {
+                    return finish("Screenshots saved. They’ll be added to your journal as soon as your server is reachable.",
+                                  imported: true)
+                }
+                throw error
             }
-            finish("Screenshots saved. Open Lunaschal to sign in and sync them to your journal.", imported: true)
+            finish("Screenshots saved. Lunaschal adds them to your journal on its next sync.", imported: true)
         } catch {
             if saved == providers.count {
                 finish("Screenshots saved on this device. Lunaschal will retry on its next sync. \(error.localizedDescription)", imported: false)

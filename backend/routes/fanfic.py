@@ -7,7 +7,7 @@ from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict
 from backend.fanfic import download, storage, xenforo
-from backend.fanfic import collections, sites, browser
+from backend.fanfic import collections, sites, browser, library, likes, source_lists
 from backend.fanfic.download import FetchBlockedError
 from backend.fanfic.xenforo import KNOWN_SITES, UnsupportedUrlError
 
@@ -18,6 +18,7 @@ _LIST_COLS = (
     'id, title, author, source_type, source_url, site, cover_path, word_count,'
     ' chapter_count, download_status, download_error, update_pending, deep_pending,'
     ' last_read_chapter_id, last_checked_at, last_opened_at, rating, review,'
+    ' shelf, shelved_at,'
     ' description, created_at, updated_at'
 )
 
@@ -38,6 +39,8 @@ _LATEST_ACTIVITY_ORDER = (
 )
 
 _OPENED_ORDER = 'fics.last_opened_at DESC NULLS LAST, fics.updated_at DESC'
+
+_ADDED_ORDER = 'fics.created_at DESC, fics.id DESC'
 
 
 def _attach_progress(dicts: list[dict]) -> list[dict]:
@@ -74,7 +77,12 @@ def _attach_library_meta(dicts: list[dict]) -> list[dict]:
             f'SELECT fic_id, COUNT(*) AS n FROM fic_chapter_reads'
             f' WHERE fic_id IN ({placeholders}) GROUP BY fic_id', ids):
         reads[r['fic_id']] = r['n']
+    lists = source_lists.lists_for(db, ids)
+    backlog = {r[0] for r in db.execute(
+        f'SELECT id FROM fics WHERE id IN ({placeholders}) AND {source_lists.backlog_sql("fics")}', ids)}
     for d in dicts:
+        d['sourceLists'] = lists.get(d['id'], [])
+        d['backlog'] = d['id'] in backlog
         d['folderIds'] = folders.get(d['id'], [])
         d['tags'] = tags.get(d['id'], [])
         d['readCount'] = reads.get(d['id'], 0)
@@ -101,6 +109,8 @@ def list_fics():
     folder_id = request.args.get('folderId')
     if folder_id == 'unsorted':
         where.append('NOT EXISTS (SELECT 1 FROM fic_folder_items WHERE fic_id=fics.id)')
+    elif folder_id == 'backlog':
+        where.append(source_lists.backlog_sql('fics'))
     elif folder_id:
         where.append('EXISTS (SELECT 1 FROM fic_folder_items'
                      ' WHERE folder_id=? AND fic_id=fics.id)')
@@ -114,9 +124,13 @@ def list_fics():
     where_sql = f" WHERE {' AND '.join(where)}" if where else ''
     # All and folder views follow chapter publication activity. Recent is
     # reading history, deliberately independent of forum publication dates.
-    sort = request.args.get('sort')
+    # The Backlog is triage of what was imported and never put on a list, so
+    # it reads newest-added first unless a sort is asked for.
+    sort = request.args.get('sort') or ('added' if folder_id == 'backlog' else None)
     if sort == 'recent':
         order = _OPENED_ORDER
+    elif sort == 'added':
+        order = _ADDED_ORDER
     elif folder_id:
         # Preserve the existing ordering inside Unsorted and named folders.
         order = _LATEST_ACTIVITY_ORDER
@@ -432,14 +446,7 @@ def add_fic_to_folder(fic_id):
         return jsonify({'error': 'Fic not found'}), 404
     if not db.execute('SELECT id FROM fic_folders WHERE id=?', (folder_id,)).fetchone():
         return jsonify({'error': 'Folder not found'}), 404
-    # Filing by hand claims the membership: an upgrade from 'import' is what
-    # stops the personal-tag sync from later unfiling something the user
-    # deliberately put here.
-    db.execute(
-        'INSERT INTO fic_folder_items(folder_id, fic_id, origin, created_at)'
-        " VALUES (?,?,'manual',?) ON CONFLICT(folder_id, fic_id)"
-        " DO UPDATE SET origin='manual'",
-        (folder_id, fic_id, int(time.time())))
+    library.file_in_folder(db, fic_id, folder_id)
     db.commit()
     return jsonify({'success': True})
 
@@ -488,9 +495,12 @@ def delete_fic(fic_id):
 @bp.get('/<fic_id>/chapters')
 def list_chapters(fic_id):
     rows = get_db().execute(
-        f'SELECT {_CHAPTER_LIST_COLS}, r.chapter_id IS NOT NULL AS is_read'
-        ' FROM fic_chapters c'
+        f'SELECT {_CHAPTER_LIST_COLS}, r.chapter_id IS NOT NULL AS is_read,'
+        ' x.reaction AS reaction, x.pending AS reaction_pending,'
+        " (c.source_post_id IS NOT NULL AND f.source_type = 'xenforo') AS likeable"
+        ' FROM fic_chapters c JOIN fics f ON f.id = c.fic_id'
         ' LEFT JOIN fic_chapter_reads r ON r.chapter_id = c.id'
+        ' LEFT JOIN fic_chapter_reactions x ON x.chapter_id = c.id'
         ' WHERE c.fic_id=?'
         " ORDER BY CASE WHEN LOWER(c.category) IN ('threadmarks','chapters') THEN 0 ELSE 1 END,"
         ' c.category, c.position',
@@ -499,6 +509,7 @@ def list_chapters(fic_id):
     dicts = [row_to_dict(r) for r in rows]
     for d in dicts:
         d['isRead'] = bool(d['isRead'])
+        d['likeable'] = bool(d['likeable'])
     return jsonify(dicts)
 
 
@@ -509,6 +520,75 @@ def get_chapter(chapter_id):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     return jsonify(row_to_dict(row))
+
+
+@bp.get('/chapters/<chapter_id>/like')
+def get_chapter_like(chapter_id):
+    return jsonify(likes.state(get_db(), chapter_id))
+
+
+@bp.post('/chapters/<chapter_id>/like')
+def like_chapter(chapter_id):
+    """`{"liked": true|false, "assumed": false}`. A like asked for here is
+    made on the forum by a background worker; `assumed` records a like the
+    user is about to press on the site themselves, and sends nothing."""
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get('liked'), bool) or not isinstance(body.get('assumed', False), bool):
+        return jsonify({'error': 'liked must be true or false'}), 400
+    db = get_db()
+    try:
+        result = likes.set_like(db, chapter_id, body['liked'], assumed=body.get('assumed', False))
+    except LookupError:
+        return jsonify({'error': 'Not found'}), 404
+    except likes.LikeError as e:
+        return jsonify({'error': str(e)}), 400
+    db.commit()
+    if result['pending']:
+        likes.start_push()
+    return jsonify(result)
+
+
+@bp.post('/chapters/<chapter_id>/refetch')
+def refetch_chapter(chapter_id):
+    """Re-get one forum chapter from its post, rewriting it in place whether
+    or not the post says it was edited."""
+    db = get_db()
+    row = db.execute(
+        'SELECT c.fic_id, c.source_post_id, f.source_type, f.download_status FROM fic_chapters c'
+        ' JOIN fics f ON f.id=c.fic_id WHERE c.id=?', (chapter_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if row['source_type'] != 'xenforo' or not row['source_post_id']:
+        return jsonify({'error': 'Only forum chapters can be re-fetched'}), 400
+    if download.is_active(row['fic_id']) or row['download_status'] == 'downloading':
+        return jsonify({'error': 'A download is already running for this fic'}), 409
+    if not likes.start_refetch(chapter_id):
+        return jsonify({'error': 'This chapter is already being re-fetched'}), 409
+    return jsonify({'chapterId': chapter_id, 'queued': True}), 202
+
+
+@bp.get('/chapters/<chapter_id>/refetch')
+def refetch_chapter_status(chapter_id):
+    status = likes.refetch_status(chapter_id)
+    if status is None:
+        return jsonify({'error': 'No re-fetch has run for this chapter'}), 404
+    return jsonify(status)
+
+
+@bp.post('/reactions/recheck')
+def recheck_reactions():
+    """Queue a deep check of every forum fic whose site has a saved session:
+    likes are only on reader pages, so finding out which chapters carry one
+    is the deep walk, which also picks up silent edits on the way."""
+    db = get_db()
+    cur = db.execute(
+        "UPDATE fics SET update_pending=1, deep_pending=1 WHERE source_type='xenforo'"
+        " AND download_status != 'downloading'"
+        " AND EXISTS (SELECT 1 FROM site_cookies s WHERE fics.site IN (s.domain, 'www.' || s.domain))")
+    db.commit()
+    if cur.rowcount:
+        _start_drain_bg()
+    return jsonify({'queued': cur.rowcount}), 202
 
 
 def _start_import_bg(fic_id: str, ref: xenforo.ThreadRef) -> None:
@@ -773,74 +853,15 @@ def start_collection_scan():
 
 @bp.post('/refresh-alerts')
 def refresh_alerts():
-    """Scan page 1 of each cookie'd site's alerts page and queue updates for
-    the unique threads mentioned: library fics get flagged, unknown threads
-    get a placeholder fic that the drain worker imports.
-
-    A fic is no longer skipped for having been fetched more recently than its
-    alert. That comparison assumed an alert is the only way a thread changes,
-    but XenForo raises none when an author edits an existing post — so
-    "checked since the alert" regularly meant "reported up to date while a
-    revised chapter sat unread". A check on an unchanged fic is cheap."""
-    db = get_db()
-    domains = [
-        r['domain'] for r in
-        db.execute('SELECT domain FROM site_cookies ORDER BY domain').fetchall()
-        if r['domain'] in KNOWN_SITES
-    ]
-    if not domains:
+    """Queue only forum activity not covered by a successful download."""
+    from backend.fanfic import alerts
+    if not any(r['domain'] in KNOWN_SITES for r in
+               get_db().execute('SELECT domain FROM site_cookies')):
         return jsonify({'error': 'No site cookies configured — paste your forum'
                         ' session cookies in Settings → Fanfic site cookies first'}), 400
-
-    errors: dict[str, str] = {}
-    alerts_seen = 0
-    # (site, thread_id) -> (ref, newest alert timestamp)
-    newest: dict[tuple[str, str], tuple[xenforo.ThreadRef, int | None]] = {}
-    for domain in domains:
-        try:
-            items = download.fetch_alerts(domain)
-        except Exception as e:
-            errors[domain] = str(e)
-            continue
-        alerts_seen += len(items)
-        for item in items:
-            key = (item.ref.domain, item.ref.thread_id)
-            prev = newest.get(key)
-            if prev is None or (item.alert_at or 0) > (prev[1] or 0):
-                newest[key] = (item.ref, item.alert_at)
-
-    flagged = new_imports = skipped_active = 0
-    now = int(time.time())
-    for (site, thread_id), (ref, _alert_at) in newest.items():
-        row = db.execute(
-            'SELECT id, update_pending, download_status'
-            ' FROM fics WHERE site=? AND thread_id=?', (site, thread_id)).fetchone()
-        if row:
-            if (row['update_pending'] or row['download_status'] == 'downloading'
-                    or download.is_active(row['id'])):
-                skipped_active += 1
-            else:
-                db.execute('UPDATE fics SET update_pending=1 WHERE id=?', (row['id'],))
-                flagged += 1
-        else:
-            placeholder = ref.slug.replace('-', ' ').strip() or 'Importing…'
-            db.execute(
-                'INSERT INTO fics(id, title, source_type, source_url, site, thread_id,'
-                ' update_pending, created_at, updated_at) VALUES (?,?,?,?,?,?,1,?,?)',
-                (str(ULID()), placeholder, 'xenforo', ref.thread_url, ref.domain,
-                 ref.thread_id, now, now))
-            new_imports += 1
-    db.commit()
-    # Always poke the drain worker, even if nothing was freshly flagged here —
-    # a prior crash/restart can leave fics stuck at update_pending=1 with no
-    # worker running to drain them (nothing else resumes that queue on
-    # startup), and start_drain() is a cheap no-op when there's nothing to do.
+    result = alerts.refresh()
     _start_drain_bg()
-    return jsonify({
-        'flagged': flagged, 'newImports': new_imports,
-        'skippedActive': skipped_active,
-        'alertsSeen': alerts_seen, 'errors': errors,
-    })
+    return jsonify(result)
 
 
 @bp.post('/scan-watched/<domain>')
@@ -1062,22 +1083,8 @@ def set_chapters_read(fic_id):
     if not isinstance(chapter_ids, list) or not chapter_ids or not isinstance(read, bool):
         return jsonify({'error': 'chapterIds (non-empty list) and read (boolean) required'}), 400
     db = get_db()
-    placeholders = ','.join('?' * len(chapter_ids))
-    owned = {r['id'] for r in db.execute(
-        f'SELECT id FROM fic_chapters WHERE fic_id=? AND id IN ({placeholders})',
-        (fic_id, *chapter_ids))}
-    if owned != set(chapter_ids):
+    if not library.set_chapters_read(db, fic_id, chapter_ids, read):
         return jsonify({'error': 'Chapter not found in this fic'}), 404
-    if read:
-        now = int(time.time())
-        db.executemany(
-            'INSERT OR IGNORE INTO fic_chapter_reads(chapter_id, fic_id, created_at)'
-            ' VALUES (?,?,?)',
-            [(cid, fic_id, now) for cid in chapter_ids])
-    else:
-        db.execute(
-            f'DELETE FROM fic_chapter_reads WHERE fic_id=? AND chapter_id IN ({placeholders})',
-            (fic_id, *chapter_ids))
     db.commit()
     count = db.execute(
         'SELECT COUNT(*) AS n FROM fic_chapter_reads WHERE fic_id=?', (fic_id,)).fetchone()
@@ -1155,19 +1162,17 @@ def save_review(fic_id):
     body = request.json or {}
     sets = []
     params: list = []
-    if 'rating' in body:
-        rating = body['rating']
-        if rating is not None and (not isinstance(rating, int) or isinstance(rating, bool)
-                                   or not 1 <= rating <= 5):
-            return jsonify({'error': 'rating must be null or an integer from 1 to 5'}), 400
-        sets.append('rating=?')
-        params.append(rating)
-    if 'review' in body:
-        review = body['review']
-        if review is not None and not isinstance(review, str):
-            return jsonify({'error': 'review must be null or a string'}), 400
-        sets.append('review=?')
-        params.append(review.strip() or None if review else None)
+    try:
+        if 'rating' in body:
+            library.check_rating(body['rating'])
+            sets.append('rating=?')
+            params.append(body['rating'])
+        if 'review' in body:
+            library.check_review(body['review'])
+            sets.append('review=?')
+            params.append(library.clean_review(body['review']))
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
     if not sets:
         return jsonify({'error': 'nothing to update'}), 400
     db = get_db()
@@ -1177,6 +1182,20 @@ def save_review(fic_id):
     db.commit()
     if cur.rowcount == 0:
         return jsonify({'error': 'Not found'}), 404
+    return jsonify({'success': True})
+
+
+@bp.patch('/<fic_id>/shelf')
+def save_shelf(fic_id):
+    shelf = (request.json or {}).get('shelf')
+    try:
+        library.check_shelf(shelf)
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    db = get_db()
+    if not library.set_shelf(db, fic_id, shelf):
+        return jsonify({'error': 'Not found'}), 404
+    db.commit()
     return jsonify({'success': True})
 
 

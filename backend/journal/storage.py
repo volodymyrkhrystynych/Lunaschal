@@ -174,3 +174,13 @@ def thumb_path(attachment_id: str) -> Path | None:
     if d is None or not is_safe_name(attachment_id):
         return None
     return d / 'thumb.jpg'
+
+
+def motion_path(attachment_id: str, ext: str) -> Path | None:
+    """`<root>/<attachment_id>/motion.<ext>` — a Live Photo's clip, beside its
+    still in the same directory, so deleting the attachment deletes both."""
+    d = attachment_dir(attachment_id)
+    ext = ext.lower().lstrip('.')
+    if d is None or not is_safe_name(attachment_id) or not _SAFE_EXT.match(ext):
+        return None
+    return d / f'motion.{ext}'

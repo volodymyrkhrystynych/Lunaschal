@@ -16,6 +16,14 @@ public struct JournalAttachmentItem: Hashable, Identifiable {
     /// The replica (and media) collection the row came from: a journal
     /// attachment, or a meal's `food_media`.
     public let collection: String
+    /// When the photo or video was taken; nil when nothing said.
+    public var capturedAt: Date? = nil
+    /// A Live Photo: an image whose clip is served beside it.
+    public var hasMotion = false
+    public var motionMIME: String? = nil
+    /// The server has a poster for this video (YouTube, or a frame of an upload).
+    public var hasThumb = false
+    public var durationSeconds: Int? = nil
 
     public init(id: String, entryID: String, kind: String, name: String = "", mime: String = "",
                 position: Int = 0, sourceURL: String? = nil, importStatus: String? = nil,
@@ -38,6 +46,27 @@ public struct JournalAttachmentItem: Hashable, Identifiable {
                   mime: data["mime"]?.string ?? "", position: Int(data["position"]?.number ?? 0),
                   sourceURL: text("sourceUrl"), importStatus: text("importStatus"),
                   transcript: text("transcript"), description: text("description"))
+        capturedAt = JournalTimestamp.parse(data["capturedAt"]?.string)
+        hasMotion = (data["hasMotion"]?.number ?? 0) != 0
+        motionMIME = text("motionMime")
+        hasThumb = (data["hasThumb"]?.number ?? 0) != 0
+        durationSeconds = data["durationSeconds"]?.number.map { Int($0) }
+    }
+
+    /// Whether this is a Live Photo the phone can play: an image with its clip.
+    public var isLivePhoto: Bool { media == .image && hasMotion }
+
+    /// "taken 1 Jul 2024", only when it was taken on a different day than
+    /// `entryDate` — on the same day it would only repeat the entry's own time.
+    public func takenLabel(entryDate: Date, calendar: Calendar = .current) -> String? {
+        guard let capturedAt, !calendar.isDate(capturedAt, inSameDayAs: entryDate) else { return nil }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = calendar.locale ?? .current
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return "taken " + formatter.string(from: capturedAt)
     }
 
     /// A row's kind, falling back to its MIME type: older rows were stored as 'file'.

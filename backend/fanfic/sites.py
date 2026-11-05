@@ -24,6 +24,8 @@ class WorkRef:
     # The user's own tags on their bookmark of this work, not the work's
     # tags. Only AO3's bookmark list carries any; everything else is ().
     tags: tuple[str, ...] = ()
+    # Latest possible update time; date-only FF.net fields use the end of day.
+    updated_at: int | None = None
 
 
 def parse_work_url(url: str) -> WorkRef | None:
@@ -226,6 +228,7 @@ def parse_collection(html: str, url: str) -> tuple[list[WorkRef], str | None]:
             if tags:
                 ref = replace(ref, tags=tuple(tags))
             if ref.site == 'fanfiction.net':
+                ref = replace(ref, updated_at=_list_updated_at(a))
                 added = _list_added_at(a)
                 if urlparse(url).path == '/favorites/story.php':
                     ref = replace(ref, favorited_at=added)
@@ -299,6 +302,38 @@ def _list_added_at(link):
             and cells[1].find('a', href=re.compile(r'/u/\d+/'))):
         return _parse_added_date(cells[4])
     return None
+
+
+def _list_updated_at(link):
+    """Read the Updated column, never Added or Published. A date alone cannot
+    rule out another update later that day, so compare its upper bound."""
+    row = link.find_parent('tr')
+    if row is None:
+        return None
+    cells = row.find_all(['td', 'th'], recursive=False)
+    table = row.find_parent('table')
+    cell = None
+    if table:
+        for header in table.find_all('tr'):
+            if header.find_parent('table') is not table:
+                continue
+            for i, label in enumerate(header.find_all(['td', 'th'], recursive=False)):
+                if re.fullmatch(r'(?:date\s+)?updated', _text(label), re.I) and i < len(cells):
+                    cell = cells[i]
+                    break
+            if cell is not None:
+                break
+    if cell is None and (table and table.get('id') == 'gui_table1' and len(cells) == 6
+                        and cells[0].find('a', href=re.compile(r'/s/\d+/'))
+                        and cells[1].find('a', href=re.compile(r'/u/\d+/'))):
+        cell = cells[3]
+    if cell is None:
+        return None
+    value = _parse_added_date(cell)
+    if value is None:
+        return None
+    precise = cell.has_attr('data-xutime') or cell.select_one('[data-xutime]') is not None
+    return value if precise else value + 86400 - 1
 
 
 def parse_patreon_collection(data: dict, url: str):

@@ -19,7 +19,7 @@ const USER_INPUTS = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const;
 
 /**
  * Record when a chapter is open and being scrolled, as reading spans the
- * briefing's day reconstruction can cite (see src/lib/readingSpans.ts).
+ * calendar displays automatically (see src/lib/readingSpans.ts).
  * `chapterId` null (a PDF, or no chapter yet) records nothing.
  */
 export function useReadingSpans(

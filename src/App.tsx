@@ -250,7 +250,14 @@ function AppShell() {
       case 'food':
         return <Food />;
       case 'lifestyle':
-        return <Lifestyle />;
+        return (
+          <Lifestyle
+            onOpenEntry={entryId => {
+              setJournalTarget({ entryId });
+              setCurrentView('journal');
+            }}
+          />
+        );
       case 'fanfic':
         return (
           <Fanfic

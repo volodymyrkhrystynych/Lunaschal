@@ -269,6 +269,7 @@ export function ChatTodoBar() {
   const { data: todos = [] } = useQuery({
     queryKey: ['chatTodos'],
     queryFn: api.chatTodos.list,
+    refetchInterval: 60_000,
   });
 
   const invalidateTodos = () =>

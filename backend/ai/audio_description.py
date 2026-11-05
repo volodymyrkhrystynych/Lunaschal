@@ -124,13 +124,13 @@ def _probe_duration(path: Path) -> float | None:
         out = subprocess.run(
             ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
              '-of', 'csv=p=0', str(path)],
-            check=True, capture_output=True, text=True,
+            check=True, capture_output=True, text=True, timeout=15,
         )
         duration = float(out.stdout.strip())
-    except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as e:
+    except (subprocess.SubprocessError, OSError, ValueError) as e:
         logger.warning('Could not probe the duration of %s: %s', path, e)
         return None
-    return duration if duration > 0 else None
+    return duration if math.isfinite(duration) and duration > 0 else None
 
 
 def plan_windows(duration: float) -> list[tuple[float, float]]:
