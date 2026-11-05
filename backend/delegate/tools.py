@@ -2,8 +2,8 @@
 or ask.
 
 **The `propose_*` tools only ever propose.** `propose_calendar_event`,
-`propose_calorie_log`, `propose_food_log`, `draft_flashcard` and
-`propose_flashcards` write nothing. They hand back a staged payload the chat UI
+`propose_calorie_log`, `propose_food_log`, `propose_screenshot_titles`,
+`draft_flashcard` and `propose_flashcards` write nothing. They hand back a staged payload the chat UI
 renders as a confirm card, and the row is inserted by `resolve_proposal` in
 backend/routes/chat.py when the user clicks. So this replaces the *classifier*
 — which guessed an intent after the reply and swallowed its own failures —
@@ -163,6 +163,39 @@ TOOLS = [
                     'tags': {'type': 'array', 'items': {'type': 'string'}},
                 },
                 'required': ['title', 'date'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'propose_screenshot_titles',
+            'description': (
+                'Stage new names for screenshot runs still called '
+                '"Screenshots", for the user to confirm on one card. Call '
+                'find_untitled_screenshots first and use its entryIds. Name '
+                'each run after what its captions show the user was doing, in '
+                'a few words ("Comparing flights to Lviv"), not after the fact '
+                'that it is screenshots. Leave out a run whose captions say '
+                'too little to name it.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'items': {
+                        'type': 'array',
+                        'minItems': 1,
+                        'items': {
+                            'type': 'object',
+                            'properties': {
+                                'entryId': {'type': 'string'},
+                                'title': {'type': 'string'},
+                            },
+                            'required': ['entryId', 'title'],
+                        },
+                    },
+                },
+                'required': ['items'],
             },
         },
     },
@@ -559,6 +592,52 @@ def _propose_calendar_event(args: dict) -> tuple[str, dict]:
                    f'event "{title}" on {when}')
 
 
+def _propose_screenshot_titles(args: dict) -> tuple[str, dict]:
+    """Stage one card for every run named this turn. The card carries each
+    run's span and shot count for the user to recognise it by; the accept
+    handler re-checks every id, since a card can sit pending for days."""
+    from backend.db.connection import get_db
+    from backend.journal import screenshot_titles
+
+    items = args.get('items')
+    if not isinstance(items, list) or not items:
+        return _refused('propose_screenshot_titles',
+                        'name at least one run — call find_untitled_screenshots for their ids')
+    db = get_db()
+    staged, problems, seen = [], [], set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        entry_id = _text(item.get('entryId'))
+        if not entry_id or entry_id in seen:
+            continue
+        seen.add(entry_id)
+        try:
+            title = screenshot_titles.clean_title(item.get('title'))
+        except screenshot_titles.RenameRejected as e:
+            problems.append(f'{entry_id}: {e}')
+            continue
+        run = screenshot_titles.untitled_run(db, entry_id)
+        if run is None:
+            problems.append(f'{entry_id}: not an unnamed screenshot run')
+            continue
+        staged.append({'entryId': entry_id, 'title': title, 'date': run['date'],
+                       'time': run['time'], 'endTime': run['endTime'],
+                       'shots': run['shots']})
+    if not staged:
+        return _refused('propose_screenshot_titles',
+                        '; '.join(problems) or 'no usable runs — use the entryIds '
+                        'find_untitled_screenshots returned')
+    names = ', '.join(f'"{s["title"]}"' for s in staged)
+    text, event = _staged('screenshot_titles', 'propose_screenshot_titles',
+                          {'items': staged},
+                          f'{len(staged)} screenshot run name'
+                          f'{"" if len(staged) == 1 else "s"} ({names})')
+    if problems:
+        text += ' Skipped: ' + '; '.join(problems) + '.'
+    return text, event
+
+
 def _propose_calorie_log(args: dict) -> tuple[str, dict]:
     description = _text(args.get('description'))[:MAX_TITLE_CHARS]
     if not description:
@@ -742,6 +821,7 @@ def _ask_user(args: dict) -> tuple[str, dict]:
 _HANDLERS = {
     'add_todos': _add_todos,
     'propose_calendar_event': _propose_calendar_event,
+    'propose_screenshot_titles': _propose_screenshot_titles,
     'propose_calorie_log': _propose_calorie_log,
     'propose_food_log': _propose_food_log,
     'propose_recipe': _propose_recipe,

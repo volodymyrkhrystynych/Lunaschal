@@ -133,6 +133,27 @@ final class ChatTests: XCTestCase {
                        "Added to today: Call the dentist")
     }
 
+    func testScreenshotTitleCardsSayWhatTheDesktopSays() {
+        func card(_ json: String) -> ChatProposal { ChatMeta(#"{"proposals": [\#(json)]}"#).proposals[0] }
+        let pending = card(#"{"id": "1", "kind": "screenshot_titles", "data": {"items": []}, "status": "pending"}"#)
+        XCTAssertEqual(pending.headline, "Rename these screenshots?")
+        XCTAssertEqual(pending.acceptLabel, "Rename")
+        XCTAssertEqual(card(#"{"id": "1", "kind": "screenshot_titles", "data": {}, "status": "accepted", "result": {"renamed": 2, "skipped": []}}"#).resolvedLabel,
+                       "Renamed 2 screenshot runs")
+        XCTAssertEqual(card(#"{"id": "1", "kind": "screenshot_titles", "data": {}, "status": "accepted", "result": {"renamed": 1, "skipped": [{"entryId": "E"}]}}"#).resolvedLabel,
+                       "Renamed 1 screenshot run — 1 skipped")
+
+        func run(_ json: String) -> String { ChatProposal.screenshotRunLabel(JSONValue.parse(json)!.object!) }
+        XCTAssertEqual(run(#"{"date": "2026-09-12", "time": "18:04", "endTime": "18:41", "shots": 2}"#), "2026-09-12 18:04–18:41 · 2 shots")
+        XCTAssertEqual(run(#"{"date": "2026-09-12", "time": "18:04", "endTime": "18:04", "shots": 1}"#), "2026-09-12 18:04 · 1 shot")
+
+        func label(_ json: String) -> String { AgentStep(JSONValue.parse(json)!).label }
+        XCTAssertEqual(label(#"{"tool": "find_untitled_screenshots", "ok": true, "count": 3}"#), "Found 3 unnamed screenshot runs")
+        XCTAssertEqual(label(#"{"tool": "find_untitled_screenshots", "ok": true, "count": 0}"#), "No unnamed screenshot runs")
+        XCTAssertEqual(label(#"{"tool": "propose_screenshot_titles", "arg": "1 screenshot run name", "ok": true}"#),
+                       "Staged screenshot names: 1 screenshot run name")
+    }
+
     func testEditedCardsGoOutWithWholeNumbers() throws {
         let data: [String: JSONValue] = ["calories": .number(600), "weight": .number(2.5), "title": .string("x"), "time": .null]
         let json = String(decoding: try JSONEncoder().encode(data), as: UTF8.self)

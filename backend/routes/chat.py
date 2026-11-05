@@ -783,6 +783,37 @@ def _accept_calendar(db, data: dict, ctx: dict) -> dict:
     return {'id': id}
 
 
+def _accept_screenshot_titles(db, data: dict, ctx: dict) -> dict:
+    """Rename each listed screenshot run, skipping any that stopped being
+    unnamed while the card waited (renamed by hand, or deleted). Only a card
+    where nothing at all could be renamed is refused: the rest of a batch is
+    still what the user approved."""
+    from backend.journal import screenshot_titles
+    items = data.get('items')
+    if not isinstance(items, list) or not items:
+        raise _AcceptRejected('there are no screenshot runs on this card')
+    for item in items:
+        if not isinstance(item, dict):
+            raise _AcceptRejected('each run needs an entryId and a title')
+        # Checked up front so one bad name refuses the whole card while it is
+        # still pending and editable, rather than half-applying it.
+        try:
+            screenshot_titles.clean_title(item.get('title'))
+        except screenshot_titles.RenameRejected as e:
+            raise _AcceptRejected(str(e)) from e
+    renamed, skipped = [], []
+    for item in items:
+        try:
+            renamed.append(screenshot_titles.rename_run(
+                db, str(item.get('entryId') or ''), item.get('title')))
+        except screenshot_titles.RenameRejected as e:
+            skipped.append({'entryId': item.get('entryId'), 'reason': str(e)})
+    if not renamed:
+        raise _AcceptRejected(skipped[0]['reason'] if len(skipped) == 1 else
+                              'none of these runs are still named "Screenshots"')
+    return {'renamed': len(renamed), 'skipped': skipped}
+
+
 def _accept_todo(db, data: dict, ctx: dict) -> dict:
     """A carried-over to-do card from the morning briefing: yesterday's
     unfinished bar item, kept into *today's* bar. Idempotent on title, since the
@@ -1131,6 +1162,7 @@ _ACCEPT_HANDLERS = {
     'writing_note': _accept_writing_note,
     'writing_note_update': _accept_writing_note_update,
     'calendar': _accept_calendar,
+    'screenshot_titles': _accept_screenshot_titles,
     'calorie': _accept_calorie,
     'food': _accept_food,
     'recipe': _accept_recipe,

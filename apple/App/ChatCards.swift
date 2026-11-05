@@ -144,9 +144,51 @@ private struct ProposalForm: View {
             Toggle("Replace the note instead of adding to it", isOn: Binding(
                 get: { replace }, set: { data["mode"] = .string($0 ? "replace" : "append") }))
                 .font(.caption)
+        case "screenshot_titles": screenshotTitles
         default:
             EmptyView()
         }
+    }
+
+    /// One name per run, each under when it was taken. A run can be taken off
+    /// the card; the last one can't, since Dismiss already says "none of these".
+    @ViewBuilder private var screenshotTitles: some View {
+        let items = data["items"]?.array ?? []
+        ForEach(items.indices, id: \.self) { index in
+            let item = items[index].object ?? [:]
+            VStack(alignment: .leading, spacing: 4) {
+                Text(ChatProposal.screenshotRunLabel(item)).font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    TextField("Name", text: screenshotTitle(index)).textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Name for \(ChatProposal.screenshotRunLabel(item))")
+                    if items.count > 1 {
+                        Button { removeScreenshotRun(index) } label: { Image(systemName: "minus.circle") }
+                            .buttonStyle(.borderless).foregroundStyle(.secondary)
+                            .accessibilityLabel("Leave out \(ChatProposal.screenshotRunLabel(item))")
+                    }
+                }
+            }
+        }
+    }
+
+    private func screenshotTitle(_ index: Int) -> Binding<String> {
+        Binding(get: {
+            let items = data["items"]?.array ?? []
+            return items.indices.contains(index) ? items[index]["title"]?.text ?? "" : ""
+        }, set: { value in
+            var items = data["items"]?.array ?? []
+            guard items.indices.contains(index), var item = items[index].object else { return }
+            item["title"] = .string(value)
+            items[index] = .object(item)
+            data["items"] = .array(items)
+        })
+    }
+
+    private func removeScreenshotRun(_ index: Int) {
+        var items = data["items"]?.array ?? []
+        guard items.indices.contains(index) else { return }
+        items.remove(at: index)
+        data["items"] = .array(items)
     }
 
     @ViewBuilder private var calendar: some View {

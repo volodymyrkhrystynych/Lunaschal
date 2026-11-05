@@ -37,6 +37,11 @@ function resolvedLabel(p: DelegateProposalRecord): string {
       return `Added note “${str(p.data, 'title')}”`;
     case 'writing_note_update':
       return `Updated note “${str(p.data, 'title')}” — the earlier version is in its history`;
+    case 'screenshot_titles': {
+      const renamed = p.result?.renamed ?? 0;
+      const skipped = p.result?.skipped?.length ?? 0;
+      return `Renamed ${renamed} screenshot run${renamed === 1 ? '' : 's'}${skipped ? ` — ${skipped} skipped` : ''}`;
+    }
     default:
       return 'Resolved';
   }
@@ -52,6 +57,7 @@ const HEADLINE: Record<string, string> = {
   todo: 'Keep this for today?',
   writing_note: 'Add to the notes?',
   writing_note_update: 'Update this note?',
+  screenshot_titles: 'Rename these screenshots?',
 };
 
 const ACCEPT_LABEL: Record<string, string> = {
@@ -64,6 +70,7 @@ const ACCEPT_LABEL: Record<string, string> = {
   todo: 'Add to today',
   writing_note: 'Add Note',
   writing_note_update: 'Update Note',
+  screenshot_titles: 'Rename',
 };
 
 const ACCEPT_PENDING_LABEL: Record<string, string> = {
@@ -76,6 +83,7 @@ const ACCEPT_PENDING_LABEL: Record<string, string> = {
   todo: 'Adding...',
   writing_note: 'Saving...',
   writing_note_update: 'Saving...',
+  screenshot_titles: 'Renaming...',
 };
 
 // Matches TodoForm.tsx — the card is the same kind of small entry form, and a
@@ -86,6 +94,33 @@ const fieldClass =
 function str(data: Record<string, unknown>, key: string): string {
   const v = data[key];
   return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
+}
+
+interface ScreenshotRun {
+  entryId: string;
+  title: string;
+  date?: string;
+  time?: string;
+  endTime?: string;
+  shots?: number;
+}
+
+function screenshotRunsOf(data: Record<string, unknown>): ScreenshotRun[] {
+  return Array.isArray(data.items) ? (data.items as ScreenshotRun[]) : [];
+}
+
+/** One run on a `screenshot_titles` card, as the user will recognise it:
+ * when it was taken and how many shots. `ChatProposal.screenshotRunLabel` on
+ * iOS, word for word. */
+export function screenshotRunLabel(run: ScreenshotRun): string {
+  let label = run.date ?? '';
+  if (run.time) {
+    label += ` ${run.time}`;
+    if (run.endTime && run.endTime !== run.time) label += `–${run.endTime}`;
+  }
+  if (typeof run.shots === 'number')
+    label += ` · ${run.shots} shot${run.shots === 1 ? '' : 's'}`;
+  return label;
 }
 
 function categoriesOf(data: Record<string, unknown>): EventCategory[] {
@@ -445,6 +480,51 @@ function ProposalForm({
         </div>
       );
 
+    case 'screenshot_titles': {
+      // One name per run, each under when it was taken. A run can be taken
+      // off the card; the last one can't, since Dismiss already says "none".
+      const runs = screenshotRunsOf(data);
+      const setRuns = (next: ScreenshotRun[]) => set({ items: next });
+      return (
+        <div className="space-y-2">
+          {runs.map((run, i) => {
+            const label = screenshotRunLabel(run);
+            return (
+              <div key={run.entryId} className="space-y-0.5">
+                <div className="text-xs text-[var(--color-text-muted)]">
+                  {label}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    aria-label={`Name for ${label}`}
+                    value={run.title ?? ''}
+                    onChange={e =>
+                      setRuns(
+                        runs.map((r, j) =>
+                          j === i ? { ...r, title: e.target.value } : r
+                        )
+                      )
+                    }
+                    className={`${fieldClass} flex-1`}
+                  />
+                  {runs.length > 1 && (
+                    <button
+                      type="button"
+                      aria-label={`Leave out ${label}`}
+                      onClick={() => setRuns(runs.filter((_, j) => j !== i))}
+                      className="px-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
     case 'writing_note_update': {
       const replace = data.mode === 'replace';
       return (
@@ -578,6 +658,7 @@ export function DelegateProposals({ messageId, proposals }: Props) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['chat', 'today'] });
       queryClient.invalidateQueries({ queryKey: ['calendar'] });
+      queryClient.invalidateQueries({ queryKey: ['journal'] });
       queryClient.invalidateQueries({ queryKey: ['lifestyle', 'calories'] });
       queryClient.invalidateQueries({ queryKey: ['food'] });
       queryClient.invalidateQueries({ queryKey: ['cookbook'] });

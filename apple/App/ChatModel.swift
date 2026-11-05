@@ -42,12 +42,14 @@ final class ChatModel: NSObject, ObservableObject, AVAudioRecorderDelegate {
     private var recorder: AVAudioRecorder?
     private var photoCache: [String: Data] = [:]
     private let cacheURL: URL
+    /// Set by `-chatFixture`: a canned conversation and no server, for UI tests.
+    private let fixture = ChatFixture.ifAsked()
 
     init(capture: CaptureModel) {
         self.capture = capture
         cacheURL = capture.chatRecordings.root.appendingPathComponent("today.cache")
         super.init()
-        conversation = try? JSONDecoder().decode(ChatConversation.self, from: Data(contentsOf: cacheURL))
+        conversation = fixture ?? (try? JSONDecoder().decode(ChatConversation.self, from: Data(contentsOf: cacheURL)))
         NotificationCenter.default.addObserver(self, selector: #selector(interrupted),
             name: AVAudioSession.interruptionNotification, object: nil)
     }
@@ -76,6 +78,7 @@ final class ChatModel: NSObject, ObservableObject, AVAudioRecorderDelegate {
     /// `todos` is off for the fast ticks: the bar changes only when something
     /// writes to it, and those writes refresh it themselves.
     func refresh(todos withTodos: Bool = true) async {
+        if fixture != nil { return }
         guard let api = capture.chatAPI() else {
             loadProblem = capture.server == nil ? "Connect to your server in Settings to chat."
                                                 : "Sign in again in Settings to chat."

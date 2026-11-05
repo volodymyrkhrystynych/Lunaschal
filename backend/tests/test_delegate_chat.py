@@ -407,11 +407,12 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
     offered = {t['function']['name'] for t in seen['tools']}
     assert offered == {'local_knowledge_search', 'local_knowledge_read',
                        'delegate', 'add_todos', 'propose_calendar_event',
+                       'propose_screenshot_titles',
                        'propose_calorie_log', 'propose_food_log', 'propose_recipe',
                        'draft_flashcard', 'propose_flashcards',
                        'create_note_to_self', 'ask_user', 'remember',
                        'search_conversations', 'search_journal', 'read_day',
-                       'wiki_read', 'wiki_search', 'create_goal', 'list_goals',
+                       'find_untitled_screenshots', 'wiki_read', 'wiki_search', 'create_goal', 'list_goals',
                        'check_goal', 'update_goal'}
 
 

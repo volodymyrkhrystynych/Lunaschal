@@ -95,6 +95,9 @@ Use search_conversations, search_journal or read_day when the answer is \
 something the user already told you or wrote down and you cannot see it in \
 this conversation. Their own record first, the web second.
 
+When they ask to name their screenshots, call find_untitled_screenshots, then \
+propose_screenshot_titles with a short name for each run its captions explain.
+
 Use wiki_read when one of your own notes about them is listed above and the \
 answer turns on what is actually in it, rather than on its title.
 

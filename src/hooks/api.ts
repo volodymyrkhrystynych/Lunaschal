@@ -821,7 +821,9 @@ export interface DelegateProposalRecord {
     | 'todo'
     // A Writing discussion's note cards (backend/writing/proposals.py).
     | 'writing_note'
-    | 'writing_note_update';
+    | 'writing_note_update'
+    // Names for screenshot runs (backend/journal/screenshot_titles.py).
+    | 'screenshot_titles';
   data: Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
   resolvedAt?: number;
@@ -834,6 +836,8 @@ export interface DelegateProposalRecord {
     photos?: number;
     calorieLogId?: string;
     revisionId?: string | null;
+    renamed?: number;
+    skipped?: { entryId: string; reason: string }[];
   };
 }
 

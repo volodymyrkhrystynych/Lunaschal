@@ -328,6 +328,30 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
     }
 
+    // The fixture's reply staged names for two screenshot runs on one card.
+    // Each run is editable and can be left out; with no server, accepting
+    // keeps the card open with its edits rather than collapsing it.
+    func testChatNamesScreenshotRunsOnOneCard() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-chatFixture")
+        app.launch()
+        selectTab(app, "Chat")
+        XCTAssertTrue(app.staticTexts["Rename these screenshots?"].waitForExistence(timeout: 5))
+        let flights = "2026-10-28 18:04–18:41 · 6 shots"
+        let lenses = "2026-10-27 21:10–21:32 · 3 shots"
+        XCTAssertTrue(app.staticTexts[flights].exists)
+        XCTAssertEqual(app.textFields["Name for \(flights)"].value as? String, "Comparing flights to Lviv")
+
+        app.buttons["Leave out \(lenses)"].tap()
+        XCTAssertFalse(app.textFields["Name for \(lenses)"].waitForExistence(timeout: 1))
+        // The last run can't be left out: Dismiss already means "none of these".
+        XCTAssertFalse(app.buttons["Leave out \(flights)"].exists)
+
+        app.buttons["chat-card-accept"].tap()
+        XCTAssertTrue(app.staticTexts["Connect to your server to save this."].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["Name for \(flights)"].exists)
+    }
+
     func testThePhoneStaysPortraitWhenTurned() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone)
         let app = XCUIApplication()
