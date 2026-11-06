@@ -5,7 +5,7 @@ public struct BookFilter: Equatable {
     public var source = ""
     public var folder = ""
     public var tag = ""
-    public var sort = "activity"
+    public var sort = "activity" { didSet { backlogChoseSort = false } }
     public var bookmark = ""
     /// `FicLibrary.activeShelves` (the default: not finished, not dropped),
     /// `archivedShelves`, `allShelves`, or one `Shelf` raw value.
@@ -15,6 +15,8 @@ public struct BookFilter: Equatable {
     public var unreadOnly = false
     /// The Backlog as a filter over the whole library, rather than its folder.
     public private(set) var backlogOnly = false
+    /// The sort is one the Backlog toggle put there, not one the user picked.
+    private var backlogChoseSort = false
     public init() {}
 
     /// The filter a list opens with, and what Reset returns it to. The Backlog
@@ -27,10 +29,14 @@ public struct BookFilter: Equatable {
 
     /// Narrows to the Backlog, taking its newest-added order with it -- but
     /// only from the default sort, so one the user picked is left alone.
+    /// Turning it off undoes only that order: Added picked by hand stays.
     public mutating func setBacklogOnly(_ on: Bool) {
         backlogOnly = on
-        if on && sort == "activity" { sort = "added" }
-        if !on && sort == "added" { sort = "activity" }
+        if on && sort == "activity" {
+            sort = "added"
+            backlogChoseSort = true
+        }
+        if !on && backlogChoseSort { sort = "activity" }
     }
 
     /// The filter with its menu's choices undone, for a list whose sort isn't

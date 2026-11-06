@@ -133,9 +133,11 @@ button returns to that list rather than pushing another, so Back is always
 chapter → chapter list → Library however many chapters are picked (passed in
 simulator). The reader's bottom-left menu takes typed or spoken commentary
 (a journal entry linked to the chapter) and Continue/Favorite bookmarks. A
-Continue bookmark removes itself when its chapter is read to the end or Next is
-tapped, unless it was saved at the very end, where only Next clears it; it says
-so when it does, and it works before the bookmark has synced. A fast flick up
+Continue bookmark removes itself when Next is tapped, or at the end of its
+chapter once the reader has scrolled at least a screen there, unless it was saved
+at the very end. Only Next clears a point saved there or reopened near the end.
+It says so when it does, and it works before the bookmark has synced. A removal
+the server refuses is dropped, so a point moved on another device stands. A fast flick up
 shows a button at the bottom right that jumps to the top of the chapter. Both
 passed in simulator; the flick speed is not yet judged on a device. Scrolling
 is logged as reading spans, and the chapter is reported as last read; both are

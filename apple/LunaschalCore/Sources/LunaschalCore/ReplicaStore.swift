@@ -150,6 +150,7 @@ public final class ReplicaStore {
             }
             for change in page.changes {
                 if try put(change) { changed.insert(change.collection) }
+                try repointContinue(after: change)
             }
             try set(scope(page.collections), page.cursor)
             if !page.hasMore {
@@ -721,25 +722,41 @@ public final class ReplicaStore {
     /// A continue point replaced while its predecessor was already on its way
     /// still names the server's older one, which the predecessor has just
     /// replaced, so it would come back as a conflict. Point it at the one the
-    /// server now has instead.
+    /// server now has instead. A tombstone means the server has none, however
+    /// it heard, so whatever named that record replaces nothing.
     private func repointContinue(after change: SyncChange) throws {
-        guard change.collection == "fic_bookmarks", change.data?["type"]?.string == "continue",
-              let bookID = change.data?["ficId"]?.string else { return }
-        for edit in try bookmarkEdits(bookID: bookID) where edit.state == "pending" && edit.operation.action == "create"
-            && edit.original.data?["type"]?.string == "continue" && edit.operation.recordId != change.id
-            && edit.operation.data["previousContinueId"]?.string != change.id {
-            guard var operation = try JSONSerialization.jsonObject(with: Data(try json(edit.operation).utf8)) as? [String: Any],
-                  var data = operation["data"] as? [String: Any],
-                  var original = try JSONSerialization.jsonObject(with: Data(try json(edit.original).utf8)) as? [String: Any]
-            else { continue }
-            data["previousContinueId"] = change.id
-            operation["data"] = data
-            operation["baseRevision"] = change.revision
-            original["revision"] = change.revision
-            try execute("UPDATE replica_outbox SET operation=?,original=? WHERE id=?",
-                        [String(decoding: try JSONSerialization.data(withJSONObject: operation), as: UTF8.self),
-                         String(decoding: try JSONSerialization.data(withJSONObject: original), as: UTF8.self), edit.id])
+        guard change.collection == "fic_bookmarks" else { return }
+        if change.deleted {
+            for edit in try edits() where isUnsentContinue(edit)
+                && edit.operation.data["previousContinueId"]?.string == change.id {
+                try rebase(edit, onto: nil)
+            }
+            return
         }
+        guard change.data?["type"]?.string == "continue", let bookID = change.data?["ficId"]?.string else { return }
+        for edit in try bookmarkEdits(bookID: bookID) where isUnsentContinue(edit)
+            && edit.operation.recordId != change.id && edit.operation.data["previousContinueId"]?.string != change.id {
+            try rebase(edit, onto: change)
+        }
+    }
+
+    private func isUnsentContinue(_ edit: PendingEdit) -> Bool {
+        edit.state == "pending" && edit.operation.collection == "fic_bookmarks" && edit.operation.action == "create"
+            && edit.original.data?["type"]?.string == "continue"
+    }
+
+    private func rebase(_ edit: PendingEdit, onto previous: SyncChange?) throws {
+        guard var operation = try JSONSerialization.jsonObject(with: Data(try json(edit.operation).utf8)) as? [String: Any],
+              var data = operation["data"] as? [String: Any],
+              var original = try JSONSerialization.jsonObject(with: Data(try json(edit.original).utf8)) as? [String: Any]
+        else { return }
+        data["previousContinueId"] = previous?.id ?? NSNull()
+        operation["data"] = data
+        operation["baseRevision"] = previous?.revision ?? 0
+        original["revision"] = previous?.revision ?? 0
+        try execute("UPDATE replica_outbox SET operation=?,original=? WHERE id=?",
+                    [String(decoding: try JSONSerialization.data(withJSONObject: operation), as: UTF8.self),
+                     String(decoding: try JSONSerialization.data(withJSONObject: original), as: UTF8.self), edit.id])
     }
 
     public func hold(_ operation: ReplicaOperation, reply: OperationReply, state: String = "conflict") throws {
@@ -747,7 +764,10 @@ public final class ReplicaStore {
             if let current = reply.current { try put(current) }
             // A refused library choice has nothing to review: its book,
             // chapter or folder is gone. Keeping it would only hide it forever.
-            if FicLibrary.lastWriteWins.contains(operation.collection) {
+            // So does a refused bookmark removal: there is nothing of the
+            // user's in it, and the server's newer point should simply stand.
+            let removal = state == "conflict" && operation.collection == "fic_bookmarks" && operation.action == "delete"
+            if removal || FicLibrary.lastWriteWins.contains(operation.collection) {
                 try execute("DELETE FROM replica_outbox WHERE id=?", [operation.id])
                 return
             }

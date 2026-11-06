@@ -37,6 +37,10 @@ struct TextChapterReader: View {
     /// Chapters this reader has already considered marking read, so reaching
     /// the end of one asks the store once, not on every scroll tick.
     @State private var autoReadChecked: Set<String> = []
+    /// The same for taking a continue point away.
+    @State private var continueChecked: Set<String> = []
+    /// Fed every scroll frame, so `body` doesn't read it either.
+    @State private var travel = ReaderTravel()
     /// What the forum shows (or will) as the user's reaction on this chapter.
     @State private var reaction: ChapterReaction?
     @Environment(\.scenePhase) private var scenePhase
@@ -124,16 +128,18 @@ struct TextChapterReader: View {
             topJump.scrolled(offset: offset, at: ProcessInfo.processInfo.systemUptime)
             if topJump.isShown != showsTopJump { showsTopJump = topJump.isShown }
         }
-        .onScrollGeometryChange(for: Double.self) { geometry in
+        .onScrollGeometryChange(for: ReaderScroll.self) { geometry in
             let range = geometry.contentSize.height + geometry.contentInsets.top
                 + geometry.contentInsets.bottom - geometry.containerSize.height
-            guard range > 0 else { return 0 }
-            return min(1, max(0, (geometry.contentOffset.y + geometry.contentInsets.top) / range))
-        } action: { _, value in
-            fraction = value
+            let offset = geometry.contentOffset.y + geometry.contentInsets.top
+            return ReaderScroll(fraction: range > 0 ? min(1, max(0, offset / range)) : 0,
+                                offset: offset, screen: geometry.containerSize.height)
+        } action: { _, scroll in
+            fraction = scroll.fraction
             if userScrolling {
-                recordScroll(value)
-                markReadAtEnd(value)
+                travel.scrolled(offset: scroll.offset)
+                recordScroll(scroll.fraction)
+                markReadAtEnd(scroll)
             }
         }
     }
@@ -369,6 +375,7 @@ struct TextChapterReader: View {
         savePosition()
         closeSpan(sync: false)
         hideTopJump()
+        travel = ReaderTravel()
         position = Self.topRow
         current = (try? store.record(collection: "fic_chapters", id: chapter.id)) ?? chapter
     }
@@ -407,14 +414,25 @@ struct TextChapterReader: View {
     }
 
     /// Scrolling to the end of a chapter marks it read, once, and takes away a
-    /// continue point in it, even on a re-read.
-    private func markReadAtEnd(_ value: Double) {
-        guard let ficID, value >= FicLibrary.autoReadFraction, !autoReadChecked.contains(current.id) else { return }
-        autoReadChecked.insert(current.id)
-        let cleared = clearContinue(reachedEnd: true)
-        let alreadyRead = (try? store.readChapterIDs(bookID: ficID).contains(current.id)) ?? true
-        if FicLibrary.shouldAutoMark(fraction: value, alreadyRead: alreadyRead) {
-            owner.markChapters(bookID: ficID, chapterIDs: [current.id], read: true)
+    /// continue point in it, even on a re-read. That second part waits for a
+    /// real read: see `ReaderTravel`.
+    private func markReadAtEnd(_ scroll: ReaderScroll) {
+        guard let ficID, scroll.fraction >= FicLibrary.autoReadFraction else { return }
+        var cleared = false
+        if travel.coveredScreen(offset: scroll.offset, screen: scroll.screen), !continueChecked.contains(current.id) {
+            continueChecked.insert(current.id)
+            cleared = clearContinue(reachedEnd: true)
+        }
+        var marked = false
+        if !autoReadChecked.contains(current.id) {
+            autoReadChecked.insert(current.id)
+            let alreadyRead = (try? store.readChapterIDs(bookID: ficID).contains(current.id)) ?? true
+            if FicLibrary.shouldAutoMark(fraction: scroll.fraction, alreadyRead: alreadyRead) {
+                owner.markChapters(bookID: ficID, chapterIDs: [current.id], read: true)
+                marked = true
+            }
+        }
+        if marked {
             show(cleared ? "Marked read · Continue point removed" : "Marked read")
         } else if cleared {
             show("Continue point removed")
@@ -429,7 +447,10 @@ struct TextChapterReader: View {
         do {
             try store.queueBookmark(chapter: current, type: type, fraction: min(1, max(0, fraction)))
             // This point has yet to be read past, even if an earlier one was.
-            if type == "continue" { autoReadChecked.remove(current.id) }
+            if type == "continue" {
+                continueChecked.remove(current.id)
+                travel = ReaderTravel()
+            }
             show(type == "continue"
                 ? "Continue point saved here · Syncs when connected"
                 : "Bookmarked · Syncs when connected")
@@ -439,6 +460,14 @@ struct TextChapterReader: View {
             owner.message = "This chapter's bookmark is already waiting to sync."
         } catch { owner.message = error.localizedDescription }
     }
+}
+
+/// One frame of the chapter's scroll view. Equatable, so the reader hears of a
+/// frame only when something in it moved.
+private struct ReaderScroll: Equatable {
+    let fraction: Double
+    let offset: Double
+    let screen: Double
 }
 
 /// The reader's text size in points: one setting for every book, saved on

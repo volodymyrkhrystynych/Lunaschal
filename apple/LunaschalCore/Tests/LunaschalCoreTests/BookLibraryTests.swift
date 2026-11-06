@@ -247,6 +247,92 @@ final class BookLibraryTests: XCTestCase {
         XCTAssertEqual(try store.bookmarkEdits(bookID: book.id).map(\.state), ["conflict"])
     }
 
+    private func refusal(current: SyncChange?) -> OperationReply {
+        OperationReply(operationId: nil, change: nil, conflict: true, current: current,
+                       error: "Bookmark changed elsewhere. Your saved choice is kept for review.", resetRequired: nil)
+    }
+
+    private func tombstone(_ bookmark: SyncChange) -> SyncChange {
+        SyncChange(revision: bookmark.revision + 95, collection: "fic_bookmarks", id: bookmark.id, deleted: true, data: nil)
+    }
+
+    func testARefusedRemovalIsDroppedAndTheServersNewerPointStands() throws {
+        let (store, _) = try store()
+        let book = book(1), first = chapter(book, position: 0)
+        let saved = continuePoint(book, on: first, at: 0.4)
+        try apply([book, first, saved], to: store)
+        XCTAssertTrue(try store.clearContinue(bookID: book.id, chapterID: first.id, reachedEnd: true))
+        // Another device moved the point while this removal waited.
+        let elsewhere = continuePoint(book, on: first, at: 0.7)
+        try apply([elsewhere], to: store)
+        let removal = try XCTUnwrap(store.bookmarkEdits(bookID: book.id).first)
+        try store.hold(removal.operation, reply: refusal(current: tombstone(saved)))
+
+        XCTAssertTrue(try store.bookmarkEdits(bookID: book.id).isEmpty, "nothing for the user to resolve")
+        XCTAssertEqual(try store.bookmarks(bookID: book.id).map(\.id), [elsewhere.id])
+        XCTAssertTrue(try store.clearContinue(bookID: book.id, chapterID: first.id, reachedEnd: true), "and it can still clear")
+    }
+
+    func testARemovalThatFailedRatherThanConflictedIsKept() throws {
+        let (store, _) = try store()
+        let book = book(1), first = chapter(book, position: 0)
+        try apply([book, first, continuePoint(book, on: first, at: 0.4)], to: store)
+        XCTAssertTrue(try store.clearContinue(bookID: book.id, chapterID: first.id, reachedEnd: true))
+        let removal = try XCTUnwrap(store.bookmarkEdits(bookID: book.id).first)
+        try store.hold(removal.operation, reply: refusal(current: nil), state: "failed")
+        XCTAssertEqual(try store.bookmarkEdits(bookID: book.id).map(\.state), ["failed"])
+    }
+
+    func testAPointSavedWhileTheRemovalWasOnItsWayNamesNothing() throws {
+        let (store, _) = try store()
+        let book = book(1), first = chapter(book, position: 0), second = chapter(book, position: 1)
+        let saved = continuePoint(book, on: first, at: 0.4)
+        try apply([book, first, second, saved], to: store)
+        XCTAssertTrue(try store.clearContinue(bookID: book.id, chapterID: first.id, reachedEnd: false))
+        let inFlight = try XCTUnwrap(store.bookmarkEdits(bookID: book.id).first).operation
+        try store.queueBookmark(chapter: second, type: "continue", fraction: 0.3)
+
+        try store.acknowledge(inFlight, reply: OperationReply(operationId: inFlight.id, change: tombstone(saved),
+            conflict: nil, current: nil, error: nil, resetRequired: nil))
+
+        let edit = try XCTUnwrap(store.bookmarkEdits(bookID: book.id).first)
+        XCTAssertEqual(edit.operation.data["previousContinueId"], .null)
+        XCTAssertEqual(edit.operation.baseRevision, 0, "the server requires these two to agree")
+        XCTAssertEqual(edit.original.revision, 0)
+        XCTAssertEqual(try store.bookmarks(bookID: book.id).map { $0.data?["chapterId"]?.string }, [second.id])
+    }
+
+    func testAPointWhoseReplacedOneWentAwayInASyncNamesNothing() throws {
+        let (store, _) = try store()
+        let book = book(1), first = chapter(book, position: 0), second = chapter(book, position: 1)
+        let saved = continuePoint(book, on: first, at: 0.4)
+        try apply([book, first, second, saved], to: store)
+        try store.queueBookmark(chapter: second, type: "continue", fraction: 0.3)
+        try apply([tombstone(saved)], to: store)
+
+        let edit = try XCTUnwrap(store.bookmarkEdits(bookID: book.id).first)
+        XCTAssertEqual(edit.operation.data["previousContinueId"], .null)
+        XCTAssertEqual(edit.operation.baseRevision, 0)
+    }
+
+    func testTheAddedPillIsAPickLikeAnyOther() {
+        var filter = BookFilter()
+        filter.sort = "added"
+        XCTAssertEqual(filter.clearedKeepingSort(), filter, "not a filter, and Reset leaves it")
+        filter.setBacklogOnly(true)
+        filter.setBacklogOnly(false)
+        XCTAssertEqual(filter.sort, "added", "survives the Backlog going on and off")
+    }
+
+    func testPickingAddedKeepsItAfterTheBacklogChoseItFirst() {
+        var filter = BookFilter()
+        filter.setBacklogOnly(true)
+        filter.sort = "added"
+        XCTAssertEqual(filter.clearedKeepingSort().sort, "added")
+        filter.setBacklogOnly(false)
+        XCTAssertEqual(filter.sort, "added")
+    }
+
     func testClearingTheMenuKeepsAPickedSort() {
         var filter = BookFilter()
         filter.sort = "title"; filter.source = "ao3"; filter.minRating = 4; filter.setBacklogOnly(true)

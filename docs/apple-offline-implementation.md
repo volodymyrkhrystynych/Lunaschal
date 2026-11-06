@@ -81,6 +81,20 @@ Books-library follow-up:
   overflow produced. `testChapterBackGoesToTheChapterListOnce` and
   `testCompactIPadKeepsOneNavigationBar` passed in simulator; Split View on a
   device is unverified.
+- Library pills and the reader's bookmark clearing
+  (`feat/ios-library-sort-pills-and-top-button`): Library sorts from a pill row
+  and Source moved to the filter menu. `BookFilter` records when the Backlog
+  toggle chose the sort, so Added picked by hand is an ordinary sort. Reaching a
+  chapter's end clears its continue point only after a screen of real scrolling
+  (`ReaderTravel`), because a bookmark is saved against scrollable height and
+  restored against block count, which lands past the saved point; that mismatch
+  remains. A refused bookmark removal is dropped instead of held, and a continue
+  create is rebased onto nothing when the record it names is tombstoned, whether
+  that arrives by acknowledgement or by sync. `swift test` covers the store,
+  filter and travel rules, and the library and reader UI tests passed in
+  simulator on iPhone. The server's refusals are simulated in those tests, not
+  exercised against a running server. The flick threshold has not been judged
+  on a device.
 
 - iPad navigation now exposes Library, Jobs, Writing, Learning and Settings as separate
   tabs, leaving narrow-window overflow to iPadOS. iPhone keeps its app More
@@ -96,7 +110,7 @@ Books-library follow-up:
   This projection change requires a server update and fresh mobile bootstrap.
 - Chapter bookmarks queue offline and sync to the desktop table through durable
   receipts and revision checks. Pending/conflicting changes are visible in the
-  book; a pending Continue change must finish before another replaces it.
+  book. A newer Continue change replaces an unsent one (see the README).
 - Library organizing: shelves (to read/reading/paused/finished/dropped, the last two
   hidden by default), rating/review, folder filing, single and batch, and chapter read
   marks queue offline as last-write-wins operations. Per-chapter forum reactions and

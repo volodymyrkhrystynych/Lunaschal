@@ -453,10 +453,12 @@ what each device can currently do and which work remains device-only.
   and are fitted around event labels so neither overlaps, a tapped title opens in full with each chapter's
   times, and tapping the rail hides them — passed in simulator); changes are saved on the device and replayed in order on the next sync. More
   holds Library, Learning and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
-  Library/Folders switch. Library mode has provider pills and sorts by the site's latest
-  chapter date (`latest_activity`), not the download time. Folders mode lists folders and Unsorted,
-  and each pushes its books with a Back button. Both have title/tag search,
-  Favorite/Continue-reading filters, and recent/title sorting; there is no tag filter, since
+  Library/Folders switch. Library mode sorts from a row of pills: Latest, the site's latest
+  chapter date (`latest_activity`, not the download time), then Recent, Added, Title and
+  Rating. A pill isn't a filter: it doesn't fill the filter icon and Reset leaves it. Source
+  moved to the filter menu. Folders mode lists folders and Unsorted, and each pushes its
+  books with a Back button; Sort is in the filter menu there. Both have title/tag search and
+  Favorite/Continue-reading filters; there is no tag filter, since
   fics carry hundreds of user tags. The toolbar's refresh calls `POST /api/fanfic/refresh-alerts`,
   and long-pressing a site's fic calls `POST /api/fanfic/<id>/check-updates` (shallow or deep);
   both only queue work for the server, and new chapters arrive by sync. A book's rating, review,
@@ -525,7 +527,17 @@ what each device can currently do and which work remains device-only.
   unsent Continue change: moving the continue point again replaces it (one held
   as a conflict too) instead of waiting for a sync, and still names the server's
   continue point as the one it replaces. If the replaced change was already on its
-  way, the newer one is re-pointed at what the server kept when that lands.
+  way, the newer one is re-pointed at what the server kept when that lands, or at
+  nothing if the server has none left. A Continue bookmark removes itself when Next is
+  tapped, or at the end of its chapter once the reader has scrolled at least a screen
+  there (`ReaderTravel`), since a resume can land near the end without any reading.
+  One saved in the last 5% waits for Next. This works before the bookmark has synced;
+  an unsent point is dropped along with the server's older one. A removal the server
+  refuses is dropped rather than held for review, so the newer point stands. A pending
+  create that was already being sent when it was cleared can come back on the next sync.
+  A fast flick up shows a button that jumps to the top of the chapter (`ReaderTopJump`).
+  Next and end-of-chapter clearing and the jump button passed in simulator; the flick
+  speed is not yet judged on a device.
   Native drawing editing is iPad-only.
 - Study (iPad-only) contains Documents, Paper previews, newspapers, and Knowledge.
   The iPhone has no Study tab, so none of these are reachable there.

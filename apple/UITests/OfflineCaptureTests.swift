@@ -1352,6 +1352,11 @@ final class OfflineCaptureTests: XCTestCase {
         chapters.tap()
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
         XCTAssertEqual(rows.count, 1, "only the resume link is left")
+        // Below the bookmarks, where the list hasn't built it yet.
+        let queued = app.staticTexts["Bookmark removed on device · Waiting to sync"]
+        for _ in 0..<3 where !queued.exists { app.swipeUp() }
+        XCTAssertTrue(queued.waitForExistence(timeout: 5),
+                      "the queued removal doesn't read as a save")
     }
 
     /// Reading to the end of the chapter removes it too.
