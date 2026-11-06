@@ -13,7 +13,7 @@ if [ "${#xctestruns[@]}" -ne 1 ] || [ ! -f "${xctestruns[0]}" ]; then
   exit 1
 fi
 
-simulator_id=$(apple/tools/simulator_snapshot.sh udid "$device")
+simulator_id=$(xcrun simctl list devices available -j | DEVICE="$device" python3 -c 'import json,os,sys; data=json.load(sys.stdin); print(next(d["udid"] for runtime,devices in data["devices"].items() if "iOS" in runtime for d in devices if os.environ["DEVICE"] in d["name"]))')
 
 # Finish first-boot setup before XCTest starts its launch deadline.
 xcrun simctl boot "$simulator_id"

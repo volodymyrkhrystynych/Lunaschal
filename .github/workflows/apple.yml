@@ -4,7 +4,7 @@ name: Apple app
 # so testing every push only queued a second full run.
 on:
   pull_request:
-    paths: ['apple/**', '.github/workflows/apple.yml', '.github/actions/xcode-project/**', '.github/actions/simulator/**']
+    paths: ['apple/**', '.github/workflows/apple.yml', '.github/actions/xcode-project/**']
   workflow_dispatch:
 permissions:
   contents: read
@@ -14,14 +14,16 @@ concurrency:
 env:
   DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
 # No job should take more than ten minutes, so a failure can be rerun on its own
-# without waiting half an hour. What made a simulator job long was not only its
-# tests: a fresh runner's first simulator boot takes 2-9 minutes, and every job
-# compiled the app for itself. simulator-build compiles once, and the simulator
-# action caches each device's first boot per runner image.
+# without waiting half an hour. simulator-build compiles once for every shard.
+# Each shard still spends about 5.5 minutes before its first test, most of it on
+# the simulator's first boot, leaving about 3.5 for tests.
+#
+# That boot is deliberately not cached. Restoring a booted device saved about 80
+# seconds, and app launches then failed on 8 of 32 shards, against 0 of 26 without
+# it. Every failing shard's simulator had been booted, shut down and booted again.
 #
 # GitHub runs at most five macOS jobs at once, across every open PR, so shards
-# beyond the fifth queue. A shard is ~3.5 minutes of download and boot and ~5 of
-# tests, so the sixteen take about half an hour when no other PR holds the Macs.
+# beyond the fifth queue.
 #
 # Simulator UI tests flake on slow runners, so each failing test gets one retry,
 # and a test stuck for 5 minutes (one once hung 12 on a tap) is stopped and
@@ -101,22 +103,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { device: iPhone, shard: 1, total: 12 }
-          - { device: iPhone, shard: 2, total: 12 }
-          - { device: iPhone, shard: 3, total: 12 }
-          - { device: iPhone, shard: 4, total: 12 }
-          - { device: iPhone, shard: 5, total: 12 }
-          - { device: iPhone, shard: 6, total: 12 }
-          - { device: iPhone, shard: 7, total: 12 }
-          - { device: iPhone, shard: 8, total: 12 }
-          - { device: iPhone, shard: 9, total: 12 }
-          - { device: iPhone, shard: 10, total: 12 }
-          - { device: iPhone, shard: 11, total: 12 }
-          - { device: iPhone, shard: 12, total: 12 }
-          - { device: iPad, shard: 1, total: 4 }
-          - { device: iPad, shard: 2, total: 4 }
-          - { device: iPad, shard: 3, total: 4 }
-          - { device: iPad, shard: 4, total: 4 }
+          - { device: iPhone, shard: 1, total: 16 }
+          - { device: iPhone, shard: 2, total: 16 }
+          - { device: iPhone, shard: 3, total: 16 }
+          - { device: iPhone, shard: 4, total: 16 }
+          - { device: iPhone, shard: 5, total: 16 }
+          - { device: iPhone, shard: 6, total: 16 }
+          - { device: iPhone, shard: 7, total: 16 }
+          - { device: iPhone, shard: 8, total: 16 }
+          - { device: iPhone, shard: 9, total: 16 }
+          - { device: iPhone, shard: 10, total: 16 }
+          - { device: iPhone, shard: 11, total: 16 }
+          - { device: iPhone, shard: 12, total: 16 }
+          - { device: iPhone, shard: 13, total: 16 }
+          - { device: iPhone, shard: 14, total: 16 }
+          - { device: iPhone, shard: 15, total: 16 }
+          - { device: iPhone, shard: 16, total: 16 }
+          - { device: iPad, shard: 1, total: 5 }
+          - { device: iPad, shard: 2, total: 5 }
+          - { device: iPad, shard: 3, total: 5 }
+          - { device: iPad, shard: 4, total: 5 }
+          - { device: iPad, shard: 5, total: 5 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -126,9 +133,6 @@ jobs:
         run: |
           mkdir -p apple/DerivedData/Build
           tar -C apple/DerivedData/Build -xf simulator-build.tar
-      - uses: ./.github/actions/simulator
-        with:
-          device: ${{ matrix.device }}
       - name: Test on ${{ matrix.device }} simulator
         run: apple/tools/run_ui_shard.sh ${{ matrix.device }} ${{ matrix.shard }} ${{ matrix.total }}
       - uses: actions/upload-artifact@v4
