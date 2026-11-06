@@ -2127,8 +2127,11 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "taken ")).firstMatch.exists,
                       "and the day it was filmed")
 
-        // Further than the clip: the filmed video sits below it.
-        for _ in 0..<16 where !later.isHittable {
+        // Further than the clip: the filmed video sits below it. A row behind
+        // the translucent navigation bar still reports hittable, and a tap there
+        // lands on the bar, so scroll until it's clear.
+        let bar = app.navigationBars["Journal"]
+        for _ in 0..<16 where !later.isHittable || later.frame.minY < bar.frame.maxY {
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
             start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 200)))
         }
