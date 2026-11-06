@@ -1,0 +1,15 @@
+# omp's custom-provider config (docs/models.md in can1357/oh-my-pi). The
+# endpoint is socat's end of the Lunaschal model proxy; the proxy rewrites the
+# model name, so "local" never changes when the served model does.
+providers:
+  lunaschal:
+    baseUrl: http://127.0.0.1:8080/v1
+    apiKey: local
+    api: openai-completions
+    models:
+      - id: local
+        name: Qwen3.6 35B A3B (Lunaschal)
+        api: openai-completions
+        reasoning: true
+        contextWindow: 96000
+        maxTokens: 32768

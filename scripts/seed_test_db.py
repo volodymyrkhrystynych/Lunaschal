@@ -2425,6 +2425,99 @@ def seed_docpacks(db):
         conn.close()
         docpacks.import_file(io.BytesIO(path.read_bytes()))
 
+def seed_code_agent(db):
+    """The Code tab: one task in each state a person looks at.
+
+    Rows only. A task's clone and out.git live under AGENT_ROOT and are one
+    `git clone` away, so nothing is written there — the review screen's diff
+    answers 410 for these, exactly as it does for a task whose workspace was
+    cleaned up after a push. No in-flight state (planning/running/testing),
+    which init_db() would rewrite to interrupted on the next start.
+    """
+    repo = db.execute("SELECT id FROM repos WHERE slug='demo-app'").fetchone()
+    repo_id = repo[0]
+    plan = ('## Plan\n1. Add `parse_duration` to `backend/util/time.py`.\n'
+            '2. Cover it in `backend/tests/test_time.py`, including the empty string.\n'
+            '3. Run `pytest backend/tests/test_time.py`.')
+
+    def task(status, title, prompt, *, days, phase='plan', **extra):
+        task_id = new_id()
+        cols = {
+            'id': task_id, 'repo_id': repo_id, 'title': title, 'prompt': prompt,
+            'harness': 'pi', 'status': status, 'phase': phase, 'base_branch': 'main',
+            'created_at': ts(days, 3), 'updated_at': ts(days), **extra,
+        }
+        db.execute(f"INSERT INTO agent_tasks ({', '.join(cols)}) "
+                   f"VALUES ({', '.join('?' * len(cols))})", tuple(cols.values()))
+        return task_id
+
+    def events(task_id, *items):
+        for seq, (kind, payload) in enumerate(items, 1):
+            db.execute('INSERT INTO agent_task_events (id, task_id, seq, kind, payload, created_at) '
+                       'VALUES (?,?,?,?,?,?)',
+                       (new_id(), task_id, seq, kind, json.dumps(payload), ts(0, 2)))
+
+    waiting = task('awaiting_plan', 'Parse "1h30m" durations',
+                   'Add a helper that parses durations like "1h30m" into seconds, with tests.',
+                   days=0, plan=plan, base_sha='1' * 40, session_id='demo-session',
+                   started_at=ts(0, 3))
+    events(waiting,
+           ('user', {'text': 'Add a helper that parses durations like "1h30m" into seconds.'}),
+           ('status', {'status': 'planning'}),
+           ('tool_call', {'id': 't1', 'title': 'rg "def parse" backend/util', 'kind': 'search',
+                          'status': 'completed'}),
+           ('proxy', {'action': 'call', 'waited': 0.4, 'ran': 38.2, 'cancels': 0,
+                      'usage': {'prompt_tokens': 14210, 'completion_tokens': 812}}),
+           ('proxy', {'action': 'promoted', 'reason': '1 call(s) recovered from reasoning',
+                      'tools': ['read']}),
+           ('message', {'text': plan}),
+           ('status', {'status': 'awaiting_plan'}))
+    db.execute("INSERT INTO agent_approvals (id, task_id, kind, request, created_at) "
+               "VALUES (?,?,'plan',?,?)", (new_id(), waiting, json.dumps({'plan': plan}), ts(0, 2)))
+
+    asking = task('needs_input', 'Rename the settings toggle',
+                  'Rename "Prevent sleep" to "Keep awake" everywhere it is shown.',
+                  days=1, phase='build', plan='1. Rename the label in Settings and the iOS app.',
+                  base_sha='2' * 40, head_sha='3' * 40, started_at=ts(1, 2),
+                  diff_stat=json.dumps([{'path': 'src/components/Settings.tsx',
+                                         'added': 1, 'removed': 1}]),
+                  summary='Renamed the web label.\nQUESTION: Should the iOS label change too?')
+    events(asking, ('user', {'text': 'Rename "Prevent sleep" to "Keep awake".'}),
+           ('status', {'status': 'needs_input'}))
+    db.execute("INSERT INTO agent_approvals (id, task_id, kind, request, created_at) "
+               "VALUES (?,?,'question',?,?)",
+               (new_id(), asking, json.dumps({'question': 'Should the iOS label change too?'}),
+                ts(1)))
+
+    done = task('done', 'Fix the off-by-one in the streak counter',
+                'The lifestyle streak counts today twice when the day rolls over at 4am.',
+                days=2, phase='build', plan='1. Use day_key_for in streak().', base_sha='4' * 40,
+                head_sha='5' * 40, started_at=ts(2, 2), finished_at=ts(2),
+                summary='streak() now keys days with day_key_for; added a regression test.',
+                diff_stat=json.dumps([
+                    {'path': 'backend/lifestyle/activity.py', 'added': 3, 'removed': 2},
+                    {'path': 'backend/tests/test_lifestyle_streak.py', 'added': 24, 'removed': 0}]),
+                test_exit=0, test_output='1803 passed in 412.11s')
+    events(done, ('user', {'text': 'Fix the off-by-one in the streak counter.'}),
+           ('test', {'exit': 0, 'tail': '1803 passed in 412.11s'}),
+           ('status', {'status': 'done'}))
+    db.execute("INSERT INTO agent_approvals (id, task_id, kind, request, status, response, "
+               "created_at, answered_at) VALUES (?,?,'plan',?,'approved','',?,?)",
+               (new_id(), done, json.dumps({'plan': '1. Use day_key_for in streak().'}),
+                ts(2, 2), ts(2, 2)))
+
+    task('pushed', 'Add a docstring to the backup status classifier',
+         'Document the four backup states.', days=5, phase='build', base_sha='6' * 40,
+         head_sha='7' * 40, finished_at=ts(5), test_exit=0,
+         pr_url='https://github.com/example/demo-app/pull/12')
+
+    # A device token that is obviously not one: the push sender would get a
+    # 400 BadDeviceToken from Apple and prune it.
+    db.execute('INSERT INTO push_devices (id, token, environment, platform, created_at, '
+               'last_seen_at) VALUES (?,?,?,?,?,?)',
+               (new_id(), 'fa' * 32, 'sandbox', 'ios', ts(3), ts(0)))
+
+
 def seed_infra(db):
     """Settings, MCP servers, the transcription log and the task-event feed.
 
@@ -2599,6 +2692,8 @@ def main() -> None:
     seed_writing(db)
     page_id = seed_paper(db)
     seed_ideas(db, page_id)
+    # After seed_ideas: a task belongs to the demo repo that registers.
+    seed_code_agent(db)
     seed_meetings(db)
     seed_lifestyle(db)
     seed_pomodoro(db)

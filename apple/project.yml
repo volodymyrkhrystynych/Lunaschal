@@ -33,6 +33,10 @@ targets:
         # Shared with the share extension: the session it imports with
         # (SharedSignIn) and the links waiting for the server.
         com.apple.security.application-groups: [group.com.lunaschal.mobile]
+        # Notifications from the Code page's agent. Every signed build is an
+        # App Store one, so this is always production; release.py refuses a
+        # profile without it.
+        aps-environment: production
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile

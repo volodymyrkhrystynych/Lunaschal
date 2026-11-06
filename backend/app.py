@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 
@@ -97,6 +98,15 @@ def create_app():
     app.register_blueprint(mobile_sync.bp)
     from backend.routes import goals
     app.register_blueprint(goals.bp)
+    from backend.routes import code_agent, push
+    app.register_blueprint(code_agent.bp)
+    app.register_blueprint(push.bp)
+    # Every Code-tab state change a person is waiting on becomes a push. A
+    # listener rather than a call in the driver, so no path into one of those
+    # states can forget it; a no-op until APNS_* is configured.
+    from backend.codeagent import tasks as code_tasks
+    from backend.push import notify as push_notify
+    code_tasks.add_listener(push_notify.task_changed)
     for bp in (auth_routes.bp, journal.bp, calendar.bp, learning.bp, settings.bp, chat.bp, files.bp, writing.bp, stt.bp, tasks.bp, curated_tags.bp, shortcuts.bp, transcriptions.bp, cookbook.bp, food.bp, spending.bp, fanfic.bp, newspapers.bp, meetings.bp, notebook.files_bp, notebook.bp, paper.bp, lifestyle.bp, ideas.bp, practice.bp, memory.bp, email.bp, notes.bp, weather.bp, jobs.bp, backup.bp, logs.bp, repos.bp, life_wiki.bp, piano.bp, torrent.bp, knowledge.bp, study.bp, apple_health.bp, location.bp):
         app.register_blueprint(bp)
 
@@ -185,4 +195,9 @@ def create_app():
         start_entry_weather_scheduler()
         from backend.goals.scheduler import start_scheduler as start_goal_scheduler
         start_goal_scheduler()
+        # The Code tab's agent runs one task phase at a time in a container.
+        # Idle (one indexed SELECT every 30s) until a task is queued, so it
+        # costs nothing on a machine without Docker until someone uses it.
+        from backend.codeagent.worker import start as start_code_agent
+        start_code_agent(Path(__file__).resolve().parent.parent)
     return app

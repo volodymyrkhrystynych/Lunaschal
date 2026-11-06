@@ -2854,3 +2854,100 @@ CREATE TABLE IF NOT EXISTS knowledge_docpacks (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_docpacks_spec
     ON knowledge_docpacks(registry, name, version);
+
+-- The Code tab: coding tasks handed to an off-the-shelf agent (pi / omp /
+-- Qwen Code) running in a sealed container on its own clone of a registered
+-- repo. Lunaschal is the agent's ACP client and its model proxy, not an agent
+-- itself. Design record: docs/code-agent.md; invariants: backend/codeagent/CLAUDE.md.
+--
+-- Files live under AGENT_ROOT (./data/agent/), outside the backup: a task's
+-- clone is one `git clone` away and its result, once it matters, is a branch
+-- on GitHub.
+CREATE TABLE IF NOT EXISTS agent_tasks (
+    id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    prompt TEXT NOT NULL,
+    -- Which agent ran it: 'pi' | 'omp' | 'qwen'. Recorded per task so the
+    -- head-to-head numbers stay attributable after the default changes.
+    harness TEXT NOT NULL,
+    -- planning/running/testing are in flight and become 'interrupted' at
+    -- startup (_reset_stale_agent_tasks). awaiting_plan and needs_input are
+    -- waiting on the user, which survives a restart as-is.
+    status TEXT NOT NULL DEFAULT 'queued'
+        CHECK(status IN ('queued','planning','awaiting_plan','running',
+                         'needs_input','testing','done','interrupted','error',
+                         'cancelled','pushed','discarded')),
+    -- Which half runs next when the worker picks the task up. Each phase is
+    -- its own worker run, so a plan waiting hours for approval holds neither
+    -- the worker nor an agent process.
+    phase TEXT NOT NULL DEFAULT 'plan' CHECK(phase IN ('plan','build')),
+    -- The agent's ACP session, resumed with session/load when it supports it.
+    session_id TEXT,
+    -- A revision, answer or follow-up waiting for the next run.
+    pending_input TEXT,
+    base_branch TEXT NOT NULL DEFAULT '',
+    base_sha TEXT,
+    -- The imported head in the host-owned out.git, not the agent's clone.
+    head_sha TEXT,
+    plan TEXT,
+    summary TEXT,
+    -- JSON: [{path, added, removed}] from out.git's numstat.
+    diff_stat TEXT,
+    -- Our own test run after the agent finished — not the agent's claim.
+    test_exit INTEGER,
+    test_output TEXT,
+    pr_url TEXT,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    started_at INTEGER,
+    finished_at INTEGER,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_tasks_updated ON agent_tasks(updated_at DESC);
+
+-- Everything the agent and the proxy did, in order. The phone polls with
+-- ?after=<seq>, so seq is per task and dense.
+CREATE TABLE IF NOT EXISTS agent_task_events (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    -- message | thought | tool_call | tool_result | plan | status | user |
+    -- proxy | permission | test. Open-ended on purpose: a new ACP update kind
+    -- should be recorded, not rejected.
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    UNIQUE(task_id, seq)
+);
+
+-- What is waiting on the user. Separate from the event log so "anything for
+-- me?" is one indexed query rather than a scan of every task's events.
+CREATE TABLE IF NOT EXISTS agent_approvals (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('plan','question')),
+    request TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','approved','rejected','answered','expired')),
+    response TEXT,
+    created_at INTEGER NOT NULL,
+    answered_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_approvals_pending
+    ON agent_approvals(status, created_at);
+
+-- Devices that get APNs pushes (backend/push/). One row per device token;
+-- a token APNs reports as gone (410) is deleted.
+CREATE TABLE IF NOT EXISTS push_devices (
+    id TEXT PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    environment TEXT NOT NULL DEFAULT 'production'
+        CHECK(environment IN ('sandbox','production')),
+    platform TEXT NOT NULL DEFAULT 'ios',
+    created_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL
+);

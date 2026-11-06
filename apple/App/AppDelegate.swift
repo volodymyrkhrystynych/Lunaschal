@@ -2,9 +2,10 @@ import UIKit
 import BackgroundTasks
 import Combine
 import LunaschalCore
+import UserNotifications
 
 @MainActor
-final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
+final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject, UNUserNotificationCenterDelegate {
     @Published private(set) var startup: Result<CaptureModel, Error>?
     private var background: BackgroundSync?
     private var screenshotUploads: ScreenshotBackgroundReceiver?
@@ -48,6 +49,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
             return try CaptureModel(store: CaptureStore(root: directory))
         }
         startup = result
+        // Before launch finishes, so a tap that launched the app is delivered.
+        UNUserNotificationCenter.current().delegate = self
         if case .success(let model) = result {
             let coordinator = BackgroundSync(scheduler: AppleSyncScheduler(),
                 next: { [weak model] in try model?.nextBackgroundSync() },
@@ -80,6 +83,30 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
 
     func applicationDidEnterBackground(_ application: UIApplication) {
         if case .some(.success(let model)) = startup { model.leaveForeground() }
+    }
+
+    // MARK: Push (the Code tab's agent: a plan to approve, a question, a result)
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        PushRouter.shared.deviceToken = CodePushPayload.hexToken(deviceToken)
+    }
+
+    /// Expected until the App ID has the Push capability and the build carries
+    /// the aps-environment entitlement (docs/code-agent.md): the Code tab still
+    /// works, it just cannot call you back.
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        print("Push registration failed: \(error.localizedDescription)")
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .list, .sound]
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse) async {
+        guard let id = CodePushPayload.taskID(from: response.notification.request.content.userInfo) else { return }
+        await MainActor.run { PushRouter.shared.openTaskID = id }
     }
 }
 

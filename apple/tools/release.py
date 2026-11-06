@@ -24,6 +24,11 @@ APP_GROUPS = {"com.lunaschal.mobile": "group.com.lunaschal.mobile",
               "com.lunaschal.mobile.watchkitapp.widgets": "group.com.lunaschal.mobile.watch"}
 
 
+# The app signs with aps-environment, so a profile without it fails the export
+# after a whole archive has been built.
+PUSH_BUNDLE = "com.lunaschal.mobile"
+
+
 def validate_profile(profile, team, bundle, now=None):
     now = now or dt.datetime.now(dt.timezone.utc)
     if not re.fullmatch(r"[A-Z0-9]{10}", team):
@@ -38,6 +43,8 @@ def validate_profile(profile, team, bundle, now=None):
     group = APP_GROUPS.get(bundle)
     if group and group not in entitlements.get("com.apple.security.application-groups", []):
         raise ValueError(f"Profile for {bundle} lacks the {group} App Group")
+    if bundle == PUSH_BUNDLE and entitlements.get("aps-environment") != "production":
+        raise ValueError(f"Profile for {bundle} lacks production Push Notifications")
     expiry = profile.get("ExpirationDate")
     if not isinstance(expiry, dt.datetime) or expiry.replace(tzinfo=dt.timezone.utc) <= now:
         raise ValueError("Profile is expired or missing expiration")
