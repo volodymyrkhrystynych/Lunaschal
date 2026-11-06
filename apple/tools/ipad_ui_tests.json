@@ -1,15 +1,15 @@
 {
-  "OfflineCaptureTests/testChapterBackGoesToTheChapterListOnce": 123.999,
-  "OfflineCaptureTests/testCompactIPadKeepsOneNavigationBar": 75.147,
-  "OfflineCaptureTests/testDrawingToolSizesApplyImmediatelyAndSurviveReopening": 52.12,
-  "OfflineCaptureTests/testDrawingToolbarStaysThroughPageChanges": 57.868,
-  "OfflineCaptureTests/testDrawingWorkspaceReopensWithoutAServer": 38.428,
-  "OfflineCaptureTests/testIPadDestinationsOpenWithoutAnAppMoreMenu": 64.806,
-  "OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate": 80.162,
-  "OfflineCaptureTests/testNewspaperScrollsAsOneColumn": 43.485,
-  "OfflineCaptureTests/testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal": 92.929,
-  "OfflineCaptureTests/testNotebookInkLogShowsWhatHappened": 53.186,
-  "OfflineCaptureTests/testNotebookZoomIsOffUntilSwitchedOn": 55.476,
-  "OfflineCaptureTests/testNotesComeBackFromTheEntryDraftAndSaveWithIt": 49.711,
-  "OfflineCaptureTests/testNotesPagesDoNotTurnWithASwipe": 61.32
+  "OfflineCaptureTests/testChapterBackGoesToTheChapterListOnce": 129.977,
+  "OfflineCaptureTests/testCompactIPadKeepsOneNavigationBar": 97.912,
+  "OfflineCaptureTests/testDrawingToolSizesApplyImmediatelyAndSurviveReopening": 63.408,
+  "OfflineCaptureTests/testDrawingToolbarStaysThroughPageChanges": 81.818,
+  "OfflineCaptureTests/testDrawingWorkspaceReopensWithoutAServer": 65.679,
+  "OfflineCaptureTests/testIPadDestinationsOpenWithoutAnAppMoreMenu": 61.501,
+  "OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate": 82.315,
+  "OfflineCaptureTests/testNewspaperScrollsAsOneColumn": 46.736,
+  "OfflineCaptureTests/testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal": 111.395,
+  "OfflineCaptureTests/testNotebookInkLogShowsWhatHappened": 62.908,
+  "OfflineCaptureTests/testNotebookZoomIsOffUntilSwitchedOn": 60.326,
+  "OfflineCaptureTests/testNotesComeBackFromTheEntryDraftAndSaveWithIt": 50.254,
+  "OfflineCaptureTests/testNotesPagesDoNotTurnWithASwipe": 61.834
 }

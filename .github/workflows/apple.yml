@@ -20,7 +20,8 @@ env:
 # each device's first boot once, and every shard starts from both.
 #
 # GitHub runs at most five macOS jobs at once, across every open PR, so shards
-# beyond the fifth queue.
+# beyond the fifth queue. A shard is ~3.5 minutes of download and boot and ~5 of
+# tests, so the sixteen take about half an hour when no other PR holds the Macs.
 #
 # Simulator UI tests flake on slow runners, so each failing test gets one retry,
 # and a test stuck for 5 minutes (one once hung 12 on a tap) is stopped and
@@ -118,19 +119,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { device: iPhone, shard: 1, total: 10 }
-          - { device: iPhone, shard: 2, total: 10 }
-          - { device: iPhone, shard: 3, total: 10 }
-          - { device: iPhone, shard: 4, total: 10 }
-          - { device: iPhone, shard: 5, total: 10 }
-          - { device: iPhone, shard: 6, total: 10 }
-          - { device: iPhone, shard: 7, total: 10 }
-          - { device: iPhone, shard: 8, total: 10 }
-          - { device: iPhone, shard: 9, total: 10 }
-          - { device: iPhone, shard: 10, total: 10 }
-          - { device: iPad, shard: 1, total: 3 }
-          - { device: iPad, shard: 2, total: 3 }
-          - { device: iPad, shard: 3, total: 3 }
+          - { device: iPhone, shard: 1, total: 12 }
+          - { device: iPhone, shard: 2, total: 12 }
+          - { device: iPhone, shard: 3, total: 12 }
+          - { device: iPhone, shard: 4, total: 12 }
+          - { device: iPhone, shard: 5, total: 12 }
+          - { device: iPhone, shard: 6, total: 12 }
+          - { device: iPhone, shard: 7, total: 12 }
+          - { device: iPhone, shard: 8, total: 12 }
+          - { device: iPhone, shard: 9, total: 12 }
+          - { device: iPhone, shard: 10, total: 12 }
+          - { device: iPhone, shard: 11, total: 12 }
+          - { device: iPhone, shard: 12, total: 12 }
+          - { device: iPad, shard: 1, total: 4 }
+          - { device: iPad, shard: 2, total: 4 }
+          - { device: iPad, shard: 3, total: 4 }
+          - { device: iPad, shard: 4, total: 4 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
