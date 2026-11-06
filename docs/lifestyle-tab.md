@@ -172,8 +172,11 @@ Open question: no charting library exists in this codebase yet — will need to 
 something small in SVG/canvas, consistent with `src/lib/` pure-logic-first style) when this gets
 built.
 
-**Body weight logging**: manual, whenever you happen to weigh yourself — no reminder/nudge. Just a
-quick "log today's weight" field on the Lifestyle tab.
+**Body weight logging**: manual, whenever you happen to weigh yourself, from a quick "log today's
+weight" field on the Lifestyle tab (or Apple Health). This first said "no reminder/nudge"; that
+changed with the coach (`backend/coach/CLAUDE.md`): when its reminders are switched on, the
+weigh-in is one of the things it may remind about, at most once a day, never once it's logged,
+and only as often as reminders turn out to help.
 
 ## 4. Chores
 

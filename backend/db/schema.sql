@@ -28,17 +28,28 @@ CREATE TABLE IF NOT EXISTS mobile_sync_operations (
     created_at INTEGER NOT NULL
 );
 
--- Goal rules are immutable; corrections come from the original source records.
+-- One overarching goal plus any number per week/month/quarter/year
+-- (backend/goals/CLAUDE.md). A daily criterion + reward is optional; where
+-- present its rule is immutable and corrections come from the source records.
+-- A goal's history is the journal entries that point at it (journal_entries.goal_id).
+-- _ensure_goal_horizons rebuilds pre-horizon tables from this statement.
 CREATE TABLE IF NOT EXISTS goals (
     id TEXT PRIMARY KEY,
+    horizon TEXT NOT NULL DEFAULT 'week' CHECK(horizon IN ('overarching','year','quarter','month','week')),
     title TEXT NOT NULL,
-    criteria TEXT NOT NULL,
-    reward TEXT NOT NULL,
+    details TEXT,
+    criteria TEXT,
+    reward TEXT,
     start_date TEXT NOT NULL,
-    target_days INTEGER NOT NULL CHECK(target_days BETWEEN 1 AND 366),
+    target_days INTEGER CHECK(target_days IS NULL OR target_days BETWEEN 1 AND 366),
+    period_start TEXT,
+    period_end TEXT,
     exercise TEXT,
     minimum_reps INTEGER,
-    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','earned','redeemed','cancelled','needs_review')),
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','earned','redeemed','cancelled','needs_review','ended')),
+    rating INTEGER CHECK(rating IS NULL OR rating BETWEEN 1 AND 5),
+    review TEXT,
+    ended_at INTEGER,
     earned_at INTEGER,
     redeemed_at INTEGER,
     last_checked_at INTEGER,
@@ -829,9 +840,83 @@ CREATE TABLE IF NOT EXISTS daily_tasks (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     position INTEGER NOT NULL DEFAULT 1,
+    -- The if-then half of a habit: "after coffee" for "weigh in". Optional.
+    cue TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+-- The review of one 4am day (backend/coach/CLAUDE.md). The rating is computed
+-- from `items`, never by the model; the model writes only `summary`. A draft is
+-- recomputed freely; `final` is set by the morning briefing (or the coach loop
+-- when the briefing didn't run) and only an excuse or a bounded override moves
+-- it after that.
+CREATE TABLE IF NOT EXISTS day_reviews (
+    id TEXT PRIMARY KEY,
+    day TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','final')),
+    score REAL,
+    rating INTEGER CHECK(rating IS NULL OR rating BETWEEN 1 AND 5),
+    rating_override INTEGER CHECK(rating_override IS NULL OR rating_override BETWEEN 1 AND 5),
+    override_reason TEXT,
+    items TEXT NOT NULL DEFAULT '[]',
+    summary TEXT,
+    replan TEXT NOT NULL DEFAULT '[]',
+    degraded INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    finalized_at INTEGER
+);
+
+-- Why something didn't happen on a day, as the user told the agent. External
+-- and one-off reasons excuse the target (it leaves the day's score and freezes
+-- a habit's streak); an internal one is kept as an obstacle to plan around.
+CREATE TABLE IF NOT EXISTS day_excuses (
+    id TEXT PRIMARY KEY,
+    day TEXT NOT NULL,
+    target_kind TEXT NOT NULL CHECK(target_kind IN ('day','habit','weight','calories','goal','todo')),
+    target_id TEXT,
+    target_title TEXT,
+    reason TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('external','one_off','internal')),
+    obstacle TEXT,
+    message_id TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_day_excuses_day ON day_excuses(day);
+
+-- One row per moment the coach considered a reminder (backend/coach/engine.py):
+-- planned for a slot, then sent, held back (the randomized no-send control, or
+-- the policy judging a send not worth it) or skipped (already logged, quiet
+-- hours, the daily cap, a habit that no longer needs prompting). After its
+-- window closes, `reward` is 1 if the thing got done and 0 if not. What the
+-- coach has learned is recomputed from these rows every time — nothing else
+-- is stored.
+CREATE TABLE IF NOT EXISTS coach_decisions (
+    id TEXT PRIMARY KEY,
+    behavior TEXT NOT NULL,
+    day TEXT NOT NULL,
+    slot TEXT NOT NULL,
+    planned_for INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'planned'
+        CHECK(status IN ('planned','sent','held','skipped_logged','skipped_quiet','skipped_cap','skipped_faded')),
+    arm TEXT,
+    mode TEXT CHECK(mode IS NULL OR mode IN ('control','policy','snooze')),
+    context TEXT NOT NULL DEFAULT '{}',
+    title TEXT,
+    body TEXT,
+    message_id TEXT,
+    pushed INTEGER NOT NULL DEFAULT 0,
+    decided_at INTEGER,
+    response TEXT,
+    responded_at INTEGER,
+    reward REAL,
+    excused INTEGER NOT NULL DEFAULT 0,
+    resolved_at INTEGER,
+    created_at INTEGER NOT NULL,
+    UNIQUE(behavior, day, slot)
+);
+CREATE INDEX IF NOT EXISTS idx_coach_decisions_due ON coach_decisions(status, planned_for);
 
 CREATE TABLE IF NOT EXISTS daily_task_completions (
     id TEXT PRIMARY KEY,
@@ -2940,14 +3025,24 @@ CREATE TABLE IF NOT EXISTS agent_approvals (
 CREATE INDEX IF NOT EXISTS idx_agent_approvals_pending
     ON agent_approvals(status, created_at);
 
--- Devices that get APNs pushes (backend/push/). One row per device token;
--- a token APNs reports as gone (410) is deleted.
+-- Devices that get APNs pushes (backend/push/). One row per device token, which
+-- belongs to one APNs environment: sandbox for Xcode builds, production for
+-- TestFlight. Apple calling a token dead disables the row; the phone registering
+-- again re-enables it. `coach` is the phone's reminders switch: the Code tab
+-- notifies every enabled device, the coach only those that turned it on.
 CREATE TABLE IF NOT EXISTS push_devices (
     id TEXT PRIMARY KEY,
     token TEXT NOT NULL UNIQUE,
     environment TEXT NOT NULL DEFAULT 'production'
         CHECK(environment IN ('sandbox','production')),
     platform TEXT NOT NULL DEFAULT 'ios',
+    bundle_id TEXT,
+    app_version TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    coach INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    last_sent_at INTEGER,
     created_at INTEGER NOT NULL,
-    last_seen_at INTEGER NOT NULL
+    last_seen_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0
 );

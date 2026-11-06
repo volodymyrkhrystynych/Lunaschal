@@ -12,6 +12,7 @@ extension JournalAPI: TodoTransport {
         switch change {
         case let .addTask(id, title): try await addDailyTask(id: id, title)
         case let .renameTask(id, title): try await renameDailyTask(id, to: title)
+        case let .setTaskCue(id, cue): try await setDailyTaskCue(id, cue)
         case let .reorderTasks(order): try await reorderDailyTasks(order)
         case let .deleteTask(id): try await deleteDailyTask(id, at: capturedAt)
         case let .tickTask(id, day, done): try await setDailyTask(id, day: day, done: done, at: capturedAt)
@@ -20,6 +21,12 @@ extension JournalAPI: TodoTransport {
         case let .setTodo(id, done): try await setTodo(id, done: done, at: capturedAt)
         case let .moveTodo(id, list): try await moveTodo(id, to: list)
         case let .deleteTodo(id): try await deleteTodo(id, at: capturedAt)
+        case let .createGoal(id, horizon, title, details):
+            if horizon == .overarching { try await setOverarchingGoal(id: id, details ?? title, at: capturedAt) }
+            else { try await createGoal(id: id, horizon: horizon, title: title, details: details, at: capturedAt) }
+        case let .editGoal(id, title, details): try await editGoal(id, title: title, details: details, at: capturedAt)
+        case let .setOverarching(id, text): try await setOverarchingGoal(id: id, text, at: capturedAt)
+        case let .setGoalStatus(id, action): try await setGoalStatus(id, action, at: capturedAt)
         }
     }
 
@@ -39,6 +46,20 @@ extension JournalAPI: TodoTransport {
 
     public func renameDailyTask(_ id: String, to title: String) async throws {
         try await todoCall("api/tasks/\(try Self.pathID(id))", method: "PATCH", ["title": title])
+    }
+
+    /// Sent as null to clear it.
+    public func setDailyTaskCue(_ id: String, _ cue: String?) async throws {
+        try await todoCall("api/tasks/\(try Self.pathID(id))", method: "PATCH", CueBody(cue: cue))
+    }
+
+    struct CueBody: Encodable {
+        let cue: String?
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(cue, forKey: .cue)
+        }
+        enum CodingKeys: String, CodingKey { case cue }
     }
 
     public func reorderDailyTasks(_ order: [String]) async throws {
@@ -83,6 +104,60 @@ extension JournalAPI: TodoTransport {
 
     public func deleteTodo(_ id: String, at: Date? = nil) async throws {
         try await todoCall("api/tasks/todos/\(try Self.pathID(id))", method: "DELETE", query: Self.capturedAtQuery(at))
+    }
+
+    // MARK: Day reviews (/api/coach)
+
+    public func coachReviews(days: Int = 7) async throws -> CoachReviews {
+        try JSONDecoder().decode(CoachReviews.self, from: await get("api/coach/reviews", ["days": String(days)]))
+    }
+
+    // MARK: Goals (/api/goals)
+    //
+    // Each of these leaves a journal entry on the server, dated `capturedAt`:
+    // a goal set on the train belongs to the train ride, not to the sync.
+
+    public func currentGoals() async throws -> CurrentGoals {
+        try JSONDecoder().decode(CurrentGoals.self, from: await get("api/goals/current", [:]))
+    }
+
+    public func createGoal(id: String, horizon: GoalHorizon, title: String, details: String?,
+                           at: Date? = nil) async throws {
+        try await todoCall("api/goals", method: "POST", query: Self.capturedAtQuery(at),
+                           GoalBody(id: try Self.pathID(id), horizon: horizon.rawValue, title: title, details: details))
+    }
+
+    public func editGoal(_ id: String, title: String, details: String?, at: Date? = nil) async throws {
+        try await todoCall("api/goals/\(try Self.pathID(id))", method: "PATCH", query: Self.capturedAtQuery(at),
+                           GoalBody(title: title, details: details))
+    }
+
+    public func setOverarchingGoal(id: String, _ text: String, at: Date? = nil) async throws {
+        try await todoCall("api/goals/overarching", method: "PUT", query: Self.capturedAtQuery(at),
+                           ["id": try Self.pathID(id), "text": text])
+    }
+
+    public func setGoalStatus(_ id: String, _ action: String, at: Date? = nil) async throws {
+        guard ["end", "cancel", "redeem"].contains(action) else { throw CaptureError.invalidResponse }
+        try await todoCall("api/goals/\(try Self.pathID(id))/\(action)", method: "POST", query: Self.capturedAtQuery(at))
+    }
+
+    /// `details` is sent as null, not left out, so clearing it clears it.
+    struct GoalBody: Encodable {
+        var id: String?
+        var horizon: String?
+        var title: String
+        var details: String?
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encodeIfPresent(id, forKey: .id)
+            try c.encodeIfPresent(horizon, forKey: .horizon)
+            try c.encode(title, forKey: .title)
+            try c.encode(details, forKey: .details)
+        }
+
+        enum CodingKeys: String, CodingKey { case id, horizon, title, details }
     }
 
     private func todoCall(_ path: String, method: String, query: [String: String] = [:]) async throws {

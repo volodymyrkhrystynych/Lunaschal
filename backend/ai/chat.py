@@ -195,7 +195,6 @@ def format_plate_context(now: int | None = None) -> str:
     module; at module level this is a cycle.
     """
     from backend.ai.briefing import learning_due_count, open_todos, pending_daily_tasks
-    from backend.ai.provider import get_settings
     from backend.db.connection import get_db
 
     now = now if now is not None else int(time.time())
@@ -203,10 +202,10 @@ def format_plate_context(now: int | None = None) -> str:
     today = day_key_for(now)
     lines: list[str] = []
 
-    settings = get_settings()
-    goals = ((settings.get('briefing_goals') if settings else None) or '').strip()
+    from backend.goals.service import context_text
+    goals = context_text(today)
     if goals:
-        lines += ['Their stated goals and current focus:', goals, '']
+        lines += ['Their goals:', goals, '']
 
     todos_today = db.execute(
         'SELECT title, done FROM chat_todos WHERE day_key=? ORDER BY done, created_at',
@@ -243,10 +242,45 @@ def format_plate_context(now: int | None = None) -> str:
     due = learning_due_count(db, now)
     if due:
         lines.append(f'Flashcards due for review: {due}.')
+        lines.append('')
+
+    lines += _coach_lines(db, today, now)
 
     if not lines:
         return ''
     return "Where the user's day stands right now:\n\n" + '\n'.join(lines).strip()
+
+
+def _coach_learned() -> str:
+    """What the reminders have learned works, once they have (backend/coach/engine.py).
+    Changes at most once a day, so it sits with the slow-moving blocks."""
+    from backend.coach.engine import context_text
+    try:
+        return context_text()
+    except Exception:
+        return ''
+
+
+def _coach_lines(db, today: str, now: int) -> list[str]:
+    """Today's weigh-in and calorie status, and how yesterday was reviewed —
+    what the agent needs to remind gently and to take an excuse in context."""
+    from backend.coach import day_facts, review
+    lines = []
+    # gather() already leaves out what the user doesn't track.
+    logged = [f"{i['kind']} {'logged' if i['done'] else 'not logged yet'}"
+              for i in day_facts.gather(db, today) if i['kind'] in ('weight', 'calories')]
+    if logged:
+        lines += [f"Today so far: {'; '.join(logged)}.", '']
+    past = review.get(review.yesterday(now))
+    if past and past['items']:
+        line = f"Yesterday's review: {past['rating']}/5" if past['rating'] else "Yesterday's review: no rating"
+        line += f" — {past['done']} done, {past['missed']} missed, {past['excused']} excused."
+        lines.append(line)
+        for item in past['items']:
+            if item.get('excuse'):
+                lines.append(f"- {item['title']}: they said “{item['excuse']}”")
+        lines.append('')
+    return lines
 
 
 def build_chat_system_prompt(now: int | None = None) -> str:
@@ -266,6 +300,7 @@ def build_chat_system_prompt(now: int | None = None) -> str:
         format_places_context(),
         format_life_wiki_context(),
         format_observations_context(),
+        _coach_learned(),
         format_journal_context(get_recent_journal_entries(now), now),
         format_schedule_context(get_upcoming_schedule(now), now),
         format_plate_context(now),

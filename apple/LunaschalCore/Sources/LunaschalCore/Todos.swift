@@ -3,20 +3,41 @@ import Foundation
 // The Todo tab on the phone: the desktop Lifestyle tab's daily tasks and
 // to-do lists (src/components/Tasks/), over the same /api/tasks routes.
 
-/// One of up to four things done every day; `done` is today's completion.
+/// A habit: one of up to ten things done every day; `done` is today's
+/// completion. `history` is the ticked 4am days of the last twelve weeks,
+/// which is what the streak, the week dots and the widget are drawn from, so
+/// they stay right after the 4am rollover before the server is asked again.
 public struct DailyTask: Codable, Equatable, Identifiable {
     public let id: String
     public var title: String
     public var position: Int
     public var done: Bool
+    /// Oldest first, as the server sends it.
+    public var history: [String]
+    /// The server's counts when it was last asked. `streak(today:)` is what
+    /// to show; these only cover what `history`'s window cannot.
+    public var serverStreak: Int
+    public var longestStreak: Int
+    /// Days the user told the agent were out of their hands: they neither
+    /// count toward a streak nor break it.
+    public var excused: [String]
+    /// The if-then half of the habit: "after coffee" for "weigh in".
+    public var cue: String?
 
-    public static let limit = 4
+    /// Mirrors MAX_TASKS in backend/routes/tasks.py.
+    public static let limit = 10
 
-    public init(id: String, title: String, position: Int, done: Bool) {
+    public init(id: String, title: String, position: Int, done: Bool, history: [String] = [],
+                serverStreak: Int = 0, longestStreak: Int = 0, excused: [String] = [], cue: String? = nil) {
         self.id = id; self.title = title; self.position = position; self.done = done
+        self.history = history; self.serverStreak = serverStreak; self.longestStreak = longestStreak
+        self.excused = excused; self.cue = cue
     }
 
-    enum CodingKeys: String, CodingKey { case id, title, position, done }
+    enum CodingKeys: String, CodingKey {
+        case id, title, position, done, history, longestStreak, excused, cue
+        case serverStreak = "streak"
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -26,6 +47,125 @@ public struct DailyTask: Codable, Equatable, Identifiable {
         // The route's CASE gives 0/1, not a boolean.
         if let flag = try? c.decode(Bool.self, forKey: .done) { done = flag }
         else { done = try c.decode(Int.self, forKey: .done) != 0 }
+        // Absent from a server, or a cache, from before streaks.
+        history = try c.decodeIfPresent([String].self, forKey: .history) ?? []
+        serverStreak = try c.decodeIfPresent(Int.self, forKey: .serverStreak) ?? 0
+        longestStreak = try c.decodeIfPresent(Int.self, forKey: .longestStreak) ?? 0
+        excused = try c.decodeIfPresent([String].self, forKey: .excused) ?? []
+        cue = try c.decodeIfPresent(String.self, forKey: .cue)
+    }
+
+    /// Whether it was ticked on a 4am day.
+    public func isDone(on day: String) -> Bool { history.contains(day) }
+
+    /// The running streak as of `today`, alive through an unticked today.
+    public func streak(today: String) -> Int {
+        let local = HabitStreaks.current(history, today: today, excused: excused)
+        // A run reaching the start of the window may go back further than
+        // the window shows; the server counted all of it.
+        return local >= HabitStreaks.historyDays - 1 ? max(local, serverStreak) : local
+    }
+
+    public func best(today: String) -> Int { max(longestStreak, streak(today: today)) }
+
+    /// Yesterday was missed, so today can't be: the run's grace day is spent.
+    public func atRisk(today: String) -> Bool { HabitStreaks.atRisk(history, today: today, excused: excused) }
+
+    /// Whether a past day was excused, for the week dots.
+    public func isExcused(on day: String) -> Bool { excused.contains(day) }
+
+    /// The last `count` days ending today, oldest first.
+    public func week(today: String, count: Int = 7) -> [Bool] {
+        HabitStreaks.days(endingAt: today, count: count).map(isDone(on:))
+    }
+
+    /// Records a tick or untick for a day, as the server will.
+    mutating func set(_ day: String, done flag: Bool, today: String) {
+        history.removeAll { $0 == day }
+        if flag { history.append(day); history.sort() }
+        if day == today { done = flag }
+    }
+}
+
+/// `backend/habit_streaks.py`, for streaks that move the moment a tick is
+/// queued rather than when the server is next asked. Both run the cases in
+/// `backend/tests/fixtures/habit_streaks.json`. Never miss twice: one missed
+/// day is grace, two in a row end the run; an excused day neither counts
+/// nor breaks it.
+public enum HabitStreaks {
+    /// The server's history window, in days.
+    public static let historyDays = 84
+    /// Missed days in a row a run survives.
+    public static let grace = 1
+
+    private static var utc: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }
+
+    static func date(_ key: String) -> Date? {
+        let parts = key.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return utc.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+    }
+
+    static func key(_ date: Date) -> String {
+        let parts = utc.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+
+    /// A day key `offset` days from `day`.
+    public static func adding(_ offset: Int, to day: String) -> String {
+        guard let date = date(day), let moved = utc.date(byAdding: .day, value: offset, to: date) else { return day }
+        return key(moved)
+    }
+
+    /// `count` day keys ending at `day`, oldest first.
+    public static func days(endingAt day: String, count: Int) -> [String] {
+        (0..<max(count, 0)).map { adding($0 - (count - 1), to: day) }
+    }
+
+    /// Done days in the run reaching today, or yesterday while today is open.
+    public static func current(_ done: [String], today: String, excused: [String] = []) -> Int {
+        let days = Set(done.filter { $0 <= today })
+        guard let floor = days.min() else { return 0 }
+        let off = Set(excused)
+        var day = days.contains(today) ? today : adding(-1, to: today)
+        var count = 0, misses = 0
+        while day >= floor {
+            if days.contains(day) {
+                count += 1; misses = 0
+            } else if !off.contains(day) {
+                misses += 1
+                if misses > grace { break }
+            }
+            day = adding(-1, to: day)
+        }
+        return count
+    }
+
+    /// A live run whose grace day is spent.
+    public static func atRisk(_ done: [String], today: String, excused: [String] = []) -> Bool {
+        let yesterday = adding(-1, to: today)
+        if done.contains(today) || done.contains(yesterday) || excused.contains(yesterday) { return false }
+        return current(done, today: today, excused: excused) > 0
+    }
+
+    public static func longest(_ done: [String], excused: [String] = []) -> Int {
+        let days = Set(done), off = Set(excused)
+        guard var day = days.min(), let last = days.max() else { return 0 }
+        var best = 0, run = 0, misses = 0
+        while day <= last {
+            if days.contains(day) {
+                run += 1; misses = 0; best = max(best, run)
+            } else if !off.contains(day) {
+                misses += 1
+                if misses > grace { run = 0 }
+            }
+            day = adding(1, to: day)
+        }
+        return best
     }
 }
 

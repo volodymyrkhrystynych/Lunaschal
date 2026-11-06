@@ -1,4 +1,4 @@
-"""Check the built device archive, including the embedded Watch bundle, its complications and the share extension."""
+"""Check the built device archive, including the embedded Watch bundle, its complications, the share extension and the Home Screen widgets."""
 import pathlib
 import plistlib
 import re
@@ -58,6 +58,18 @@ def check_archive(root, build=None):
         raise ValueError("Share extension is missing its exempt-encryption declaration")
     if not (share / "PrivacyInfo.xcprivacy").is_file():
         raise ValueError("Share extension is missing its privacy manifest")
+    widgets = app / "PlugIns/LunaschalWidgets.appex"
+    info = plistlib.loads((widgets / "Info.plist").read_bytes())
+    if (info["CFBundleIdentifier"] != "com.lunaschal.mobile.widgets"
+            or info["CFBundleSupportedPlatforms"] != ["iPhoneOS"]
+            or info.get("NSExtension", {}).get("NSExtensionPointIdentifier") != "com.apple.widgetkit-extension"):
+        raise ValueError("Unexpected widget extension identity or platform")
+    if (info["CFBundleShortVersionString"], info["CFBundleVersion"]) != versions[0]:
+        raise ValueError("Phone and widget extension versions differ")
+    if info.get("ITSAppUsesNonExemptEncryption") is not False:
+        raise ValueError("Widget extension is missing its exempt-encryption declaration")
+    if not (widgets / "PrivacyInfo.xcprivacy").is_file():
+        raise ValueError("Widget extension is missing its privacy manifest")
     watch_info = plistlib.loads((watch / "Info.plist").read_bytes())
     if watch_info.get("WKCompanionAppBundleIdentifier") != "com.lunaschal.mobile":
         raise ValueError("Watch companion points to another app")
@@ -65,4 +77,4 @@ def check_archive(root, build=None):
 
 if __name__ == "__main__":
     check_archive(pathlib.Path(sys.argv[1]), sys.argv[2] if len(sys.argv) > 2 else None)
-    print("Device archive contains matching phone, Watch, complication and share bundles, assets, and privacy manifests.")
+    print("Device archive contains matching phone, Watch, complication, share and widget bundles, assets, and privacy manifests.")

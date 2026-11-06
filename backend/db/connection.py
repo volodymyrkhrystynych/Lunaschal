@@ -177,6 +177,10 @@ def init_db() -> None:
     _migrate_flashcards_to_learning(db)
     _ensure_prevent_sleep(db)
     _ensure_briefing_settings(db)
+    # After it: the old briefing_goals text becomes the overarching goal.
+    _ensure_goal_horizons(db)
+    _ensure_coach_columns(db)
+    _ensure_push_device_columns(db)
     _ensure_research_settings(db)
     _ensure_timeout_settings(db)
     _ensure_message_finished_at(db)
@@ -1964,6 +1968,132 @@ def _ensure_provider_outlook_imap(db: sqlite3.Connection) -> None:
         raise
     finally:
         db.execute('PRAGMA foreign_keys=ON')
+
+
+def _ensure_goal_horizons(db: sqlite3.Connection) -> None:
+    """Goals grew horizons (overarching / year / quarter / month / week).
+
+    A pre-horizon `goals` table had NOT NULL criteria/reward/target_days, which
+    SQLite cannot relax in place, so it is rebuilt from the statement in
+    schema.sql itself (one source of truth for the shape). foreign_keys is
+    toggled outside the transaction, as in `_ensure_email_imap`, so the DROP
+    does not cascade away `goal_days` — the verdicts behind every earned and
+    redeemed reward. Each old streak goal is filed under the horizon its length
+    fits, over the period its start date falls in.
+
+    The old free-text `settings.briefing_goals` becomes the overarching goal,
+    once: the column is cleared after copying, which is the latch.
+    """
+
+    from backend.goals.periods import goal_period, horizon_for_days
+
+    cols = {r[1] for r in db.execute('PRAGMA table_info(goals)')}
+    if 'horizon' not in cols:
+        schema = (Path(__file__).parent / 'schema.sql').read_text()
+        ddl = re.search(r'CREATE TABLE IF NOT EXISTS goals \(.*?\n\);', schema, re.S).group(0)
+        db.commit()
+        db.execute('PRAGMA foreign_keys=OFF')
+        try:
+            db.execute('BEGIN')
+            db.execute(ddl.replace('IF NOT EXISTS goals (', 'goals_new (', 1))
+            db.execute(
+                'INSERT INTO goals_new (id,title,criteria,reward,start_date,target_days,exercise,'
+                'minimum_reps,status,earned_at,redeemed_at,last_checked_at,created_at,updated_at) '
+                'SELECT id,title,criteria,reward,start_date,target_days,exercise,minimum_reps,'
+                'status,earned_at,redeemed_at,last_checked_at,created_at,updated_at FROM goals')
+            for row in db.execute('SELECT id,start_date,target_days FROM goals_new').fetchall():
+                horizon = horizon_for_days(row['target_days'])
+                start, end = goal_period(horizon, row['start_date'], row['target_days'])
+                db.execute('UPDATE goals_new SET horizon=?,period_start=?,period_end=? WHERE id=?',
+                           (horizon, start, end, row['id']))
+            db.execute('DROP TABLE goals')
+            db.execute('ALTER TABLE goals_new RENAME TO goals')
+            fk_problems = db.execute('PRAGMA foreign_key_check').fetchall()
+            if fk_problems:
+                raise RuntimeError(f'goals migration broke FK integrity: {fk_problems}')
+            db.execute('COMMIT')
+        except Exception:
+            db.execute('ROLLBACK')
+            raise
+        finally:
+            db.execute('PRAGMA foreign_keys=ON')
+    # Here rather than in schema.sql: on an old database schema.sql runs before
+    # the rebuild above, when `horizon` does not exist yet.
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_goals_one_overarching ON goals(horizon) "
+               "WHERE horizon='overarching' AND ended_at IS NULL AND status != 'cancelled'")
+    db.execute('CREATE INDEX IF NOT EXISTS idx_goals_period ON goals(horizon, period_end)')
+
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
+    if 'goal_id' not in cols:
+        # The entry a goal change left behind. SET NULL, as for idea_id: the
+        # journal is the record, and outlives the goal it describes.
+        db.execute('ALTER TABLE journal_entries ADD COLUMN goal_id TEXT'
+                   ' REFERENCES goals(id) ON DELETE SET NULL')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_journal_entries_goal ON journal_entries(goal_id)')
+
+    settings_cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'briefing_goals' in settings_cols:
+        row = db.execute('SELECT briefing_goals FROM settings WHERE id=1').fetchone()
+        text = ((row['briefing_goals'] if row else None) or '').strip()
+        if text:
+            has_overarching = db.execute(
+                "SELECT 1 FROM goals WHERE horizon='overarching' AND ended_at IS NULL "
+                "AND status != 'cancelled'").fetchone()
+            if not has_overarching:
+                from ulid import ULID
+
+                from backend.day_boundary import day_key_for
+                now = int(time.time())
+                db.execute(
+                    "INSERT INTO goals (id,horizon,title,details,start_date,created_at,updated_at) "
+                    "VALUES (?,'overarching',?,?,?,?,?)",
+                    (str(ULID()), text.splitlines()[0][:200], text, day_key_for(now), now, now))
+            db.execute('UPDATE settings SET briefing_goals=NULL WHERE id=1')
+    db.commit()
+
+
+def _ensure_push_device_columns(db: sqlite3.Connection) -> None:
+    """Delivery state and the coach switch on a `push_devices` table that the
+    Code tab created first. Existing rows keep `coach` at 0: opening the Code
+    page never agreed to reminders."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(push_devices)')}
+    for name, ddl in (('platform', "TEXT NOT NULL DEFAULT 'ios'"),
+                      ('bundle_id', 'TEXT'),
+                      ('app_version', 'TEXT'),
+                      ('enabled', 'INTEGER NOT NULL DEFAULT 1'),
+                      ('coach', 'INTEGER NOT NULL DEFAULT 0'),
+                      ('last_error', 'TEXT'),
+                      ('last_sent_at', 'INTEGER'),
+                      ('updated_at', 'INTEGER NOT NULL DEFAULT 0')):
+        if name not in cols:
+            db.execute(f'ALTER TABLE push_devices ADD COLUMN {name} {ddl}')
+    db.commit()
+
+
+def _ensure_coach_columns(db: sqlite3.Connection) -> None:
+    """The habit cue and the coach's settings (backend/coach/CLAUDE.md).
+
+    The coach is off until switched on — the spoken task nudge it replaces was
+    removed for nagging — so every switch defaults to 0. The tracked behaviours
+    default to what the user asked to be reminded of: weight and calories.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(daily_tasks)')}
+    if 'cue' not in cols:
+        db.execute('ALTER TABLE daily_tasks ADD COLUMN cue TEXT')
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    for name, definition in (
+        ('coach_checkin_enabled', 'INTEGER NOT NULL DEFAULT 0'),
+        ('coach_checkin_hour', 'INTEGER NOT NULL DEFAULT 21'),
+        ('coach_behaviors', """TEXT NOT NULL DEFAULT '{"weight": true, "calories": true, "habits": true}'"""),
+        ('coach_enabled', 'INTEGER NOT NULL DEFAULT 0'),
+        ('coach_quiet_start', 'INTEGER NOT NULL DEFAULT 22'),
+        ('coach_quiet_end', 'INTEGER NOT NULL DEFAULT 8'),
+        ('coach_daily_cap', 'INTEGER NOT NULL DEFAULT 3'),
+        ('coach_no_send_rate', 'REAL NOT NULL DEFAULT 0.25'),
+    ):
+        if name not in cols:
+            db.execute(f'ALTER TABLE settings ADD COLUMN {name} {definition}')
+    db.commit()
 
 
 def _ensure_microsoft_oauth_settings(db: sqlite3.Connection) -> None:

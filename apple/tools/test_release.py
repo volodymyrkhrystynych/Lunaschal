@@ -31,6 +31,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(len(set(options["provisioningProfiles"].values())), len(BUNDLES))
         self.assertIn("LUNASCHAL_COMPLICATIONS_PROFILE_UUID = 00000000-0000-0000-0000-000000000002\n", config)
         self.assertIn("LUNASCHAL_SHARE_PROFILE_UUID = 00000000-0000-0000-0000-000000000003\n", config)
+        self.assertIn("LUNASCHAL_WIDGETS_PROFILE_UUID = 00000000-0000-0000-0000-000000000004\n", config)
 
     def test_every_grouped_profile_needs_its_app_group(self):
         for index, bundle in enumerate(BUNDLES):

@@ -21,7 +21,10 @@ Built differently from this plan: a nightly `ops/backup.sh` rsyncs the DB and me
 - Frontend grouping (Overdue / Today / Upcoming / Someday).
 - _Phase 2 (later):_ subtasks.
 
-## 3. Habit tracking with streaks — ⬜ not started
+## 3. Habit tracking with streaks — ✅ done differently (`feat/ios-habits-widget`)
+
+Built by growing daily tasks rather than adding `habits` tables: the cap went from 4 to 10, `GET /api/tasks` returns each task's `streak`, `longestStreak` and twelve weeks of `history` (`backend/habit_streaks.py`), and the web and iOS rows show the week and the streak. The iPhone also got Habits and To-Do Home Screen widgets. Still open: a longer history grid and completion rates. The original plan, kept for reference:
+
 
 **Why:** highest delight-per-line-of-code on the roadmap — one new table, simple queries, a small grid UI — and it makes opening the app every day the default, which feeds the journal and todos too.
 

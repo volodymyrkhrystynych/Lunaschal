@@ -234,6 +234,14 @@ private struct MessageRow: View {
                             .font(.caption).lineLimit(1)
                     }
                 }
+                if message.role == "assistant" {
+                    if let review = DayReview.parse(metadata: message.metadata) {
+                        ReviewCard(review: review) { chat.input = review.explainPrompt }
+                    }
+                    if let coach = CoachMessage.parse(metadata: message.metadata) {
+                        CoachCard(message: coach) { chat.input = $0 }
+                    }
+                }
                 if !meta.proposals.isEmpty {
                     ProposalCards(resolver: chat, messageID: message.id, proposals: meta.proposals)
                 }

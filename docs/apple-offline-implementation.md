@@ -1,5 +1,15 @@
 # Apple apps and offline experience — implementation tracker
 
+Habits and Home Screen widgets (`feat/ios-habits-widget`): daily tasks became
+habits — up to ten, each with its streak and last seven days, on the phone and
+the web — and the new `LunaschalWidgets` extension adds interactive Habits and
+To-Do widgets that tick through a queue in the `group.com.lunaschal.mobile` App
+Group. Core tests cover streaks, the 4am rollover in the widget, merging the
+app's and widget's snapshots and the shared queue's locks; the offline Todo UI
+test covers a tick's streak. The widget extension builds in simulator; its
+signed release needs the `APPLE_WIDGETS_PROFILE_BASE64` profile, and the
+widgets themselves are unverified on device.
+
 Chat todos and daily reminders (`fix/chat-todos-daily-badges`): Capture returns
 to Entry when reselected; Capture and Daily count the three unmet daily health
 requirements using server records plus offline logs. Core tests cover the
@@ -294,7 +304,7 @@ and any remaining limits. Do not promote “source written” to “device verif
 | Mobile exclusions | Practice and Notebook do not need native mobile tabs                                                                                                         |
 | Drawing           | Native-quality Pencil drawing is a central reason for the Apple app                                                                                          |
 | Chat              | Server-backed native tab (passed in simulator); voice messages queue offline. Local chat is optional and requires evaluation                                 |
-| Todo              | Native tab (passed in simulator offline): daily tasks and to-dos, changes queued in an outbox, and a due-today/overdue badge                                 |
+| Todo              | Native tab (passed in simulator offline): habits with streaks and to-dos, changes queued in an outbox, a due-today/overdue badge, and Habits/To-Do Home Screen widgets (build in simulator; device unverified) |
 | Jobs              | More → Jobs (passed in simulator offline): the triage feed, last copy kept offline, Queue/Dismiss queued in an outbox                                        |
 | Writing           | More → Writing / iPad tab (passed in simulator against a fixture): notes with pin and history, discussions with proposed-note cards; fetched, not replicated |
 | Watch controls    | Transcribe and Record; both preserve the original audio and create journal entries                                                                           |

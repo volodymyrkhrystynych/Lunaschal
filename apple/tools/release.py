@@ -11,15 +11,19 @@ import plistlib
 import re
 
 BUNDLES = ("com.lunaschal.mobile", "com.lunaschal.mobile.watchkitapp",
-           "com.lunaschal.mobile.watchkitapp.widgets", "com.lunaschal.mobile.share")
+           "com.lunaschal.mobile.watchkitapp.widgets", "com.lunaschal.mobile.share",
+           "com.lunaschal.mobile.widgets")
 # File stems on the runner and the xcconfig variable each profile fills, in BUNDLES order.
-PROFILES = (("ios", "IOS"), ("watch", "WATCH"), ("complications", "COMPLICATIONS"), ("share", "SHARE"))
+PROFILES = (("ios", "IOS"), ("watch", "WATCH"), ("complications", "COMPLICATIONS"), ("share", "SHARE"),
+            ("widgets", "WIDGETS"))
 # The App Group each profile must carry. The Watch app hands its timer to the
 # complications through the Watch group, and the share extension imports with
-# the session the app leaves in the iPhone group; a profile without its group
+# the session the app leaves in the iPhone group, as the Home Screen widgets
+# do along with their lists and queued ticks; a profile without its group
 # archives fine and then signs something that silently cannot work.
 APP_GROUPS = {"com.lunaschal.mobile": "group.com.lunaschal.mobile",
               "com.lunaschal.mobile.share": "group.com.lunaschal.mobile",
+              "com.lunaschal.mobile.widgets": "group.com.lunaschal.mobile",
               "com.lunaschal.mobile.watchkitapp": "group.com.lunaschal.mobile.watch",
               "com.lunaschal.mobile.watchkitapp.widgets": "group.com.lunaschal.mobile.watch"}
 

@@ -1,0 +1,6 @@
+{
+  "Simulator Target Bundle": "com.lunaschal.mobile",
+  "aps": {"alert": {"title": "Time for new goals", "body": "1 goal reviewed. What are your goals for this week?"},
+          "sound": "default", "category": "COACH_GOALS", "thread-id": "coach", "interruption-level": "active"},
+  "coach": {"kind": "rollover", "day": "2026-11-03", "horizons": ["week"], "messageId": "01FIXTUREROLLOVER00000000"}
+}

@@ -35,7 +35,7 @@ from pathlib import Path
 
 # Extraction is capped so one pathological file can't produce a snapshot too
 # large to fit in a prompt.
-MAX_ROUTES = 600
+MAX_ROUTES = 800
 MAX_COMPONENTS = 400
 MAX_COMMITS = 40
 

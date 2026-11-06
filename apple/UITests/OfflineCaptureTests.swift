@@ -2127,8 +2127,11 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "taken ")).firstMatch.exists,
                       "and the day it was filmed")
 
-        // Further than the clip: the filmed video sits below it.
-        for _ in 0..<16 where !later.isHittable {
+        // Further than the clip: the filmed video sits below it. A row behind
+        // the translucent navigation bar still reports hittable, and a tap there
+        // lands on the bar, so scroll until it's clear.
+        let bar = app.navigationBars["Journal"]
+        for _ in 0..<16 where !later.isHittable || later.frame.minY < bar.frame.maxY {
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
             start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 200)))
         }
@@ -2644,7 +2647,7 @@ final class OfflineCaptureTests: XCTestCase {
         daily.typeText(task)
         app.buttons["todo-daily-add"].tap()
         XCTAssertTrue(app.buttons[task].waitForExistence(timeout: 5))
-        XCTAssertEqual(daily.value as? String ?? "", "Add a daily task", "The field clears")
+        XCTAssertEqual(daily.value as? String ?? "", "Add a habit", "The field clears")
 
         // So does a to-do due today.
         let name = "Call the dentist \(Int.random(in: 1000...9999))"
@@ -2676,10 +2679,18 @@ final class OfflineCaptureTests: XCTestCase {
         check?.tap()
         XCTAssertTrue(row.waitForNonExistence(timeout: 5))
 
-        // Deleting leaves room for the next run under the four-task cap.
-        app.buttons[task].swipeLeft()
+        // Ticking the habit starts its streak at once, with no server to count it.
+        let habit = app.buttons.matching(NSPredicate(format: "identifier == 'todo-daily-row' AND label CONTAINS %@", task)).firstMatch
+        XCTAssertEqual(habit.value as? String ?? "", "", "No streak before the first tick")
+        habit.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.5)).tap()
+        let streak = NSPredicate(format: "value BEGINSWITH '1 day streak'")
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation(for: streak, evaluatedWith: habit)], timeout: 5), .completed,
+                       habit.value as? String ?? "")
+
+        // Deleting leaves room for the next run under the cap.
+        habit.swipeLeft()
         app.buttons["Delete"].tap()
-        XCTAssertTrue(app.buttons[task].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(habit.waitForNonExistence(timeout: 5))
     }
 
     func testChatKeepsAVoiceMessageForTheServerWithoutOne() {

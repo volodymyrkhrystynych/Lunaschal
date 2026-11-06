@@ -1,9 +1,12 @@
 import LunaschalCore
 import SwiftUI
 
-/// The Todo tab, as the desktop's TasksSection lays it out: up to four daily
-/// tasks above the To-Do and Archive lists. Edit reorders and deletes the
-/// daily tasks; a to-do opens in a form, and swipes to archive or delete.
+/// The Todo tab, as the desktop's Lifestyle tab lays it out: the overarching
+/// goal and this week's, month's, quarter's and year's goals; up to ten daily
+/// habits, each with its streak and last seven days; then the To-Do and
+/// Archive lists. Edit reorders and deletes the habits; a to-do opens in a
+/// form, and swipes to archive or delete. A goal opens in an editor, and
+/// every goal change leaves a journal entry on the server.
 /// Changes show at once and reach the server through the sync outbox.
 struct TodoView: View {
     @ObservedObject var todo: TodoModel
@@ -13,10 +16,15 @@ struct TodoView: View {
     @State private var editing: TodoItem?
     @State private var renaming: DailyTask?
     @State private var renameText = ""
+    @State private var cueing: DailyTask?
+    @State private var cueText = ""
     @State private var explaining = false
+    @State private var goalEditing: GoalEditing?
+    @State private var expanded: Set<GoalHorizon> = [.week]
 
     var body: some View {
         List {
+            if let goals = todo.goals { goalsSection(goals) }
             dailySection
             todoSection
             if !todo.refusals.isEmpty {
@@ -56,7 +64,26 @@ struct TodoView: View {
             TodoEditor(heading: "To-do", draft: TodoDraft(item), onSave: { todo.edit(item, $0) },
                        onDelete: { todo.delete(item) })
         }
-        .alert("Rename daily task", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
+        .sheet(item: $goalEditing) { editing in
+            GoalEditor(editing: editing) { title, details in
+                switch editing {
+                case .overarching: todo.setOverarching(details)
+                case let .new(horizon): todo.addGoal(horizon, title: title, details: details)
+                case let .existing(goal): todo.edit(goal, title: title, details: details)
+                }
+            } onEnd: {
+                if case let .existing(goal) = editing { todo.end(goal) }
+            }
+        }
+        .alert("When will you do it?", isPresented: Binding(get: { cueing != nil }, set: { if !$0 { cueing = nil } }),
+               presenting: cueing) { task in
+            TextField("After my morning coffee", text: $cueText)
+            Button("Save") { todo.setCue(task, cueText) }
+            Button("Cancel", role: .cancel) {}
+        } message: { task in
+            Text("A cue ties “\(task.title)” to something you already do. Habits with one stick better.")
+        }
+        .alert("Rename habit", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
                presenting: renaming) { task in
             TextField("Title", text: $renameText)
             Button("Save") { todo.rename(task, to: renameText) }
@@ -93,12 +120,59 @@ struct TodoView: View {
         return [state, waiting].compactMap { $0 }.joined(separator: "\n\n")
     }
 
+    private func goalsSection(_ goals: CurrentGoals) -> some View {
+        Section {
+            Button { goalEditing = .overarching(goals.overarching) } label: {
+                if let goal = goals.overarching {
+                    Text(goal.text).foregroundStyle(.primary).lineLimit(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Label("Set your overarching goal", systemImage: "scope")
+                }
+            }
+            .accessibilityIdentifier("goal-overarching")
+            ForEach(goals.horizons) { period in
+                DisclosureGroup(isExpanded: Binding(
+                    get: { expanded.contains(period.horizon) },
+                    set: { if $0 { expanded.insert(period.horizon) } else { expanded.remove(period.horizon) } }
+                )) {
+                    ForEach(period.goals) { goal in
+                        GoalRow(goal: goal) { goalEditing = .existing(goal) }
+                            .swipeActions(edge: .trailing) {
+                                Button("End", systemImage: "flag.checkered") { todo.end(goal) }.tint(.indigo)
+                            }
+                    }
+                    Button { goalEditing = .new(period.horizon) } label: {
+                        Label("Add a goal", systemImage: "plus")
+                    }
+                    .accessibilityIdentifier("goal-add-\(period.horizon.rawValue)")
+                } label: {
+                    HStack {
+                        Text(period.horizon.heading)
+                        Spacer()
+                        if period.unset {
+                            Text("Not set").font(.caption).foregroundStyle(.orange)
+                        } else {
+                            Text(period.label).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .accessibilityIdentifier("goal-period-\(period.horizon.rawValue)")
+            }
+        } header: {
+            Text("Goals")
+        }
+    }
+
     private var dailySection: some View {
         Section {
             ForEach(todo.tasks) { task in
-                DailyTaskRow(task: task) { todo.toggle(task) }
+                DailyTaskRow(task: task, today: DayKey.of(Date())) { todo.toggle(task) }
                     .contextMenu {
                         Button("Rename", systemImage: "pencil") { renameText = task.title; renaming = task }
+                        Button(task.cue == nil ? "Add a cue" : "Change cue", systemImage: "arrow.turn.down.right") {
+                            cueText = task.cue ?? ""; cueing = task
+                        }
                         Button("Delete", systemImage: "trash", role: .destructive) { todo.delete(task) }
                     }
             }
@@ -108,7 +182,7 @@ struct TodoView: View {
             }
             if todo.tasks.count < DailyTask.limit {
                 HStack {
-                    TextField("Add a daily task", text: $newTask)
+                    TextField("Add a habit", text: $newTask)
                         .submitLabel(.done)
                         .onSubmit(addTask)
                         .accessibilityIdentifier("todo-daily-input")
@@ -118,7 +192,16 @@ struct TodoView: View {
                 }
             }
         } header: {
-            Text("Daily tasks")
+            HStack {
+                Text("Habits")
+                Spacer()
+                if let review = todo.yesterday, review.rating != nil || !review.items.isEmpty {
+                    Text("Yesterday \(review.stars.isEmpty ? review.tally : review.stars)")
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel("Yesterday: \(review.rating.map { "\($0) of 5" } ?? review.tally)")
+                        .accessibilityIdentifier("todo-yesterday")
+                }
+            }
         } footer: {
             if todo.tasks.isEmpty { Text("Up to \(DailyTask.limit), ordered by importance. They reset at 4am.") }
         }
@@ -163,21 +246,187 @@ struct TodoView: View {
     }
 }
 
+/// What the goal editor sheet is open on.
+private enum GoalEditing: Identifiable {
+    case overarching(Goal?)
+    case new(GoalHorizon)
+    case existing(Goal)
+
+    var id: String {
+        switch self {
+        case .overarching: return "overarching"
+        case let .new(horizon): return "new-\(horizon.rawValue)"
+        case let .existing(goal): return goal.id
+        }
+    }
+}
+
+private struct GoalRow: View {
+    let goal: Goal
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(goal.title).foregroundStyle(.primary)
+                if let details = goal.details, !details.isEmpty {
+                    Text(details).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
+                if let streak = goal.streakLine {
+                    Label(goal.reward.map { "\(streak) · \($0)" } ?? streak, systemImage: "flame")
+                        .font(.caption).foregroundStyle(.orange).labelStyle(CompactLabel())
+                }
+                if goal.overdue {
+                    Text("\(goal.periodLabel) is over — the review will grade it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("goal-row")
+    }
+}
+
+/// One editor for every goal: the overarching goal is a block of text; a
+/// period goal is a title with optional details. A daily rule and prize are
+/// set up in chat, where they can be talked through — they can't change later.
+private struct GoalEditor: View {
+    let editing: GoalEditing
+    let onSave: (_ title: String, _ details: String) -> Void
+    let onEnd: () -> Void
+    @State private var title = ""
+    @State private var details = ""
+    @Environment(\.dismiss) private var dismiss
+
+    private var isOverarching: Bool { if case .overarching = editing { return true } else { return false } }
+
+    private var heading: String {
+        switch editing {
+        case .overarching: return "Overarching goal"
+        case let .new(horizon): return "New goal · \(horizon.heading.lowercased())"
+        case let .existing(goal): return goal.periodLabel
+        }
+    }
+
+    private var canSave: Bool {
+        !(isOverarching ? details : title).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if isOverarching {
+                    Section {
+                        TextEditor(text: $details)
+                            .frame(minHeight: 160)
+                            .accessibilityIdentifier("goal-editor-text")
+                    } footer: {
+                        Text("What everything else is in service of. Saving writes a journal entry, so the old goal stays on record.")
+                    }
+                } else {
+                    Section {
+                        TextField("Goal", text: $title)
+                            .accessibilityIdentifier("goal-editor-title")
+                        TextField("Details", text: $details, axis: .vertical)
+                            .lineLimit(1...6)
+                    } footer: {
+                        Text("Want a daily streak with a prize? Ask in Chat — the rule can't change once it's set.")
+                    }
+                    if case let .existing(goal) = editing {
+                        if let criteria = goal.criteria {
+                            Section("Daily rule") {
+                                Text(criteria)
+                                if let streak = goal.streakLine { Text(streak).foregroundStyle(.secondary) }
+                                if let reward = goal.reward { Text("Prize: \(reward)").foregroundStyle(.secondary) }
+                            }
+                        }
+                        Section {
+                            Button("End goal") { onEnd(); dismiss() }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(heading)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { onSave(title, details); dismiss() }
+                        .disabled(!canSave)
+                        .accessibilityIdentifier("goal-editor-save")
+                }
+            }
+            .onAppear {
+                switch editing {
+                case let .overarching(goal): details = goal?.text ?? ""
+                case .new: break
+                case let .existing(goal): title = goal.title; details = goal.details ?? ""
+                }
+            }
+        }
+    }
+}
+
 private struct DailyTaskRow: View {
     let task: DailyTask
+    let today: String
     let toggle: () -> Void
 
     var body: some View {
+        let streak = task.streak(today: today)
         HStack(spacing: 12) {
             CheckButton(done: task.done, id: "todo-daily-check", action: toggle)
-            Text(task.title)
-                .strikethrough(task.done)
-                .foregroundStyle(task.done ? .secondary : .primary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(task.title)
+                    .strikethrough(task.done)
+                    .foregroundStyle(task.done ? .secondary : .primary)
+                if let cue = task.cue {
+                    Text(cue).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            HabitWeekDots(week: task.week(today: today),
+                          excused: HabitStreaks.days(endingAt: today, count: 7).map(task.isExcused(on:)))
+            if streak > 0 {
+                // A run whose grace day is spent: missing today too would end it.
+                let risk = task.atRisk(today: today)
+                Label("\(streak)", systemImage: risk ? "flame" : "flame.fill")
+                    .labelStyle(CompactLabel())
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(risk ? .red : .orange)
+                    .accessibilityIdentifier("todo-daily-streak")
+            }
         }
         .accessibilityElement(children: .combine)
+        .accessibilityValue(streak > 0 ? "\(streak) day streak, best \(task.best(today: today))"
+                            + (task.atRisk(today: today) ? ", missed yesterday" : "") : "")
         .accessibilityAddTraits(task.done ? .isSelected : [])
         .accessibilityAction(named: task.done ? "Not done" : "Done", toggle)
         .accessibilityIdentifier("todo-daily-row")
+    }
+}
+
+/// The last seven days, oldest first, today last. An excused day is a ring:
+/// it neither counted nor broke the streak.
+private struct HabitWeekDots: View {
+    let week: [Bool]
+    var excused: [Bool] = []
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(week.enumerated()), id: \.offset) { index, done in
+                if !done, excused.indices.contains(index), excused[index] {
+                    Circle().strokeBorder(Color.secondary.opacity(0.6), lineWidth: 1).frame(width: 6, height: 6)
+                } else {
+                    Circle()
+                        .fill(done ? Color.accentColor : Color.secondary.opacity(0.25))
+                        .frame(width: 6, height: 6)
+                }
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 

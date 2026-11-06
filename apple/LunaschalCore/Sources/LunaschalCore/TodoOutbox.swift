@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 
 // Changes made in the Todo tab, kept on the phone until the server has them.
 // The lists on screen are the server's last copy with these laid over it, so
@@ -8,6 +13,8 @@ import Foundation
 public enum TodoChange: Codable, Equatable {
     case addTask(id: String, title: String)
     case renameTask(id: String, title: String)
+    /// "After coffee": when the habit is done. Nil clears it.
+    case setTaskCue(id: String, cue: String?)
     case reorderTasks([String])
     case deleteTask(id: String)
     /// `day` is the 4am day it was ticked on, so a tick sent after the
@@ -18,12 +25,21 @@ public enum TodoChange: Codable, Equatable {
     case setTodo(id: String, done: Bool)
     case moveTodo(id: String, list: String)
     case deleteTodo(id: String)
+    /// A goal for a horizon; `.overarching` replaces the overarching goal.
+    /// The id is minted here, so a replayed create is a no-op on the server.
+    case createGoal(id: String, horizon: GoalHorizon, title: String, details: String?)
+    case editGoal(id: String, title: String, details: String?)
+    case setOverarching(id: String, text: String)
+    /// `end`, `cancel` or `redeem`.
+    case setGoalStatus(id: String, action: String)
 
     /// What a refusal says it was about.
     var subject: String {
         switch self {
         case let .addTask(_, title), let .renameTask(_, title): return "“\(title)”"
         case let .createTodo(draft), let .editTodo(_, draft): return "“\(draft.title)”"
+        case let .createGoal(_, _, title, _), let .editGoal(_, title, _): return "the goal “\(title)”"
+        case .setOverarching: return "the overarching goal"
         case .reorderTasks: return "the new order"
         default: return "a change"
         }
@@ -46,13 +62,19 @@ public struct TodoOp: Codable, Equatable, Identifiable {
     }
 }
 
-/// The daily tasks and to-dos as the Todo tab shows them.
+/// The goals, daily tasks and to-dos as the Today tab shows them.
 public struct TodoLists: Codable, Equatable {
     public var tasks: [DailyTask]
     public var todos: [TodoItem]
+    /// Nil until the server has been asked — and in a cache from before goals.
+    public var goals: CurrentGoals?
+    /// Yesterday's review, for the line above the habits.
+    public var review: DayReview?
 
-    public init(tasks: [DailyTask] = [], todos: [TodoItem] = []) {
-        self.tasks = tasks.sorted { $0.position < $1.position }; self.todos = todos
+    public init(tasks: [DailyTask] = [], todos: [TodoItem] = [], goals: CurrentGoals? = nil,
+                review: DayReview? = nil) {
+        self.tasks = tasks.sorted { $0.position < $1.position }; self.todos = todos; self.goals = goals
+        self.review = review
     }
 
     /// These lists with changes not yet on the server laid over them, the
@@ -71,6 +93,8 @@ public struct TodoLists: Codable, Equatable {
             tasks.append(DailyTask(id: id, title: title, position: tasks.count + 1, done: false))
         case let .renameTask(id, title):
             updateTask(id) { $0.title = title }
+        case let .setTaskCue(id, cue):
+            updateTask(id) { $0.cue = cue }
         case let .reorderTasks(order):
             let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
             tasks = tasks.enumerated().sorted {
@@ -81,7 +105,7 @@ public struct TodoLists: Codable, Equatable {
             tasks.removeAll { $0.id == id }
             renumber()
         case let .tickTask(id, day, done):
-            if day == today { updateTask(id) { $0.done = done } }
+            updateTask(id) { $0.set(day, done: done, today: today) }
         case let .createTodo(draft):
             guard let id = draft.id, !todos.contains(where: { $0.id == id }) else { return }
             var item = TodoItem(id: id, title: draft.trimmedTitle, createdAt: TodoRules.iso(now))
@@ -106,6 +130,8 @@ public struct TodoLists: Codable, Equatable {
             updateTodo(id) { $0.list = list }
         case let .deleteTodo(id):
             todos.removeAll { $0.id == id }
+        case .createGoal, .editGoal, .setOverarching, .setGoalStatus:
+            goals?.apply(change)
         }
     }
 
@@ -141,6 +167,12 @@ extension TodoItem {
 }
 
 /// The queue on disk, oldest first.
+///
+/// The app's own queue has one writer, but the Home Screen widget's
+/// (`TodoWidgetFiles.outbox`) is written by the widget extension and emptied
+/// by the app, two processes. So every read-modify-write holds a file lock,
+/// and sending or draining the queue holds a second, separate one: a widget
+/// tap that is mid-send and the app's drain must not both deliver one tick.
 public final class TodoOutbox {
     public let root: URL
     private var file: URL { root.appendingPathComponent("outbox.json") }
@@ -151,24 +183,73 @@ public final class TodoOutbox {
     }
 
     public func list() throws -> [TodoOp] {
-        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
-        return try JSONDecoder().decode([TodoOp].self, from: Data(contentsOf: file))
+        try locked(".outbox.lock") { try read() }
     }
 
     @discardableResult
     public func append(_ change: TodoChange, now: Date = Date()) throws -> TodoOp {
         let op = TodoOp(change: change, createdAt: now)
-        try write(try list() + [op])
+        try append(op)
         return op
     }
 
+    /// Keeps the op's id and time: one moved here from the widget's queue.
+    public func append(_ op: TodoOp) throws {
+        try locked(".outbox.lock") {
+            let ops = try read()
+            if !ops.contains(where: { $0.id == op.id }) { try write(ops + [op]) }
+        }
+    }
+
     public func remove(_ op: TodoOp) throws {
-        try write(try list().filter { $0.id != op.id })
+        try locked(".outbox.lock") { try write(try read().filter { $0.id != op.id }) }
+    }
+
+    /// Everything queued, leaving the queue empty.
+    public func drain() throws -> [TodoOp] {
+        try locked(".outbox.lock") {
+            let ops = try read()
+            if !ops.isEmpty { try write([]) }
+            return ops
+        }
+    }
+
+    /// Runs `body` while holding the send lock, or returns false at once
+    /// when another process holds it. The OS drops it if that process dies.
+    @discardableResult
+    public func whileSending(_ body: () async throws -> Void) async throws -> Bool {
+        let descriptor = open(root.appendingPathComponent(".send.lock").path, O_CREAT | O_RDWR, mode_t(0o600))
+        guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+        defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { return false }
+        defer { _ = flock(descriptor, LOCK_UN) }
+        try await body()
+        return true
+    }
+
+    private func read() throws -> [TodoOp] {
+        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+        return try JSONDecoder().decode([TodoOp].self, from: Data(contentsOf: file))
     }
 
     private func write(_ ops: [TodoOp]) throws {
         try JSONEncoder().encode(ops).write(to: file, options: .atomic)
     }
+
+    private func locked<T>(_ name: String, _ body: () throws -> T) throws -> T {
+        try withFileLock(root.appendingPathComponent(name), body)
+    }
+}
+
+/// Runs `body` holding an exclusive lock on `url` (created if missing),
+/// waiting for another process to let go of it first.
+func withFileLock<T>(_ url: URL, _ body: () throws -> T) throws -> T {
+    let descriptor = open(url.path, O_CREAT | O_RDWR, mode_t(0o600))
+    guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+    defer { close(descriptor) }
+    guard flock(descriptor, LOCK_EX) == 0 else { throw CocoaError(.fileLocking) }
+    defer { _ = flock(descriptor, LOCK_UN) }
+    return try body()
 }
 
 public protocol TodoTransport {

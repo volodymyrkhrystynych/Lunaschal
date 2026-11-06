@@ -413,7 +413,9 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
                        'create_note_to_self', 'ask_user', 'remember',
                        'search_conversations', 'search_journal', 'read_day',
                        'find_untitled_screenshots', 'wiki_read', 'wiki_search', 'create_goal', 'list_goals',
-                       'check_goal', 'update_goal'}
+                       'set_overarching_goal', 'edit_goal',
+                       'check_goal', 'update_goal', 'record_excuse', 'get_day_review',
+                       'adjust_day_rating', 'set_habit_cue'}
 
 
 def test_the_research_toolset_is_research_and_nothing_else(monkeypatch, answered):

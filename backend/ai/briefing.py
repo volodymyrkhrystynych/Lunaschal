@@ -93,16 +93,17 @@ def gather_briefing_context(now: int | None = None) -> dict:
     """Assemble everything the briefing draws on. Pure w.r.t. the model — only
     reads the DB."""
     from backend.db.connection import get_db
-    from backend.ai.provider import get_settings
+    from backend.coach import engine as coach_engine
+    from backend.goals import service as goal_service
     now = now if now is not None else int(time.time())
     db = get_db()
     today = day_key_for(now)
     horizon = (date.fromisoformat(today) + timedelta(days=CALENDAR_LOOKAHEAD_DAYS)).isoformat()
-    s = get_settings()
     return {
         'now': now,
         'today': today,
-        'goals': (s.get('briefing_goals') if s else None) or '',
+        'goals': goal_service.context_text(today),
+        'coach': coach_engine.context_text(today),
         'journal': get_recent_journal_entries(now),
         'daily_tasks': pending_daily_tasks(db, today),
         'todos': open_todos(db),
@@ -131,7 +132,21 @@ def build_briefing_prompt(context: dict) -> str:
 
     goals = (context.get('goals') or '').strip()
     if goals:
-        lines += ["The user's stated goals and current focus:", goals, '']
+        lines += ["The user's goals:", goals, '']
+
+    coach = (context.get('coach') or '').strip()
+    if coach:
+        lines += [coach, '']
+
+    review = context.get('review')
+    if review and review.get('items'):
+        lines.append("Yesterday's review (already shown to them above your check-in, rating included):")
+        for item in review['items']:
+            status = ('excused' if item.get('excused') else 'unknown' if item['done'] is None
+                      else 'done' if item['done'] else 'missed')
+            reason = f" — they said: {item['excuse']}" if item.get('excuse') else ''
+            lines.append(f"- {item['title']}: {status}{reason}")
+        lines.append('')
 
     journal = format_journal_context(context['journal'], context['now'])
     if journal:
@@ -180,6 +195,21 @@ def build_briefing_prompt(context: dict) -> str:
                 context['calendar'], context['learning_due'], articles)):
         lines.append('(No recent journal, tasks, to-dos, calendar events, or reviews.)')
 
+    week = context.get('week') or []
+    if week:
+        lines.append("It's Sunday. The week's reviewed days, for a two-sentence look back at the "
+                     'start of your check-in (kind, specific, no numbers beyond what is here):')
+        lines += [f"- {d['day']}: {d['rating'] or 'no rating'}/5 — {d['done']} done, {d['missed']} missed, "
+                  f"{d['excused']} excused" for d in week]
+        lines.append('')
+
+    if context.get('suggest_habit'):
+        habits = ', '.join(t['title'] for t in context.get('habits', [])) or 'none yet'
+        lines += [
+            'You may suggest ONE new daily habit in "habitSuggestion" (or null), only if their goals or '
+            'journal clearly point to something small they would benefit from doing every day. Give it '
+            f'an if-then cue tied to something they already do. Their habits now: {habits}.', '']
+
     if context.get('yesterday'):
         lines += ['Previous day evidence for calendar reconstruction (JSON):',
                   json.dumps(context['yesterday'], ensure_ascii=False), '']
@@ -196,7 +226,10 @@ SYSTEM_PROMPT = (
     "Your answer has three parts: briefing, todos, and events.\n\n"
     "\"briefing\" is the check-in only: a warm, concise few sentences that reflect "
     "what they've been living and thinking about and how you're framing their day. "
-    "Be encouraging, not naggy. Do NOT list the day's tasks here.\n\n"
+    "Be encouraging, not naggy. Do NOT list the day's tasks here. Yesterday's "
+    "review and its rating are already shown above your words: don't restate the "
+    "rating or the list. If it helps, name one small thing to carry into today, "
+    "and if a goal period has no goals set, invite them to set some.\n\n"
     "\"todos\" IS the plan for the day. It is rendered as a checklist directly "
     "under your check-in and it is the only place the day's work appears, so it "
     "must carry the plan — a check-in with an empty list tells the user nothing "
@@ -249,6 +282,18 @@ BRIEFING_SCHEMA = {
                 'required': ['title', 'priority', 'list', 'due', 'linkedTitle'],
                 'additionalProperties': False,
             },
+        },
+        # Offered only when the prompt invites one (briefing_job decides:
+        # at most weekly, and only with room for another habit).
+        'habitSuggestion': {
+            'type': ['object', 'null'],
+            'properties': {
+                'title': {'type': 'string'},
+                'cue': {'type': 'string'},
+                'why': {'type': 'string'},
+            },
+            'required': ['title', 'cue', 'why'],
+            'additionalProperties': False,
         },
     },
     'required': ['briefing', 'todos', 'events'],

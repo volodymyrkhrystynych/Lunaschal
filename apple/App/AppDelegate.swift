@@ -72,6 +72,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject, UNUs
                     background.handle(AppleSyncLease(processing))
                 }
             }
+        if case .success(let model) = result { CoachReminders.shared.start(model: model) }
+        else { CoachReminders.shared.start(model: nil) }
         if registered { background?.schedule() }
         else if case .success(let model) = result {
             background = nil
@@ -85,10 +87,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject, UNUs
         if case .some(.success(let model)) = startup { model.leaveForeground() }
     }
 
-    // MARK: Push (the Code tab's agent: a plan to approve, a question, a result)
+    // MARK: Push (the Code tab's agent and the coach's reminders)
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         PushRouter.shared.deviceToken = CodePushPayload.hexToken(deviceToken)
+        CoachReminders.shared.registered(token: deviceToken)
     }
 
     /// Expected until the App ID has the Push capability and the build carries
@@ -96,6 +99,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject, UNUs
     /// works, it just cannot call you back.
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         print("Push registration failed: \(error.localizedDescription)")
+        CoachReminders.shared.failed(error)
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
@@ -105,8 +109,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject, UNUs
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             didReceive response: UNNotificationResponse) async {
-        guard let id = CodePushPayload.taskID(from: response.notification.request.content.userInfo) else { return }
-        await MainActor.run { PushRouter.shared.openTaskID = id }
+        if let id = CodePushPayload.taskID(from: response.notification.request.content.userInfo) {
+            await MainActor.run { PushRouter.shared.openTaskID = id }
+        } else {
+            await CoachReminders.shared.handle(response)
+        }
     }
 }
 

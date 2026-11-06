@@ -275,6 +275,7 @@ def create_journal_entry(
     pending_attachments: int = 0,
     coords: tuple[float, float] | None = None,
     auto_file: bool = False,
+    goal_id: str | None = None,
 ) -> str | None:
     """Inserts a journal entry and kicks off background metadata generation
     (and, if `polish` and `raw_content` is set, background polish — the STT
@@ -297,6 +298,9 @@ def create_journal_entry(
     moved out of the journal (see `autofile_entry`). An id that was already moved
     is a replay of that capture's create, and must not bring the entry back.
 
+    `goal_id` marks the entry a goal change left behind (backend/goals/) — set
+    in the INSERT itself, so the goal judge never sees it as evidence.
+
     A composer mints its entry id at the first recorded chunk, so a clip can
     reach `create_recording_entry` *before* this does — the boot sweep after a
     crash sends only the clip, and an offline queue can replay in either order.
@@ -313,10 +317,10 @@ def create_journal_entry(
     source = 'device' if coords else None
     cur = db.execute(
         'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags,'
-        ' latitude, longitude, location_source, auto_file, created_at, updated_at)'
-        ' VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        ' latitude, longitude, location_source, auto_file, goal_id, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
         (id, content, raw_content, title, tags_json(tags),
-         latitude, longitude, source, int(auto_file), created_at, created_at),
+         latitude, longitude, source, int(auto_file), goal_id, created_at, created_at),
     )
     # With no fix of its own, where the phone's trail was at that moment.
     if cur.rowcount and not coords:

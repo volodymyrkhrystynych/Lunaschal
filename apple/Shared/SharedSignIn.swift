@@ -61,6 +61,12 @@ enum SharedSignIn {
             .appendingPathComponent("shared-links", isDirectory: true)
     }
 
+    /// The group's container, for the Home Screen widgets' files
+    /// (`TodoWidgetFiles`). Nil without the App Group entitlement.
+    static func container() -> URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
+    }
+
     static func screenshotsRoot() -> URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)?
             .appendingPathComponent("journal-screenshots", isDirectory: true)

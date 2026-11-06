@@ -45,6 +45,8 @@ from backend.ai.briefing import (
 )
 from backend.ai.llm import EmptyCompletion
 from backend.briefing_events import stage_events
+from backend.coach import review as day_review
+from backend.goals import rollover as goal_rollover
 from backend.oddities_job import briefing_report, render_markdown as render_oddities
 from backend.routes.tasks import (
     _parse_priority, _parse_due, _today_chat_todo_titles,
@@ -168,6 +170,54 @@ def stage_carryover_todos(db, conv_id: str, today: str) -> list[dict]:
     return proposals
 
 
+HABIT_SUGGESTION_DAYS = 7
+
+
+def _may_suggest_habit(db, habit_count: int, now: int) -> bool:
+    """At most one suggested habit a week, and never into a full list."""
+    from backend.routes.tasks import MAX_TASKS
+    if habit_count >= MAX_TASKS:
+        return False
+    since = now - HABIT_SUGGESTION_DAYS * 86400
+    for row in db.execute("SELECT metadata FROM messages WHERE role='assistant' AND created_at>=? "
+                          "AND metadata LIKE '%\"habit\"%'", (since,)):
+        try:
+            if any(p.get('kind') == 'habit' for p in json.loads(row['metadata']).get('proposals', [])):
+                return False
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return True
+
+
+def _habit_suggestion(raw) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    title = (raw.get('title') or '').strip()[:200]
+    if not title:
+        return None
+    return {'id': str(ULID()), 'kind': 'habit', 'status': 'pending',
+            'data': {'title': title, 'cue': (raw.get('cue') or '').strip()[:200],
+                     'why': (raw.get('why') or '').strip()[:300]}}
+
+
+def stage_habit_plans(db, conv_id: str, review: dict) -> list[dict]:
+    """The review's if-then plans for recurring obstacles, as `habit_plan`
+    cards. Accepting one sets that habit's cue. A plan whose habit title
+    doesn't match a habit is dropped — a cue needs somewhere to go."""
+    habits = {r['title'].strip().lower(): r for r in db.execute('SELECT id, title, cue FROM daily_tasks')}
+    proposals = []
+    for plan in review.get('replan') or []:
+        habit = habits.get((plan.get('habitTitle') or '').strip().lower())
+        if not habit or not (plan.get('ifThen') or '').strip():
+            continue
+        proposals.append({
+            'id': str(ULID()), 'kind': 'habit_plan', 'status': 'pending',
+            'data': {'taskId': habit['id'], 'habitTitle': habit['title'],
+                     'obstacle': plan.get('obstacle') or '', 'cue': plan['ifThen'].strip()[:200]},
+        })
+    return proposals
+
+
 def _oddities_report(now: int) -> dict:
     """The server-oddities section never costs the briefing: a broken read of
     its tables reports the check as not having run, which is what it amounts to."""
@@ -202,7 +252,26 @@ def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         db.commit()  # persist the conversation if we just created it
         return None
 
+    # Close finished goal periods and review yesterday before planning today:
+    # the plan should know how yesterday went, and the review leads the message.
+    # Neither may cost the briefing.
+    try:
+        goal_rollover.run(now)
+    except Exception as e:
+        print(f'Goal rollover before the briefing failed: {e}')
+    try:
+        review = day_review.finalize(day_review.yesterday(now), now)
+    except Exception as e:
+        print(f"Yesterday's review failed: {e}")
+        review = None
+    shown_review = review if review and review['items'] else None
+
     context = gather_briefing_context(now)
+    context['review'] = shown_review
+    context['habits'] = [dict(r) for r in db.execute('SELECT title FROM daily_tasks ORDER BY position')]
+    context['suggest_habit'] = _may_suggest_habit(db, len(context['habits']), now)
+    if date.fromisoformat(day_key).weekday() == 6:
+        context['week'] = day_review.recent(7, day_key)
     degraded = False
     try:
         result = generate_briefing(context)
@@ -231,7 +300,7 @@ def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
     # also offered as a card.
     carried = stage_carryover_todos(db, conv_id, context['today'])
     oddities = _oddities_report(now)
-    if degraded and not inserted and not carried and not oddities['items']:
+    if degraded and not inserted and not carried and not oddities['items'] and not shown_review:
         # No prose, nothing added, nothing carried over and nothing wrong with
         # the server: there's no briefing to leave. A server problem alone is
         # still worth waking to.
@@ -240,10 +309,16 @@ def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
 
     content = f"{briefing}\n\n{render_oddities(oddities)}"
     metadata = {'briefing': True}
+    replans = []
+    if shown_review:
+        content = f"{day_review.render(shown_review)}\n\n{content}"
+        metadata['review'] = day_review.card(shown_review)
+        replans = stage_habit_plans(db, conv_id, shown_review)
     if oddities['items']:
         metadata['oddities'] = [i['fingerprint'] for i in oddities['items']]
     events = stage_events(db, result.get('events', []), context.get('yesterday'))
-    proposals = events + carried
+    suggestion = _habit_suggestion(result.get('habitSuggestion')) if context['suggest_habit'] else None
+    proposals = events + carried + replans + ([suggestion] if suggestion else [])
     if proposals:
         metadata['proposals'] = proposals
     if degraded:

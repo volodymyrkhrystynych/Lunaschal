@@ -360,8 +360,46 @@ what each device can currently do and which work remains device-only.
   is signed for push; delivery needs the server's APNs key (docs/code-agent.md).
   Passed in simulator with the `-codeFixture` demo data; notifications and a
   real agent are not yet verified.
-- Todo is the desktop Lifestyle tab's tasks card: up to four daily tasks (tick
-  for today, add, rename, reorder and delete under Edit) above the To-Do and
+- Chat shows the coach's cards: yesterday's review under the morning briefing
+  (stars, each habit / weigh-in / calorie log / goal as done, missed or
+  excused, and Explain, which starts a message naming what was missed so the
+  agent can record the reason), the evening check-in's "Tell me about today",
+  and a goal period's close with a button to the Todo tab to set the next
+  ones. A review's if-then plan for a recurring obstacle is an editable
+  `habit_plan` card that sets the habit's cue. Parsing is unit tested
+  (`CoachReviewTests`); the cards build in the simulator.
+- Habits follow "never miss twice": one missed day is grace and two end the
+  streak; a day excused in chat is a ring in the week dots and neither counts
+  nor breaks the run; a streak whose grace day is spent shows a hollow red
+  flame. Each habit can carry a cue (long-press → Add a cue), and the Habits
+  header shows yesterday's rating. Core's `HabitStreaks` runs the backend's
+  own fixture (`backend/tests/fixtures/habit_streaks.json`).
+- Coach reminders (Settings → Coach, off by default): turning them on asks
+  for notification permission and registers the phone with the server
+  (`CoachReminders.swift`). Check-ins, goal rollovers and the learning
+  reminders arrive as notifications with lock-screen buttons — Done ticks the
+  habit for the day the reminder was about, Log weight / Log calories take a
+  typed value, Reply sends a message the agent answers with the app closed,
+  Later re-shows it in an hour from the phone itself. "Check-ins and
+  reminders" holds the server's switches and what reminders have changed so
+  far. Routing is unit tested (`CoachNotificationTests`) and the app builds;
+  APNs cannot reach a simulator, so delivery is unverified until a TestFlight
+  build after the signing steps in SIGNING.md. Payloads for `xcrun simctl
+  push` are in `tools/push-fixtures/`.
+- Todo opens with Goals: the overarching goal (a block of text) and
+  collapsible This week / month / quarter / year sections, each listing its
+  open goals (a goal with a daily rule shows its streak and prize) or "Not
+  set". A goal opens in an editor; the overarching goal is replaced rather
+  than edited, and every change — add, edit, end — queues in the same outbox
+  as the to-dos and leaves a journal entry on the server, dated when it was
+  made. Daily rules and prizes are set up in Chat. Core logic is unit tested
+  (`GoalsTests`); the screen builds in the simulator but has no UI test yet,
+  since the offline UI tests have no server to load goals from.
+- Todo is the desktop Lifestyle tab's tasks card: up to ten daily habits (tick
+  for today, add, rename, reorder and delete under Edit), each showing its
+  last seven days as dots and its running streak (Core's `HabitStreaks`, the
+  server's `backend/habit_streaks.py`, recomputed the moment a tick is queued;
+  an unticked today doesn't break it), above the To-Do and
   Archive lists, ordered and filtered as on the desktop (soonest due first,
   then priority; a repeating to-do hides until it's near due). A to-do opens
   in a form for title, notes, due date, repeat, priority and list; swipe to
@@ -371,9 +409,22 @@ what each device can currently do and which work remains device-only.
   the next pass. A daily-task tick carries the 4am day it was made on, so one
   sent after the rollover still counts for that day, and a daily task created
   offline carries its own id, so a resend can't add it twice. A change the
-  server turns down (a fifth daily task, say) is dropped and said in the tab.
-  Passed in simulator offline (including the badge and a relaunch with
-  changes waiting); not yet run against a server or verified on device.
+  server turns down (an eleventh habit, say) is dropped and said in the tab.
+  Passed in simulator offline (including the badge, a relaunch with changes
+  waiting, and a tick's streak); not yet run against a server or verified on
+  device.
+- Home Screen widgets (`Widgets/`, the `LunaschalWidgets` extension): **Habits**
+  ticks today's habits from the Home Screen with their streaks and week, and
+  **To-Do** completes open to-dos, due ones first, each in small, medium and
+  large. They read a snapshot the app keeps in the `group.com.lunaschal.mobile`
+  App Group and refresh it from the server with the app's shared sign-in; a tap
+  is queued there, shown at once, sent by the widget if it can be, and moved
+  into the app's own outbox on its next pass if not. Habits untick at 4am from
+  the snapshot's history, without waiting for a refresh. The rules
+  (`TodoWidget.swift`: merging the app's and widget's copies, folding a send in
+  once, the shared queue's locks) are covered by Core tests; the extension
+  builds in simulator, but an unsigned build has no App Group, so the widgets
+  there only say to open the app. Not yet verified on device.
 - More → Jobs is the desktop Jobs tab's triage feed: the same postings in the
   same order, grouped Worth a look / The rest, sortable Best match or Nearest,
   each card showing the model's two-sentence summary (or the start of the

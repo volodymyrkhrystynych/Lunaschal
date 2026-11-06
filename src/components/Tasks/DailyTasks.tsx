@@ -1,7 +1,13 @@
+import { useState } from 'react';
 import { useDraftState } from '@/hooks/useDraftState';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, DailyTask } from '../../hooks/api';
 import { InlineEditableText } from '../InlineEditableText';
+import { localDayKey } from '@/lib/dates';
+import { recentDays, streakLabel } from '@/lib/habits';
+
+/** Mirrors MAX_TASKS in backend/routes/tasks.py. */
+export const MAX_DAILY_TASKS = 10;
 
 interface DailyTasksProps {
   tasks: DailyTask[];
@@ -93,6 +99,8 @@ export function DailyTasks({
     setEditingId(task.id);
   };
 
+  const today = localDayKey();
+
   return (
     <div>
       <div className="flex items-baseline justify-between gap-2 mb-3">
@@ -103,18 +111,18 @@ export function DailyTasks({
               : ''
           }`}
         >
-          Daily Tasks
+          Habits
         </h2>
         {/* This row is the card's top-right corner, so the delete toggle lives
             here the way the workout log's does — it governs the whole card,
             to-dos included, not just the four rows below it. */}
         <div className="flex items-center gap-2">
-          {tasks.length < 4 && !showAdd && (
+          {tasks.length < MAX_DAILY_TASKS && !showAdd && (
             <button
               onClick={() => setShowAdd(true)}
               className="text-sm px-3 py-1.5 rounded border border-white/20 text-[var(--color-text)] hover:bg-white/10 transition-colors"
             >
-              + Add task
+              + Add habit
             </button>
           )}
           {onToggleDelete && (
@@ -184,7 +192,10 @@ export function DailyTasks({
                     : 'text-[var(--color-text)]'
                 }
               />
+              <HabitCue task={task} />
             </div>
+
+            <HabitWeek task={task} today={today} />
 
             <div className="flex items-center gap-1 shrink-0">
               <button
@@ -218,7 +229,8 @@ export function DailyTasks({
 
         {tasks.length === 0 && !showAdd && !isLoading && (
           <div className="text-center py-6 text-[var(--color-text-muted)] text-sm">
-            No tasks yet. Add up to 4, ordered by importance.
+            No habits yet. Add up to {MAX_DAILY_TASKS}, ordered by importance.
+            They reset at 4am.
           </div>
         )}
       </div>
@@ -237,7 +249,7 @@ export function DailyTasks({
                 setNewTitle('');
               }
             }}
-            placeholder="Task title…"
+            placeholder="Habit…"
             className="flex-1 bg-[var(--color-surface)] border border-white/20 rounded px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]"
           />
           <button
@@ -259,6 +271,97 @@ export function DailyTasks({
             Cancel
           </button>
         </div>
+      )}
+    </div>
+  );
+}
+
+/** The last seven days as dots, and the running streak. */
+/** The if-then half of a habit — "after coffee" — shown under its title and
+ *  edited in place. Saved on blur; an empty cue clears it. */
+function HabitCue({ task }: { task: DailyTask }) {
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (cue: string) => api.tasks.setCue(task.id, cue),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tasks'] }),
+  });
+  if (draft === null) {
+    return (
+      <button
+        type="button"
+        onClick={() => setDraft(task.cue ?? '')}
+        className="block text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+      >
+        {task.cue ? `↳ ${task.cue}` : '+ cue'}
+      </button>
+    );
+  }
+  return (
+    <input
+      autoFocus
+      aria-label={`Cue for ${task.title}`}
+      value={draft}
+      placeholder="After my morning coffee"
+      onChange={e => setDraft(e.target.value)}
+      onBlur={() => {
+        if (draft.trim() !== (task.cue ?? '')) save.mutate(draft.trim());
+        setDraft(null);
+      }}
+      onKeyDown={e => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') setDraft(null);
+      }}
+      className="mt-0.5 w-full bg-transparent border-b border-white/20 text-xs outline-none"
+    />
+  );
+}
+
+function HabitWeek({ task, today }: { task: DailyTask; today: string }) {
+  const streak = streakLabel(task.streak);
+  const best = task.longestStreak ?? 0;
+  return (
+    <div
+      className="flex items-center gap-2 shrink-0"
+      title={best > 0 ? `Longest streak: ${best} days` : undefined}
+    >
+      <div className="flex gap-0.5" aria-label="Last seven days">
+        {recentDays(task.history, today, 7, task.excused).map(
+          ({ day, done, excused }) => (
+            <span
+              key={day}
+              title={excused ? `${day} — excused` : day}
+              data-testid={
+                done
+                  ? 'habit-day-done'
+                  : excused
+                    ? 'habit-day-excused'
+                    : 'habit-day'
+              }
+              className={`w-1.5 h-1.5 rounded-full ${
+                done
+                  ? 'bg-[var(--color-primary)]'
+                  : excused
+                    ? 'border border-white/40'
+                    : 'bg-white/15'
+              }`}
+            />
+          )
+        )}
+      </div>
+      {streak && (
+        <span
+          className={`text-xs tabular-nums w-9 text-right ${
+            task.atRisk ? 'text-red-400' : 'text-[var(--color-text-muted)]'
+          }`}
+          title={
+            task.atRisk
+              ? 'Missed yesterday — today keeps the streak alive'
+              : undefined
+          }
+        >
+          {streak}
+        </span>
       )}
     </div>
   );

@@ -2,6 +2,7 @@ import Combine
 import Foundation
 import LunaschalCore
 import SwiftUI
+import WidgetKit
 
 /// The Todo tab: the desktop Lifestyle tab's daily tasks and to-do lists.
 /// Every change goes into the sync outbox and shows at once; the lists on
@@ -22,6 +23,8 @@ final class TodoModel: ObservableObject {
     /// started after they were sent comes back.
     private var sent: [(op: TodoOp, at: Date)] = []
     private var lastQueue: [TodoOp] = []
+    /// When `server` was fetched: the cache file's age until the first fetch.
+    private var fetchedAt: Date
     private var watching: AnyCancellable?
     private var refusalWatch: AnyCancellable?
 
@@ -29,6 +32,8 @@ final class TodoModel: ObservableObject {
         self.capture = capture
         cacheURL = capture.store.root.appendingPathComponent("todos.cache")
         server = (try? JSONDecoder().decode(TodoLists.self, from: Data(contentsOf: cacheURL))) ?? TodoLists()
+        fetchedAt = (try? cacheURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            ?? .distantPast
         lastQueue = capture.todoQueue
         watching = capture.$todoQueue.sink { [weak self] queue in self?.queueChanged(queue) }
         refusalWatch = capture.$todoRefusals.sink { [weak self] _ in self?.objectWillChange.send() }
@@ -37,6 +42,11 @@ final class TodoModel: ObservableObject {
     /// What the tab shows.
     var lists: TodoLists { server.applying(sent.map(\.op) + capture.todoQueue, today: DayKey.of(Date())) }
     var tasks: [DailyTask] { lists.tasks }
+    var goals: CurrentGoals? { lists.goals }
+    /// Yesterday's review, once it has been written.
+    var yesterday: DayReview? {
+        lists.review.flatMap { $0.day == HabitStreaks.adding(-1, to: DayKey.of(Date())) ? $0 : nil }
+    }
     var todos: [TodoItem] { lists.todos }
     var waiting: Int { capture.todoQueue.count }
     var refusals: [String] { capture.todoRefusals }
@@ -54,6 +64,8 @@ final class TodoModel: ObservableObject {
         sent += lastQueue.filter { !left.contains($0.id) }.map { ($0, now) }
         lastQueue = queue
         objectWillChange.send()
+        // The publisher fires before `todoQueue` takes the new value.
+        publishToWidgets(pending: queue)
     }
 
     func refresh() async {
@@ -67,11 +79,18 @@ final class TodoModel: ObservableObject {
         do {
             async let fetchedTasks = api.dailyTasks()
             async let fetchedTodos = api.todos()
+            // A server from before goals answers 404; the lists still load.
+            async let fetchedGoals = try? api.currentGoals()
+            async let fetchedReviews = try? api.coachReviews(days: 1)
             let (tasks, todos) = try await (fetchedTasks, fetchedTodos)
-            server = TodoLists(tasks: tasks, todos: todos)
+            let yesterday = HabitStreaks.adding(-1, to: DayKey.of(Date()))
+            server = TodoLists(tasks: tasks, todos: todos, goals: await fetchedGoals ?? server.goals,
+                               review: await fetchedReviews?.review(of: yesterday))
+            fetchedAt = started
             sent.removeAll { $0.at < started }
             loadProblem = nil
             if let data = try? JSONEncoder().encode(server) { try? data.write(to: cacheURL, options: .atomic) }
+            publishToWidgets()
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
             loadProblem = ("Offline", "Can't reach your server. Changes are saved on this phone and sent when it's back.")
@@ -79,6 +98,17 @@ final class TodoModel: ObservableObject {
     }
 
     private func queue(_ change: TodoChange) { capture.queueTodo(change) }
+
+    /// Hands the Home Screen widgets this view of the lists, and redraws
+    /// them if it changed what they show.
+    func publishToWidgets(pending: [TodoOp]? = nil) {
+        guard let container = SharedSignIn.container() else { return }
+        let (fetched, asOf, sentOps, pending) = (server, fetchedAt, sent.map(\.op), pending ?? capture.todoQueue)
+        let changed = (try? TodoWidgetSnapshot.update(at: TodoWidgetFiles.snapshot(in: container)) {
+            $0 = $0.merging(app: fetched, asOf: asOf, sent: sentOps, pending: pending, now: Date())
+        }) ?? false
+        if changed { WidgetCenter.shared.reloadAllTimelines() }
+    }
 
     // MARK: Daily tasks
 
@@ -99,6 +129,14 @@ final class TodoModel: ObservableObject {
         queue(.renameTask(id: task.id, title: trimmed))
     }
 
+    /// "After coffee": the if-then half of the habit. Empty clears it.
+    func setCue(_ task: DailyTask, _ cue: String) {
+        let trimmed = cue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = trimmed.isEmpty ? nil : trimmed
+        guard value != task.cue else { return }
+        queue(.setTaskCue(id: task.id, cue: value))
+    }
+
     func moveTasks(from source: IndexSet, to destination: Int) {
         var order = tasks
         order.move(fromOffsets: source, toOffset: destination)
@@ -106,6 +144,36 @@ final class TodoModel: ObservableObject {
     }
 
     func delete(_ task: DailyTask) { queue(.deleteTask(id: task.id)) }
+
+    // MARK: Goals
+
+    /// Replacing the overarching goal leaves a journal entry on the server
+    /// quoting the old one, so an unchanged save sends nothing.
+    func setOverarching(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != goals?.overarching?.text else { return }
+        queue(.setOverarching(id: ULID.make(), text: trimmed))
+    }
+
+    func addGoal(_ horizon: GoalHorizon, title: String, details: String? = nil) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        queue(.createGoal(id: ULID.make(), horizon: horizon, title: trimmed, details: Self.clean(details)))
+    }
+
+    func edit(_ goal: Goal, title: String, details: String?) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notes = Self.clean(details)
+        guard !trimmed.isEmpty, trimmed != goal.title || notes != goal.details else { return }
+        queue(.editGoal(id: goal.id, title: trimmed, details: notes))
+    }
+
+    func end(_ goal: Goal) { queue(.setGoalStatus(id: goal.id, action: "end")) }
+
+    private static func clean(_ text: String?) -> String? {
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     // MARK: To-dos
 

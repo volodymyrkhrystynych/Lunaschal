@@ -28,14 +28,15 @@ its registered App ID cannot get a distribution profile.
 | Lunaschal                | `com.lunaschal.mobile`                     | `Lunaschal`             |
 | Lunaschal Watch          | `com.lunaschal.mobile.watchkitapp`         | `LunaschalWatch`        |
 | Watch face complications | `com.lunaschal.mobile.watchkitapp.widgets` | `LunaschalWatchWidgets` |
-| iPhone widgets           | `com.lunaschal.mobile.widgets`             | Not built yet           |
+| iPhone widgets           | `com.lunaschal.mobile.widgets`             | `LunaschalWidgets`      |
 | Share sheet              | `com.lunaschal.mobile.share`               | `LunaschalShare`        |
 
-`com.lunaschal.mobile.widgets` is reserved for an iPhone widget extension.
-When it is built it needs its own App Store profile, a matching
-entry in `apple/tools/release.py`'s `BUNDLES` and `PROFILES`, a check in
-`apple/tools/check_archive.py`, and a secret in the release workflow, as the
-complications and the share sheet have.
+`com.lunaschal.mobile.widgets` is the iPhone's Home Screen widgets (Habits
+and To-Do), embedded in the iPhone app. It has its entry in
+`apple/tools/release.py`'s `BUNDLES` and `PROFILES`, a check in
+`apple/tools/check_archive.py`, and the `APPLE_WIDGETS_PROFILE_BASE64` secret
+in the release workflow, as the complications and the share sheet have — so
+**a release fails until that profile exists**.
 
 Two App Groups are registered in the team (confirmed by the user on
 2026-10-07):
@@ -43,7 +44,7 @@ Two App Groups are registered in the team (confirmed by the user on
 | Registered as   | App Group                          | Used by                                      |
 | --------------- | ---------------------------------- | -------------------------------------------- |
 | Lunaschal Watch | `group.com.lunaschal.mobile.watch` | `LunaschalWatch` and `LunaschalWatchWidgets` |
-| Lunaschal       | `group.com.lunaschal.mobile`       | `Lunaschal` and `LunaschalShare`             |
+| Lunaschal       | `group.com.lunaschal.mobile`       | `Lunaschal`, `LunaschalShare` and `LunaschalWidgets` |
 
 The Watch app and its complications extension share
 `group.com.lunaschal.mobile.watch`: the pomodoro timer and the recording status
@@ -66,6 +67,13 @@ selected must be regenerated. `apple/tools/release.py` refuses either profile
 without the group, rather than letting it sign an extension that can only say
 "sign in first".
 
+The Home Screen widgets (`LunaschalWidgets`) use the same group and the same
+sign-in copy: they read the lists the app leaves there, refresh them from the
+server, and queue ticks there for the app to send. So
+`com.lunaschal.mobile.widgets` needs App Groups enabled with
+`group.com.lunaschal.mobile` selected before its profile is made, and
+`release.py` refuses its profile without the group.
+
 Distribution profiles the user has created (as reported on 2026-10-07; the
 profile files themselves live only in the release environment's secrets):
 
@@ -77,6 +85,7 @@ profile files themselves live only in the release environment's secrets):
 Still needed: an App Store profile for
 `com.lunaschal.mobile.watchkitapp.widgets` with
 `group.com.lunaschal.mobile.watch`, one for `com.lunaschal.mobile.share` with
+`group.com.lunaschal.mobile`, one for `com.lunaschal.mobile.widgets` with
 `group.com.lunaschal.mobile`, and the iPhone profile regenerated once that
 group is selected on its App ID. The portal lists a profile's capabilities
 but not which group each selects; `release.py` checks that every profile
@@ -110,6 +119,36 @@ record in App Store Connect before uploading a build. Apple describes the
 [app-record setup](https://developer.apple.com/help/app-store-connect/create-an-app-record/add-a-new-app/)
 and [Watch companion identifier](https://developer.apple.com/documentation/bundleresources/information-property-list/wkcompanionappbundleidentifier).
 
+## Push notifications (the coach's reminders, the Code page)
+
+The app registers for remote notifications (`aps-environment: production` in
+`project.yml`, since every signed build is an App Store one), so its App ID
+needs the capability and **its profile must include it**. `tools/release.py` refuses an App Store profile for `com.lunaschal.mobile`
+without `aps-environment: production`, rather than letting a build ship that
+can never receive a reminder. Steps, all in the developer account:
+
+1. Certificates, Identifiers & Profiles → Identifiers → `com.lunaschal.mobile`
+   → enable **Push Notifications**. No certificate is needed; token auth is used.
+2. Regenerate the App Store profile for `com.lunaschal.mobile` (it now carries
+   the push entitlement) and update the `APPLE_IOS_PROFILE_BASE64` secret.
+3. Keys → create a key with **Apple Push Notifications service (APNs)**.
+   Download the `.p8` once (Apple won't offer it again) and note its Key ID.
+4. On the server, put the key somewhere only the service user can read, and
+   add to the production `.env` (read by `ops/run-prod.sh`):
+
+   ```sh
+   APNS_KEY_PATH=/home/volodya/.config/lunaschal/AuthKey_XXXXXXXXXX.p8
+   APNS_KEY_ID=XXXXXXXXXX
+   # APNS_TEAM_ID defaults to 4AG98Q33RQ, APNS_TOPIC to com.lunaschal.mobile
+   ```
+
+5. Restart the server, install the TestFlight build, turn on Settings → Coach
+   reminders on the phone, and use **Send test** in the web's Settings → Coach.
+
+The key never leaves the server's environment: no route returns it or its path
+(`backend/push/apns.py`). A simulator can't receive APNs at all; handling is
+checked there with the payloads in `tools/push-fixtures/`.
+
 ## Hosted signing setup
 
 The [release workflow](../.github/workflows/apple-release.yml) accepts a unique
@@ -136,9 +175,10 @@ variable named `APPLE_TEAM_ID` can override it. Configure these environment
 secrets (base64 values must be a single unwrapped line):
 
 - `APPLE_DISTRIBUTION_P12_BASE64` and `APPLE_DISTRIBUTION_P12_PASSWORD`.
-- `APPLE_IOS_PROFILE_BASE64`, `APPLE_WATCH_PROFILE_BASE64` and
-  `APPLE_COMPLICATIONS_PROFILE_BASE64` and `APPLE_SHARE_PROFILE_BASE64`: App
-  Store distribution profiles using the same certificate.
+- `APPLE_IOS_PROFILE_BASE64`, `APPLE_WATCH_PROFILE_BASE64`,
+  `APPLE_COMPLICATIONS_PROFILE_BASE64`, `APPLE_SHARE_PROFILE_BASE64` and
+  `APPLE_WIDGETS_PROFILE_BASE64`: App Store distribution profiles using the
+  same certificate.
 - For upload only: `APPSTORECONNECT_API_KEY_P8_BASE64`,
   `APPSTORECONNECT_KEY_ID`, and `APPSTORECONNECT_ISSUER_ID`.
 

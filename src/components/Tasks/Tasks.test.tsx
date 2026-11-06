@@ -142,16 +142,37 @@ describe('list rendering and switching', () => {
   });
 });
 
+describe('habit streaks', () => {
+  it('shows the running streak and the week as dots', async () => {
+    vi.mocked(api.tasks.list).mockResolvedValue([
+      {
+        ...dailyTask('d1', 'Morning pages', 1),
+        streak: 3,
+        longestStreak: 9,
+        history: ['2000-01-01'], // outside any week ending today
+      },
+      dailyTask('d2', 'Stretch', 2),
+    ]);
+    renderTasks();
+    await screen.findByText('Morning pages');
+    expect(screen.getByText('🔥 3')).not.toBeNull();
+    expect(screen.getByTitle('Longest streak: 9 days')).not.toBeNull();
+    // Seven days per habit, none of them ticked this week.
+    expect(screen.getAllByTestId('habit-day')).toHaveLength(14);
+    expect(screen.queryAllByTestId('habit-day-done')).toHaveLength(0);
+  });
+});
+
 describe('level-1 section selection', () => {
   it('moves the highlight from Daily through the list pills with S', async () => {
     renderTasks();
     await screen.findByText('Fix the bike');
 
     key('KeyD'); // level 0 → 1, Daily focused
-    expect(screen.getByText('Daily Tasks').className).toContain('ring-1');
+    expect(screen.getByText('Habits').className).toContain('ring-1');
 
     key('KeyS'); // → To-Do
-    expect(screen.getByText('Daily Tasks').className).not.toContain('ring-1');
+    expect(screen.getByText('Habits').className).not.toContain('ring-1');
     expect(screen.getByRole('button', { name: /To-Do/ }).className).toContain(
       'ring-1'
     );

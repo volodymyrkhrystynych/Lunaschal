@@ -1,0 +1,6 @@
+{
+  "Simulator Target Bundle": "com.lunaschal.mobile",
+  "aps": {"alert": {"title": "Weigh-in", "body": "Step on the scale before breakfast?"},
+          "sound": "default", "category": "COACH_WEIGHT", "thread-id": "coach", "interruption-level": "active"},
+  "coach": {"kind": "weight", "day": "2026-11-03", "messageId": "01FIXTUREWEIGHT0000000000"}
+}

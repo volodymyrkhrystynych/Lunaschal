@@ -14,7 +14,8 @@ def sweep():
     ai_service.clear_deferral()
     with ai_service.background():
         for goal in service.list_goals():
-            if goal['status'] not in ('cancelled', 'redeemed'):
+            # Plain-text goals have nothing to judge; an ended one is closed.
+            if goal['hasRule'] and goal['endedAt'] is None and goal['status'] not in ('cancelled', 'redeemed'):
                 service.evaluate(goal['id'], retry=False)
                 if ai_service.deferred_reason():
                     break

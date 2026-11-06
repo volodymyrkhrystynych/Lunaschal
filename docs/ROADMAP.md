@@ -142,8 +142,9 @@ A month grid where each day shows **one photo** from that day, for browsing back
 
 ## Habit tracking
 
-- ⬜ Habit grid: define habits, check them off daily. (Daily tasks — max 4, reset each day — are the nearest thing today.)
-- ⬜ **Streaks** and simple stats over time.
+- ✅ Habits: daily tasks grew into them — up to ten, ticked per 4am day, each with its last seven days on the web and phone.
+- ✅ **Streaks** (current and longest, `backend/habit_streaks.py`), and an interactive Habits widget on the iPhone Home Screen.
+- ⬜ A longer history grid (the server already sends twelve weeks) and completion rates.
 
 ## Lifestyle tab
 
