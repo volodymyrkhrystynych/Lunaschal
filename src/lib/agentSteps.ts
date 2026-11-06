@@ -128,6 +128,7 @@ const PROPOSAL_LABELS: Record<string, string> = {
   propose_food_log: 'a food entry',
   draft_flashcard: 'a flashcard draft',
   propose_flashcards: 'flashcards',
+  propose_screenshot_titles: 'screenshot names',
 };
 
 export function stepLabel(step: AgentStep): string {
@@ -200,6 +201,12 @@ export function stepLabel(step: AgentStep): string {
       return step.ok
         ? `Looked up ${target}`
         : `Couldn't look up that day${step.error ? ` — ${step.error}` : ''}`;
+    case 'find_untitled_screenshots':
+      if (!step.ok)
+        return `Couldn't look up screenshots${step.error ? ` — ${step.error}` : ''}`;
+      return step.count
+        ? `Found ${step.count} unnamed screenshot run${step.count === 1 ? '' : 's'}`
+        : 'No unnamed screenshot runs';
     // Read-only recall scoped to one writing project — its own chapters and
     // notes, never another project's. Nothing is written here either.
     case 'writing_list':

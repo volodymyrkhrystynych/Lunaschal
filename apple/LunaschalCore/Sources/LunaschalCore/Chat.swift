@@ -117,6 +117,7 @@ public struct AgentStep: Equatable {
     static let proposalLabels = [
         "propose_calendar_event": "a calendar event", "propose_calorie_log": "a calorie entry",
         "propose_food_log": "a food entry", "draft_flashcard": "a flashcard draft", "propose_flashcards": "flashcards",
+        "propose_screenshot_titles": "screenshot names",
     ]
 
     /// `stepLabel` in src/lib/agentSteps.ts, word for word.
@@ -156,6 +157,10 @@ public struct AgentStep: Equatable {
             return succeeded ? found("the journal", target) : failed("Couldn't search the journal", dash: true)
         case "read_day":
             return succeeded ? "Looked up \(target)" : failed("Couldn't look up that day", dash: true)
+        case "find_untitled_screenshots":
+            guard succeeded else { return failed("Couldn't look up screenshots", dash: true) }
+            let runs = count ?? 0
+            return runs > 0 ? "Found \(runs) unnamed screenshot run\(runs == 1 ? "" : "s")" : "No unnamed screenshot runs"
         case "writing_list":
             return succeeded ? "Checked the project's chapters and notes (\(count ?? 0))" : failed("Couldn't read the project", dash: true)
         case "writing_search":
@@ -241,19 +246,32 @@ public struct ChatProposal: Equatable, Identifiable {
 
     public var isPending: Bool { status == "pending" }
 
+    /// One run on a `screenshot_titles` card, as the user will recognise it:
+    /// when it was taken and how many shots. `screenshotRunLabel` in
+    /// DelegateProposals.tsx, word for word.
+    public static func screenshotRunLabel(_ item: [String: JSONValue]) -> String {
+        var label = item["date"]?.string ?? ""
+        if let time = item["time"]?.string {
+            label += " \(time)"
+            if let end = item["endTime"]?.string, end != time { label += "–\(end)" }
+        }
+        if let shots = item["shots"]?.int { label += " · \(shots) shot\(shots == 1 ? "" : "s")" }
+        return label
+    }
+
     public var headline: String {
         if let reconstructionDay { return "Suggested event · \(reconstructionDay)" }
         return ["calendar": "Save as calendar event?", "calorie": "Log calories?", "food": "Add to your food log?",
                 "recipe": "Save this recipe?", "recipe_link": "Link this meal to that recipe?",
                 "flashcards": "Generate flashcards?", "todo": "Keep this for today?", "writing_note": "Add to the notes?",
-                "writing_note_update": "Update this note?"][kind] ?? "Save this?"
+                "writing_note_update": "Update this note?", "screenshot_titles": "Rename these screenshots?"][kind] ?? "Save this?"
     }
 
     public var acceptLabel: String {
         if reconstructionDay != nil { return "Approve event" }
         return ["calendar": "Save", "calorie": "Log", "food": "Log Meal", "recipe": "Save", "recipe_link": "Link",
                 "flashcards": "Queue Cards", "todo": "Add to today", "writing_note": "Add Note",
-                "writing_note_update": "Update Note"][kind] ?? "Save"
+                "writing_note_update": "Update Note", "screenshot_titles": "Rename"][kind] ?? "Save"
     }
 
     public var resolvedLabel: String {
@@ -272,6 +290,10 @@ public struct ChatProposal: Equatable, Identifiable {
         case "writing_note": return "Added note “\(data["title"]?.string ?? "")”"
         case "writing_note_update":
             return "Updated note “\(data["title"]?.string ?? "")” — the earlier version is in its history"
+        case "screenshot_titles":
+            let renamed = result["renamed"]?.int ?? 0
+            let skipped = result["skipped"]?.array?.count ?? 0
+            return "Renamed \(renamed) screenshot run\(renamed == 1 ? "" : "s")" + (skipped > 0 ? " — \(skipped) skipped" : "")
         default: return "Resolved"
         }
     }

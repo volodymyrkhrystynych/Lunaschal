@@ -334,7 +334,7 @@ what each device can currently do and which work remains device-only.
 - Chat works like the desktop's: today's one conversation, the streamed reply
   with its steps and reasoning, sources, Markdown, New chat / Clean slate, the
   delegate's editable confirm cards (calendar, calories, food, recipe, recipe
-  link, flashcards), "flashcard this" drafts, the day's to-do bar (tick, rename,
+  link, flashcards, names for screenshot runs), "flashcard this" drafts, the day's to-do bar (tick, rename,
   dismiss, send to the permanent list), and photos. Typing and photos need the
   server; a voice message doesn't: stopping the recording queues the clip
   (with any typed words and staged photos) in the sync outbox, and the server

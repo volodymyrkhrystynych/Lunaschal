@@ -292,6 +292,22 @@ describe('stepLabel', () => {
     );
   });
 
+  it('labels the screenshot naming tools by what they found and staged', () => {
+    expect(
+      stepLabel({ tool: 'find_untitled_screenshots', ok: true, count: 3 })
+    ).toBe('Found 3 unnamed screenshot runs');
+    expect(
+      stepLabel({ tool: 'find_untitled_screenshots', ok: true, count: 0 })
+    ).toBe('No unnamed screenshot runs');
+    expect(
+      stepLabel({
+        tool: 'propose_screenshot_titles',
+        arg: '1 screenshot run name',
+        ok: true,
+      })
+    ).toBe('Staged screenshot names: 1 screenshot run name');
+  });
+
   it('labels the writing project tools by what was opened', () => {
     expect(stepLabel({ tool: 'writing_list', ok: true, count: 12 })).toBe(
       "Checked the project's chapters and notes (12)"

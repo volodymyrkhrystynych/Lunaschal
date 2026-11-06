@@ -33,6 +33,7 @@ from datetime import datetime
 
 from backend.db.connection import fts_match_query, get_db, search_journal_fts
 from backend.day_boundary import day_bounds, day_key_for
+from backend.journal import screenshot_titles
 # The caps and the clipping live in backend/recall.py: two more surfaces (a
 # writing project's chapters and notes, a repository's other ideas) recall
 # things now, and they answer to the same budget. Imported under the private
@@ -108,6 +109,33 @@ TOOLS = [
                     },
                 },
                 'required': ['date'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'find_untitled_screenshots',
+            'description': (
+                'List recent runs of screenshots that were filed automatically '
+                'under the default name "Screenshots" (a journal entry, plus a '
+                'calendar event once a run has two or more shots), with when '
+                'they were taken and what each picture shows. Use it before '
+                'propose_screenshot_titles, to see what there is to name.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'days': {
+                        'type': 'integer',
+                        'minimum': 1,
+                        'maximum': screenshot_titles.MAX_DAYS,
+                        'description': (
+                            f'How many days back to look. Defaults to '
+                            f'{screenshot_titles.DEFAULT_DAYS}.'
+                        ),
+                    },
+                },
             },
         },
     },
@@ -298,6 +326,39 @@ class LifeTools:
 
     # --- dispatch ---------------------------------------------------------
 
+    # --- screenshot runs still under the default name ---------------------
+
+    def find_untitled_screenshots(self, days=None) -> tuple[str, dict]:
+        """What `propose_screenshot_titles` can name: each run's id, span and
+        captions. The ids are what the model hands back, so they are printed
+        verbatim rather than as a friendlier label."""
+        if isinstance(days, bool) or not isinstance(days, (int, float)):
+            days = screenshot_titles.DEFAULT_DAYS
+        days = max(1, min(int(days), screenshot_titles.MAX_DAYS))
+        event = {'tool': 'find_untitled_screenshots', 'arg': f'{days} days',
+                 'ok': True, 'count': 0}
+        runs = screenshot_titles.untitled_runs(get_db(), days)
+        if not runs:
+            return (f'No screenshot runs still named "Screenshots" in the last {days} days.',
+                    event)
+        blocks = []
+        for run in runs:
+            span = f'{run["date"]} {run["time"]}–'
+            if run['endDate'] != run['date']:
+                span += f'{run["endDate"]} '
+            span += run['endTime']
+            lines = [f'entryId {run["entryId"]} · {span} · {run["shots"]} shot'
+                     + ('' if run['shots'] == 1 else 's')
+                     + ('' if run['hasEvent'] else ' · no calendar event')]
+            if run['note']:
+                lines.append(f'Note: {run["note"]}')
+            lines += [f'- {c}' for c in run['captions']] or ['(no captions yet)']
+            blocks.append('\n'.join(lines))
+        return (
+            'Screenshot runs still named "Screenshots" (newest first):\n\n' + _join(blocks),
+            {**event, 'count': len(runs)},
+        )
+
     def run_tool(self, name: str, args: dict) -> tuple[str, dict]:
         args = args if isinstance(args, dict) else {}
         if name == 'search_conversations':
@@ -310,4 +371,6 @@ class LifeTools:
             )
         if name == 'read_day':
             return self.read_day((args.get('date') or '').strip() or day_key_for())
+        if name == 'find_untitled_screenshots':
+            return self.find_untitled_screenshots(args.get('days'))
         return (f'Unknown tool: {name}', {'tool': name, 'ok': False, 'error': 'unknown tool'})

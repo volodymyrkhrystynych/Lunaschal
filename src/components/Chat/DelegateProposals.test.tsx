@@ -240,6 +240,60 @@ describe('pending cards', () => {
     expect(screen.getByText('From')).toBeTruthy();
   });
 
+  it('names screenshot runs on one card, each editable and removable', async () => {
+    resolveProposal().mockResolvedValue({
+      proposal: {
+        id: 's1',
+        kind: 'screenshot_titles',
+        status: 'accepted',
+        data: {},
+      },
+    } as never);
+    const flights = {
+      entryId: 'E1',
+      title: 'Comparing flights',
+      date: '2026-10-28',
+      time: '18:04',
+      endTime: '18:41',
+      shots: 6,
+    };
+    const lenses = {
+      entryId: 'E2',
+      title: 'Lighthouse lenses',
+      date: '2026-10-27',
+      time: '21:10',
+      endTime: '21:10',
+      shots: 1,
+    };
+    renderProposals([
+      {
+        id: 's1',
+        kind: 'screenshot_titles',
+        status: 'pending',
+        data: { items: [flights, lenses] },
+      },
+    ]);
+
+    expect(screen.getByText('Rename these screenshots?')).toBeTruthy();
+    expect(screen.getByText('2026-10-27 21:10 · 1 shot')).toBeTruthy();
+    fireEvent.change(
+      screen.getByLabelText('Name for 2026-10-28 18:04–18:41 · 6 shots'),
+      { target: { value: 'Booking Lviv' } }
+    );
+    fireEvent.click(
+      screen.getByLabelText('Leave out 2026-10-27 21:10 · 1 shot')
+    );
+    // The last run can't be left out: Dismiss already says "none of these".
+    expect(screen.queryByLabelText(/^Leave out/)).toBeNull();
+
+    fireEvent.click(screen.getByText('Rename'));
+    await waitFor(() =>
+      expect(resolveProposal()).toHaveBeenCalledWith('m1', 's1', 'accept', {
+        items: [{ ...flights, title: 'Booking Lviv' }],
+      })
+    );
+  });
+
   it('accepting posts the card values for that proposal id', async () => {
     resolveProposal().mockResolvedValue({
       proposal: { id: 'p1', kind: 'calendar', status: 'accepted', data: {} },
@@ -303,6 +357,24 @@ describe('pending cards', () => {
 });
 
 describe('resolved cards', () => {
+  it('says how many screenshot runs were renamed, and how many skipped', () => {
+    renderProposals([
+      {
+        id: 's1',
+        kind: 'screenshot_titles',
+        status: 'accepted',
+        data: { items: [] },
+        result: {
+          renamed: 1,
+          skipped: [{ entryId: 'E2', reason: 'already named "Trip"' }],
+        },
+      },
+    ]);
+    expect(
+      screen.getByText('Renamed 1 screenshot run — 1 skipped')
+    ).toBeTruthy();
+  });
+
   it('collapses an accepted proposal to a quiet line per kind', () => {
     renderProposals([
       {
