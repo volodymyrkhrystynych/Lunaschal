@@ -21,7 +21,7 @@ from backend.ai.journal import (
 )
 from backend.ai import jobs
 from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
-from backend.journal import archive, context_prompts, playable, storage, voice_drafts, youtube_import
+from backend.journal import archive, context_prompts, playable, storage, voice_drafts, web_archive, youtube_import
 from backend.journal import location as entry_location
 from backend.journal import refile
 from backend.journal import video as journal_video
@@ -1741,7 +1741,12 @@ def get_attachment_motion(attachment_id):
 
 @bp.post('/<entry_id>/attachments/link')
 def attach_link(entry_id):
-    """Attach a YouTube video to an entry by its URL.
+    """Attach a link to an entry: a YouTube video, or any other web page.
+
+    A YouTube link is downloaded here (backend/journal/youtube_import.py). Any
+    other link becomes a `kind='webpage'` row in `import_status='queued'` and is
+    printed to a PDF later by the user's own browser, through the extension
+    (backend/journal/web_archive.py) — nothing is spawned for it here.
 
     The row is created synchronously and the bytes arrive minutes later, so this
     returns 201 with an attachment already in `import_status='importing'` — the
@@ -1786,8 +1791,12 @@ def attach_link(entry_id):
     # Rejected here as well as in the worker: this is the one caller that can
     # answer the user directly, and a 400 beats a card that appears only to
     # fail. The worker still checks, because it is also reached by a retry.
-    if youtube.parse_video_id(url) is None:
-        return jsonify({'error': 'That does not look like a YouTube video URL.'}), 400
+    is_video = youtube.parse_video_id(url) is not None
+    if not is_video:
+        try:
+            url = web_archive.valid_link(url)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
 
     position = db.execute(
         'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM journal_attachments'
@@ -1807,8 +1816,10 @@ def attach_link(entry_id):
         'INSERT OR IGNORE INTO journal_attachments'
         '(id, entry_id, kind, name, path, position, source_url,'
         " import_status, created_at)"
-        " VALUES (?,?,'youtube',?,'',?,?,'importing',?)",
-        (attachment_id, entry_id, url, position, url,
+        " VALUES (?,?,?,?,'',?,?,?,?)",
+        (attachment_id, entry_id,
+         'youtube' if is_video else 'webpage', url, position, url,
+         'importing' if is_video else 'queued',
          captured_at if captured_at is not None else int(time.time())),
     )
     db.commit()
@@ -1821,9 +1832,111 @@ def attach_link(entry_id):
         _close_screenshot_session(db, entry_id)
         db.commit()
         _notify_subscribers(entry_id)
-        youtube_import.start_progress(attachment_id, 'queued')
-        youtube_import.start_import_bg(attachment_id, entry_id, url)
+        if is_video:
+            youtube_import.start_progress(attachment_id, 'queued')
+            youtube_import.start_import_bg(attachment_id, entry_id, url)
     return jsonify(_attachment_dict(_load_attachment(attachment_id))), 201
+
+
+@bp.post('/attachments/<attachment_id>/retry')
+def retry_attachment_import(attachment_id):
+    """Try a failed link again: re-download a video, or re-queue a page.
+
+    For a page that needed a login, this is the second half of the fix — sign
+    in to the site in the archiving browser, then press Retry.
+    """
+    row = _load_attachment(attachment_id)
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if row['kind'] == 'webpage':
+        if not web_archive.retry(attachment_id):
+            return jsonify({'error': 'This page is not waiting on a retry'}), 409
+    elif row['kind'] == 'youtube':
+        if row['import_status'] != 'error':
+            return jsonify({'error': 'This video is not waiting on a retry'}), 409
+        db = get_db()
+        db.execute(
+            "UPDATE journal_attachments SET import_status='importing', import_error=NULL"
+            ' WHERE id=?',
+            (attachment_id,),
+        )
+        db.commit()
+        youtube_import.start_progress(attachment_id, 'queued')
+        youtube_import.start_import_bg(attachment_id, row['entry_id'], row['source_url'])
+    else:
+        return jsonify({'error': 'Only links can be retried'}), 400
+    _notify_subscribers(row['entry_id'])
+    return jsonify(_attachment_dict(_load_attachment(attachment_id)))
+
+
+# --- Web page archiving, driven by the browser extension ----------------------
+#
+# The extension's archive tab (extension/archive.html) polls these, prints the
+# page in the user's own logged-in browser and posts the PDF back. See
+# backend/journal/web_archive.py for why the server never fetches it itself.
+
+def _archive_body() -> dict:
+    return request.get_json(silent=True) or {}
+
+
+@bp.post('/web-archive/connect')
+def web_archive_connect():
+    try:
+        return jsonify(web_archive.connect(_archive_body().get('clientId')))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@bp.post('/web-archive/poll')
+def web_archive_poll():
+    try:
+        return jsonify(web_archive.poll(_archive_body().get('clientId')))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@bp.post('/web-archive/disconnect')
+def web_archive_disconnect():
+    web_archive.disconnect(_archive_body().get('clientId'))
+    return jsonify({'success': True})
+
+
+@bp.post('/web-archive/<attachment_id>/result')
+def web_archive_result(attachment_id):
+    """Multipart: a `meta` JSON field (clientId, outcome, title, finalUrl,
+    message), plus `pdf` and an optional JPEG `poster` when the outcome is ok."""
+    try:
+        meta = json.loads(request.form.get('meta') or '{}')
+    except ValueError:
+        return jsonify({'error': 'meta is not JSON'}), 400
+    if not isinstance(meta, dict):
+        return jsonify({'error': 'meta is not an object'}), 400
+
+    def _read(name: str, cap: int) -> bytes | None:
+        f = request.files.get(name)
+        if f is None:
+            return None
+        data = f.read(cap + 1)
+        if len(data) > cap:
+            raise ValueError(f'{name} is too large')
+        return data
+
+    try:
+        entry_id = web_archive.submit(
+            attachment_id, meta.get('clientId'),
+            outcome=meta.get('outcome'),
+            title=meta.get('title') if isinstance(meta.get('title'), str) else None,
+            final_url=meta.get('finalUrl') if isinstance(meta.get('finalUrl'), str) else None,
+            message=meta.get('message') if isinstance(meta.get('message'), str) else None,
+            pdf=_read('pdf', web_archive.MAX_PDF_BYTES),
+            poster=_read('poster', web_archive.MAX_POSTER_BYTES),
+        )
+    except web_archive.ArchiveConflict as e:
+        return jsonify({'error': str(e)}), 409
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    _notify_subscribers(entry_id)
+    return jsonify(_attachment_dict(_load_attachment(attachment_id)))
 
 
 @bp.get('/attachments/<attachment_id>/import-status')
@@ -1834,6 +1947,18 @@ def attachment_import_status(attachment_id):
     process never started it (a restart), and the row's own `import_status` is
     the durable answer in both cases.
     """
+    row = get_db().execute(
+        'SELECT kind, import_status FROM journal_attachments WHERE id=?',
+        (attachment_id,),
+    ).fetchone()
+    if row is not None and row['kind'] == 'webpage':
+        # No registry: the row is the whole state. What the card can't read off
+        # the row is whether any browser is coming for it.
+        return jsonify({
+            'done': row['import_status'] != 'queued',
+            'phase': row['import_status'],
+            'archiverOnline': web_archive.online(),
+        })
     return jsonify(youtube_import.get_progress(attachment_id) or {'done': True})
 
 
@@ -1865,7 +1990,8 @@ def transcribe_attachment(attachment_id):
     # `file` is the catch-all kind behind the composer's attach-a-file button.
     # There is no model that reads an arbitrary blob, and queueing one would
     # park the row in 'running' until it errored.
-    if row['kind'] == 'file':
+    # A webpage's `transcript` is the PDF's own text, written when it lands.
+    if row['kind'] in ('file', 'webpage'):
         return jsonify({'error': 'This attachment type cannot be transcribed'}), 400
     if row['kind'] == 'youtube' and row['import_status'] != 'ready':
         return jsonify({'error': 'The video is still downloading'}), 409
@@ -2475,7 +2601,7 @@ def _metadata_context(entry_id: str) -> str | None:
         'SELECT kind, name, transcript, transcript_status,'
         ' description, description_status'
         ' FROM journal_attachments'
-        " WHERE entry_id=? AND kind IN ('image','youtube','audio','video')"
+        " WHERE entry_id=? AND kind IN ('image','youtube','webpage','audio','video')"
         ' ORDER BY position',
         (entry_id,),
     ).fetchall()
@@ -2487,6 +2613,12 @@ def _metadata_context(entry_id: str) -> str | None:
         if r['kind'] == 'image':
             if transcribed:
                 lines.append(f"Photo — {r['name']}: {r['transcript']}")
+            continue
+        if r['kind'] == 'webpage':
+            if transcribed:
+                lines.append(
+                    f"""Web page "{r['name']}", what it says — {_clip(r['transcript'])}"""
+                )
             continue
         if r['kind'] == 'youtube':
             if described:
@@ -2563,6 +2695,11 @@ def _attachments_settled(entry_id: str, expected: int) -> bool:
             or r['description_status'] == 'running'
         ):
             return False
+        # A shared page is the subject of the entry the way a video is, and
+        # waits under the same long cap: the browser printing it may not be
+        # open yet, and an entry titled from nothing is the failure to avoid.
+        if r['kind'] == 'webpage' and r['import_status'] == 'queued':
+            return False
     return True
 
 
@@ -2614,8 +2751,8 @@ def _entry_has_video(entry_id: str) -> bool:
     the waiter was spawned from, so at start it is usually not there yet.
     """
     return get_db().execute(
-        "SELECT 1 FROM journal_attachments WHERE entry_id=? AND kind='youtube'"
-        ' LIMIT 1',
+        "SELECT 1 FROM journal_attachments WHERE entry_id=?"
+        " AND kind IN ('youtube','webpage') LIMIT 1",
         (entry_id,),
     ).fetchone() is not None
 

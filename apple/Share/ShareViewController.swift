@@ -45,8 +45,10 @@ final class ShareModel: ObservableObject {
         if !images.isEmpty { return await shareScreenshots(images) }
         let text = await Self.sharedText(items)
         guard let link = FicImportLink.find(in: text) else {
-            if let video = YouTubeLink.find(in: text) { return addToDraft(video) }
-            return finish("That isn’t a link to a fic or a YouTube video. Lunaschal imports fics from \(FicImportLink.siteNames.joined(separator: ", ")).",
+            // Anything else with a web link goes to the journal: a video is
+            // downloaded, any other page printed to PDF by the archiving browser.
+            if let link = JournalLink.find(in: text) { return addToDraft(link) }
+            return finish("There’s no web link in what was shared. Lunaschal imports fics from \(FicImportLink.siteNames.joined(separator: ", ")) and adds any other link to your journal draft.",
                           imported: false)
         }
         guard let session = SharedSignIn.read() else {
@@ -109,13 +111,13 @@ final class ShareModel: ObservableObject {
     }
 
     /// The link waits in the App Group until Lunaschal next opens, then joins
-    /// the draft's YouTube links; whatever the draft already holds is kept.
-    private func addToDraft(_ video: String) {
+    /// the draft's links; whatever the draft already holds is kept.
+    private func addToDraft(_ link: String) {
         guard let root = SharedSignIn.sharedLinksRoot() else {
             return finish("Lunaschal can’t receive shared links in this build.", imported: false)
         }
         do {
-            try SharedLinkInbox(root: root).append(video)
+            try SharedLinkInbox(root: root).append(link)
             finish("Added to your journal draft. It’s in Capture next time you open Lunaschal.", imported: true)
         } catch {
             finish(error.localizedDescription, imported: false)

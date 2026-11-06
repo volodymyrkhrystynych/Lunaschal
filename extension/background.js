@@ -215,6 +215,13 @@ async function resumeFile(applicationId, ext = 'pdf') {
   };
 }
 
+function base64Blob(data, type) {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
+
 // --------------------------------------------------------------------------
 // Message router
 // --------------------------------------------------------------------------
@@ -252,6 +259,57 @@ const handlers = {
   },
   async ffnResume() {
     return api('/api/fanfic/site-limit/resume', { method: 'POST' });
+  },
+
+  // Journal links printed to PDF (archive.html, lib/archive.js).
+  async archiveConnect({ clientId }) {
+    return api('/api/journal/web-archive/connect', {
+      method: 'POST',
+      body: { clientId },
+    });
+  },
+  async archivePoll({ clientId }) {
+    return api('/api/journal/web-archive/poll', {
+      method: 'POST',
+      body: { clientId },
+    });
+  },
+  async archiveDisconnect({ clientId }) {
+    return api('/api/journal/web-archive/disconnect', {
+      method: 'POST',
+      body: { clientId },
+    });
+  },
+  async archiveResult({ clientId, attachmentId, result }) {
+    const { baseUrl } = await settings();
+    const form = new FormData();
+    form.append(
+      'meta',
+      JSON.stringify({
+        clientId,
+        outcome: result.outcome,
+        title: result.title,
+        finalUrl: result.finalUrl,
+        message: result.message,
+      })
+    );
+    if (result.pdf)
+      form.append('pdf', base64Blob(result.pdf, 'application/pdf'), 'page.pdf');
+    if (result.poster)
+      form.append('poster', base64Blob(result.poster, 'image/jpeg'), 'poster.jpg');
+    const response = await fetch(
+      `${baseUrl}/api/journal/web-archive/${encodeURIComponent(attachmentId)}/result`,
+      { method: 'POST', headers: await authHeaders(), body: form }
+    );
+    const parsed = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(
+        parsed?.error || `Lunaschal returned ${response.status}.`
+      );
+      error.status = response.status;
+      throw error;
+    }
+    return { attachment: parsed };
   },
   async ping() {
     return { ok: true };
@@ -379,6 +437,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sender.url !== chrome.runtime.getURL('ffn.html')
   ) {
     sendResponse({ ok: false, error: 'Open the FF.net download control tab.' });
+    return false;
+  }
+  // Same rule for the journal archive queue: only archive.html submits PDFs.
+  if (
+    message?.type?.startsWith('archive') &&
+    sender.url !== chrome.runtime.getURL('archive.html')
+  ) {
+    sendResponse({ ok: false, error: 'Open the journal archive control tab.' });
     return false;
   }
   const handler = handlers[message?.type];

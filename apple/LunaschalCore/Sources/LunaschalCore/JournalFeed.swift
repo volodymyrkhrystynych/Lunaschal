@@ -1,7 +1,7 @@
 import Foundation
 
 /// One attachment on a server journal entry, read from its replicated row.
-/// `kind` is the server's: 'image' | 'audio' | 'video' | 'youtube' | 'file'.
+/// `kind` is the server's: 'image' | 'audio' | 'video' | 'youtube' | 'webpage' | 'file'.
 public struct JournalAttachmentItem: Hashable, Identifiable {
     public let id: String
     public let entryID: String
@@ -76,6 +76,7 @@ public struct JournalAttachmentItem: Hashable, Identifiable {
         case "audio": return .audio
         case "video": return .video
         case "youtube": return .youtube
+        case "webpage": return .webpage
         default:
             if mime.hasPrefix("image/") { return .image }
             if mime.hasPrefix("audio/") { return .audio }
@@ -84,7 +85,27 @@ public struct JournalAttachmentItem: Hashable, Identifiable {
         }
     }
 
-    public enum Media { case image, audio, video, youtube, file }
+    public enum Media { case image, audio, video, youtube, webpage, file }
+
+    /// Where a shared web page is: waiting for the browser extension to print
+    /// it, printed, or refused — a login wall or a failure keeps only the link.
+    public enum PageState: Equatable { case waiting, archived, needsLogin, failed }
+
+    public var pageState: PageState? {
+        guard media == .webpage else { return nil }
+        switch importStatus {
+        case "queued": return .waiting
+        case "login_required": return .needsLogin
+        case "error": return .failed
+        default: return .archived
+        }
+    }
+
+    /// The site a shared link points at, without its `www.`.
+    public var sourceHost: String? {
+        guard let sourceURL, let host = URLComponents(string: sourceURL)?.host else { return nil }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
 
     /// Whether AVFoundation can open the stored file. A clip recorded in a
     /// desktop browser is WebM/Opus, which it cannot; the server then sends an

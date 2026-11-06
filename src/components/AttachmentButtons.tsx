@@ -23,8 +23,9 @@ import { isTouchDevice } from '../lib/deviceInput';
  *
  * All three take `multiple`, which none of the old ones did.
  *
- * A fourth button, **Video**, appears only where `onLink` is supplied: it takes
- * a YouTube URL rather than a file, and the video is downloaded server-side.
+ * A fourth button, **Link**, appears only where `onLink` is supplied: it takes
+ * a URL rather than a file. A YouTube video is downloaded server-side; any
+ * other page is printed to PDF by the browser extension's archive tab.
  * Deliberately a button and a field rather than sniffing the composer's text
  * for a URL — a link pasted into a sentence is usually part of the sentence.
  *
@@ -40,7 +41,7 @@ export function AttachmentButtons({
   extra,
 }: {
   onFiles: (files: File[]) => void;
-  /** Supplied where a YouTube link can be attached; omit to hide the button. */
+  /** Supplied where a link can be attached; omit to hide the button. */
   onLink?: (url: string) => void;
   disabled?: boolean;
   /** Distinguishes the composer's inputs from an entry's in the DOM. */
@@ -142,7 +143,7 @@ export function AttachmentButtons({
           className={cls}
           data-testid={`${idPrefix}-link-button`}
         >
-          🔗 Video
+          🔗 Link
         </button>
       )}
       {extra}
@@ -162,7 +163,7 @@ export function AttachmentButtons({
                 setLinkOpen(false);
               }
             }}
-            placeholder="Paste a YouTube link"
+            placeholder="Paste a link"
             className="flex-1 min-w-0 px-2 py-1 text-xs rounded border border-white/10 bg-transparent text-[var(--color-text)]"
             data-testid={`${idPrefix}-link-input`}
           />

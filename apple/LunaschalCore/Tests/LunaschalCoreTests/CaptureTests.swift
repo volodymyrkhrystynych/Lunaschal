@@ -25,7 +25,7 @@ final class CaptureTests: XCTestCase {
         let url = try YouTubeLink.canonical("https://youtu.be/aircAruvnKk?list=ignored")
         XCTAssertEqual(url, "https://www.youtube.com/watch?v=aircAruvnKk")
         let other = try YouTubeLink.canonical("https://youtube.com/shorts/dQw4w9WgXcQ")
-        let capture = Capture(text: "My thoughts", youtubeURLs: [url, other])
+        let capture = Capture(text: "My thoughts", linkURLs: [url, other])
         try store.save(capture)
         let restored = try CaptureStore(root: root).load(capture.id)
         XCTAssertEqual(restored, capture)
@@ -44,12 +44,12 @@ final class CaptureTests: XCTestCase {
     }
 
     func testNonCanonicalLinkIsRejectedOnSave() {
-        let capture = Capture(text: "Thoughts", youtubeURLs: ["https://youtu.be/aircAruvnKk"])
+        let capture = Capture(text: "Thoughts", linkURLs: ["https://youtu.be/aircAruvnKk"])
         XCTAssertThrowsError(try store.save(capture))
     }
 
     func testLinkOnlyEntryKeepsItsBodyEmptyAcrossRestart() throws {
-        let capture = try store.commitDraft(text: " \n ", youtubeURLs: [
+        let capture = try store.commitDraft(text: " \n ", linkURLs: [
             "https://youtu.be/aircAruvnKk", "https://youtube.com/shorts/dQw4w9WgXcQ"
         ])
         XCTAssertEqual(capture.text, "")
@@ -67,7 +67,7 @@ final class CaptureTests: XCTestCase {
     func testAttachedLinksNeverReplaceOrAppendToCommentary() throws {
         let url = "https://www.youtube.com/watch?v=aircAruvnKk"
         for text in ["My thoughts", "I wrote this URL myself: \(url)"] {
-            let capture = try store.commitDraft(text: text, youtubeURLs: [url])
+            let capture = try store.commitDraft(text: text, linkURLs: [url])
             XCTAssertEqual(capture.text, text)
             XCTAssertEqual(capture.links.map(\.url), [url])
         }

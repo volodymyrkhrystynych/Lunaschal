@@ -41,7 +41,7 @@ final class NotebookDraftTests: XCTestCase {
     func testSaveEntryFilesWordsStagedFilesAndNotesPagesAsOneEntry() throws {
         let photo = try store.stageFile(data: Data("photo".utf8), name: "photo.jpg", contentType: "image/jpeg")
         try store.setDraftNotebook(ULID.make())
-        let capture = try store.commitDraft(text: "Evening", youtubeURLs: [],
+        let capture = try store.commitDraft(text: "Evening", linkURLs: [],
                                             images: [(Data("p1".utf8), "Notes p1.jpg"), (Data("p2".utf8), "Notes p2.jpg")])
         XCTAssertEqual(capture.text, "Evening")
         XCTAssertEqual(capture.files.map(\.name), ["photo.jpg", "Notes p1.jpg", "Notes p2.jpg"])
@@ -55,14 +55,14 @@ final class NotebookDraftTests: XCTestCase {
 
     func testNotesAloneAreAnEntry() throws {
         try store.setDraftNotebook(ULID.make())
-        let capture = try store.commitDraft(text: "", youtubeURLs: [], images: [(Data("p1".utf8), "Notes p1.jpg")])
+        let capture = try store.commitDraft(text: "", linkURLs: [], images: [(Data("p1".utf8), "Notes p1.jpg")])
         XCTAssertEqual(capture.files.map(\.name), ["Notes p1.jpg"])
     }
 
     func testAMealLeavesTheNotesForTheNextEntry() throws {
         let notebook = ULID.make()
         try store.setDraftNotebook(notebook)
-        let meal = try store.commitDraft(text: "Soup", youtubeURLs: [], kind: .food,
+        let meal = try store.commitDraft(text: "Soup", linkURLs: [], kind: .food,
                                          images: [(Data("p1".utf8), "Notes p1.jpg")])
         XCTAssertEqual(meal.files, [])
         XCTAssertEqual(try store.draft().notebookID, notebook)
@@ -70,7 +70,7 @@ final class NotebookDraftTests: XCTestCase {
 
     func testARefusedSaveLeavesNoPagesBehind() throws {
         let files = root.appendingPathComponent("files")
-        XCTAssertThrowsError(try store.commitDraft(text: "x", youtubeURLs: ["https://example.com/not-youtube"],
+        XCTAssertThrowsError(try store.commitDraft(text: "x", linkURLs: ["javascript:alert(1)"],
                                                    images: [(Data("p1".utf8), "Notes p1.jpg")]))
         XCTAssertEqual((try? FileManager.default.contentsOfDirectory(atPath: files.path)) ?? [], [])
     }
@@ -78,9 +78,9 @@ final class NotebookDraftTests: XCTestCase {
     // MARK: Replacing a filed newspaper
 
     func testAReplacementCarriesWhatItReplaces() throws {
-        let morning = try store.commitImages(text: "Toronto Star, 2026-10-08", youtubeURLs: [],
+        let morning = try store.commitImages(text: "Toronto Star, 2026-10-08", linkURLs: [],
                                              images: [(Data("p1".utf8), "p1.jpg")])
-        let evening = try store.commitImages(text: "Toronto Star, 2026-10-08", youtubeURLs: [],
+        let evening = try store.commitImages(text: "Toronto Star, 2026-10-08", linkURLs: [],
                                              images: [(Data("p1".utf8), "p1.jpg"), (Data("p5".utf8), "p5.jpg")],
                                              replaces: [morning.id])
         XCTAssertEqual(evening.replaces, [morning.id])
@@ -90,27 +90,27 @@ final class NotebookDraftTests: XCTestCase {
     // MARK: For review
 
     func testForReviewTravelsWithTheCaptureAndReachesTheCreate() throws {
-        let saved = try store.commitImages(text: "", youtubeURLs: [], images: [(Data("p1".utf8), "p1.jpg")],
+        let saved = try store.commitImages(text: "", linkURLs: [], images: [(Data("p1".utf8), "p1.jpg")],
                                            forReview: true)
         let reloaded = try CaptureStore(root: root).load(saved.id)
         XCTAssertTrue(reloaded.forReview)
         XCTAssertEqual(JournalAPI.entryBody(reloaded)["forReview"], "true")
 
-        let plain = try store.commitImages(text: "", youtubeURLs: [], images: [(Data("p1".utf8), "p1.jpg")])
+        let plain = try store.commitImages(text: "", linkURLs: [], images: [(Data("p1".utf8), "p1.jpg")])
         XCTAssertFalse(plain.forReview)
         XCTAssertNil(JournalAPI.entryBody(plain)["forReview"], "Off sends nothing, as before")
     }
 
     func testTheComposersNotesCarryForReviewButAMealDoesNot() throws {
-        let entry = try store.commitDraft(text: "Notes", youtubeURLs: [], images: [(Data("p".utf8), "p.jpg")],
+        let entry = try store.commitDraft(text: "Notes", linkURLs: [], images: [(Data("p".utf8), "p.jpg")],
                                           forReview: true)
         XCTAssertTrue(entry.forReview)
-        let meal = try store.commitDraft(text: "Lunch", youtubeURLs: [], kind: .food, forReview: true)
+        let meal = try store.commitDraft(text: "Lunch", linkURLs: [], kind: .food, forReview: true)
         XCTAssertFalse(meal.forReview)
     }
 
     func testAManifestFromBeforeForReviewIsNotForReview() throws {
-        let capture = try store.commitImages(text: "", youtubeURLs: [], images: [(Data("a".utf8), "a.jpg")],
+        let capture = try store.commitImages(text: "", linkURLs: [], images: [(Data("a".utf8), "a.jpg")],
                                              forReview: true)
         let url = root.appendingPathComponent(capture.id + ".json")
         var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
@@ -120,7 +120,7 @@ final class NotebookDraftTests: XCTestCase {
     }
 
     func testAManifestFromBeforeReplacementsStillLoads() throws {
-        let capture = try store.commitDraft(text: "Old", youtubeURLs: [])
+        let capture = try store.commitDraft(text: "Old", linkURLs: [])
         let url = root.appendingPathComponent(capture.id + ".json")
         var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
         json.removeValue(forKey: "replaces")
@@ -137,8 +137,8 @@ final class NotebookDraftTests: XCTestCase {
     }
 
     func testAReplacementWaitsUntilWhatItReplacesHasGoneUp() throws {
-        let morning = try store.commitImages(text: "Morning", youtubeURLs: [], images: [(Data("a".utf8), "a.jpg")])
-        let evening = try store.commitImages(text: "Evening", youtubeURLs: [], images: [(Data("b".utf8), "b.jpg")],
+        let morning = try store.commitImages(text: "Morning", linkURLs: [], images: [(Data("a".utf8), "a.jpg")])
+        let evening = try store.commitImages(text: "Evening", linkURLs: [], images: [(Data("b".utf8), "b.jpg")],
                                              replaces: [morning.id, ULID.make()])
         XCTAssertTrue(try store.waitsForReplaced(evening))
         var sent = try store.load(morning.id)
@@ -148,8 +148,8 @@ final class NotebookDraftTests: XCTestCase {
     }
 
     func testSyncSendsTheOldEntryFirstThenRetiresItsCopy() async throws {
-        let morning = try store.commitImages(text: "Morning", youtubeURLs: [], images: [(Data("a".utf8), "a.jpg")])
-        let evening = try store.commitImages(text: "Evening", youtubeURLs: [], images: [(Data("b".utf8), "b.jpg")],
+        let morning = try store.commitImages(text: "Morning", linkURLs: [], images: [(Data("a".utf8), "a.jpg")])
+        let evening = try store.commitImages(text: "Evening", linkURLs: [], images: [(Data("b".utf8), "b.jpg")],
                                              replaces: [morning.id])
         let server = OrderedServer()
         try await CaptureSync(store: store).run(using: server)
@@ -163,8 +163,8 @@ final class NotebookDraftTests: XCTestCase {
     }
 
     func testAReplacementIsHeldWhileTheOldOneCannotGoUp() async throws {
-        let morning = try store.commitImages(text: "Morning", youtubeURLs: [], images: [(Data("a".utf8), "a.jpg")])
-        let evening = try store.commitImages(text: "Evening", youtubeURLs: [], images: [(Data("b".utf8), "b.jpg")],
+        let morning = try store.commitImages(text: "Morning", linkURLs: [], images: [(Data("a".utf8), "a.jpg")])
+        let evening = try store.commitImages(text: "Evening", linkURLs: [], images: [(Data("b".utf8), "b.jpg")],
                                              replaces: [morning.id])
         let server = OrderedServer()
         server.offline = [morning.id]

@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from 'react';
+import { lazy, memo, Suspense, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { type JournalAttachment, api } from '../hooks/api';
 import { useAttachmentUpload } from '../hooks/useAttachmentUpload';
@@ -20,6 +20,11 @@ import {
   summarizeAttachments,
   transcribeLabel,
 } from '../lib/journalAttachments';
+
+// pdf.js is a large chunk and most entries carry no page; load it on first open.
+const PdfViewer = lazy(() =>
+  import('./Study/PdfViewer').then(m => ({ default: m.PdfViewer }))
+);
 
 /**
  * Audio, video and photo attachments on a journal entry.
@@ -330,6 +335,180 @@ export const JournalAttachments = memo(function JournalAttachments({
  * drive, so this still draws when the drive is unplugged; the player below it
  * is then the part that 404s.
  */
+function RetryButton({ id }: { id: string }) {
+  const queryClient = useQueryClient();
+  const retry = useMutation({
+    mutationFn: () => api.journal.attachments.retry(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['journal'] }),
+  });
+  return (
+    <button
+      type="button"
+      onClick={() => retry.mutate()}
+      disabled={retry.isPending}
+      className="ml-2 px-2 py-0.5 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 disabled:opacity-50"
+    >
+      {retry.isPending ? 'Retrying…' : 'Retry'}
+    </button>
+  );
+}
+
+function hostOf(url: string | null | undefined): string {
+  if (!url) return '';
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * A web page shared into the entry, printed to PDF by the user's own browser
+ * (the extension's archive tab — backend/journal/web_archive.py).
+ *
+ * It waits in `queued` for as long as no browser comes by, which is why the
+ * card says whether one is connected: "waiting" and "nobody is coming" are
+ * different problems. A page that was a login wall even in that browser keeps
+ * the link and nothing else, and Retry is the fix once the user has signed in.
+ */
+function WebPageCard({ a }: { a: JournalAttachment }) {
+  const [reading, setReading] = useState(false);
+  const queryClient = useQueryClient();
+  const queued = a.importStatus === 'queued';
+  const host = hostOf(a.sourceUrl);
+
+  const { data: progress } = useQuery({
+    queryKey: ['journal', 'import', a.id],
+    queryFn: () => api.journal.attachments.importStatus(a.id),
+    enabled: queued,
+    refetchInterval: 5000,
+  });
+  // The /events stream normally carries the result; this covers a tab whose
+  // stream dropped while the page was printing.
+  useEffect(() => {
+    if (queued && progress?.done)
+      queryClient.invalidateQueries({ queryKey: ['journal'] });
+  }, [queued, progress?.done, queryClient]);
+
+  const original = a.sourceUrl && (
+    <a
+      href={a.sourceUrl}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-block text-xs text-[var(--color-text-muted)] underline hover:text-[var(--color-text)] break-all"
+    >
+      {host || a.sourceUrl}
+    </a>
+  );
+
+  if (queued) {
+    return (
+      <div className="rounded bg-black/30 px-3 py-3 text-xs text-[var(--color-text-muted)] space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="animate-pulse" aria-hidden="true">
+            ⏳
+          </span>
+          <span>
+            {progress && progress.archiverOnline === false
+              ? "Archiver offline — open the extension's journal link archive tab."
+              : 'Waiting for the browser to archive this page…'}
+          </span>
+        </div>
+        {original}
+      </div>
+    );
+  }
+
+  if (a.importStatus === 'login_required' || a.importStatus === 'error') {
+    const login = a.importStatus === 'login_required';
+    return (
+      <div className="rounded bg-black/30 px-3 py-2 text-xs space-y-1">
+        <div className="flex items-center flex-wrap gap-1">
+          <span
+            className={
+              login
+                ? 'rounded px-1.5 py-0.5 bg-amber-500/15 text-amber-300'
+                : 'text-[var(--color-error,#f87171)]'
+            }
+          >
+            {login ? 'Needs login — not archived' : 'Could not archive this page.'}
+          </span>
+          <RetryButton id={a.id} />
+        </div>
+        {!login && a.importError && (
+          <div className="text-[var(--color-text-muted)]">{a.importError}</div>
+        )}
+        {original}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={() => setReading(true)}
+        disabled={!a.url}
+        className="relative block w-full rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors disabled:cursor-not-allowed text-left"
+        title={a.url ? 'Read the archived copy' : 'The archived file is missing'}
+      >
+        {a.thumbnailUrl ? (
+          <img
+            src={a.thumbnailUrl}
+            alt={a.name}
+            loading="lazy"
+            className="w-full max-h-72 object-cover object-top bg-black"
+          />
+        ) : (
+          <div className="w-full py-10 bg-black/40 text-center text-2xl" aria-hidden="true">
+            📄
+          </div>
+        )}
+        <span className="absolute bottom-1 right-1 rounded bg-black/75 px-1.5 py-0.5 text-[11px] text-white">
+          PDF
+        </span>
+      </button>
+      {original}
+      {reading && a.url && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 flex flex-col"
+          role="dialog"
+          aria-label={a.name}
+        >
+          <div className="flex items-center gap-3 px-4 py-2 text-sm text-white">
+            <span className="truncate">{a.name}</span>
+            {a.sourceUrl && (
+              <a
+                href={a.sourceUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="ml-auto shrink-0 text-xs underline text-white/70 hover:text-white"
+              >
+                Open original
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={() => setReading(false)}
+              className={`${a.sourceUrl ? '' : 'ml-auto '}text-white/80 hover:text-white text-xl`}
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="flex-1 min-h-0">
+            <Suspense
+              fallback={<div className="p-4 text-sm text-white/70">Opening…</div>}
+            >
+              <PdfViewer fileUrl={a.url} />
+            </Suspense>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function YouTubeCard({ a }: { a: JournalAttachment }) {
   const [playing, setPlaying] = useState(false);
   const importing = a.importStatus === 'importing';
@@ -350,6 +529,7 @@ function YouTubeCard({ a }: { a: JournalAttachment }) {
     return (
       <div className="rounded bg-black/30 px-3 py-2 text-xs text-[var(--color-error,#f87171)]">
         Could not download this video. {a.importError}
+        <RetryButton id={a.id} />
       </div>
     );
   }
@@ -431,6 +611,7 @@ const KIND_ICONS: Record<JournalAttachment['kind'], string> = {
   image: '📷',
   file: '📎',
   youtube: '▶️',
+  webpage: '🌐',
 };
 
 const DESCRIPTION_SEEN_KEY_PREFIX = 'journal-attachment-description-seen:';
@@ -655,6 +836,7 @@ function AttachmentRow({
         />
       )}
       {a.kind === 'youtube' && <YouTubeCard a={a} />}
+      {a.kind === 'webpage' && <WebPageCard a={a} />}
       {a.kind === 'image' && (
         <div className="flex items-center gap-2">
           {/* Fixed height, width follows the photo: a landscape shot in a
@@ -716,7 +898,7 @@ function AttachmentRow({
       <div className="flex items-center gap-2">
         {/* No model reads an arbitrary blob, and the route refuses one — so a
             `file` gets no Transcribe button rather than one that 400s. */}
-        {a.kind !== 'file' && (
+        {a.kind !== 'file' && a.kind !== 'webpage' && (
           <button
             type="button"
             onClick={onTranscribe}
@@ -736,13 +918,15 @@ function AttachmentRow({
             {describeAudioLabel(a)}
           </button>
         )}
-        <a
-          href={a.url}
-          download
-          className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-        >
-          Download
-        </a>
+        {a.url && (
+          <a
+            href={a.url}
+            download
+            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+          >
+            Download
+          </a>
+        )}
         {a.kind === 'image' && editable && (
           <button
             type="button"
@@ -807,7 +991,7 @@ function AttachmentRow({
         <AttachmentDescription
           attachmentId={a.id}
           descriptionKind="transcript"
-          label="Transcript"
+          label={a.kind === 'webpage' ? 'Page text' : 'Transcript'}
         >
           {a.transcript}
         </AttachmentDescription>

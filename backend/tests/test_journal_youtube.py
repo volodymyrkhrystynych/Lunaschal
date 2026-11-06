@@ -198,13 +198,17 @@ def _insert_attachment(entry_id, **columns):
 
 # --- validation -------------------------------------------------------------
 
-def test_a_non_youtube_url_is_rejected_before_anything_runs(
+def test_a_non_youtube_url_never_reaches_yt_dlp(
     client, entry_id, archive_root, monkeypatch
 ):
+    """Any other link is a web page for the browser to print
+    (test_journal_web_archive.py), not a download."""
+    from backend.journal import web_archive
+    monkeypatch.setattr(web_archive, 'assert_public_url', lambda url: url)
     calls = _fake_ytdlp(monkeypatch)
     res = _attach(client, entry_id, 'https://vimeo.com/12345')
-    assert res.status_code == 400
-    assert 'YouTube' in res.get_json()['error']
+    assert res.status_code == 201
+    assert res.get_json()['kind'] == 'webpage'
     assert calls == []
 
 

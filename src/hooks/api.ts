@@ -129,7 +129,7 @@ export interface JournalAttachment {
    * download and nothing else — no player, no thumbnail, and no model ever
    * reads it.
    */
-  kind: 'audio' | 'video' | 'image' | 'file' | 'youtube';
+  kind: 'audio' | 'video' | 'image' | 'file' | 'youtube' | 'webpage';
   /** The user's label — what this recording, video, photo or file is about. */
   name: string;
   /**
@@ -161,7 +161,7 @@ export interface JournalAttachment {
    * existed (nothing backfills it).
    */
   exif: Record<string, unknown> | null;
-  /** The canonical watch URL, `youtube` only. */
+  /** The link as shared — the canonical watch URL for `youtube`, the page for `webpage`. */
   sourceUrl?: string | null;
   /**
    * Runtime in seconds, for `youtube` (known before the download finishes) and
@@ -183,19 +183,30 @@ export interface JournalAttachment {
   motionUrl?: string;
   motionMime?: string | null;
   /**
-   * The download's own lifecycle, `youtube` only — separate from
-   * `transcriptStatus`, which means "is a model reading this".
+   * The download's own lifecycle, `youtube` and `webpage` only — separate from
+   * `transcriptStatus`, which means "is a model reading this". A `webpage`
+   * waits in `queued` for the browser extension to print it, and lands in
+   * `login_required` (no file, link kept) when even that browser hits a wall.
    */
-  importStatus?: 'importing' | 'ready' | 'error';
+  importStatus?: 'importing' | 'queued' | 'ready' | 'login_required' | 'error';
   importError?: string | null;
   createdAt: string;
 }
 
 /** What the download is doing right now (GET .../import-status). */
 export interface JournalImportProgress {
-  phase?: 'queued' | 'metadata' | 'downloading' | 'done' | 'error';
+  phase?:
+    | 'queued'
+    | 'metadata'
+    | 'downloading'
+    | 'done'
+    | 'ready'
+    | 'login_required'
+    | 'error';
   error?: string | null;
   done?: boolean;
+  /** `webpage` only: whether any browser's archive tab has polled lately. */
+  archiverOnline?: boolean;
 }
 
 export interface FicRef {
@@ -3805,9 +3816,10 @@ export const api = {
         );
       },
       /**
-       * Attach a YouTube video by URL. Returns at once with the row already in
-       * `importStatus: 'importing'` — the download takes minutes and the card
-       * shows itself working rather than the composer blocking on it.
+       * Attach a link. A YouTube video returns at once in `importStatus:
+       * 'importing'` — the download takes minutes and the card shows itself
+       * working. Any other page returns in `'queued'`, waiting for the browser
+       * extension to print it to PDF.
        *
        * `attachmentId` is the client's own ULID, replayed until the server
        * confirms, which is what makes a retry a no-op server-side.
@@ -3820,6 +3832,12 @@ export const api = {
       importStatus: (attachmentId: string) =>
         get<JournalImportProgress>(
           `/api/journal/attachments/${attachmentId}/import-status`
+        ),
+      /** Re-download a failed video, or re-queue a page that failed or needed a login. */
+      retry: (attachmentId: string) =>
+        post<JournalAttachment>(
+          `/api/journal/attachments/${attachmentId}/retry`,
+          {}
         ),
       rename: (attachmentId: string, name: string) =>
         patch<JournalAttachment>(`/api/journal/attachments/${attachmentId}`, {

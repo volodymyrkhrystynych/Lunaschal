@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS journal_entries (
 CREATE TABLE IF NOT EXISTS journal_attachments (
     id TEXT PRIMARY KEY,
     entry_id TEXT NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,          -- 'audio' | 'video' | 'image' | 'file' | 'youtube'
+    kind TEXT NOT NULL,          -- 'audio' | 'video' | 'image' | 'file' | 'youtube' | 'webpage'
     -- What the attachment is about, named by the user. Defaults to the uploaded
     -- filename so a list of attachments is never a list of blank rows.
     name TEXT NOT NULL,
@@ -169,6 +169,16 @@ CREATE TABLE IF NOT EXISTS journal_attachments (
     motion_path TEXT,
     motion_mime TEXT,
     motion_size INTEGER,
+    -- kind='webpage' (any other link) reuses source_url/thumb_path/import_* and
+    -- is printed to a PDF by the user's own browser, through the extension
+    -- (backend/journal/web_archive.py). Its import_status is
+    -- 'queued' | 'ready' | 'login_required' | 'error' — 'queued', not
+    -- 'importing', because it waits durably for a browser to come by and must
+    -- survive the startup reset that fails an interrupted YouTube download.
+    -- The row is its own queue: these two are the lease a browser holds while
+    -- it prints the page, so a closed tab lets another claim it.
+    archive_client TEXT,
+    archive_lease_until INTEGER,
     created_at INTEGER NOT NULL
 );
 

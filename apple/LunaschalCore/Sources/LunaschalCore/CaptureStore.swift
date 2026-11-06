@@ -105,7 +105,7 @@ public final class CaptureStore {
             throw CaptureError.invalidID
         }
         if capture.kind.isMediaLog {
-            // The food log and spending have no YouTube links and keep media only.
+            // The food log and spending have no links and keep media only.
             guard capture.mode == .text, capture.links.isEmpty else { throw CaptureError.invalidID }
             guard capture.files.allSatisfy(capture.kind.accepts) else {
                 throw capture.kind == .spending ? CaptureError.notSpendingMedia : CaptureError.notFoodMedia
@@ -113,7 +113,7 @@ public final class CaptureStore {
         }
         for link in capture.links {
             guard capture.mode == .text, ULID.isValid(link.attachmentID),
-                  try YouTubeLink.canonical(link.url) == link.url else { throw LinkError.invalidURL }
+                  try JournalLink.canonical(link.url) == link.url else { throw LinkError.invalidURL }
         }
         for file in capture.files {
             guard capture.mode == .text, ULID.isValid(file.attachmentID) else { throw CaptureError.invalidID }
@@ -400,7 +400,7 @@ public final class CaptureStore {
     /// server uses it for the entry's place and the weather it looks up.
     /// `images` are the draft notebook's rendered pages, filed after what was
     /// staged; the notebook itself is let go with the rest of the draft.
-    public func commitDraft(text: String, youtubeURLs: [String], kind: CaptureKind = .journal,
+    public func commitDraft(text: String, linkURLs: [String], kind: CaptureKind = .journal,
                             images: [(data: Data, name: String)] = [], forReview: Bool = false,
                             autoFile: Bool = false,
                             location: (latitude: Double, longitude: Double)? = nil,
@@ -411,7 +411,7 @@ public final class CaptureStore {
         let capture: Capture
         do {
             // A meal is never a review card, as it never takes the notebook.
-            capture = try commit(text: text, youtubeURLs: youtubeURLs, kind: kind, files: staged.files + pages,
+            capture = try commit(text: text, linkURLs: linkURLs, kind: kind, files: staged.files + pages,
                                  clips: staged.clips, forReview: forReview && kind == .journal,
                                  autoFile: autoFile && kind == .journal, location: location, now: now)
         } catch {
@@ -429,16 +429,16 @@ public final class CaptureStore {
         try updateDraft { $0.notebookID = id }
     }
 
-    /// Save on an edited server entry: what is staged for it, plus `youtubeURLs`
+    /// Save on an edited server entry: what is staged for it, plus `linkURLs`
     /// (journal only), becomes one addition queued for upload under that entry,
     /// and the entry's draft is emptied. Nil when there was nothing to add.
     @discardableResult
-    public func commitAdditions(to entryID: String, kind: CaptureKind, youtubeURLs: [String] = [],
+    public func commitAdditions(to entryID: String, kind: CaptureKind, linkURLs: [String] = [],
                                 now: Date = Date()) throws -> Capture? {
         let staged = try draft(for: entryID)
-        let links = kind.isMediaLog ? [] : try youtubeURLs.map(YouTubeLink.canonical)
+        let links = kind.isMediaLog ? [] : try linkURLs.map(JournalLink.canonical)
         guard !(staged.isEmpty && links.isEmpty) else { return nil }
-        let capture = Capture(kind: kind, now: now, youtubeURLs: links, files: staged.files,
+        let capture = Capture(kind: kind, now: now, linkURLs: links, files: staged.files,
                               clips: staged.clips, entryID: entryID)
         try save(capture)
         try updateDraft(entryID) { $0 = CaptureDraft() }
@@ -464,13 +464,13 @@ public final class CaptureStore {
     /// cleared, so a half-written text entry waits where it was. `replaces`
     /// names entries this one supersedes (see `Capture.replaces`).
     @discardableResult
-    public func commitImages(text: String, youtubeURLs: [String], images: [(data: Data, name: String)],
+    public func commitImages(text: String, linkURLs: [String], images: [(data: Data, name: String)],
                              replaces: [String] = [], forReview: Bool = false,
                              location: (latitude: Double, longitude: Double)? = nil,
                              now: Date = Date()) throws -> Capture {
         let files = try writeImages(images, now: now)
         do {
-            return try commit(text: text, youtubeURLs: youtubeURLs, kind: .journal, files: files, clips: [],
+            return try commit(text: text, linkURLs: linkURLs, kind: .journal, files: files, clips: [],
                               replaces: replaces, forReview: forReview, location: location, now: now)
         } catch {
             for file in files { removeBytes(file) }
@@ -520,16 +520,16 @@ public final class CaptureStore {
         }
     }
 
-    private func commit(text: String, youtubeURLs: [String], kind: CaptureKind, files: [CaptureFile],
+    private func commit(text: String, linkURLs: [String], kind: CaptureKind, files: [CaptureFile],
                         clips: [CaptureClip], replaces: [String] = [], forReview: Bool = false,
                         autoFile: Bool = false,
                         location: (latitude: Double, longitude: Double)?, now: Date) throws -> Capture {
-        let links = kind.isMediaLog ? [] : try youtubeURLs.map(YouTubeLink.canonical)
+        let links = kind.isMediaLog ? [] : try linkURLs.map(JournalLink.canonical)
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Links are attachments, just like files and clips, never substitute words.
         let date = Self.entryDate(kind: kind, text: body, files: files, clips: clips, links: links, now: now)
         var capture = Capture(text: body, kind: kind, now: date,
-                              youtubeURLs: links, files: files, clips: clips)
+                              linkURLs: links, files: files, clips: clips)
         capture.latitude = location?.latitude
         capture.longitude = location?.longitude
         capture.replaces = replaces

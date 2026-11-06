@@ -225,7 +225,7 @@ public struct Capture: Codable, Identifiable, Equatable {
     }
 
     public init(text: String = "", mode: CaptureMode = .text, kind: CaptureKind = .journal, now: Date = Date(),
-                youtubeURLs: [String] = [], files: [CaptureFile] = [], clips: [CaptureClip] = [],
+                linkURLs: [String] = [], files: [CaptureFile] = [], clips: [CaptureClip] = [],
                 ficID: String? = nil, chapterID: String? = nil, entryID: String? = nil) {
         id = ULID.make(now: now)
         self.entryID = entryID
@@ -236,7 +236,7 @@ public struct Capture: Codable, Identifiable, Equatable {
         self.mode = mode
         self.kind = kind
         self.text = text
-        links = youtubeURLs.map { CaptureLink(url: $0, now: now) }
+        links = linkURLs.map { CaptureLink(url: $0, now: now) }
         self.files = files
         self.clips = clips
         state = mode == .text ? .pending : .recording
@@ -329,9 +329,39 @@ public enum YouTubeLink {
     }
 }
 
+/// Any link a journal entry can carry. A YouTube video is canonicalized and
+/// downloaded by the server; any other page is printed to PDF by the browser
+/// extension's archive tab (backend/journal/web_archive.py). The server is the
+/// one that refuses a private address, since only it can resolve the host.
+public enum JournalLink {
+    /// The first web link in `text`: a shared URL, or a page title with its
+    /// link after it, as some apps share.
+    public static func find(in text: String) -> String? {
+        let tokens = text.split(whereSeparator: { $0.isWhitespace || $0 == "<" || $0 == ">" || $0 == "\"" })
+        return tokens.lazy.filter { $0.lowercased().hasPrefix("http") }
+            .compactMap { try? canonical(String($0)) }.first
+    }
+
+    public static func canonical(_ value: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let video = try? YouTubeLink.canonical(trimmed) { return video }
+        guard let parts = URLComponents(string: trimmed),
+              ["http", "https"].contains(parts.scheme?.lowercased() ?? ""),
+              parts.user == nil, parts.password == nil,
+              let host = parts.host, !host.isEmpty else {
+            throw LinkError.invalidURL
+        }
+        return trimmed
+    }
+
+    public static func isYouTube(_ value: String) -> Bool {
+        (try? YouTubeLink.canonical(value)) != nil
+    }
+}
+
 public enum LinkError: LocalizedError {
     case invalidURL
-    public var errorDescription: String? { "Enter a YouTube video link, such as a watch, Shorts, or youtu.be URL." }
+    public var errorDescription: String? { "Enter a web link starting with http:// or https://." }
 }
 
 public enum ULID {

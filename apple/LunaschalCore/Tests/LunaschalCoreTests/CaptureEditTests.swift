@@ -50,7 +50,7 @@ final class CaptureEditTests: XCTestCase {
     }
 
     func testCommentaryCanBeClearedWhileKeepingTheYouTubeAttachment() async throws {
-        let capture = try store.commitDraft(text: "My thoughts", youtubeURLs: ["https://youtu.be/aircAruvnKk"])
+        let capture = try store.commitDraft(text: "My thoughts", linkURLs: ["https://youtu.be/aircAruvnKk"])
         try store.editText(capture.id, to: " \n ", attempt: nil)
         XCTAssertEqual(try store.load(capture.id).text, "")
         XCTAssertEqual(try store.load(capture.id).links, capture.links)

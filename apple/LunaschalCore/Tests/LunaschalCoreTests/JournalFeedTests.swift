@@ -84,6 +84,22 @@ final class JournalFeedTests: XCTestCase {
         XCTAssertEqual(JournalAttachmentItem(id: "y", entryID: "e", kind: "youtube").playerMIME, "video/mp4")
     }
 
+    func testASharedPageSaysWhereItIs() {
+        func page(_ status: String?) -> JournalAttachmentItem {
+            JournalAttachmentItem(id: "w", entryID: "e", kind: "webpage", mime: "application/pdf",
+                                  sourceURL: "https://www.example.com/articles/bridges", importStatus: status)
+        }
+        // A web page is not a file even though its bytes are a PDF: it has a
+        // lifecycle the card shows, and a refused one has no file at all.
+        XCTAssertEqual(page("ready").media, .webpage)
+        XCTAssertEqual(page("queued").pageState, .waiting)
+        XCTAssertEqual(page("ready").pageState, .archived)
+        XCTAssertEqual(page("login_required").pageState, .needsLogin)
+        XCTAssertEqual(page("error").pageState, .failed)
+        XCTAssertEqual(page("ready").sourceHost, "example.com")
+        XCTAssertNil(JournalAttachmentItem(id: "a", entryID: "e", kind: "audio").pageState)
+    }
+
     func testACategorisedEventWrapsTheEntriesWrittenDuringIt() {
         let times = ["2026-10-05T19:00:00Z", "2026-10-05T17:30:00Z", "2026-10-05T17:10:00Z",
                      "2026-10-05T16:00:00Z"].map(at)

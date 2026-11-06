@@ -15,7 +15,7 @@ final class CaptureFileTests: XCTestCase {
 
     func testPhotoOnlyEntrySurvivesRestartWithItsBytes() throws {
         let photo = try store.stageFile(data: Data("jpeg bytes".utf8), name: "Photo.jpg", contentType: "image/jpeg")
-        let capture = try store.commitDraft(text: "", youtubeURLs: [])
+        let capture = try store.commitDraft(text: "", linkURLs: [])
         XCTAssertEqual(capture.files, [photo])
         let restored = try CaptureStore(root: root).load(capture.id)
         XCTAssertEqual(restored.files, [photo])
@@ -83,7 +83,7 @@ final class CaptureFileTests: XCTestCase {
     func testSyncHandsTheTransportEachStoredFileInOrder() async throws {
         let first = try store.stageFile(data: Data("one".utf8), name: "1.jpg", contentType: "image/jpeg")
         let second = try store.stageFile(data: Data("two".utf8), name: "2.pdf", contentType: "application/pdf")
-        let capture = try store.commitDraft(text: "Two files", youtubeURLs: [])
+        let capture = try store.commitDraft(text: "Two files", linkURLs: [])
         XCTAssertEqual(capture.files, [first, second])
         let transport = FileRecordingTransport()
         try await CaptureSync(store: store).run(using: transport)
@@ -114,7 +114,7 @@ final class CaptureFileTests: XCTestCase {
         // Nothing is queued for sync while it is only a draft.
         XCTAssertEqual(try reopened.list(), [])
 
-        let capture = try reopened.commitDraft(text: "  Thoughts  ", youtubeURLs: ["https://youtu.be/aircAruvnKk"])
+        let capture = try reopened.commitDraft(text: "  Thoughts  ", linkURLs: ["https://youtu.be/aircAruvnKk"])
         XCTAssertEqual(capture.text, "Thoughts")
         XCTAssertEqual(capture.clips.map(\.attachmentID), [clip.attachmentID])
         XCTAssertEqual(capture.files, [photo])
@@ -132,7 +132,7 @@ final class CaptureFileTests: XCTestCase {
         let staged = try store.stageFile(data: Data("staged".utf8), name: "s.jpg", contentType: "image/jpeg")
 
         let capture = try store.commitImages(text: "Toronto Star, 2026-10-06",
-                                             youtubeURLs: ["https://youtu.be/aircAruvnKk"],
+                                             linkURLs: ["https://youtu.be/aircAruvnKk"],
                                              images: [(Data("p1".utf8), "Notes p1.jpg"), (Data("p2".utf8), "Notes p2.jpg")])
         XCTAssertEqual(capture.files.map(\.name), ["Notes p1.jpg", "Notes p2.jpg"])
         XCTAssertTrue(capture.files.allSatisfy(\.isImage))
@@ -148,7 +148,7 @@ final class CaptureFileTests: XCTestCase {
 
     func testNotebookSaveWithABadLinkLeavesNoFilesBehind() throws {
         let before = Set((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("files").path)) ?? [])
-        XCTAssertThrowsError(try store.commitImages(text: "", youtubeURLs: ["https://example.com"],
+        XCTAssertThrowsError(try store.commitImages(text: "", linkURLs: ["ftp://example.com/file"],
                                                     images: [(Data("p1".utf8), "Notes p1.jpg")]))
         let after = Set((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("files").path)) ?? [])
         XCTAssertEqual(after, before)
@@ -159,7 +159,7 @@ final class CaptureFileTests: XCTestCase {
         let clip = try store.beginClip(transcribe: false)
         try record(clip)
         try store.finishClip(clip.attachmentID)
-        let capture = try store.commitDraft(text: "", youtubeURLs: [])
+        let capture = try store.commitDraft(text: "", linkURLs: [])
         XCTAssertEqual(capture.text, "")
         XCTAssertEqual(capture.mode, .text)
         XCTAssertFalse(capture.clips[0].transcribe)
@@ -175,13 +175,13 @@ final class CaptureFileTests: XCTestCase {
     func testRecordingInterruptedByAKillStaysInTheDraftMarked() throws {
         let clip = try store.beginClip(transcribe: true)
         try record(clip)
-        XCTAssertThrowsError(try store.commitDraft(text: "Mid-recording", youtubeURLs: [])) {
+        XCTAssertThrowsError(try store.commitDraft(text: "Mid-recording", linkURLs: [])) {
             XCTAssertEqual($0 as? CaptureError, .stillRecording)
         }
         XCTAssertFalse(try store.draft().isEmpty, "A refused save keeps the draft")
         try CaptureStore(root: root).recoverInterruptedRecordings()
         XCTAssertEqual(try store.draft().clips.first?.state, .interrupted)
-        XCTAssertEqual(try store.commitDraft(text: "", youtubeURLs: []).clips.first?.state, .interrupted)
+        XCTAssertEqual(try store.commitDraft(text: "", linkURLs: []).clips.first?.state, .interrupted)
     }
 
     func testDiscardedClipLeavesNoAudioBehind() throws {
@@ -197,7 +197,7 @@ final class CaptureFileTests: XCTestCase {
         let clip = try store.beginClip(transcribe: true)
         try record(clip)
         try store.finishClip(clip.attachmentID)
-        let capture = try store.commitDraft(text: "", youtubeURLs: [])
+        let capture = try store.commitDraft(text: "", linkURLs: [])
         let body = try RecordingMultipart(entryID: capture.id, attachmentID: clip.attachmentID,
                                           capturedAt: clip.createdAt, transcribe: true, audioURL: store.clipURL(clip))
         defer { try? FileManager.default.removeItem(at: body.url) }
@@ -222,7 +222,7 @@ final class CaptureFileTests: XCTestCase {
             try store.finishClip(clip.attachmentID)
             clips.append(clip)
         }
-        let capture = try store.commitDraft(text: "", youtubeURLs: [])
+        let capture = try store.commitDraft(text: "", linkURLs: [])
         let transport = FileRecordingTransport()
         try await CaptureSync(store: store).run(using: transport)
         XCTAssertEqual(transport.sentClips.map { try? Data(contentsOf: $0) }, [Data("first".utf8), Data("second".utf8)])

@@ -11,13 +11,16 @@
  */
 const $ = id => document.getElementById(id);
 
-$('ffn').addEventListener('click', async () => {
-  const url = chrome.runtime.getURL('ffn.html');
+async function openControlTab(page) {
+  const url = chrome.runtime.getURL(page);
   const tabs = await chrome.tabs.query({ url });
   if (tabs.length) await chrome.tabs.update(tabs[0].id, { active: true });
   else await chrome.tabs.create({ url });
   window.close();
-});
+}
+
+$('ffn').addEventListener('click', () => openControlTab('ffn.html'));
+$('archive').addEventListener('click', () => openControlTab('archive.html'));
 
 function send(type, payload = {}) {
   return new Promise((resolve, reject) => {
