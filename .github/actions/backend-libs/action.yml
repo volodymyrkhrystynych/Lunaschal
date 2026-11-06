@@ -3,7 +3,10 @@ description: Installs the backend's apt packages from a cache of their .debs
 # A slow Ubuntu mirror once held this step for 41 minutes while a job beside it
 # took four seconds, and every shard takes that chance. Installing from the
 # cache needs no mirror at all; the key carries the runner image because what
-# has to be downloaded depends on what the image already has.
+# has to be downloaded depends on what the image already has. A cold cache still
+# downloads, and the slow mirror is throttled rather than stalled, so it never
+# trips apt's own timeouts: give it two minutes, then keep what it fetched and
+# finish from the main archive.
 runs:
   using: composite
   steps:
@@ -27,8 +30,14 @@ runs:
           libxdamage1 libxrandr2 libxtst6 libxshmfence1 libasound2t64 libfontconfig1 libdbus-1-3
         )
         apt_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
-        sudo apt-get "${apt_options[@]}" update -q
-        sudo apt-get "${apt_options[@]}" install -yq --no-install-recommends --download-only "${packages[@]}"
+        download() {
+          sudo timeout 120 apt-get "${apt_options[@]}" update -q &&
+            sudo timeout 120 apt-get "${apt_options[@]}" install -yq --no-install-recommends --download-only "${packages[@]}"
+        }
+        if ! download; then
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|' /etc/apt/sources.list /etc/apt/sources.list.d/*
+          download
+        fi
         mkdir -p "$HOME/apt-debs"
         cp /var/cache/apt/archives/*.deb "$HOME/apt-debs/"
         sudo apt-get "${apt_options[@]}" install -yq --no-install-recommends "${packages[@]}"
