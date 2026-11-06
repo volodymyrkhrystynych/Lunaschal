@@ -1653,6 +1653,17 @@ final class CaptureModel: ObservableObject {
         requestSync()
     }
 
+    /// Removes the book's continue point if it is in this chapter, now that
+    /// the chapter has been read past. Returns whether it did.
+    func clearContinue(bookID: String, chapterID: String, reachedEnd: Bool) -> Bool {
+        do {
+            guard try replica.clearContinue(bookID: bookID, chapterID: chapterID, reachedEnd: reachedEnd) else { return false }
+        } catch { message = error.localizedDescription; return false }
+        libraryRevision += 1
+        requestSync()
+        return true
+    }
+
     func checkFicForUpdates(_ book: SyncChange, deep: Bool) async {
         guard let api = chatAPI() else { message = "Sign in to update fics on the server."; return }
         do { message = try await api.checkFicForUpdates(book.id, deep: deep).summary(title: book.title) }

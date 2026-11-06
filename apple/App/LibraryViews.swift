@@ -373,7 +373,9 @@ struct BookView: View {
             if !bookmarkEdits.isEmpty {
                 Section("Bookmark sync") {
                     ForEach(bookmarkEdits) { edit in
-                        Text(edit.state == "pending" ? "Bookmark saved on device · Waiting to sync" : edit.error ?? "Bookmark needs review")
+                        Text(edit.state != "pending" ? edit.error ?? "Bookmark needs review"
+                             : edit.operation.action == "delete" ? "Bookmark removed on device · Waiting to sync"
+                             : "Bookmark saved on device · Waiting to sync")
                         if edit.state != "pending" {
                             Button("Keep server version and discard this pending change", role: .destructive) {
                                 do { try model.replica.resolve(edit, keepLocal: false); Task { await refreshChapters() } }

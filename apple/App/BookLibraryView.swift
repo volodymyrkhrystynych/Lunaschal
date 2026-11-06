@@ -12,7 +12,7 @@ struct LibraryView: View {
     var body: some View {
         Group {
             if mode == "folders" { FolderListView(model: model) }
-            else { BookListView(model: model, showsProviders: true) }
+            else { BookListView(model: model, isWholeLibrary: true) }
         }
         .navigationTitle("Library")
         .navigationBarTitleDisplayMode(.inline)
@@ -31,11 +31,11 @@ struct LibraryView: View {
 }
 
 /// One list of books. With a `folder` it is that folder's contents; without,
-/// it is the whole library, narrowed by the provider pills.
+/// it is the whole library, sorted by the pills and narrowed by the filter menu.
 struct BookListView: View {
     @ObservedObject var model: CaptureModel
     var folder: String? = nil
-    var showsProviders = false
+    var isWholeLibrary = false
     @State private var filter: BookFilter
     @State private var books: [SyncChange] = []
     @State private var limit = 50
@@ -50,10 +50,10 @@ struct BookListView: View {
     @State private var editMode: EditMode = .inactive
     @State private var selection: Set<String> = []
 
-    init(model: CaptureModel, folder: String? = nil, showsProviders: Bool = false) {
+    init(model: CaptureModel, folder: String? = nil, isWholeLibrary: Bool = false) {
         self.model = model
         self.folder = folder
-        self.showsProviders = showsProviders
+        self.isWholeLibrary = isWholeLibrary
         _filter = State(initialValue: BookFilter(opening: folder))
     }
 
@@ -62,11 +62,16 @@ struct BookListView: View {
                                      "fic_chapter_reads", "fic_chapter_reactions"]
 
     static let providers = [
-        ("", "All"), ("forums.spacebattles.com", "SpaceBattles"),
+        ("", "All sources"), ("forums.spacebattles.com", "SpaceBattles"),
         ("forums.sufficientvelocity.com", "Sufficient Velocity"),
         ("forum.questionablequesting.com", "Questionable Questing"),
         ("fanfiction", "FanFiction.net"), ("ao3", "AO3"), ("patreon", "Patreon"),
         ("epub", "EPUB"), ("docx", "DOCX"), ("pdf", "PDF"),
+    ]
+
+    static let sorts = [
+        ("activity", "Latest"), ("recent", "Recent"), ("added", "Added"),
+        ("title", "Title"), ("rating", "Rating"),
     ]
 
     var body: some View {
@@ -145,22 +150,22 @@ struct BookListView: View {
         .searchable(text: $filter.query, placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "Search titles and tags")
         .safeAreaInset(edge: .top, spacing: 0) {
-            if showsProviders {
+            if isWholeLibrary {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(Self.providers, id: \.0) { value, label in
-                            Button(label) { filter.source = value }
+                        ForEach(Self.sorts, id: \.0) { value, label in
+                            Button(label) { filter.sort = value }
                                 .buttonStyle(.bordered)
                                 .buttonBorderShape(.capsule)
                                 .controlSize(.small)
-                                .tint(filter.source == value ? .accentColor : .secondary)
-                                .accessibilityAddTraits(filter.source == value ? .isSelected : [])
+                                .tint(filter.sort == value ? .accentColor : .secondary)
+                                .accessibilityAddTraits(filter.sort == value ? .isSelected : [])
                         }
                     }
                     .padding(.horizontal).padding(.vertical, 6)
                 }
                 .background(.bar)
-                .accessibilityIdentifier("library-providers")
+                .accessibilityIdentifier("library-sorts")
             }
         }
         .toolbar {
@@ -199,6 +204,12 @@ struct BookListView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    if isWholeLibrary {
+                        Picker("Source", selection: $filter.source) {
+                            ForEach(Self.providers, id: \.0) { value, label in Text(label).tag(value) }
+                        }
+                        .pickerStyle(.menu)
+                    }
                     Picker("Bookmarks", selection: $filter.bookmark) {
                         Text("All books").tag("")
                         Text("Favorites").tag("favorite")
@@ -223,12 +234,14 @@ struct BookListView: View {
                             get: { filter.backlogOnly }, set: { filter.setBacklogOnly($0) }))
                             .accessibilityIdentifier("filter-backlog")
                     }
-                    Picker("Sort", selection: $filter.sort) {
-                        Text("Latest update on the site").tag("activity")
-                        Text("Recently read").tag("recent")
-                        Text("Added to library").tag("added")
-                        Text("Title").tag("title")
-                        Text("Rating").tag("rating")
+                    if !isWholeLibrary {
+                        Picker("Sort", selection: $filter.sort) {
+                            Text("Latest update on the site").tag("activity")
+                            Text("Recently read").tag("recent")
+                            Text("Added to library").tag("added")
+                            Text("Title").tag("title")
+                            Text("Rating").tag("rating")
+                        }
                     }
                     Button("Reset filters") { filter = fresh() }
                 } label: {
@@ -237,6 +250,7 @@ struct BookListView: View {
                 }
             }
         }
+        .refreshable { await refresh() }
         .task(id: model.downloadingLibrary) { await refresh() }
         // Only when a pass changed books, folders, bookmarks or chapters. The
         // list's rows keep their ids, so it stays where it was scrolled to.
@@ -255,7 +269,11 @@ struct BookListView: View {
         .onChange(of: model.ficDownload?.id) { _, _ in onDevice = model.ficsOnDevice(books) }
     }
 
-    private func fresh() -> BookFilter { BookFilter(opening: folder) }
+    /// What Reset returns to, and what the menu's icon compares with. The
+    /// whole library's sort is on the pills, so it isn't the menu's to reset.
+    private func fresh() -> BookFilter {
+        isWholeLibrary ? filter.clearedKeepingSort() : BookFilter(opening: folder)
+    }
 
     static let typingPause: UInt64 = 300_000_000
 
@@ -402,6 +420,7 @@ struct FolderListView: View {
                     description: Text("Folders made in the desktop library appear here after a sync."))
             }
         }
+        .refreshable { await refresh() }
         .task(id: model.downloadingLibrary) { await refresh() }
         .onChange(of: model.syncChanges) { _, changes in
             if changes.touches(["fics", "fic_folders"]) { Task { await refresh() } }

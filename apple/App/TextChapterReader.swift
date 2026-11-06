@@ -5,7 +5,8 @@ import LunaschalCore
 /// scrolling is logged as reading spans, the chapter becomes the book's
 /// last-read chapter, and the menu at the bottom left takes commentary and
 /// bookmarks. Next/Previous, above and below the text, move through the
-/// chapter's own threadmark category without leaving.
+/// chapter's own threadmark category without leaving. A fast flick up offers
+/// a jump to the top of the chapter at the bottom right.
 struct TextChapterReader: View {
     @ObservedObject var owner: CaptureModel
     var initialFraction: Double?
@@ -23,6 +24,11 @@ struct TextChapterReader: View {
     @AppStorage("readerTextSize") private var textSize = ReaderTextSize.standard
     @State private var fraction = 0.0
     @State private var userScrolling = false
+    /// Fed every scroll frame, so `body` reads `showsTopJump` instead: a change
+    /// to anything `body` reads redraws the chapter.
+    @State private var topJump = ReaderTopJump()
+    @State private var showsTopJump = false
+    @State private var topJumpClear: Task<Void, Never>?
     @State private var spans = ReadingSpanState()
     @State private var pendingFraction: Double?
     @State private var sheet: ReaderSheet?
@@ -31,6 +37,10 @@ struct TextChapterReader: View {
     /// Chapters this reader has already considered marking read, so reaching
     /// the end of one asks the store once, not on every scroll tick.
     @State private var autoReadChecked: Set<String> = []
+    /// The same for taking a continue point away.
+    @State private var continueChecked: Set<String> = []
+    /// Fed every scroll frame, so `body` doesn't read it either.
+    @State private var travel = ReaderTravel()
     /// What the forum shows (or will) as the user's reaction on this chapter.
     @State private var reaction: ChapterReaction?
     @Environment(\.scenePhase) private var scenePhase
@@ -53,6 +63,8 @@ struct TextChapterReader: View {
     /// The scroll id of the Next/Previous row above the text. The start of a
     /// chapter lands here rather than on its first paragraph, so the row shows.
     private static let topRow = -1
+    /// That row is only there when the chapter has a neighbor to go to.
+    private var firstRow: Int { neighbors.previous != nil || neighbors.next != nil ? Self.topRow : 0 }
 
     var body: some View { lifecycle(chrome) }
 
@@ -60,6 +72,7 @@ struct TextChapterReader: View {
         page
         // Floating rather than in a bar, so the text runs to the bottom edge.
         .overlay(alignment: .bottomLeading) { floatingControls }
+        .overlay(alignment: .bottomTrailing) { topJumpButton }
         .navigationTitle(current.title).navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { textSizeMenu }
@@ -99,17 +112,34 @@ struct TextChapterReader: View {
             // Only the reader's own scrolling counts: restoring a position or
             // a bookmark moves the view too, and proves nothing.
             userScrolling = phase == .interacting || phase == .decelerating
+            topJumpClear?.cancel()
+            if phase == .idle && showsTopJump {
+                topJumpClear = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    hideTopJump()
+                }
+            }
         }
         .onScrollGeometryChange(for: Double.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top
+        } action: { _, offset in
+            guard userScrolling else { return }
+            topJump.scrolled(offset: offset, at: ProcessInfo.processInfo.systemUptime)
+            if topJump.isShown != showsTopJump { showsTopJump = topJump.isShown }
+        }
+        .onScrollGeometryChange(for: ReaderScroll.self) { geometry in
             let range = geometry.contentSize.height + geometry.contentInsets.top
                 + geometry.contentInsets.bottom - geometry.containerSize.height
-            guard range > 0 else { return 0 }
-            return min(1, max(0, (geometry.contentOffset.y + geometry.contentInsets.top) / range))
-        } action: { _, value in
-            fraction = value
+            let offset = geometry.contentOffset.y + geometry.contentInsets.top
+            return ReaderScroll(fraction: range > 0 ? min(1, max(0, offset / range)) : 0,
+                                offset: offset, screen: geometry.containerSize.height)
+        } action: { _, scroll in
+            fraction = scroll.fraction
             if userScrolling {
-                recordScroll(value)
-                markReadAtEnd(value)
+                travel.scrolled(offset: scroll.offset)
+                recordScroll(scroll.fraction)
+                markReadAtEnd(scroll)
             }
         }
     }
@@ -126,6 +156,34 @@ struct TextChapterReader: View {
         }
         .padding(.horizontal).padding(.bottom, 8)
         .animation(.default, value: status)
+    }
+
+    @ViewBuilder
+    private var topJumpButton: some View {
+        Group {
+            if showsTopJump {
+                Button {
+                    position = firstRow
+                    hideTopJump()
+                } label: {
+                    Image(systemName: "arrow.up.to.line")
+                        .font(.title3.weight(.semibold))
+                        .frame(width: 48, height: 48)
+                        .background(.regularMaterial, in: Circle())
+                }
+                .accessibilityLabel("Top of chapter")
+                .accessibilityIdentifier("reader-to-top")
+                .padding(.horizontal).padding(.bottom, 8)
+                .transition(.opacity)
+            }
+        }
+        .animation(.default, value: showsTopJump)
+    }
+
+    private func hideTopJump() {
+        topJumpClear?.cancel()
+        topJump.reset()
+        showsTopJump = false
     }
 
     /// Sheets, loading and saving: what the reader does around the page.
@@ -275,7 +333,7 @@ struct TextChapterReader: View {
                 }
                 Spacer()
                 if let next {
-                    Button { move(to: next) } label: {
+                    Button { goNext(to: next) } label: {
                         Label("Next chapter", systemImage: "chevron.right").labelStyle(.titleAndIcon)
                     }
                     .buttonStyle(.borderedProminent)
@@ -316,8 +374,23 @@ struct TextChapterReader: View {
     private func move(to chapter: SyncChange) {
         savePosition()
         closeSpan(sync: false)
+        hideTopJump()
+        travel = ReaderTravel()
         position = Self.topRow
         current = (try? store.record(collection: "fic_chapters", id: chapter.id)) ?? chapter
+    }
+
+    /// Going on to the next chapter is having finished this one, however far
+    /// down it the continue point was.
+    private func goNext(to chapter: SyncChange) {
+        let cleared = clearContinue(reachedEnd: false)
+        move(to: chapter)
+        if cleared { show("Continue point removed") }
+    }
+
+    private func clearContinue(reachedEnd: Bool) -> Bool {
+        guard let ficID else { return false }
+        return owner.clearContinue(bookID: ficID, chapterID: current.id, reachedEnd: reachedEnd)
     }
 
     private func savePosition() {
@@ -340,14 +413,30 @@ struct TextChapterReader: View {
         if let due = spans.takeFlush(now: now) { owner.queueReading(.span(due)) }
     }
 
-    /// Scrolling to the end of a chapter marks it read, once.
-    private func markReadAtEnd(_ value: Double) {
-        guard let ficID, value >= FicLibrary.autoReadFraction, !autoReadChecked.contains(current.id) else { return }
-        autoReadChecked.insert(current.id)
-        let alreadyRead = (try? store.readChapterIDs(bookID: ficID).contains(current.id)) ?? true
-        guard FicLibrary.shouldAutoMark(fraction: value, alreadyRead: alreadyRead) else { return }
-        owner.markChapters(bookID: ficID, chapterIDs: [current.id], read: true)
-        show("Marked read")
+    /// Scrolling to the end of a chapter marks it read, once, and takes away a
+    /// continue point in it, even on a re-read. That second part waits for a
+    /// real read: see `ReaderTravel`.
+    private func markReadAtEnd(_ scroll: ReaderScroll) {
+        guard let ficID, scroll.fraction >= FicLibrary.autoReadFraction else { return }
+        var cleared = false
+        if travel.coveredScreen(offset: scroll.offset, screen: scroll.screen), !continueChecked.contains(current.id) {
+            continueChecked.insert(current.id)
+            cleared = clearContinue(reachedEnd: true)
+        }
+        var marked = false
+        if !autoReadChecked.contains(current.id) {
+            autoReadChecked.insert(current.id)
+            let alreadyRead = (try? store.readChapterIDs(bookID: ficID).contains(current.id)) ?? true
+            if FicLibrary.shouldAutoMark(fraction: scroll.fraction, alreadyRead: alreadyRead) {
+                owner.markChapters(bookID: ficID, chapterIDs: [current.id], read: true)
+                marked = true
+            }
+        }
+        if marked {
+            show(cleared ? "Marked read · Continue point removed" : "Marked read")
+        } else if cleared {
+            show("Continue point removed")
+        }
     }
 
     private func closeSpan(sync: Bool) {
@@ -357,6 +446,11 @@ struct TextChapterReader: View {
     private func bookmark(_ type: String) {
         do {
             try store.queueBookmark(chapter: current, type: type, fraction: min(1, max(0, fraction)))
+            // This point has yet to be read past, even if an earlier one was.
+            if type == "continue" {
+                continueChecked.remove(current.id)
+                travel = ReaderTravel()
+            }
             show(type == "continue"
                 ? "Continue point saved here · Syncs when connected"
                 : "Bookmarked · Syncs when connected")
@@ -366,6 +460,14 @@ struct TextChapterReader: View {
             owner.message = "This chapter's bookmark is already waiting to sync."
         } catch { owner.message = error.localizedDescription }
     }
+}
+
+/// One frame of the chapter's scroll view. Equatable, so the reader hears of a
+/// frame only when something in it moved.
+private struct ReaderScroll: Equatable {
+    let fraction: Double
+    let offset: Double
+    let screen: Double
 }
 
 /// The reader's text size in points: one setting for every book, saved on

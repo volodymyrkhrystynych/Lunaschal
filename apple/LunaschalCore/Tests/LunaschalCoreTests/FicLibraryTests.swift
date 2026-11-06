@@ -273,6 +273,18 @@ final class FicLibraryTests: XCTestCase {
         XCTAssertEqual(filter.sort, "title")
     }
 
+    func testTheAddedPillSortsTheWholeLibraryNewestAddedFirst() throws {
+        let (store, _) = try store()
+        // Site activity runs the other way, so the order can only come from createdAt.
+        let older = with(book(3), ["createdAt": .string("2026-01-02T00:00:00+00:00")])
+        let newer = with(book(1), ["createdAt": .string("2026-10-27T09:30:00+00:00")])
+        try apply([older, newer], to: store)
+        var filter = BookFilter()
+        XCTAssertEqual(try store.books(filter: filter, limit: 100).records.map(\.id), [older.id, newer.id])
+        filter.sort = "added"
+        XCTAssertEqual(try store.books(filter: filter, limit: 100).records.map(\.id), [newer.id, older.id])
+    }
+
     func testOnlyForumPostsAreLikeable() {
         let forum = with(book(1), ["sourceType": .string("xenforo")])
         let post = with(chapter(forum, position: 0), ["sourceUrl": .string("https://forums.example.com/threads/x.1/post-55")])

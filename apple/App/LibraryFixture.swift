@@ -96,6 +96,11 @@ enum LibraryFixture {
     /// rest of the fixture reads as it always did.
     static let manyArgument = "-libraryManyBooks"
     static let fillerCount = 62
+    /// With `-libraryLongBook` as well, a book whose chapters are long enough
+    /// to flick through at speed. A book of its own, because the replica
+    /// keeps a chapter it already holds at the same revision.
+    static let longArgument = "-libraryLongBook"
+    static let long = "01K8BBBBBBBBBBBBBBBBBBBB0A"
     static var filler: [Book] {
         guard ProcessInfo.processInfo.arguments.contains(manyArgument) else { return [] }
         return (1...fillerCount).map { index in
@@ -103,6 +108,13 @@ enum LibraryFixture {
                  author: "Paginator", site: nil, sourceType: "epub", tags: [], folders: [], chapters: 1,
                  onDevice: 0, daysSinceUpdate: 200 + Double(index), description: "Pads the list past one page.")
         }
+    }
+
+    static var longBooks: [Book] {
+        guard ProcessInfo.processInfo.arguments.contains(longArgument) else { return [] }
+        return [Book(id: long, title: "A Very Long Road", author: "Merrow", site: "forums.spacebattles.com",
+                     sourceType: "xenforo", tags: [], folders: [], chapters: 2, onDevice: 2,
+                     daysSinceUpdate: 0.1, description: "Chapters too long to scroll back up by hand.")]
     }
 
     static func chapterID(_ book: Book, _ index: Int) -> String {
@@ -121,7 +133,7 @@ enum LibraryFixture {
             change("fic_folders", finished, ["name": "Finished", "position": 1]),
             change("fic_folders", toRead, ["name": "To read", "position": 2]),
         ]
-        for book in books + filler {
+        for book in books + filler + longBooks {
             changes.append(change("fics", book.id, bookData(book, now: now, iso: iso), revision: bookRevision))
             for index in 0..<book.onDevice { changes.append(chapter(book, index, now: now)) }
         }
@@ -151,8 +163,8 @@ enum LibraryFixture {
         // last run downloaded are gone again and every launch starts the same.
         let store = try ReplicaStore(url: root.appendingPathComponent("replica.sqlite"))
         try store.apply(decoded, startingBootstrap: true)
-        // Shelving, reviews, read marks and likes a previous run left waiting.
-        for edit in try store.edits() where ["fics", "fic_chapter_reads", "fic_chapter_reactions"].contains(edit.operation.collection) {
+        // Shelving, reviews, bookmarks, read marks and likes a previous run left waiting.
+        for edit in try store.edits() where ["fics", "fic_bookmarks", "fic_chapter_reads", "fic_chapter_reactions"].contains(edit.operation.collection) {
             try store.resolve(edit, keepLocal: false)
         }
         // The PDF book goes back to not downloaded too.
@@ -242,7 +254,7 @@ enum LibraryFixture {
     ]
 
     private static func paragraphs(book: Book, chapter: Int) -> [String] {
-        (0..<14).map { paragraph in
+        (0..<(book.id == long ? 150 : 14)).map { paragraph in
             (0..<4).map { sentences[(book.title.count + chapter * 5 + paragraph * 3 + $0) % sentences.count] }
                 .joined(separator: " ")
         }
