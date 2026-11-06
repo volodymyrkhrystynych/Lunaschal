@@ -1,10 +1,10 @@
 name: Apple app
 # Pull requests (and by hand) only. A push to main is the merge of a PR that
 # already ran this, and the signed release builds main without waiting on it,
-# so testing every push only queued a second 40-minute run.
+# so testing every push only queued a second full run.
 on:
   pull_request:
-    paths: ['apple/**', '.github/workflows/apple.yml']
+    paths: ['apple/**', '.github/workflows/apple.yml', '.github/actions/xcode-project/**']
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,15 +13,21 @@ concurrency:
   cancel-in-progress: true
 env:
   DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-# The simulator work used to be one job of ~40 minutes. It is now split across
-# parallel macOS jobs, each building for itself (~5 min) and then running its
-# share: the device archive and Watch build, four shards of the iPhone UI
-# tests (app unit tests in the first), and the iPad-only tests. Four, not
-# five: GitHub runs at most five macOS jobs at once, and with six ~20-minute
-# simulator jobs the sixth queued behind the first wave, doubling the wall
-# time to 40+ minutes. Simulator UI
-# tests flake on slow runners, so each failing test gets one retry, and a test
-# stuck for 5 minutes (one once hung 12 on a tap) is stopped and retried.
+# No job should take more than ten minutes, so a failure can be rerun on its own
+# without waiting half an hour. simulator-build compiles once for every shard.
+# Each shard still spends about 5.5 minutes before its first test, most of it on
+# the simulator's first boot, leaving about 3.5 for tests.
+#
+# That boot is deliberately not cached. Restoring a booted device saved about 80
+# seconds, and app launches then failed on 8 of 32 shards, against 0 of 26 without
+# it. Every failing shard's simulator had been booted, shut down and booted again.
+#
+# GitHub runs at most five macOS jobs at once, across every open PR, so shards
+# beyond the fifth queue.
+#
+# Simulator UI tests flake on slow runners, so each failing test gets one retry,
+# and a test stuck for 5 minutes (one once hung 12 on a tap) is stopped and
+# retried. Job timeouts leave room for those retries beyond the ten-minute aim.
 jobs:
   core:
     runs-on: ubuntu-latest
@@ -41,108 +47,97 @@ jobs:
 
   archive:
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Generate Xcode project
-        run: |
-          brew install xcodegen
-          swift apple/tools/make_icons.swift
-          xcodegen generate --spec apple/project.yml
+      - uses: ./.github/actions/xcode-project
       - name: Verify unsigned device archive
         run: |
           xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
             -configuration Release -destination 'generic/platform=iOS' \
             -archivePath apple/Lunaschal.xcarchive CODE_SIGNING_ALLOWED=NO archive
           python3 apple/tools/check_archive.py apple/Lunaschal.xcarchive
+
+  watch:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/xcode-project
       - name: Build Watch companion
         run: |
           xcodebuild -project apple/Lunaschal.xcodeproj -scheme LunaschalWatch \
             -sdk watchsimulator -destination 'generic/platform=watchOS Simulator' \
             -derivedDataPath apple/WatchDerivedData CODE_SIGNING_ALLOWED=NO build
 
-  iphone:
+  simulator-build:
     runs-on: macos-26
-    # Each shard is ~8 min of build and ~16 of tests; room for a retried test.
-    timeout-minutes: 40
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/xcode-project
+      - name: Build for testing
+        # Hosted Macs are arm64, and the one simulator build runs on iPhone and iPad.
+        run: |
+          xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath apple/DerivedData \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO build-for-testing
+          # The photo-picker test's picture: generated above, so not in a checkout.
+          cp apple/App/Assets.xcassets/AppIcon.appiconset/Icon.png apple/DerivedData/Build/Products/test-photo.png
+          tar -C apple/DerivedData/Build -cf simulator-build.tar Products
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simulator-build
+          path: simulator-build.tar
+          compression-level: 1
+          retention-days: 1
+          if-no-files-found: error
+
+  ui:
+    name: ${{ matrix.device }} ${{ matrix.shard }}/${{ matrix.total }}
+    needs: simulator-build
+    runs-on: macos-26
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        include:
+          - { device: iPhone, shard: 1, total: 16 }
+          - { device: iPhone, shard: 2, total: 16 }
+          - { device: iPhone, shard: 3, total: 16 }
+          - { device: iPhone, shard: 4, total: 16 }
+          - { device: iPhone, shard: 5, total: 16 }
+          - { device: iPhone, shard: 6, total: 16 }
+          - { device: iPhone, shard: 7, total: 16 }
+          - { device: iPhone, shard: 8, total: 16 }
+          - { device: iPhone, shard: 9, total: 16 }
+          - { device: iPhone, shard: 10, total: 16 }
+          - { device: iPhone, shard: 11, total: 16 }
+          - { device: iPhone, shard: 12, total: 16 }
+          - { device: iPhone, shard: 13, total: 16 }
+          - { device: iPhone, shard: 14, total: 16 }
+          - { device: iPhone, shard: 15, total: 16 }
+          - { device: iPhone, shard: 16, total: 16 }
+          - { device: iPad, shard: 1, total: 5 }
+          - { device: iPad, shard: 2, total: 5 }
+          - { device: iPad, shard: 3, total: 5 }
+          - { device: iPad, shard: 4, total: 5 }
+          - { device: iPad, shard: 5, total: 5 }
     steps:
       - uses: actions/checkout@v4
-      - name: Generate Xcode project
+      - uses: actions/download-artifact@v4
+        with:
+          name: simulator-build
+      - name: Unpack build
         run: |
-          brew install xcodegen
-          swift apple/tools/make_icons.swift
-          xcodegen generate --spec apple/project.yml
-      - name: Test on iPhone simulator (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
-        shell: bash
-        run: |
-          simulator_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for runtime,devices in data["devices"].items() if "iOS" in runtime for d in devices if "iPhone" in d["name"]))')
-          selection=()
-          # Finish first-boot setup before XCTest starts its launch deadline.
-          xcrun simctl boot "$simulator_id"
-          xcrun simctl bootstatus "$simulator_id" -b
-          # The photo-picker test must not depend on stock simulator photos.
-          xcrun simctl addmedia "$simulator_id" apple/App/Assets.xcassets/AppIcon.appiconset/Icon.png
-          # A selector error must stop the job, not accidentally run the full suite.
-          python3 apple/tools/ui_shards.py apple/UITests ${{ matrix.shard }} ${{ strategy.job-total }} > "$RUNNER_TEMP/ui-selection.txt"
-          while IFS= read -r test; do selection+=("$test"); done < "$RUNNER_TEMP/ui-selection.txt"
-          if [ "${{ matrix.shard }}" = 1 ]; then selection+=("-only-testing:LunaschalAppTests"); fi
-          xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
-            -destination "platform=iOS Simulator,id=$simulator_id" \
-            -parallel-testing-enabled NO -destination-timeout 120 \
-            -retry-tests-on-failure -test-iterations 2 \
-            -test-timeouts-enabled YES -default-test-execution-time-allowance 300 \
-            -derivedDataPath apple/DerivedData -resultBundlePath apple/TestResults.xcresult \
-            "${selection[@]}" CODE_SIGNING_ALLOWED=NO test
+          mkdir -p apple/DerivedData/Build
+          tar -C apple/DerivedData/Build -xf simulator-build.tar
+      - name: Test on ${{ matrix.device }} simulator
+        run: apple/tools/run_ui_shard.sh ${{ matrix.device }} ${{ matrix.shard }} ${{ matrix.total }}
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: apple-test-results-iphone-${{ matrix.shard }}
-          path: apple/TestResults.xcresult
-          if-no-files-found: ignore
-
-  ipad:
-    runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - name: Generate Xcode project
-        run: |
-          brew install xcodegen
-          swift apple/tools/make_icons.swift
-          xcodegen generate --spec apple/project.yml
-      - name: Test iPad-only screens
-        shell: bash
-        run: |
-          simulator_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for runtime,devices in data["devices"].items() if "iOS" in runtime for d in devices if "iPad" in d["name"]))')
-          xcrun simctl boot "$simulator_id"
-          xcrun simctl bootstatus "$simulator_id" -b
-          xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
-            -destination "platform=iOS Simulator,id=$simulator_id" \
-            -parallel-testing-enabled NO -destination-timeout 120 \
-            -retry-tests-on-failure -test-iterations 2 \
-            -test-timeouts-enabled YES -default-test-execution-time-allowance 300 \
-            -derivedDataPath apple/DerivedData -resultBundlePath apple/TestResults.xcresult \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingWorkspaceReopensWithoutAServer \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testIPadDestinationsOpenWithoutAnAppMoreMenu \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testCompactIPadKeepsOneNavigationBar \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testChapterBackGoesToTheChapterListOnce \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testNewspaperScrollsAsOneColumn \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesPagesDoNotTurnWithASwipe \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingToolbarStaysThroughPageChanges \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testNotebookZoomIsOffUntilSwitchedOn \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testNotebookInkLogShowsWhatHappened \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingToolSizesApplyImmediatelyAndSurviveReopening \
-            -only-testing:LunaschalUITests/OfflineCaptureTests/testNotesComeBackFromTheEntryDraftAndSaveWithIt \
-            CODE_SIGNING_ALLOWED=NO test
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: apple-test-results-ipad
+          name: apple-test-results-${{ matrix.device }}-${{ matrix.shard }}
           path: apple/TestResults.xcresult
           if-no-files-found: ignore

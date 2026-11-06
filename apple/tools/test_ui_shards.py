@@ -5,7 +5,8 @@ import sys
 import tempfile
 import unittest
 
-from ui_shards import APP_TEST_SECONDS, DEFAULT_SECONDS, DURATIONS, shard, tests
+from ui_shards import (APP_TEST_SECONDS, DEFAULT_SECONDS, DURATIONS, IPAD_TESTS, ipad_tests,
+                       shard, tests)
 
 UITESTS = pathlib.Path(__file__).resolve().parents[1] / "UITests"
 
@@ -69,6 +70,23 @@ class UIShardTests(unittest.TestCase):
                                     capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(result.stdout, "")
+
+    def test_every_ipad_test_lands_in_exactly_one_shard(self):
+        listed = json.loads(IPAD_TESTS.read_text())
+        names = ipad_tests(tests(UITESTS), listed)
+        script = pathlib.Path(__file__).with_name("ui_shards.py")
+        selected = []
+        for i in (1, 2):
+            result = subprocess.run(
+                [sys.executable, str(script), str(UITESTS), str(i), "2", "--ipad"],
+                capture_output=True, text=True, check=True)
+            selected.extend(result.stdout.splitlines())
+        self.assertEqual(sorted(selected),
+                         [f"-only-testing:LunaschalUITests/{name}" for name in names])
+
+    def test_ipad_list_must_not_name_a_removed_test(self):
+        with self.assertRaises(SystemExit):
+            ipad_tests(["Case/testKept"], {"Case/testKept": 1, "Case/testGone": 1})
 
     def test_rejects_a_shard_outside_the_total(self):
         with self.assertRaises(ValueError):

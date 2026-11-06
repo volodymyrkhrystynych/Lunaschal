@@ -1,0 +1,10 @@
+name: Generate Xcode project
+description: Installs XcodeGen, creates the icons and generates the project
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        brew install xcodegen
+        swift apple/tools/make_icons.swift
+        xcodegen generate --spec apple/project.yml

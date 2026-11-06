@@ -1,0 +1,15 @@
+{
+  "OfflineCaptureTests/testChapterBackGoesToTheChapterListOnce": 129.977,
+  "OfflineCaptureTests/testCompactIPadKeepsOneNavigationBar": 97.912,
+  "OfflineCaptureTests/testDrawingToolSizesApplyImmediatelyAndSurviveReopening": 63.408,
+  "OfflineCaptureTests/testDrawingToolbarStaysThroughPageChanges": 81.818,
+  "OfflineCaptureTests/testDrawingWorkspaceReopensWithoutAServer": 65.679,
+  "OfflineCaptureTests/testIPadDestinationsOpenWithoutAnAppMoreMenu": 61.501,
+  "OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate": 82.315,
+  "OfflineCaptureTests/testNewspaperScrollsAsOneColumn": 46.736,
+  "OfflineCaptureTests/testNotebookFillsTheWindowContinuesFromDrawAndSavesToTheJournal": 111.395,
+  "OfflineCaptureTests/testNotebookInkLogShowsWhatHappened": 62.908,
+  "OfflineCaptureTests/testNotebookZoomIsOffUntilSwitchedOn": 60.326,
+  "OfflineCaptureTests/testNotesComeBackFromTheEntryDraftAndSaveWithIt": 50.254,
+  "OfflineCaptureTests/testNotesPagesDoNotTurnWithASwipe": 61.834
+}
