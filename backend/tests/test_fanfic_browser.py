@@ -136,6 +136,21 @@ def test_missing_content_is_blocked_not_imported(clock):
     assert not get_db().execute('SELECT 1 FROM fic_chapters').fetchone()
 
 
+def test_result_reports_parser_acceptance_including_replay(client, clock):
+    queue()
+    job = browser.poll(CLIENT)['request']
+    endpoint = f"/api/fanfic/browser/{job['id']}/result"
+    payload = {'clientId': CLIENT, 'attemptId': job['attemptId'], 'kind': 'page', 'url': URL}
+    response = client.post(endpoint, json={**payload, 'html': '<h1>Temporary error</h1>'})
+    assert response.status_code == 200
+    assert response.json == {'success': True, 'accepted': False}
+    assert browser.poll(CLIENT)['request']['needsAttention']
+    for _ in range(2):
+        response = client.post(endpoint, json={**payload, 'html': story()})
+        assert response.status_code == 200
+        assert response.json == {'success': True, 'accepted': True}
+
+
 def test_browser_collection_without_copied_cookies_checkpoints_page(client, clock):
     result = client.post('/api/fanfic/collections', json={'site': 'fanfiction.net', 'collection': 'favorites'})
     assert result.status_code == 202

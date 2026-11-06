@@ -176,7 +176,7 @@ def submit(request_id, client_id, payload):
                 or row['attempt_id'] != payload.get('attemptId')):
             raise BrowserConflict('This browser request is no longer assigned to this tab')
         if row['status'] == 'ready':
-            return  # Lost HTTP acknowledgement: the saved reply is idempotent.
+            return True  # Lost HTTP acknowledgement: the saved reply is idempotent.
         if row['status'] not in ('leased', 'blocked'):
             raise BrowserConflict('This request is waiting for its next allowed attempt')
         kind = payload.get('kind')
@@ -214,13 +214,14 @@ def submit(request_id, client_id, payload):
                 db.execute("UPDATE fanfic_browser_requests SET status='ready',html=?,final_url=?,error=NULL WHERE id=?",
                            (html, url, request_id))
                 db.commit()
-                return
+                return True
         else:
             message = {'challenge': 'Complete the browser challenge in the FF.net tab, then Continue.',
                        'login': 'Sign in to FF.net in the download tab, then Continue.',
                        'error': 'The FF.net tab could not load this page. Open it and retry manually.'}[kind]
         db.execute("UPDATE fanfic_browser_requests SET status='blocked',error=? WHERE id=?", (message, request_id))
         db.commit()
+        return False
 
 
 def retry(request_id, client_id):
