@@ -4,7 +4,7 @@ name: Apple app
 # so testing every push only queued a second full run.
 on:
   pull_request:
-    paths: ['apple/**', '.github/workflows/apple.yml', '.github/actions/xcode-project/**']
+    paths: ['apple/**', '.github/workflows/apple.yml', '.github/actions/xcode-project/**', '.github/actions/simulator/**']
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,8 +16,8 @@ env:
 # No job should take more than ten minutes, so a failure can be rerun on its own
 # without waiting half an hour. What made a simulator job long was not only its
 # tests: a fresh runner's first simulator boot takes 2-9 minutes, and every job
-# compiled the app for itself. simulator-build compiles once, simulator-boot does
-# each device's first boot once, and every shard starts from both.
+# compiled the app for itself. simulator-build compiles once, and the simulator
+# action caches each device's first boot per runner image.
 #
 # GitHub runs at most five macOS jobs at once, across every open PR, so shards
 # beyond the fifth queue. A shard is ~3.5 minutes of download and boot and ~5 of
@@ -92,27 +92,9 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  simulator-boot:
-    runs-on: macos-26
-    timeout-minutes: 15
-    strategy:
-      matrix:
-        device: [iPhone, iPad]
-    steps:
-      - uses: actions/checkout@v4
-      - name: First boot, then keep the booted device's data
-        run: apple/tools/simulator_snapshot.sh save ${{ matrix.device }} simulator-${{ matrix.device }}.tar
-      - uses: actions/upload-artifact@v4
-        with:
-          name: simulator-${{ matrix.device }}
-          path: simulator-${{ matrix.device }}.tar
-          compression-level: 1
-          retention-days: 1
-          if-no-files-found: error
-
   ui:
     name: ${{ matrix.device }} ${{ matrix.shard }}/${{ matrix.total }}
-    needs: [simulator-build, simulator-boot]
+    needs: simulator-build
     runs-on: macos-26
     timeout-minutes: 15
     strategy:
@@ -140,14 +122,13 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: simulator-build
-      - uses: actions/download-artifact@v4
-        with:
-          name: simulator-${{ matrix.device }}
-      - name: Unpack build and simulator
+      - name: Unpack build
         run: |
           mkdir -p apple/DerivedData/Build
           tar -C apple/DerivedData/Build -xf simulator-build.tar
-          apple/tools/simulator_snapshot.sh restore ${{ matrix.device }} simulator-${{ matrix.device }}.tar
+      - uses: ./.github/actions/simulator
+        with:
+          device: ${{ matrix.device }}
       - name: Test on ${{ matrix.device }} simulator
         run: apple/tools/run_ui_shard.sh ${{ matrix.device }} ${{ matrix.shard }} ${{ matrix.total }}
       - uses: actions/upload-artifact@v4
