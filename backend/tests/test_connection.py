@@ -1,6 +1,9 @@
 """Unit tests for backend.db.connection.build_update — the shared
 UPDATE-clause builder used across the PATCH route handlers."""
+import threading
+
 from backend.db.connection import build_update, get_db
+from backend.place_roles import list_periods
 
 
 def test_sets_given_columns_and_appends_where_params(client):
@@ -139,3 +142,95 @@ def test_paper_content_time_backfills_from_the_pages(client):
     # no-op rather than a re-backfill over live values.
     _ensure_paper_content_updated_at(db)
     assert times['drawn'] == 500
+
+
+def _hammer(work, *, threads=6):
+    """Run `work` on several threads at once; return whatever any of them raised."""
+    failures = []
+    start = threading.Barrier(threads)
+
+    def run():
+        start.wait()
+        try:
+            work()
+        except Exception as e:  # noqa: BLE001 — the raised exception is the finding
+            failures.append(repr(e))
+
+    workers = [threading.Thread(target=run) for _ in range(threads)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    return failures
+
+
+def _seed_one_role(db):
+    db.execute("INSERT INTO saved_places (id, name, latitude, longitude, radius_m, created_at, updated_at)"
+               " VALUES ('p', 'Office', 43.6, -79.6, 50, 1, 1)")
+    db.execute("INSERT INTO place_roles (id, role, place_id, started_on, created_at, updated_at)"
+               " VALUES ('r', 'work', 'p', '2026-07-27', 1, 1)")
+    db.commit()
+
+
+def test_concurrent_reads_of_one_statement_each_get_the_whole_answer():
+    """The Settings crash, at its source. Every request shares one connection,
+    and identical SQL shares one cached statement, so a thread could reset the
+    statement another was still reading: that reader then saw no rows at all,
+    or this table's single row several times over with its columns NULL. The
+    window's ~30 requests at startup were enough to send a NOT NULL column to
+    the client as null."""
+    db = get_db()
+    _seed_one_role(db)
+    wrong = []
+
+    def read():
+        for _ in range(1500):
+            rows = list_periods(db)
+            if [(r['id'], r['started_on']) for r in rows] != [('r', '2026-07-27')]:
+                wrong.append(rows)
+
+    assert _hammer(read) == []
+    assert wrong == []
+
+
+def test_a_commit_cannot_land_inside_another_threads_read():
+    db = get_db()
+    _seed_one_role(db)
+
+    def read_and_write():
+        for i in range(400):
+            assert db.execute('SELECT started_on FROM place_roles WHERE id=?', ('r',)).fetchone()[0]
+            db.execute('UPDATE place_roles SET updated_at=? WHERE id=?', (i, 'r'))
+            db.commit()
+
+    assert _hammer(read_and_write) == []
+
+
+def test_a_cursor_still_reads_like_a_cursor():
+    """Fetching inside the lock must not change what callers see."""
+    db = get_db()
+    _seed_one_role(db)
+    db.execute("INSERT INTO saved_places (id, name, created_at, updated_at) VALUES ('q', 'Gym', 1, 1)")
+
+    cur = db.execute('SELECT id FROM saved_places ORDER BY id')
+    assert cur.fetchone()['id'] == 'p'
+    assert [r['id'] for r in cur.fetchall()] == ['q']
+    assert cur.fetchone() is None
+
+    assert [r['id'] for r in db.execute('SELECT id FROM saved_places ORDER BY id')] == ['p', 'q']
+    assert len(db.execute('SELECT id FROM saved_places').fetchmany(1)) == 1
+
+    assert db.execute("UPDATE saved_places SET notes='x'").rowcount == 2
+    assert db.execute("UPDATE saved_places SET notes='y' RETURNING id").fetchall() != []
+    assert db.execute("DELETE FROM saved_places WHERE id='q'").rowcount == 1
+    assert db.execute("INSERT INTO saved_places (id, name, created_at, updated_at)"
+                      " VALUES ('z', 'New', 1, 1)").lastrowid > 0
+    db.rollback()
+
+    # Reading from a query while writing inside the loop stays legal.
+    for row in db.execute('SELECT id FROM saved_places'):
+        db.execute('UPDATE saved_places SET notes=? WHERE id=?', ('seen', row['id']))
+    db.commit()
+    with db:
+        db.execute("UPDATE saved_places SET notes='ctx'")
+    assert db.execute('SELECT notes FROM saved_places').fetchone()['notes'] == 'ctx'

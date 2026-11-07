@@ -34,7 +34,11 @@ export const QUERY_GC_TIME = 1000 * 60 * 60 * 24 * 20; // 20 days, < 2^31-1 ms
 // mapping straight over it took down the whole app, not just the card. Same
 // shape of mistake as v3: a persisted object gained a required field and the
 // commit that added it did not bump this.
-export const PERSIST_BUSTER = 'v6';
+// v7: a server read race (see SerializedConnection in backend/db/connection.py)
+// could answer a list with duplicated rows full of nulls, and the cache kept
+// them. A render that throws on one never mounts the query that would replace
+// it, so a persisted bad row crashed that view on every reload.
+export const PERSIST_BUSTER = 'v7';
 
 const IDB_KEY = 'lunaschal-react-query';
 
