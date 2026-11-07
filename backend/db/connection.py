@@ -1,8 +1,10 @@
+import itertools
 import json
 import os
 import random
 import re
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +13,92 @@ from ulid import ULID
 
 _DB_PATH = os.environ.get('DATABASE_URL', './data/lunaschal.db')
 _conn: sqlite3.Connection | None = None
+
+
+class _SerializedCursor(sqlite3.Cursor):
+    """A cursor whose whole result is read before anyone else may touch the
+    connection; fetches then serve that copy. See SerializedConnection."""
+
+    def __init__(self, connection):
+        super().__init__(connection)
+        self._lock = connection.lock
+        self._rows = iter(())
+
+    def _run(self, statement, *args):
+        with self._lock:
+            statement(*args)
+            self._rows = iter(super().fetchall() if self.description else ())
+        return self
+
+    def execute(self, sql, parameters=(), /):
+        return self._run(super().execute, sql, parameters)
+
+    def executemany(self, sql, parameters, /):
+        return self._run(super().executemany, sql, parameters)
+
+    def executescript(self, script, /):
+        return self._run(super().executescript, script)
+
+    def fetchone(self):
+        return next(self._rows, None)
+
+    def fetchmany(self, size=None):
+        return list(itertools.islice(self._rows, self.arraysize if size is None else size))
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._rows)
+
+
+class SerializedConnection(sqlite3.Connection):
+    """The one connection every thread shares, made safe to share.
+
+    `check_same_thread=False` only promises that SQLite will not crash. A read
+    is many steps (execute, then fetch row by row) and any of them could
+    interleave with another thread's, and identical SQL shares one cached
+    statement, so a second reader resetting it left the first with no rows, a
+    row repeated, or columns NULL that the schema says cannot be: a NOT NULL
+    date reached the client as null and crashed Settings, and the same race is
+    the source of `bad parameter or other API misuse` and `another row
+    available` in the logs. So each statement and the reading of its result
+    happen as one step under this lock.
+
+    This does not isolate transactions: threads still share one, and a commit
+    still commits whatever any thread had pending. That is unchanged.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.lock = threading.RLock()
+        super().__init__(*args, **kwargs)
+
+    def cursor(self, factory=_SerializedCursor):
+        return super().cursor(factory)
+
+    def execute(self, sql, parameters=(), /):
+        return self.cursor().execute(sql, parameters)
+
+    def executemany(self, sql, parameters, /):
+        return self.cursor().executemany(sql, parameters)
+
+    def executescript(self, script, /):
+        return self.cursor().executescript(script)
+
+    def commit(self):
+        with self.lock:
+            super().commit()
+
+    def rollback(self):
+        with self.lock:
+            super().rollback()
+
+    def __exit__(self, *exc_info):
+        with self.lock:
+            return super().__exit__(*exc_info)
 
 TIMESTAMP_COLS = frozenset({
     'earned_at', 'redeemed_at',
@@ -77,7 +165,7 @@ def get_db() -> sqlite3.Connection:
     global _conn
     if _conn is None:
         Path(_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-        _conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
+        _conn = sqlite3.connect(_DB_PATH, check_same_thread=False, factory=SerializedConnection)
         _conn.row_factory = sqlite3.Row
         _conn.execute('PRAGMA journal_mode=WAL')
         _conn.execute('PRAGMA foreign_keys=ON')
