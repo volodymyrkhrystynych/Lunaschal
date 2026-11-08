@@ -68,6 +68,8 @@ export function ResearchSection() {
       researchTimeoutEnabled?: boolean;
       researchSearchTimeoutSeconds?: number;
       researchDeepTimeoutSeconds?: number;
+      codeAgentWeb?: boolean;
+      codeAgentTavilyKey?: string;
     }) => api.settings.updateAI(data),
     onSuccess: invalidateSettings,
   });
@@ -298,6 +300,60 @@ export function ResearchSection() {
             web either way.
           </p>
         )}
+      </div>
+
+      {/* The Code tab's agent searches through Tavily on a key of its own,
+          never the provider above, so its searches neither spend that quota
+          nor depend on it (backend/codeagent/lookups.py). */}
+      <div className="border-t border-white/10 pt-3 space-y-2">
+        <div>
+          <h3 className="text-sm font-medium text-[var(--color-text)]">
+            Code agent web research
+          </h3>
+          <p className="text-xs text-[var(--color-text-muted)] mt-1">
+            The coding agent always has the offline library and this
+            repository's wiki. With this on and a Tavily key saved it can also
+            hand a question to a web researcher, after the library didn't
+            answer, up to 20 times per task.
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+          <input
+            type="checkbox"
+            checked={settings?.codeAgentWeb ?? true}
+            onChange={e =>
+              saveResearch.mutate({ codeAgentWeb: e.target.checked })
+            }
+          />
+          Let the code agent research the web
+        </label>
+        <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+          Tavily key
+          <input
+            type="password"
+            defaultValue=""
+            placeholder={
+              settings?.hasCodeAgentTavilyKey
+                ? '•••••• (saved)'
+                : 'Paste the key'
+            }
+            onBlur={e => {
+              if (e.target.value.trim())
+                saveResearch.mutate({
+                  codeAgentTavilyKey: e.target.value.trim(),
+                });
+            }}
+            className="flex-1 rounded bg-[var(--color-bg)] border border-white/10 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+          />
+        </label>
+        {(settings?.codeAgentWeb ?? true) &&
+          settings &&
+          !settings.hasCodeAgentTavilyKey && (
+            <p className="text-xs text-[var(--color-text-muted)]">
+              Add a Tavily key to enable it — until then the agent uses the
+              library alone.
+            </p>
+          )}
       </div>
 
       {/* Everything bounding a research run before this was a count — turns,

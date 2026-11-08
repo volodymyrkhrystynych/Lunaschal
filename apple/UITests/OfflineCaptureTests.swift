@@ -1202,11 +1202,16 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertEqual(code.label, "Code (2)")
         code.tap()
 
+        XCTAssertTrue(app.buttons["code-transcribe"].waitForExistence(timeout: 5))
         let planned = app.staticTexts["Parse \"1h30m\" durations"]
         XCTAssertTrue(planned.waitForExistence(timeout: 5))
         planned.tap()
         let approve = app.buttons["code-approve"]
         XCTAssertTrue(approve.waitForExistence(timeout: 5))
+        // The task reads as a terminal: the request as a prompt line, the tool it ran.
+        XCTAssertTrue(app.staticTexts["● rg \"def streak\" backend"].exists)
+        XCTAssertTrue(app.staticTexts["❯ Parse \"1h30m\" durations"].exists)
+        XCTAssertTrue(app.buttons["code-transcribe"].exists)
         approve.tap()
         XCTAssertTrue(app.staticTexts["Queued"].waitForExistence(timeout: 5))
         XCTAssertFalse(approve.exists)

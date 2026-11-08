@@ -13,11 +13,13 @@ degrades to "answer from the wiki and repo context, and say search was
 unavailable" instead of dying mid-loop — the same trust-first stance
 backend/ai/learning_verification.py takes about evidence.
 """
+import contextvars
 import ipaddress
 import logging
 import socket
 import threading
 import time
+from contextlib import contextmanager
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -157,11 +159,37 @@ def _search_setting(settings: dict, name: str) -> str:
     return (settings.get(f'research_{name}') or '').strip()
 
 
+# A provider and key that replace the configured ones for one call stack. The
+# coding agent searches through Tavily on a key of its own, whatever the app's
+# provider is — and the search happens three calls deep, inside the delegate's
+# loop and its deep pass, so it is a property of the stack (the reasoning
+# `service.background()` uses for priority) rather than a parameter threaded
+# through all of them.
+_override: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar(
+    'search_override', default=None)
+
+
+@contextmanager
+def search_override(provider: str, key: str):
+    """Search through `provider` with `key` inside this block, on this thread."""
+    token = _override.set((provider, (key or '').strip()))
+    try:
+        yield
+    finally:
+        _override.reset(token)
+
+
 def search_provider() -> str:
+    override = _override.get()
+    if override:
+        return override[0]
     return _search_setting(_settings(), 'search_provider')
 
 
 def is_search_configured() -> bool:
+    override = _override.get()
+    if override:
+        return bool(override[1])
     settings = _settings()
     provider = _search_setting(settings, 'search_provider')
     if provider == 'brave':
@@ -249,10 +277,19 @@ def web_search(query: str, limit: int = DEFAULT_RESULTS) -> list[dict]:
     query = (query or '').strip()
     if not query:
         return []
+    limit = max(1, min(limit, 10))
+    override = _override.get()
+    if override:
+        provider, key = override
+        if provider != 'tavily':
+            raise SearchUnavailable(f'{provider} cannot be used as an override')
+        if not key:
+            raise SearchUnavailable('Tavily search needs an API key')
+        return _dispatch('tavily', lambda: _search_tavily(query, key, limit))
+
     settings = _settings()
     provider = _search_setting(settings, 'search_provider')
     key = _search_setting(settings, 'search_key')
-    limit = max(1, min(limit, 10))
 
     if provider == 'brave':
         if not key:
@@ -283,6 +320,25 @@ def _search_brave(query: str, key: str, limit: int) -> list[dict]:
             'snippet': (r.get('description') or '')[:400],
         }
         for r in results[:limit]
+        if r.get('url')
+    ]
+
+
+def _search_tavily(query: str, key: str, limit: int) -> list[dict]:
+    resp = requests.post(
+        'https://api.tavily.com/search',
+        json={'query': query, 'max_results': limit, 'search_depth': 'basic'},
+        headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
+        timeout=SEARCH_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return [
+        {
+            'title': r.get('title') or '',
+            'url': r.get('url') or '',
+            'snippet': (r.get('content') or '')[:400],
+        }
+        for r in (resp.json().get('results') or [])[:limit]
         if r.get('url')
     ]
 

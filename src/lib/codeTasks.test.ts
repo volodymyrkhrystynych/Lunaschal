@@ -8,6 +8,8 @@ import {
   parseDiff,
   pollIntervalMs,
   statusLabel,
+  terminalLines,
+  appendDictation,
 } from './codeTasks';
 
 const task = (status: string, extra: Partial<CodeTask> = {}): CodeTask => ({
@@ -72,6 +74,58 @@ describe('codeTasks', () => {
       'Pushed',
       'Discarded',
     ]);
+  });
+
+  it('labels model calls with what was prefilled and what was cached', () => {
+    expect(
+      eventLabel(
+        ev('proxy', {
+          action: 'call',
+          ran: 4.1,
+          prefilled: 1200,
+          cached: 148000,
+        })
+      )
+    ).toBe('Model: 4s · 1.2k new, 148k cached');
+    expect(
+      eventLabel(
+        ev('proxy', { action: 'call', ran: 3, prefilled: 812, cached: 0 })
+      )
+    ).toBe('Model: 3s · 812 new');
+  });
+
+  it('labels the lookups the agent made through the host', () => {
+    const look = (p: Record<string, unknown>) =>
+      eventLabel(ev('proxy', { action: 'lookup', ...p }));
+    expect(
+      look({
+        tool: 'library_search',
+        arg: 'flask streaming',
+        ok: true,
+        count: 5,
+      })
+    ).toBe('Library: 5 results for \u2018flask streaming\u2019');
+    expect(look({ tool: 'library_read', arg: 'A/Streaming', ok: true })).toBe(
+      'Read from the library: A/Streaming'
+    );
+    expect(
+      look({ tool: 'web_research', arg: 'q', ok: false, blocked: true })
+    ).toBe('Web research refused: search the library first');
+    expect(
+      look({
+        tool: 'web_research',
+        arg: 'q',
+        ok: true,
+        count: 1,
+        seconds: 41.6,
+      })
+    ).toBe('Web research: 1 source for \u2018q\u2019 in 42s');
+    expect(
+      look({ tool: 'repo_wiki_search', arg: 'proxy', ok: true, count: 2 })
+    ).toBe('Wiki: 2 notes for \u2018proxy\u2019');
+    expect(look({ tool: 'code_map', arg: 'slot', ok: true })).toBe(
+      'Code map: \u2018slot\u2019'
+    );
   });
 
   it('labels events the way the phone does', () => {
@@ -164,5 +218,100 @@ describe('codeTasks', () => {
     expect(files[1].isNew).toBe(true);
     expect(files[2].isBinary).toBe(true);
     expect(parseDiff('')).toEqual([]);
+  });
+});
+
+const tev = (
+  seq: number,
+  kind: string,
+  payload: Record<string, unknown>
+): CodeTaskEvent => ({ seq, kind, payload, createdAt: null });
+
+describe('terminalLines', () => {
+  // The same cases as CodeAgentTests.swift, so the two transcripts agree.
+  it('reads like a session', () => {
+    const lines = terminalLines([
+      tev(1, 'user', { text: 'Fix the streak' }),
+      tev(2, 'status', { status: 'planning' }),
+      tev(3, 'thought', { text: '  Look at habits.py first  ' }),
+      tev(4, 'tool_call', {
+        title: 'Read backend/habits.py',
+        status: 'pending',
+      }),
+      tev(5, 'tool_result', { status: 'in_progress' }),
+      tev(6, 'tool_result', { status: 'completed' }),
+      tev(7, 'proxy', { action: 'call', ran: 38.2, waited: 0 }),
+      tev(8, 'message', { text: '1. Change the loop\n2. Add a test' }),
+    ]);
+    expect(lines.map(l => l.style)).toEqual([
+      'prompt',
+      'dim',
+      'thought',
+      'tool',
+      'dim',
+      'dim',
+      'text',
+    ]);
+    expect(lines.map(l => l.text)).toEqual([
+      '❯ Fix the streak',
+      '── planning ──',
+      'Look at habits.py first',
+      '● Read backend/habits.py',
+      '  ⎿ done',
+      '  · model: 38s',
+      '1. Change the loop\n2. Add a test',
+    ]);
+  });
+
+  it('shows failures and test output', () => {
+    const lines = terminalLines([
+      tev(1, 'permission', { title: 'Edit a.py', decision: 'allowed' }),
+      tev(2, 'permission', { title: 'Edit a.py', decision: 'refused' }),
+      tev(3, 'tool_result', { status: 'failed' }),
+      tev(4, 'proxy', { action: 'stuck' }),
+      tev(5, 'test', { exit: 1, tail: '1 failed\n' }),
+      tev(6, 'status', {
+        status: 'error',
+        error: 'session/new timed out after 120s',
+      }),
+      tev(7, 'status', {
+        note: 'the plan step changed files; they were reverted',
+      }),
+      tev(8, 'message', { text: '   ' }),
+    ]);
+    expect(lines.map(l => l.text)).toEqual([
+      '  ⎿ refused: Edit a.py (the plan step is read-only)',
+      '  ⎿ failed',
+      '  · stuck: tool calls keep landing in its thinking',
+      '✗ tests failed (exit 1)',
+      '1 failed',
+      '✗ session/new timed out after 120s',
+      '  ! the plan step changed files; they were reverted',
+    ]);
+    expect(lines[4].id).toBe('e5-tail');
+  });
+
+  it('draws the checklist', () => {
+    const lines = terminalLines([
+      tev(1, 'plan', {
+        entries: [
+          { content: 'Read', status: 'completed' },
+          { content: 'Edit', status: 'in_progress' },
+          { content: 'Test', status: 'pending' },
+        ],
+      }),
+    ]);
+    expect(lines.map(l => l.text)).toEqual(['  ☒ Read\n  ◐ Edit\n  ☐ Test']);
+  });
+});
+
+describe('appendDictation', () => {
+  it('adds to the draft', () => {
+    expect(appendDictation('', ' fix it ')).toBe('fix it');
+    expect(appendDictation('fix it', 'and test it')).toBe('fix it and test it');
+    expect(appendDictation('fix it\n', 'and test it')).toBe(
+      'fix it\nand test it'
+    );
+    expect(appendDictation('fix it', '  ')).toBe('fix it');
   });
 });

@@ -4,6 +4,7 @@ fixture, against the real nvidia-smi), so route tests set the module-level
 cache directly rather than relying on ordering between fixture setup and
 monkeypatch — that keeps them deterministic regardless of what's actually
 measured on the machine running the suite."""
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -385,3 +386,16 @@ def test_patch_settings_treats_a_null_provider_as_none(client):
 
     assert resp.status_code == 200
     assert _stored_provider(client) == ''
+
+
+def test_code_agent_web_defaults_on_and_the_tavily_key_is_write_only(client):
+    data = client.get('/api/settings').get_json()
+    assert data['codeAgentWeb'] is True
+    assert data['hasCodeAgentTavilyKey'] is False
+
+    resp = client.patch('/api/settings/ai', json={'codeAgentTavilyKey': 'tvly-secret',
+                                                  'codeAgentWeb': False})
+    assert resp.status_code == 200
+    data = client.get('/api/settings').get_json()
+    assert data['hasCodeAgentTavilyKey'] is True and data['codeAgentWeb'] is False
+    assert 'tvly-secret' not in json.dumps(data)

@@ -71,14 +71,21 @@ struct CodeFixture {
     """
 
     func events(for id: String) -> [CodeTaskEvent] {
-        let prompt = tasks.first { $0.id == id }?.prompt ?? ""
-        return [
-            event(1, "user", ["text": .string(prompt)]),
-            event(2, "tool_call", ["title": .string("rg \"def streak\" backend"), "kind": .string("search")]),
-            event(3, "proxy", ["action": .string("call"), "waited": .number(4.2), "ran": .number(38.0)]),
-            event(4, "proxy", ["action": .string("promoted"), "reason": .string("1 call recovered")]),
-            event(5, "message", ["text": .string(tasks.first { $0.id == id }?.plan ?? "Done.")]),
+        let task = tasks.first { $0.id == id }
+        var events = [
+            event(1, "user", ["text": .string(task?.prompt ?? "")]),
+            event(2, "status", ["status": .string("planning")]),
+            event(3, "thought", ["text": .string("The streak is computed from day keys, so the bug is likely at the 4am boundary.")]),
+            event(4, "tool_call", ["title": .string("rg \"def streak\" backend"), "kind": .string("search")]),
+            event(5, "tool_result", ["status": .string("completed")]),
+            event(6, "proxy", ["action": .string("call"), "waited": .number(4.2), "ran": .number(38.0)]),
+            event(7, "proxy", ["action": .string("promoted"), "reason": .string("1 call recovered")]),
+            event(8, "message", ["text": .string(task?.plan ?? "Done.")]),
         ]
+        if let exit = task?.testExit {
+            events.append(event(9, "test", ["exit": .number(Double(exit)), "tail": .string(task?.testOutput ?? "")]))
+        }
+        return events
     }
 
     // MARK: Building

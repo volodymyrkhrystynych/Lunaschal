@@ -53,6 +53,47 @@ and Settings → Logs shows it (label `code_agent`). Three things happen there t
   **pokes** the model to re-emit a broken one (at most twice), and otherwise records **stuck**.
 - *A floor on `max_tokens`* (32k): at 8k, file writes were cut off and saved half-written
   ([doug.sh's omp tuning notes](https://doug.sh/posts/tuning-a-local-coding-agent-oh-my-pi/)).
+- *Qwen's coding sampler* (temperature 0.6, top-p 0.95, top-k 20, min-p 0, presence 0), filled in
+  where the agent sent none. The `[qwen36]` preset runs Qwen's general-thinking sampler (1.0) because
+  it serves every `chat_json` call in the app; without this the agent would write code at 1.0.
+
+Every `call` event also records llama-server's `prompt_n` / `cache_n` as `prefilled` / `cached`, and
+the terminal shows them ("Model: 4s · 1.2k new, 148k cached"). Qwen3.6 is a hybrid model, and
+llama.cpp is known to throw its prompt cache away on hybrids (#22746, #21831). At 150k tokens that is
+minutes of prefill, which otherwise just looks like a slow model. If it happens on the server, the fix
+is `cache-ram` / `ctx-checkpoints` in `llama/presets.ini`.
+
+## Lookups: the library, the repo's wiki, and the web
+
+The container has no network, so the agent's lookups go to the host through its model socket:
+`GET/POST /lunaschal/tools[/<name>]` on the proxy, called by a pi extension
+(`agent/config/pi/extensions/lunaschal.js`). The host runs them with the app's own toolboxes
+(`backend/codeagent/lookups.py`):
+
+| Tool | Backed by | Offered when |
+|---|---|---|
+| `library_search` / `library_read` | the offline library: Kiwix plus the docs packages | always |
+| `web_research` | the Chat tab's research delegate, searching through **Tavily on the code agent's own key** | Settings → Research → Code agent is on (default) and a key is saved |
+| `repo_wiki_search` / `repo_wiki_read` | the repo's nightly code-wiki notes plus research notes | the repo has notes |
+| `code_map` | the repo's graphify graph (of the mirror, so main, not the agent's edits) | the repo has a graph |
+
+Rules:
+- **The endpoint is the boundary, not the extension.** The agent owns `$HOME` and can curl the
+  socket. So names are checked against what the task was offered, arguments and results are clipped,
+  and each task has a budget of 200 lookups and 20 web runs.
+- **Library first.** The library tools and the delegate share one `ResearchTools`, so the Chat tab's
+  gate holds across the whole task: the web is refused until the library has been searched (and read,
+  if it found anything). An inherently current question can skip it (`current: true`).
+- **The web researcher's own model turns run at P2** and yield to chat like the agent's.
+- **Tavily is selected per call stack** (`web.search_override`), so the app's Brave/SearXNG quota is
+  neither spent nor needed. Pages are still fetched by the host's SSRF-guarded fetcher. The search
+  circuit breaker is shared with the app's provider, so a Tavily outage also pauses the app's search
+  for the cooldown.
+- **Slow lookups send whitespace keepalives** before their JSON: Node's `fetch` gives up on a
+  response that is silent for five minutes, and a web run can take longer.
+
+Web access here is a deliberate exception to "unattended work gets no web"
+(`backend/research/CLAUDE.md`), made at the user's request.
 
 ## Isolation
 
@@ -100,12 +141,40 @@ exit code is what the phone and the PR show.
 
 | | pi | omp | Qwen Code |
 |---|---|---|---|
-| Version pinned | 0.73.1 (+ `pi-acp` 0.0.34) | 18.12.2 (Bun 1.4.3) | 0.25.2 |
+| Version pinned | 0.87.1 (+ `pi-acp` 0.0.34) | 18.12.2 (Bun 1.4.3) | 0.25.2 |
 | Driven over | ACP via the `pi-acp` adapter | native ACP (`omp acp`) | native ACP (`qwen --acp`) |
 | Prompt size | minimal — cheapest at 450 tok/s prefill | larger: many tools, subagents | largest (Gemini CLI fork) |
 | Edits | retyped text | hash-anchored lines: fewer output tokens | retyped text |
 | Permissions | none (the container is the sandbox) | over ACP | approval modes |
 | Reports with this model | positive (similar 3080 Ti setup) | positive after tuning | none found |
+
+**pi and `pi-acp` are pinned as a pair.** pi-acp asks pi for RPC commands older pis lack, and pi
+answers an unknown command with an error that carries no request id, so pi-acp waits on it forever. With
+pi 0.73.1 (missing `get_available_thinking_levels`) every pi task died at `session/new timed out after
+120s`. pi-acp 0.0.34 needs pi ≥ 0.81, which is published as `@earendil-works/pi-coding-agent` (the
+`@mariozechner` name stopped at 0.73) and needs Node ≥ 22.19. `test_codeagent_container.py` holds the
+Dockerfile to that; recheck the minimum in pi-acp's README whenever either is bumped.
+
+**pi's config for this model** (`agent/config/pi/`; each line is checked against pi 0.87.1's docs and
+source, and the important ones are pinned by `test_codeagent_container.py`):
+
+- `compat.thinkingFormat: "qwen-chat-template"` sends `chat_template_kwargs.enable_thinking` and
+  `preserve_thinking`. Without it pi sends OpenAI's `reasoning_effort`, which llama-server ignores,
+  so the thinking level did nothing. `preserve_thinking` is what Qwen's model card recommends for
+  agents. It also keeps the prompt prefix identical turn to turn, which the prompt cache needs.
+- `thinkingTokenBudgetField: "thinking_budget_tokens"` plus `thinkingBudgets` (medium = 8k) cap a
+  turn's reasoning, which shares `max_tokens` with the answer. A llama.cpp build that predates
+  per-request budgets ignores the field.
+- `contextWindow` is the server's whole `ctx-size` (190k). `kv-unified` lets one slot address the
+  whole pool. `compaction.reserveTokens: 32768` (the proxy's `max_tokens` floor) means a session tops
+  out near 157k, which also leaves room for a chat arriving meanwhile.
+- `defaultTools` adds pi's own `grep`/`find`/`ls`: structured, truncated output is easier on a 3B-active
+  model than raw shell output.
+- `httpIdleTimeoutMs: 0`: the proxy's keepalives already cover a long call. A client timeout would
+  only make pi retry, and the GPU would do the work twice.
+
+`agent/entrypoint.sh` refreshes `models.json`, `settings.json` and the extension on every start
+(everything else is seeded once), so a task created before an image change still gets them.
 
 The configs in `agent/config/` follow each project's documented format, but **only the head-to-head run
 proves them**. Run it on the server:
@@ -128,8 +197,11 @@ A one-off check, also on the server: `python -m backend.codeagent.run --repo lun
 
 - **No iOS builds in the container** (it is Linux). The PR's CI covers it: Actions macOS runners are free
   on public repos, and `apple.yml` already builds the app.
-- `kv-unified` means the agent's context comes out of the same 190k pool as chat, so the agent configs
-  cap it at 96k.
+- `kv-unified` means the agent's context comes out of the same 190k pool as chat. The agent may use
+  all of it. Compaction keeps it under ~157k, and a chat preempts the agent's request. **Not yet
+  measured:** whether llama-server evicts an idle agent slot's cache when a long chat needs the room,
+  and how much re-prefill the agent's next turn then pays. The `prefilled`/`cached` numbers on each
+  model call are how to tell.
 - The CLI (`backend.codeagent.run`) shares the GPU properly only within its own process: admission is
   in-memory, so a chat in the server process does not preempt it. The Code tab is the real path.
 
@@ -149,11 +221,12 @@ A one-off check, also on the server: `python -m backend.codeagent.run --repo lun
 
 ## Files
 
-- Backend: `backend/codeagent/` (`mirror`, `container`, `proxy`, `toolfix`, `acp`, `driver`, `tasks`,
-  `worker`, `github`, `run`), `backend/push/` (`apns`, `notify`), `backend/routes/code_agent.py`,
+- Backend: `backend/codeagent/` (`mirror`, `container`, `proxy`, `toolfix`, `lookups`, `acp`, `driver`,
+  `tasks`, `worker`, `github`, `run`), `backend/push/` (`apns`, `notify`), `backend/routes/code_agent.py`,
   `backend/routes/push.py`. Tables: `agent_tasks`, `agent_task_events`, `agent_approvals`,
   `push_devices`.
-- Image: `agent/Dockerfile`, `agent/entrypoint.sh`, `agent/config/`, `requirements-agent.txt`.
+- Image: `agent/Dockerfile`, `agent/entrypoint.sh`, `agent/config/` (including the pi lookup extension,
+  tested by `agent/tests/`), `requirements-agent.txt`.
 - iOS: `LunaschalCore/CodeAgent.swift` (models, labels, the unified-diff parser, polling, push payload),
   `CodeAgentAPI.swift`; `App/CodeModel.swift`, `CodeViews.swift`, `CodeFixture.swift` (`-codeFixture`).
 - Web: `src/components/Chat/CodeTasks.tsx`, `src/lib/codeTasks.ts`.

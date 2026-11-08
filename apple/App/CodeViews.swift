@@ -9,13 +9,29 @@ struct CodeTasksView: View {
     @ObservedObject var code: CodeModel
     @State private var draft = ""
     @State private var repoID: String?
+    @StateObject private var dictation: Dictation
+
+    init(code: CodeModel) {
+        self.code = code
+        _dictation = StateObject(wrappedValue: Dictation(capture: code.capture) { [weak code] in
+            code?.capture.chatAPI() != nil
+        })
+    }
 
     var body: some View {
         List {
             Section {
-                TextField("Describe a change for the agent…", text: $draft, axis: .vertical)
-                    .lineLimit(3...8)
-                    .accessibilityIdentifier("code-new-prompt")
+                HStack(alignment: .top) {
+                    TextField("Describe a change for the agent…", text: $draft, axis: .vertical)
+                        .lineLimit(3...8)
+                        .accessibilityIdentifier("code-new-prompt")
+                    CodeMicButton(dictation: dictation, code: code, text: $draft)
+                        .buttonStyle(.borderless)
+                }
+                if dictation.status == .recording {
+                    Label("Recording — tap stop to transcribe", systemImage: "waveform")
+                        .font(.caption).foregroundStyle(.red)
+                }
                 if code.repos.count > 1 {
                     Picker("Repository", selection: $repoID) {
                         ForEach(code.repos) { Text($0.name).tag(Optional($0.id)) }
@@ -34,7 +50,7 @@ struct CodeTasksView: View {
             if let problem = code.loadProblem {
                 Label(problem, systemImage: "wifi.slash").font(.footnote).foregroundStyle(.secondary)
             }
-            if let notice = code.notice {
+            if let notice = code.notice ?? dictation.error {
                 Text(notice).font(.footnote).foregroundStyle(.red)
             }
             section("Needs you", code.needsYou)
@@ -46,6 +62,7 @@ struct CodeTasksView: View {
         .task { await code.poll() }
         .task { await code.askForNotifications() }
         .onAppear { if repoID == nil { repoID = code.repos.first(where: \.isDefaultRepo)?.id } }
+        .onDisappear { dictation.cancel() }
     }
 
     @ViewBuilder private func section(_ title: String, _ tasks: [CodeTask]) -> some View {
@@ -111,42 +128,44 @@ struct CodeStatusBadge: View {
 
 // MARK: One task
 
+/// A task is read as a terminal session: what you asked, every tool the agent
+/// ran, its thinking folded, the model calls, the test run — top to bottom on
+/// a dark screen, newest at the bottom, with the reply line under it. The
+/// lines come from `CodeTerminal` in Core, shared with the desktop's.
 struct CodeTaskDetailView: View {
     @ObservedObject var code: CodeModel
     let taskID: String
     @State private var reply = ""
-    @State private var showSteps = false
     @State private var confirmPush = false
     @State private var confirmDiscard = false
+    @StateObject private var dictation: Dictation
+
+    init(code: CodeModel, taskID: String) {
+        self.code = code
+        self.taskID = taskID
+        _dictation = StateObject(wrappedValue: Dictation(capture: code.capture) { [weak code] in
+            code?.capture.chatAPI() != nil
+        })
+    }
 
     private var task: CodeTask? { code.task(taskID) }
-    private var events: [CodeTaskEvent] { code.details[taskID]?.events ?? [] }
+    private var lines: [CodeTerminalLine] { CodeTerminal.lines(code.details[taskID]?.events ?? []) }
 
     var body: some View {
-        ScrollView {
+        VStack(spacing: 0) {
+            terminal
             if let task {
-                VStack(alignment: .leading, spacing: 16) {
-                    header(task)
-                    if let notice = code.notice { Text(notice).font(.footnote).foregroundStyle(.red) }
-                    if let question = task.pending?.question { questionCard(question) }
-                    if let plan = task.plan { planCard(task, plan) }
-                    if task.status == "done" || task.status == "needs_input" || task.status == "pushed"
-                        || task.diffStat != nil || task.testExit != nil {
-                        resultCard(task)
-                    }
-                    if task.canContinue { continueCard(task) }
-                    activity
-                }
-                .padding()
-            } else {
-                ProgressView().padding(.top, 60)
+                actionBar(task)
+                if task.canMessage { composer(task) }
             }
         }
-        .safeAreaInset(edge: .bottom) { if let task, task.canMessage { composer(task) } }
+        .background(Terminal.background)
+        .environment(\.colorScheme, .dark)
         .navigationTitle(task?.title ?? "Task")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .task { await code.pollDetail(taskID) }
+        .onDisappear { dictation.cancel() }
         .confirmationDialog("Push this branch and open a pull request?", isPresented: $confirmPush,
                             titleVisibility: .visible) {
             Button("Push & open PR") { Task { await code.push(taskID) } }
@@ -156,6 +175,32 @@ struct CodeTaskDetailView: View {
         .confirmationDialog("Discard this task?", isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button("Discard", role: .destructive) { Task { await code.discard(taskID) } }
         } message: { Text("Its container and clone are deleted.") }
+    }
+
+    private var terminal: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 6) {
+                if let task {
+                    HStack(spacing: 8) {
+                        CodeStatusBadge(task: task)
+                        Text("\(task.harness) · agent/\(task.id.suffix(6).lowercased())")
+                            .foregroundStyle(Terminal.dim)
+                    }
+                    .padding(.bottom, 4)
+                    ForEach(lines) { CodeTerminalRow(line: $0) }
+                    if task.isActive { TerminalCursor(label: task.statusLabel) }
+                } else {
+                    ProgressView().tint(Terminal.dim).padding(.top, 60).frame(maxWidth: .infinity)
+                }
+            }
+            .font(Terminal.font)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // A terminal follows its newest line.
+        .defaultScrollAnchor(.bottom)
+        .defaultScrollAnchor(.bottom, for: .sizeChanges)
+        .accessibilityIdentifier("code-terminal")
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
@@ -184,119 +229,78 @@ struct CodeTaskDetailView: View {
         }
     }
 
-    private func header(_ task: CodeTask) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                CodeStatusBadge(task: task)
-                Text(task.harness).font(.caption.monospaced()).foregroundStyle(.secondary)
-                if task.isActive { ProgressView().controlSize(.small) }
-            }
-            Text(task.prompt).font(.callout)
-            if let error = task.error { Text(error).font(.footnote).foregroundStyle(.red) }
-        }
-    }
-
-    private func planCard(_ task: CodeTask, _ plan: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Plan", systemImage: "list.number").font(.headline)
-            MarkdownText(text: plan)
-            if task.awaitsPlanApproval {
-                HStack {
-                    Button { Task { await code.approve(taskID) } } label: {
-                        Label("Approve & build", systemImage: "checkmark")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("code-approve")
-                    Text("or reply below to revise").font(.caption).foregroundStyle(.secondary)
+    /// What can be done right now, in one row above the reply line: the
+    /// terminal is for reading, this is for the next step.
+    @ViewBuilder private func actionBar(_ task: CodeTask) -> some View {
+        let files = task.diffStat ?? []
+        let hasActions = task.awaitsPlanApproval || task.testsPassed != nil || !files.isEmpty || task.canPush
+            || task.canContinue || task.prUrl != nil || code.notice != nil || dictation.error != nil
+        if hasActions {
+            VStack(alignment: .leading, spacing: 6) {
+                if let notice = code.notice ?? dictation.error {
+                    Text(notice).font(.caption).foregroundStyle(Terminal.failure)
                 }
-                .disabled(code.busy)
-            }
-        }
-        .padding()
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func questionCard(_ question: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("The agent asks", systemImage: "questionmark.bubble").font(.headline)
-            Text(question)
-            Text("Answer below; it carries on from there.").font(.caption).foregroundStyle(.secondary)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityIdentifier("code-question")
-    }
-
-    private func resultCard(_ task: CodeTask) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Result", systemImage: "doc.text.magnifyingglass").font(.headline)
-            if let summary = task.summary { MarkdownText(text: summary) }
-            if let passed = task.testsPassed {
-                DisclosureGroup {
-                    ScrollView(.horizontal) {
-                        Text(task.testOutput ?? "").font(.system(.caption2, design: .monospaced))
-                            .textSelection(.enabled)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        if task.awaitsPlanApproval {
+                            Button { Task { await code.approve(taskID) } } label: {
+                                Label("Approve & build", systemImage: "checkmark")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(code.busy)
+                            .accessibilityIdentifier("code-approve")
+                        }
+                        if let passed = task.testsPassed {
+                            Label(passed ? "Tests passed" : "Tests failed",
+                                  systemImage: passed ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(passed ? Terminal.success : Terminal.failure)
+                        }
+                        if !files.isEmpty {
+                            NavigationLink(value: CodeRoute.diff(taskID)) {
+                                Text("\(files.count) file\(files.count == 1 ? "" : "s") +\(task.linesAdded) −\(task.linesRemoved)")
+                                    .font(.caption.monospacedDigit())
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("code-open-diff")
+                        }
+                        if task.canPush {
+                            Button { confirmPush = true } label: { Label("Push & open PR", systemImage: "arrow.up.circle") }
+                                .buttonStyle(.bordered)
+                                .accessibilityIdentifier("code-push")
+                        }
+                        if task.canContinue {
+                            Button { Task { await code.resume(taskID) } } label: {
+                                Label("Continue", systemImage: "play.circle")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(code.busy)
+                        }
+                        if let url = task.prUrl.flatMap(URL.init(string:)) {
+                            Link(destination: url) { Label("Pull request", systemImage: "arrow.triangle.pull") }
+                                .buttonStyle(.bordered)
+                        }
                     }
-                } label: {
-                    Label(passed ? "Tests passed" : "Tests failed (exit \(task.testExit ?? -1))",
-                          systemImage: passed ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundStyle(passed ? .green : .red)
+                    .controlSize(.small)
                 }
             }
-            if let files = task.diffStat, !files.isEmpty {
-                NavigationLink(value: CodeRoute.diff(taskID)) {
-                    HStack {
-                        Label("\(files.count) file\(files.count == 1 ? "" : "s") changed", systemImage: "plusminus")
-                        Spacer()
-                        Text("+\(task.linesAdded) −\(task.linesRemoved)").font(.caption.monospacedDigit())
-                    }
-                }
-                .accessibilityIdentifier("code-open-diff")
-            }
-            if task.canPush {
-                Button { confirmPush = true } label: { Label("Push & open PR", systemImage: "arrow.up.circle") }
-                    .buttonStyle(.bordered)
-                    .accessibilityIdentifier("code-push")
-            }
-            if let url = task.prUrl.flatMap(URL.init(string:)) {
-                Link(destination: url) { Label("Pull request", systemImage: "arrow.triangle.pull") }
-            }
-        }
-        .padding()
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func continueCard(_ task: CodeTask) -> some View {
-        Button { Task { await code.resume(taskID) } } label: {
-            Label("Continue from where it stopped", systemImage: "play.circle")
-        }
-        .buttonStyle(.bordered)
-    }
-
-    private var activity: some View {
-        let shown = events.filter { showSteps || !$0.isDetail }
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Activity").font(.headline)
-                Spacer()
-                Toggle("Model & tool steps", isOn: $showSteps).toggleStyle(.button).font(.caption)
-            }
-            ForEach(shown) { event in
-                CodeEventRow(event: event)
-            }
-            if shown.isEmpty { Text("Nothing yet.").font(.footnote).foregroundStyle(.secondary) }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .top) { Divider() }
         }
     }
 
     private func composer(_ task: CodeTask) -> some View {
-        HStack(alignment: .bottom) {
+        HStack(alignment: .bottom, spacing: 8) {
+            Text("❯").font(Terminal.font).foregroundStyle(Terminal.prompt).padding(.bottom, 9)
             TextField(task.awaitsPlanApproval ? "What should change in the plan?"
                       : task.pending?.question != nil ? "Your answer" : "Ask for a follow-up change",
                       text: $reply, axis: .vertical)
+                .font(Terminal.font)
                 .lineLimit(1...5)
-                .textFieldStyle(.roundedBorder)
+                .padding(.vertical, 8)
                 .accessibilityIdentifier("code-reply")
+            CodeMicButton(dictation: dictation, code: code, text: $reply)
             Button {
                 let text = reply
                 reply = ""
@@ -304,43 +308,133 @@ struct CodeTaskDetailView: View {
                     if task.awaitsPlanApproval { await code.revise(taskID, text: text) }
                     else { await code.message(taskID, text: text) }
                 }
-            } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }
+            } label: { Image(systemName: "arrow.up.circle.fill").font(.title2).frame(width: 36, height: 36) }
             .disabled(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || code.busy)
             .accessibilityLabel("Send")
         }
-        .padding(.horizontal).padding(.vertical, 8)
-        .background(.bar)
+        .padding(.horizontal, 12).padding(.vertical, 4)
+        .background(Terminal.bar)
+        .overlay(alignment: .top) { Divider() }
     }
 }
 
-private struct CodeEventRow: View {
-    let event: CodeTaskEvent
+/// The terminal's palette. Dark in both appearances: it is a terminal.
+enum Terminal {
+    static let background = Color(red: 0.07, green: 0.075, blue: 0.085)
+    static let bar = Color(red: 0.11, green: 0.115, blue: 0.13)
+    static let text = Color(white: 0.92)
+    static let dim = Color(white: 0.55)
+    static let prompt = Color(red: 0.45, green: 0.8, blue: 1.0)
+    static let tool = Color(red: 0.5, green: 0.85, blue: 0.55)
+    static let success = Color(red: 0.45, green: 0.85, blue: 0.5)
+    static let failure = Color(red: 1.0, green: 0.45, blue: 0.42)
+    static let font = Font.system(.footnote, design: .monospaced)
+}
+
+private struct CodeTerminalRow: View {
+    let line: CodeTerminalLine
+    @State private var expanded = false
+
+    /// Folded lines show this much until tapped.
+    private static let foldedOutputLines = 15
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: icon).foregroundStyle(.secondary).frame(width: 18)
-            if event.kind == "message", let text = event.text {
-                MarkdownText(text: text)
-            } else {
-                Text(event.label)
-                    .font(event.isDetail ? .caption : .callout)
-                    .foregroundStyle(event.isDetail ? .secondary : .primary)
+        switch line.style {
+        case .thought:
+            Text("∴ " + line.text)
+                .italic()
+                .foregroundStyle(Terminal.dim)
+                .lineLimit(expanded ? nil : 2)
+                .onTapGesture { expanded.toggle() }
+                .accessibilityHint(expanded ? "Folds the thinking" : "Shows all of the thinking")
+        case .output:
+            let all = line.text.components(separatedBy: "\n")
+            let folded = !expanded && all.count > Self.foldedOutputLines
+            VStack(alignment: .leading, spacing: 2) {
+                if folded {
+                    Text("… \(all.count - Self.foldedOutputLines) more lines — tap to show")
+                        .foregroundStyle(Terminal.dim)
+                }
+                Text(folded ? all.suffix(Self.foldedOutputLines).joined(separator: "\n") : line.text)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(Color(white: 0.72))
+                    .textSelection(.enabled)
             }
+            .onTapGesture { expanded.toggle() }
+        default:
+            Text(line.text)
+                .foregroundStyle(color)
+                .fontWeight(line.style == .prompt ? .semibold : .regular)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, line.style == .prompt ? 6 : 0)
         }
     }
 
-    private var icon: String {
-        switch event.kind {
-        case "user": return "person"
-        case "message": return "text.bubble"
-        case "tool_call", "tool_result": return "wrench.and.screwdriver"
-        case "proxy": return "cpu"
-        case "permission": return "lock"
-        case "test": return "checkmark.seal"
-        case "plan": return "checklist"
-        case "thought": return "brain"
-        default: return "circle.fill"
+    private var color: Color {
+        switch line.style {
+        case .prompt: return Terminal.prompt
+        case .text: return Terminal.text
+        case .tool: return Terminal.tool
+        case .success: return Terminal.success
+        case .failure: return Terminal.failure
+        case .dim, .thought, .output: return Terminal.dim
         }
+    }
+}
+
+/// The blinking block at the bottom while the agent is working.
+private struct TerminalCursor: View {
+    let label: String
+    @State private var on = true
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("▌").foregroundStyle(Terminal.text).opacity(on ? 1 : 0)
+            Text(label.lowercased() + "…").foregroundStyle(Terminal.dim)
+        }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(550))
+                on.toggle()
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Record, and on Stop the server's words are added to the text field to be
+/// read over: an instruction to a coding agent is checked before it is sent,
+/// unlike Chat's mic, which sends on Stop.
+struct CodeMicButton: View {
+    @ObservedObject var dictation: Dictation
+    @ObservedObject var code: CodeModel
+    @Binding var text: String
+
+    var body: some View {
+        Button {
+            Task {
+                await dictation.toggle { clip in
+                    Task { @MainActor in
+                        if let words = await code.transcribe(clip) { text = CodeDraft.appending(words, to: text) }
+                    }
+                }
+            }
+        } label: {
+            Group {
+                if dictation.status == .starting || code.transcribing {
+                    ProgressView()
+                } else {
+                    Image(systemName: dictation.status == .recording ? "stop.circle.fill" : "mic")
+                        .foregroundStyle(dictation.status == .recording ? Color.red : Color.accentColor)
+                }
+            }
+            .font(.title3)
+            .frame(width: 36, height: 36)
+        }
+        .disabled(dictation.status == .starting || code.transcribing)
+        .accessibilityLabel(dictation.status == .recording ? "Stop and transcribe" : "Transcribe")
+        .accessibilityIdentifier("code-transcribe")
     }
 }
 

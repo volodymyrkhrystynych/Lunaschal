@@ -1,19 +1,22 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type CodeTask } from '@/hooks/api';
+import { useRecorder } from '@/hooks/useRecorder';
+import { RecordingButton } from '../RecordingButton';
 import {
+  appendDictation,
   canContinue,
   canDiscard,
   canMessage,
   canPush,
-  eventLabel,
   isActive,
-  isDetail,
   lineTotals,
   needsYou,
   parseDiff,
   pollIntervalMs,
   statusLabel,
+  terminalLines,
+  type TerminalLine,
 } from '@/lib/codeTasks';
 
 const btn =
@@ -64,6 +67,7 @@ export function CodeTasks() {
           className="w-full rounded-lg bg-[var(--color-surface)] border border-white/10 p-2 text-sm"
         />
         <div className="flex items-center gap-2">
+          <DictateButton onWords={w => setDraft(d => appendDictation(d, w))} />
           <button
             className={primary}
             disabled={!draft.trim() || create.isPending}
@@ -118,10 +122,71 @@ export function CodeTasks() {
   );
 }
 
+/**
+ * A mic that types: on Stop the server's words are added to the field to be
+ * read over before sending (Chat's mic sends on Stop; a coding instruction
+ * gets checked first).
+ */
+function DictateButton({ onWords }: { onWords: (words: string) => void }) {
+  const recorder = useRecorder(text => onWords(text));
+  return (
+    <span className="inline-flex items-center gap-2">
+      <RecordingButton
+        status={recorder.status}
+        starting={recorder.starting}
+        action="dictate"
+        title="Dictate — the words are added here to check before sending"
+        testId="code-transcribe"
+        onClick={() =>
+          recorder.status === 'recording'
+            ? recorder.stop()
+            : void recorder.start()
+        }
+      />
+      {recorder.error && (
+        <span className="text-xs text-red-400">{recorder.error}</span>
+      )}
+    </span>
+  );
+}
+
+const lineClass: Record<TerminalLine['style'], string> = {
+  prompt: 'text-sky-300 font-semibold mt-2',
+  text: 'text-neutral-100',
+  tool: 'text-green-400',
+  output: 'text-neutral-400 text-[11px]',
+  thought: 'text-neutral-500 italic',
+  dim: 'text-neutral-500',
+  success: 'text-green-400',
+  failure: 'text-red-400',
+};
+
+function TerminalRow({ line }: { line: TerminalLine }) {
+  if (line.style === 'thought')
+    return (
+      <details className={lineClass.thought}>
+        <summary className="cursor-pointer list-none truncate">
+          ∴ {line.text.split('\n')[0]}
+        </summary>
+        <div className="whitespace-pre-wrap">{line.text}</div>
+      </details>
+    );
+  return (
+    <div className={`whitespace-pre-wrap break-words ${lineClass[line.style]}`}>
+      {line.text}
+    </div>
+  );
+}
+
+/**
+ * One task, read as a terminal session: the request, every tool the agent
+ * ran, its thinking folded, the model calls and the test run, newest at the
+ * bottom with the reply line under it. Lines from src/lib/codeTasks.ts's
+ * `terminalLines`, shared with the phone.
+ */
 function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const queryClient = useQueryClient();
   const [reply, setReply] = useState('');
-  const [steps, setSteps] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
   const { data } = useQuery({
     queryKey: ['code', 'task', id],
@@ -138,26 +203,103 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
     mutationFn: (f: () => Promise<CodeTask>) => f(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['code'] }),
   });
+  const lines = terminalLines(data?.events ?? []);
+  const scroller = useRef<HTMLDivElement>(null);
+  // A terminal follows its newest line, unless you've scrolled up to read.
+  const pinned = useRef(true);
+  useEffect(() => {
+    const el = scroller.current;
+    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+  }, [lines.length]);
 
   const task = data?.task;
   if (!task)
     return (
       <div className="p-4 text-sm text-[var(--color-text-muted)]">Loading…</div>
     );
-  const events = (data?.events ?? []).filter(e => steps || !isDetail(e));
   const question =
     task.pending?.kind === 'question' ? task.pending.request.question : null;
 
   return (
-    <div className="h-full overflow-y-auto p-4 space-y-4">
-      <div className="flex items-center gap-2">
+    <div className="h-full flex flex-col">
+      <div className="flex items-center gap-2 p-3 border-b border-white/10">
         <button className={btn} onClick={onBack}>
           ← Tasks
         </button>
-        <span className="text-xs text-[var(--color-text-muted)]">
-          {statusLabel(task.status)} · {task.harness}
+        <span className="text-sm text-[var(--color-text)] truncate">
+          {task.title}
         </span>
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex gap-2 shrink-0">
+          {isActive(task) && (
+            <button
+              className={btn}
+              onClick={() => act.mutate(() => api.code.cancel(task.id))}
+            >
+              Cancel
+            </button>
+          )}
+          {canDiscard(task) && (
+            <button
+              className={btn}
+              onClick={() => act.mutate(() => api.code.discard(task.id))}
+            >
+              Discard
+            </button>
+          )}
+        </div>
+      </div>
+      <div
+        ref={scroller}
+        onScroll={e => {
+          const el = e.currentTarget;
+          pinned.current =
+            el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        }}
+        className="flex-1 overflow-y-auto bg-[#121316] p-3 font-mono text-xs leading-relaxed space-y-1"
+        data-testid="code-terminal"
+      >
+        <div className="text-neutral-500">
+          [{statusLabel(task.status)}] {task.harness} · agent/{task.id}
+        </div>
+        {lines.map(l => (
+          <TerminalRow key={l.id} line={l} />
+        ))}
+        {isActive(task) && (
+          <div className="text-neutral-500">
+            <span className="animate-pulse text-neutral-100">▌</span>{' '}
+            {statusLabel(task.status).toLowerCase()}…
+          </div>
+        )}
+      </div>
+      <div className="border-t border-white/10 p-3 space-y-2">
+        {act.error && (
+          <p className="text-xs text-red-400">{act.error.message}</p>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {task.status === 'awaiting_plan' && (
+            <button
+              className={primary}
+              disabled={act.isPending}
+              onClick={() => act.mutate(() => api.code.approve(task.id))}
+            >
+              Approve &amp; build
+            </button>
+          )}
+          {task.testExit !== null && (
+            <span
+              className={`text-xs ${task.testExit === 0 ? 'text-green-400' : 'text-red-400'}`}
+            >
+              {task.testExit === 0
+                ? '✓ Tests passed'
+                : `✗ Tests failed (exit ${task.testExit})`}
+            </span>
+          )}
+          {task.diffStat && task.diffStat.length > 0 && (
+            <button className={btn} onClick={() => setDiffOpen(v => !v)}>
+              {task.diffStat.length} files +{lineTotals(task).added} −
+              {lineTotals(task).removed}
+            </button>
+          )}
           {canPush(task) && (
             <button
               className={primary}
@@ -179,114 +321,9 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
               Continue
             </button>
           )}
-          {isActive(task) && (
-            <button
-              className={btn}
-              onClick={() => act.mutate(() => api.code.cancel(task.id))}
-            >
-              Cancel
-            </button>
-          )}
-          {canDiscard(task) && (
-            <button
-              className={btn}
-              onClick={() => act.mutate(() => api.code.discard(task.id))}
-            >
-              Discard
-            </button>
-          )}
-        </div>
-      </div>
-      <h2 className="text-lg text-[var(--color-text)]">{task.title}</h2>
-      {task.error && <p className="text-sm text-red-400">{task.error}</p>}
-      {act.error && <p className="text-sm text-red-400">{act.error.message}</p>}
-      {question && (
-        <div className="rounded-lg bg-yellow-500/10 p-3 text-sm">
-          <div className="font-medium">The agent asks</div>
-          <div>{question}</div>
-        </div>
-      )}
-      {task.plan && (
-        <div className="rounded-lg bg-white/5 p-3 text-sm space-y-2">
-          <div className="font-medium">Plan</div>
-          <div className="whitespace-pre-wrap">{task.plan}</div>
-          {task.status === 'awaiting_plan' && (
-            <button
-              className={primary}
-              onClick={() => act.mutate(() => api.code.approve(task.id))}
-            >
-              Approve &amp; build
-            </button>
-          )}
-        </div>
-      )}
-      {(task.summary || task.testExit !== null || task.diffStat) && (
-        <div className="rounded-lg bg-white/5 p-3 text-sm space-y-2">
-          <div className="font-medium">Result</div>
-          {task.summary && (
-            <div className="whitespace-pre-wrap">{task.summary}</div>
-          )}
-          {task.testExit !== null && (
-            <details>
-              <summary
-                className={
-                  task.testExit === 0 ? 'text-green-400' : 'text-red-400'
-                }
-              >
-                {task.testExit === 0
-                  ? 'Tests passed'
-                  : `Tests failed (exit ${task.testExit})`}
-              </summary>
-              <pre className="text-xs overflow-x-auto">{task.testOutput}</pre>
-            </details>
-          )}
-          {task.diffStat && (
-            <details
-              onToggle={e => setDiffOpen((e.target as HTMLDetailsElement).open)}
-            >
-              <summary>{task.diffStat.length} files changed</summary>
-              {diff.error && (
-                <p className="text-xs text-red-400">{diff.error.message}</p>
-              )}
-              {parseDiff(diff.data?.patch ?? '').map(f => (
-                <details key={f.path} className="mt-1">
-                  <summary className="font-mono text-xs">{f.path}</summary>
-                  {f.hunks.map((h, i) => (
-                    <pre key={i} className="text-[11px] overflow-x-auto">
-                      <div className="text-[var(--color-text-muted)]">
-                        {h.header}
-                      </div>
-                      {h.lines.map((l, j) => (
-                        <div
-                          key={j}
-                          className={
-                            l.kind === 'added'
-                              ? 'bg-green-500/15'
-                              : l.kind === 'removed'
-                                ? 'bg-red-500/15'
-                                : ''
-                          }
-                        >
-                          {(l.newNumber ?? l.oldNumber ?? '')
-                            .toString()
-                            .padStart(4)}{' '}
-                          {l.kind === 'added'
-                            ? '+'
-                            : l.kind === 'removed'
-                              ? '−'
-                              : ' '}
-                          {l.text}
-                        </div>
-                      ))}
-                    </pre>
-                  ))}
-                </details>
-              ))}
-            </details>
-          )}
           {task.prUrl && (
             <a
-              className="text-[var(--color-primary)] hover:underline"
+              className="text-sm text-[var(--color-primary)] hover:underline"
               href={task.prUrl}
               target="_blank"
               rel="noreferrer"
@@ -295,67 +332,83 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
             </a>
           )}
         </div>
-      )}
-      <section>
-        <div className="flex items-center justify-between mb-1">
-          <h3 className="text-sm font-medium text-[var(--color-text)]">
-            Activity
-          </h3>
-          <label className="text-xs text-[var(--color-text-muted)]">
+        {diffOpen && (
+          <div className="max-h-80 overflow-y-auto">
+            {diff.error && (
+              <p className="text-xs text-red-400">{diff.error.message}</p>
+            )}
+            {parseDiff(diff.data?.patch ?? '').map(f => (
+              <details key={f.path} className="mt-1">
+                <summary className="font-mono text-xs">{f.path}</summary>
+                {f.hunks.map((h, i) => (
+                  <pre key={i} className="text-[11px] overflow-x-auto">
+                    <div className="text-[var(--color-text-muted)]">
+                      {h.header}
+                    </div>
+                    {h.lines.map((l, j) => (
+                      <div
+                        key={j}
+                        className={
+                          l.kind === 'added'
+                            ? 'bg-green-500/15'
+                            : l.kind === 'removed'
+                              ? 'bg-red-500/15'
+                              : ''
+                        }
+                      >
+                        {(l.newNumber ?? l.oldNumber ?? '')
+                          .toString()
+                          .padStart(4)}{' '}
+                        {l.kind === 'added'
+                          ? '+'
+                          : l.kind === 'removed'
+                            ? '−'
+                            : ' '}
+                        {l.text}
+                      </div>
+                    ))}
+                  </pre>
+                ))}
+              </details>
+            ))}
+          </div>
+        )}
+        {canMessage(task) && (
+          <div className="flex items-center gap-2 font-mono">
+            <span className="text-sky-300">❯</span>
             <input
-              type="checkbox"
-              checked={steps}
-              onChange={e => setSteps(e.target.checked)}
-            />{' '}
-            model &amp; tool steps
-          </label>
-        </div>
-        <ul className="space-y-1 text-sm">
-          {events.map(e => (
-            <li
-              key={e.seq}
-              className={
-                isDetail(e)
-                  ? 'text-xs text-[var(--color-text-muted)]'
-                  : 'whitespace-pre-wrap'
-              }
-            >
-              {eventLabel(e)}
-            </li>
-          ))}
-        </ul>
-      </section>
-      {canMessage(task) && (
-        <div className="flex gap-2">
-          <input
-            value={reply}
-            onChange={e => setReply(e.target.value)}
-            placeholder={
-              task.status === 'awaiting_plan'
-                ? 'What should change in the plan?'
-                : question
-                  ? 'Your answer'
-                  : 'Ask for a follow-up change'
-            }
-            className="flex-1 rounded-lg bg-[var(--color-surface)] border border-white/10 px-2 py-1 text-sm"
-          />
-          <button
-            className={primary}
-            disabled={!reply.trim() || act.isPending}
-            onClick={() => {
-              const text = reply.trim();
-              setReply('');
-              act.mutate(() =>
+              value={reply}
+              onChange={e => setReply(e.target.value)}
+              placeholder={
                 task.status === 'awaiting_plan'
-                  ? api.code.revise(task.id, text)
-                  : api.code.message(task.id, text)
-              );
-            }}
-          >
-            Send
-          </button>
-        </div>
-      )}
+                  ? 'What should change in the plan?'
+                  : question
+                    ? 'Your answer'
+                    : 'Ask for a follow-up change'
+              }
+              className="flex-1 rounded-lg bg-[var(--color-surface)] border border-white/10 px-2 py-1 text-sm"
+            />
+            <DictateButton
+              onWords={w => setReply(r => appendDictation(r, w))}
+            />
+            <button
+              className={primary}
+              disabled={!reply.trim() || act.isPending}
+              onClick={() => {
+                const text = reply.trim();
+                setReply('');
+                act.mutate(() =>
+                  task.status === 'awaiting_plan'
+                    ? api.code.revise(task.id, text)
+                    : api.code.message(task.id, text)
+                );
+              }}
+            >
+              Send
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

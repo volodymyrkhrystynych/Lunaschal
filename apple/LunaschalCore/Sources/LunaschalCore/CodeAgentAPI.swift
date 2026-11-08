@@ -60,6 +60,28 @@ extension JournalAPI {
             "api/push/devices", Body(token: token, environment: sandbox ? "sandbox" : "production"))).configured
     }
 
+    /// Speech to text, waited on: the words go into the text field to be read
+    /// over before anything is sent, so this is `/api/transcribe` and not a
+    /// recording the server files away. No `source`, so it is not logged into
+    /// the Journal's transcription feed.
+    public func transcribe(clip: URL) async throws -> String {
+        guard (try clip.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else { throw CaptureError.missingAudio }
+        let (body, boundary) = try writeMultipart(fields: [], files: [
+            MultipartFile(field: "audio", filename: "dictation.m4a", contentType: "audio/mp4", source: clip)
+        ])
+        defer { try? FileManager.default.removeItem(at: body) }
+        var req = request("api/transcribe", method: "POST")
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.upload(for: req, fromFile: body)
+        try checkChat(data, response)
+        return try Self.transcript(data)
+    }
+
+    static func transcript(_ data: Data) throws -> String {
+        struct Reply: Decodable { let text: String }
+        return try JSONDecoder().decode(Reply.self, from: data).text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func codeAction(_ id: String, _ action: String,
                             _ body: [String: JSONValue] = [:]) async throws -> CodeTask {
         try JSONDecoder().decode(CodeTask.self, from: await chatJSON(

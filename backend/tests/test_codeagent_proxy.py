@@ -210,3 +210,22 @@ def test_serves_over_a_unix_socket(events):
     finally:
         server.stop()
     assert not path.exists()
+
+
+def test_prepare_fills_the_coding_sampler_without_overriding_the_client():
+    out = proxy.prepare(BODY, 'qwen36')
+    assert out['temperature'] == 0.6 and out['top_p'] == 0.95 and out['top_k'] == 20
+    assert out['min_p'] == 0.0 and out['presence_penalty'] == 0.0
+    own = proxy.prepare({**BODY, 'temperature': 0.2, 'chat_template_kwargs': {'preserve_thinking': True}},
+                        'qwen36')
+    assert own['temperature'] == 0.2
+    assert own['chat_template_kwargs'] == {'preserve_thinking': True}
+
+
+def test_a_call_logs_what_was_prefilled_and_what_came_from_the_cache(events):
+    script = chunks(content='ok')
+    script[-1]['timings'] = {'prompt_n': 1200, 'cache_n': 148000, 'predicted_per_second': 33.9}
+    done = gen_for(Upstream(script), events).complete(BODY)
+    [ev] = events
+    assert ev['prefilled'] == 1200 and ev['cached'] == 148000
+    assert 'timings' not in done  # ours, never the agent's
