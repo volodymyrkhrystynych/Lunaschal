@@ -985,6 +985,9 @@ export interface AppSettings {
   researchSearchProvider: string;
   hasResearchSearchKey: boolean;
   researchSearxngUrl: string;
+  /** The Code tab agent may research the web (through Tavily, on its own key). */
+  codeAgentWeb: boolean;
+  hasCodeAgentTavilyKey: boolean;
   // Wall-clock budgets, in seconds. The chat one bounds a whole reply; the
   // two research ones bound gathering, after which the run writes up what it
   // already has rather than failing (backend/delegate/limits.py).
@@ -3608,6 +3611,7 @@ export const api = {
         AppSettings & {
           hfToken?: string;
           websearchSearchKey?: string;
+          codeAgentTavilyKey?: string;
           googleOauthClientId?: string;
           googleOauthClientSecret?: string;
           microsoftOauthClientId?: string;

@@ -118,6 +118,10 @@ def get_settings():
         # Never the key itself, following hasHfToken.
         'hasResearchSearchKey': bool(s.get('research_search_key')),
         'researchSearxngUrl': s.get('research_searxng_url') or '',
+        # The Code tab agent's web research, through Tavily on its own key
+        # (backend/codeagent/lookups.py). The key never comes back out.
+        'codeAgentWeb': bool(s.get('code_agent_web', 1)),
+        'hasCodeAgentTavilyKey': bool(s.get('code_agent_tavily_key')),
         # Wall-clock budgets. Defaults live in backend/delegate/limits.py and
         # are repeated here the way briefingMaxTokens' is — the route answers
         # for a settings row that predates the columns.
@@ -192,6 +196,8 @@ def update_ai():
         'researchSearchProvider': 'research_search_provider',
         'researchSearchKey': 'research_search_key',
         'researchSearxngUrl': 'research_searxng_url',
+        'codeAgentWeb': 'code_agent_web',
+        'codeAgentTavilyKey': 'code_agent_tavily_key',
         'chatTimeoutEnabled': 'chat_timeout_enabled',
         'chatTimeoutSeconds': 'chat_timeout_seconds',
         'researchTimeoutEnabled': 'research_timeout_enabled',
@@ -237,7 +243,7 @@ def update_ai():
             value = body[camel]
             if camel in ('briefingThinking', 'llmThinking', 'repoContextEnabled',
                          'researchEnabled', 'llamaChatVision', 'chatTimeoutEnabled',
-                         'researchTimeoutEnabled', 'torrentRequireVpn'):
+                         'researchTimeoutEnabled', 'torrentRequireVpn', 'codeAgentWeb'):
                 # Stored as 0/1 — Gemma 4's thinking channel is on or off, with no
                 # graded levels to validate against.
                 value = 1 if value else 0

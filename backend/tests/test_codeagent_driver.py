@@ -53,8 +53,9 @@ class LocalRuntime:
 
 
 class NoProxy:
-    def __init__(self, path, on_event):
+    def __init__(self, path, on_event, lookups=None):
         self.on_event = on_event
+        self.lookups = lookups
 
     def start(self):
         return self

@@ -54,6 +54,37 @@ final class CodeAgentTests: XCTestCase {
         XCTAssertEqual(events.map(\.isDetail), [false, true, true, true, false, false, false])
     }
 
+    func testModelCallLabelsShowTheCache() {
+        XCTAssertEqual(event(1, "proxy", ["action": .string("call"), "ran": .number(4.1),
+                                          "prefilled": .number(1200), "cached": .number(148000)]).label,
+                       "Model: 4s · 1.2k new, 148k cached")
+        XCTAssertEqual(event(2, "proxy", ["action": .string("call"), "ran": .number(3),
+                                          "prefilled": .number(812), "cached": .number(0)]).label,
+                       "Model: 3s · 812 new")
+    }
+
+    func testLookupLabelsMatchTheWeb() {
+        func look(_ p: [String: JSONValue]) -> String {
+            event(1, "proxy", ["action": .string("lookup")].merging(p) { $1 }).label
+        }
+        XCTAssertEqual(look(["tool": .string("library_search"), "arg": .string("flask streaming"),
+                             "ok": .bool(true), "count": .number(5)]),
+                       "Library: 5 results for \u{2018}flask streaming\u{2019}")
+        XCTAssertEqual(look(["tool": .string("library_read"), "arg": .string("A/Streaming"), "ok": .bool(true)]),
+                       "Read from the library: A/Streaming")
+        XCTAssertEqual(look(["tool": .string("web_research"), "arg": .string("q"), "ok": .bool(false),
+                             "blocked": .bool(true)]),
+                       "Web research refused: search the library first")
+        XCTAssertEqual(look(["tool": .string("web_research"), "arg": .string("q"), "ok": .bool(true),
+                             "count": .number(1), "seconds": .number(41.6)]),
+                       "Web research: 1 source for \u{2018}q\u{2019} in 42s")
+        XCTAssertEqual(look(["tool": .string("repo_wiki_search"), "arg": .string("proxy"), "ok": .bool(true),
+                             "count": .number(2)]),
+                       "Wiki: 2 notes for \u{2018}proxy\u{2019}")
+        XCTAssertEqual(look(["tool": .string("code_map"), "arg": .string("slot"), "ok": .bool(true)]),
+                       "Code map: \u{2018}slot\u{2019}")
+    }
+
     func testPendingQuestionAndStateRules() throws {
         let json = """
         {"id": "T", "repoId": "R", "title": "t", "prompt": "p", "harness": "omp", "status": "needs_input",
@@ -159,5 +190,74 @@ final class CodeAgentTests: XCTestCase {
           "cloneState": "ready", "isDefault": 1, "hasCheckout": true, "hasGraph": false}]
         """.utf8))
         XCTAssertTrue(repos[0].isDefaultRepo)
+    }
+
+    // MARK: Terminal
+
+    private func event(_ seq: Int, _ kind: String, _ payload: [String: JSONValue]) -> CodeTaskEvent {
+        CodeTaskEvent(seq: seq, kind: kind, payload: payload, createdAt: nil)
+    }
+
+    func testTheTerminalReadsLikeASession() {
+        let lines = CodeTerminal.lines([
+            event(1, "user", ["text": .string("Fix the streak")]),
+            event(2, "status", ["status": .string("planning")]),
+            event(3, "thought", ["text": .string("  Look at habits.py first  ")]),
+            event(4, "tool_call", ["title": .string("Read backend/habits.py"), "status": .string("pending")]),
+            event(5, "tool_result", ["status": .string("in_progress")]),
+            event(6, "tool_result", ["status": .string("completed")]),
+            event(7, "proxy", ["action": .string("call"), "ran": .number(38.2), "waited": .number(0)]),
+            event(8, "message", ["text": .string("1. Change the loop\n2. Add a test")]),
+        ])
+        XCTAssertEqual(lines.map(\.style), [.prompt, .dim, .thought, .tool, .dim, .dim, .text])
+        XCTAssertEqual(lines.map(\.text), [
+            "❯ Fix the streak", "── planning ──", "Look at habits.py first", "● Read backend/habits.py",
+            "  ⎿ done", "  · model: 38s", "1. Change the loop\n2. Add a test",
+        ])
+        XCTAssertEqual(Set(lines.map(\.id)).count, lines.count)
+    }
+
+    func testTerminalFailuresAndTestOutput() {
+        let lines = CodeTerminal.lines([
+            event(1, "permission", ["title": .string("Edit a.py"), "decision": .string("allowed")]),
+            event(2, "permission", ["title": .string("Edit a.py"), "decision": .string("refused")]),
+            event(3, "tool_result", ["status": .string("failed")]),
+            event(4, "proxy", ["action": .string("stuck")]),
+            event(5, "test", ["exit": .number(1), "tail": .string("1 failed\n")]),
+            event(6, "status", ["status": .string("error"), "error": .string("session/new timed out after 120s")]),
+            event(7, "status", ["note": .string("the plan step changed files; they were reverted")]),
+            event(8, "message", ["text": .string("   ")]),
+        ])
+        XCTAssertEqual(lines.map(\.text), [
+            "  ⎿ refused: Edit a.py (the plan step is read-only)",
+            "  ⎿ failed",
+            "  · stuck: tool calls keep landing in its thinking",
+            "✗ tests failed (exit 1)", "1 failed",
+            "✗ session/new timed out after 120s",
+            "  ! the plan step changed files; they were reverted",
+        ])
+        XCTAssertEqual(lines.map(\.style), [.dim, .failure, .failure, .failure, .output, .failure, .dim])
+        XCTAssertEqual(lines[4].id, "e5-tail")
+    }
+
+    func testTerminalChecklist() {
+        let lines = CodeTerminal.lines([event(1, "plan", ["entries": .array([
+            .object(["content": .string("Read"), "status": .string("completed")]),
+            .object(["content": .string("Edit"), "status": .string("in_progress")]),
+            .object(["content": .string("Test"), "status": .string("pending")]),
+        ])])])
+        XCTAssertEqual(lines.map(\.text), ["  ☒ Read\n  ◐ Edit\n  ☐ Test"])
+    }
+
+    func testDictationAppendsToTheDraft() {
+        XCTAssertEqual(CodeDraft.appending(" fix it ", to: ""), "fix it")
+        XCTAssertEqual(CodeDraft.appending("and test it", to: "fix it"), "fix it and test it")
+        XCTAssertEqual(CodeDraft.appending("and test it", to: "fix it\n"), "fix it\nand test it")
+        XCTAssertEqual(CodeDraft.appending("  ", to: "fix it"), "fix it")
+    }
+
+    func testTranscriptIsTheTrimmedText() throws {
+        XCTAssertEqual(try JournalAPI.transcript(Data(#"{"text": " add a test ", "language": "en"}"#.utf8)), "add a test")
+        XCTAssertThrowsError(try JournalAPI.transcript(Data(#"{"error": "x"}"#.utf8)))
     }
 }

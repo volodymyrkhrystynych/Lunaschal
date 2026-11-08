@@ -159,14 +159,14 @@ private struct LearningAnswerCard: View {
     let session: LearningSession
     let card: LearningCard
     @State private var answer = ""
-    @StateObject private var dictation: LearningDictation
+    @StateObject private var dictation: Dictation
     @FocusState private var focused: Bool
 
     init(learning: LearningModel, session: LearningSession, card: LearningCard) {
         self.learning = learning
         self.session = session
         self.card = card
-        _dictation = StateObject(wrappedValue: LearningDictation(capture: learning.capture) { [weak learning] in learning?.transport() })
+        _dictation = StateObject(wrappedValue: Dictation(capture: learning.capture) { [weak learning] in learning?.transport() != nil })
     }
 
     private var canCheck: Bool {
@@ -392,7 +392,7 @@ private struct LearningReviewPage: View {
 /// The desktop's 🎤: red with Stop while recording, a spinner while the
 /// microphone is being set up.
 private struct LearningMicButton: View {
-    let status: LearningDictation.Status
+    let status: Dictation.Status
     let action: () -> Void
 
     var body: some View {

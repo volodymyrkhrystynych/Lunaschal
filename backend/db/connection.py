@@ -1297,6 +1297,14 @@ def _ensure_code_agent_settings(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN github_agent_token TEXT')
     if 'code_agent_harness' not in cols:
         db.execute("ALTER TABLE settings ADD COLUMN code_agent_harness TEXT NOT NULL DEFAULT 'pi'")
+    # The agent's web research (backend/codeagent/lookups.py): on unless
+    # switched off, and only ever through Tavily on this key — a key of its
+    # own, so the agent's searches neither spend nor depend on the app's
+    # Brave/SearXNG provider. No key, no web tool.
+    if 'code_agent_web' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN code_agent_web INTEGER NOT NULL DEFAULT 1')
+    if 'code_agent_tavily_key' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN code_agent_tavily_key TEXT')
     repo_cols = {r[1] for r in db.execute('PRAGMA table_info(repos)')}
     if 'agent_test_command' not in repo_cols:
         # '' means the agent's own default (backend/codeagent/tasks.py).

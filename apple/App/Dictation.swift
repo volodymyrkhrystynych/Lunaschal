@@ -2,26 +2,30 @@ import AVFoundation
 import Foundation
 import LunaschalCore
 
-/// The review's mic button: record, and on Stop hand the clip over as the
-/// answer. Nothing waits on the words; the server transcribes the clip and
-/// grades it while the next card is already up (`LearningModel.submitRecording`,
-/// which owns the file from then on and deletes it once sent).
+/// A mic button's recorder: record, and on Stop hand the clip to whoever asked.
+/// Learning's review sends it as the answer and waits on nothing — the server
+/// transcribes and grades it while the next card is already up
+/// (`LearningModel.submitRecording`, which owns the file from then on). The
+/// Code page waits for the words and types them into its field
+/// (`CodeModel.transcribe`), because a coding instruction is read over before
+/// it is sent.
 @MainActor
-final class LearningDictation: NSObject, ObservableObject, AVAudioRecorderDelegate {
+final class Dictation: NSObject, ObservableObject, AVAudioRecorderDelegate {
     enum Status: Equatable { case idle, starting, recording }
 
     @Published private(set) var status = Status.idle
     @Published var error: String?
 
     private let capture: CaptureModel
-    private let transport: () -> LearningTransport?
+    private let available: () -> Bool
     private var recorder: AVAudioRecorder?
     private var clip: URL?
     private var deliver: ((URL) -> Void)?
 
-    init(capture: CaptureModel, transport: @escaping () -> LearningTransport?) {
+    /// `available` says whether there is a server to send the clip to.
+    init(capture: CaptureModel, available: @escaping () -> Bool) {
         self.capture = capture
-        self.transport = transport
+        self.available = available
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(interrupted),
             name: AVAudioSession.interruptionNotification, object: nil)
@@ -39,7 +43,7 @@ final class LearningDictation: NSObject, ObservableObject, AVAudioRecorderDelega
     }
 
     private func start(_ onClip: @escaping (URL) -> Void) async {
-        guard transport() != nil else {
+        guard available() else {
             error = "Dictation needs your server."
             return
         }
@@ -48,7 +52,7 @@ final class LearningDictation: NSObject, ObservableObject, AVAudioRecorderDelega
         // One microphone: a Capture recording in progress gives way, as it does for Chat.
         if capture.recorder.activeID != nil { capture.recorder.stop() }
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("learning-\(UUID().uuidString)").appendingPathExtension("m4a")
+            .appendingPathComponent("dictation-\(UUID().uuidString)").appendingPathExtension("m4a")
         do {
             guard await AVAudioApplication.requestRecordPermission() else {
                 throw RecorderError.message("Allow microphone access in Settings to dictate.")

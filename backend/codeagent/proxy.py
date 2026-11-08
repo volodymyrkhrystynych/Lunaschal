@@ -61,6 +61,14 @@ PAUSE_WAIT_SECONDS = 600.0  # hold through a short pause; past this, 503
 PAUSE_POLL_SECONDS = 5.0
 UPSTREAM_TIMEOUT = (10, 1800)
 
+# Qwen's published sampler for *precise coding* in thinking mode. The [qwen36]
+# preset runs its general-thinking one (temperature 1.0) because that alias
+# serves every chat_json call in the app; the agent asks for none, so without
+# these it would write code at 1.0. Defaults only — a harness that sends its
+# own value keeps it.
+CODING_SAMPLER = {'temperature': 0.6, 'top_p': 0.95, 'top_k': 20,
+                  'min_p': 0.0, 'presence_penalty': 0.0}
+
 EventFn = Callable[[str, dict], None]
 
 
@@ -72,8 +80,11 @@ class UpstreamError(RuntimeError):
 
 def prepare(body: dict, alias: str) -> dict:
     """The request as it goes upstream: our alias, always streamed (so it can
-    be cancelled), and a floor on max_tokens."""
+    be cancelled), the coding sampler where the client set none, and a floor
+    on max_tokens."""
     out = copy.deepcopy(body)
+    for key, value in CODING_SAMPLER.items():
+        out.setdefault(key, value)
     out['model'] = alias
     out['stream'] = True
     out.pop('stream_options', None)
@@ -90,11 +101,14 @@ def assemble(chunks: Iterable[dict]) -> dict:
     calls: dict[int, dict] = {}
     finish = None
     usage = None
+    timings = None
     meta = {}
     for chunk in chunks:
         meta = meta or {k: chunk.get(k) for k in ('id', 'created') if chunk.get(k)}
         if chunk.get('usage'):
             usage = chunk['usage']
+        if chunk.get('timings'):
+            timings = chunk['timings']
         for choice in chunk.get('choices') or []:
             finish = choice.get('finish_reason') or finish
             delta = choice.get('delta') or {}
@@ -127,6 +141,24 @@ def assemble(chunks: Iterable[dict]) -> dict:
     }
     if usage:
         out['usage'] = usage
+    if timings:
+        # llama-server's own numbers: prompt_n is what it had to prefill, cache_n
+        # what it reused. Kept beside the completion, never sent to the agent.
+        out['timings'] = timings
+    return out
+
+
+def cache_stats(completion: dict) -> dict:
+    """How much of the prompt was prefilled and how much came from the cache.
+
+    At 150k tokens a lost prompt cache is minutes of prefill on this hybrid
+    model, and nothing else makes that visible: the call just looks slow."""
+    t = completion.get('timings') or {}
+    out = {}
+    if isinstance(t.get('prompt_n'), int):
+        out['prefilled'] = t['prompt_n']
+    if isinstance(t.get('cache_n'), int):
+        out['cached'] = t['cache_n']
     return out
 
 
@@ -219,7 +251,9 @@ class Generator:
                     'ran': round(time.monotonic() - admitted, 2),
                     'cancels': cancels, 'usage': completion.get('usage'),
                     'finish': completion['choices'][0].get('finish_reason'),
+                    **cache_stats(completion),
                 })
+                completion.pop('timings', None)
                 return completion
             except service.Preempted:
                 cancels += 1
@@ -255,8 +289,40 @@ class Generator:
 
 # ------------------------------------------------------------- the server
 
-def make_app(gen: Generator) -> Flask:
+def make_app(gen: Generator, lookups=None) -> Flask:
+    """The agent's endpoint. `lookups` (backend/codeagent/lookups.py) adds the
+    `/lunaschal/tools` routes its pi extension calls; without it they list
+    nothing, which the extension reads as "no tools to register"."""
     app = Flask('codeagent-proxy')
+
+    @app.get('/lunaschal/tools')
+    def lookup_tools():
+        return jsonify({'tools': lookups.offered() if lookups else []})
+
+    @app.post('/lunaschal/tools/<name>')
+    def lookup_call(name):
+        if lookups is None or name not in lookups.names:
+            return jsonify({'text': f'No lookup tool named {name!r}.', 'ok': False}), 404
+        args = request.get_json(silent=True) or {}
+        results: queue.Queue = queue.Queue()
+        threading.Thread(target=lambda: results.put(lookups.call(name, args)), daemon=True,
+                         name='codeagent-lookup').start()
+
+        def body():
+            # A web run takes minutes, and Node's fetch gives up on a response
+            # that sends nothing for five. Leading whitespace is valid JSON, so
+            # the keepalive needs no framing the extension has to strip.
+            while True:
+                try:
+                    _status, result = results.get(timeout=KEEPALIVE_SECONDS)
+                except queue.Empty:
+                    yield ' '
+                    continue
+                yield json.dumps(result)
+                return
+
+        return Response(body(), mimetype='application/json',
+                        headers={'Cache-Control': 'no-cache'})
 
     @app.get('/v1/models')
     def models():
@@ -313,13 +379,15 @@ def make_app(gen: Generator) -> Flask:
 class ProxyServer:
     """One task's proxy, serving on its socket from a daemon thread."""
 
-    def __init__(self, socket_path: Path, on_event: EventFn, upstream=_upstream_chunks):
+    def __init__(self, socket_path: Path, on_event: EventFn, upstream=_upstream_chunks,
+                 lookups=None):
         from werkzeug.serving import make_server
         self.socket_path = Path(socket_path)
+        self.lookups = lookups
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         if self.socket_path.exists():
             self.socket_path.unlink()
-        self.app = make_app(Generator(on_event, upstream))
+        self.app = make_app(Generator(on_event, upstream), lookups)
         self._server = make_server(f'unix://{self.socket_path}', 0, self.app, threaded=True)
         # The container runs as this same uid; nobody else needs it.
         os.chmod(self.socket_path, 0o600)
@@ -331,6 +399,8 @@ class ProxyServer:
         return self
 
     def stop(self) -> None:
+        if self.lookups is not None:
+            self.lookups.stopped.set()  # a web run in flight stops at its next step
         self._server.shutdown()
         self._server.server_close()
         try:

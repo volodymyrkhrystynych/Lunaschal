@@ -11,7 +11,8 @@
 # at run time there is no network at all. A task that needs a new dependency
 # needs a new image.
 
-FROM node:22.12.0-bookworm-slim
+# 22.19+ because pi 0.87 refuses anything older (its `engines`).
+FROM node:22.20.0-bookworm-slim
 
 # git/ripgrep for the agent's tools, socat for the model socket, and the
 # system libraries the backend test suite reaches: pango for weasyprint's
@@ -36,9 +37,16 @@ COPY package.json package-lock.json /opt/app/
 RUN cd /opt/app && npm ci --ignore-scripts --no-audit --no-fund
 
 # The three agents, pinned. omp runs on Bun rather than Node.
+#
+# pi and pi-acp move together: pi-acp asks pi for commands that older pis do
+# not have, and pi answers an unknown command with an error carrying no
+# request id, so pi-acp waits on it forever and session/new times out. pi
+# 0.73 (still published under @mariozechner) lacks get_available_thinking_levels;
+# pi-acp 0.0.34 wants pi >= 0.81, now published under @earendil-works. 0.87.1
+# is the last pi before that pi-acp release.
 RUN npm install -g --no-audit --no-fund \
       bun@1.4.3 \
-      @mariozechner/pi-coding-agent@0.73.1 \
+      @earendil-works/pi-coding-agent@0.87.1 \
       pi-acp@0.0.34 \
       @qwen-code/qwen-code@0.25.2 \
       @oh-my-pi/pi-coding-agent@18.12.2
@@ -55,6 +63,8 @@ ENV PATH=/opt/venv/bin:$PATH \
     OPENAI_API_KEY=local \
     OPENAI_MODEL=local \
     PI_TELEMETRY=0 \
+    PI_OFFLINE=1 \
+    PI_SKIP_VERSION_CHECK=1 \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 
 ENTRYPOINT ["/usr/local/bin/agent-entrypoint"]

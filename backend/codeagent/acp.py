@@ -139,7 +139,7 @@ class AcpClient:
                 raise AcpClosed(self._closed_message())
             self._send({'jsonrpc': '2.0', 'id': req_id, 'method': method, 'params': params})
             if not waiter['event'].wait(timeout):
-                raise AcpError(f'{method} timed out')
+                raise AcpError(f'{method} timed out after {timeout:.0f}s')
             msg = waiter['msg']
             if msg is None:
                 raise AcpClosed(self._closed_message())

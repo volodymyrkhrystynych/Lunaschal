@@ -56,7 +56,9 @@ DEFAULT_TEST_SCRIPT = (
 )
 
 PLAN_PROMPT = """You are working in the git repository at /work, on the branch {branch}. \
-Read the repository's own instructions first (CLAUDE.md or AGENTS.md at the root, if present).
+Read the repository's own instructions first (CLAUDE.md or AGENTS.md at the root, if present). \
+For how a library or API works, use library_search first if you have it, and web_research only \
+when the library does not answer.
 
 Task:
 {prompt}
@@ -220,8 +222,9 @@ class Driver:
         try:
             task = self._ensure_workspace(task)
             self.runtime.start(task_id)
-            proxy = self.proxy_factory(mirror.sock_dir(task_id) / 'model.sock',
-                                       self._proxy_event(task_id)).start()
+            on_event = self._proxy_event(task_id)
+            proxy = self.proxy_factory(mirror.sock_dir(task_id) / 'model.sock', on_event,
+                                       lookups=self._lookups(task, on_event)).start()
             client, turn = self._connect(task)
             turn.muted = True
             session_id, fresh = self._session(client, task)
@@ -323,6 +326,16 @@ class Driver:
             return client.prompt(session_id, text)
         finally:
             done.set()
+
+    def _lookups(self, task: dict, on_event):
+        """The task's library/wiki/web lookups, or None — a lookup toolbox that
+        cannot be built costs the agent its lookups, never the task."""
+        try:
+            from backend.codeagent.lookups import Lookups
+            return Lookups(task.get('repoId'), on_event)
+        except Exception:
+            logger.exception('code task %s: lookups unavailable', task['id'])
+            return None
 
     def _proxy_event(self, task_id: str):
         def on_event(kind: str, payload: dict) -> None:

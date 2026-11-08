@@ -17,6 +17,13 @@ ACP, with its model calls routed through the app's model service. Design record 
 - **Every model call goes through `service.slot` at P2** (`proxy.Generator`), one request per slot —
   `ENTRY_TTL` is 30 minutes, so a slot must never be held for a session. Responses are buffered so a
   preemption replay cannot duplicate output.
+- **The lookup endpoint (`/lunaschal/tools`, `lookups.py`) is a boundary, not a convenience.** The
+  agent owns `$HOME`, so it can rewrite the pi extension or curl the socket directly. So only offered
+  names are served, arguments and results are clipped, and each task has a budget. The web goes
+  through the shared `ResearchTools` gate (library first) and through Tavily on the code agent's own
+  key (`web.search_override`), at P2. Nothing in the container gains network.
+- **Agent configs track the server**: pi's and omp's `contextWindow` equal `[qwen36]`'s `ctx-size`,
+  and pi's `compaction.reserveTokens` is at least `proxy.MIN_MAX_TOKENS`. Tests hold both.
 - **The plan phase leaves no changes**: write permissions refused, then `reset --hard` if dirty anyway.
 - **Tests are run by the driver after the agent finishes**; `test_exit` is ours, not the agent's claim.
 - **`tasks.set_status` is the only way a task changes state**, so the push listener cannot be bypassed.

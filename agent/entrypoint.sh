@@ -16,6 +16,16 @@ seed /opt/agent-config/pi "$HOME/.pi/agent"
 seed /opt/agent-config/omp "$HOME/.omp/agent"
 seed /opt/agent-config/qwen "$HOME/.qwen"
 
+# Except the files that are ours rather than the agent's: refreshed on every
+# start, or a task created before an image change would keep the old model
+# settings — and never see the lookup extension — for the rest of its life.
+# Neither agent writes these over ACP.
+refresh() { mkdir -p "$(dirname "$2")"; cp "$1" "$2"; }
+for f in models.json settings.json extensions/lunaschal.js; do
+  refresh "/opt/agent-config/pi/$f" "$HOME/.pi/agent/$f"
+done
+refresh /opt/agent-config/omp/models.yml "$HOME/.omp/agent/models.yml"
+
 # Installed dependencies, linked into the clone. The repo's .gitignore says
 # `node_modules/` and `.venv/` — patterns with a trailing slash match only
 # directories, never these symlinks — so they go in info/exclude, or the

@@ -10,8 +10,15 @@
           "id": "local",
           "name": "Qwen3.6 35B A3B (Lunaschal)",
           "reasoning": true,
-          "contextWindow": 96000,
-          "maxTokens": 32768
+          "contextWindow": 190000,
+          "maxTokens": 32768,
+          "compat": {
+            "thinkingFormat": "qwen-chat-template",
+            "thinkingTokenBudgetField": "thinking_budget_tokens",
+            "maxTokensField": "max_tokens",
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": false
+          }
         }
       ]
     }

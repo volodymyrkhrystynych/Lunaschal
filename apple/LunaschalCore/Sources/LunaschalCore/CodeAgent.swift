@@ -161,7 +161,16 @@ public struct CodeTaskEvent: Codable, Equatable, Identifiable, Sendable {
             case "call":
                 let ran = Int((number("ran") ?? 0).rounded())
                 let waited = number("waited") ?? 0
-                return waited >= 1 ? "Model: \(ran)s (waited \(Int(waited.rounded()))s for the GPU)" : "Model: \(ran)s"
+                var label = "Model: \(ran)s"
+                // What llama-server prefilled versus reused: a long call with a
+                // big "new" number is a lost prompt cache, not a slow model.
+                if let prefilled = number("prefilled") {
+                    let cached = number("cached") ?? 0
+                    label += " · \(Self.tokens(prefilled)) new"
+                    if cached > 0 { label += ", \(Self.tokens(cached)) cached" }
+                }
+                return waited >= 1 ? label + " (waited \(Int(waited.rounded()))s for the GPU)" : label
+            case "lookup": return lookupLabel
             case "preempted": return "Paused for a chat message"
             case "paused": return "Waiting: GPU inference is paused"
             case "paused_out": return "Gave up waiting for the GPU"
@@ -172,6 +181,35 @@ public struct CodeTaskEvent: Codable, Equatable, Identifiable, Sendable {
             }
         default: return kind
         }
+    }
+
+    /// A library, wiki, code-map or web lookup the agent made through the host.
+    private var lookupLabel: String {
+        let arg = string("arg").map { "\u{2018}\($0)\u{2019}" } ?? ""
+        let ok = payload["ok"] == .bool(true)
+        let count = number("count").map { Int($0) }
+        let found = { (noun: String) in count.map { "\($0) \(noun)\($0 == 1 ? "" : "s")" } ?? noun + "s" }
+        switch string("tool") {
+        case "library_search":
+            return ok ? "Library: \(found("result")) for \(arg)" : "Library search failed: \(arg)"
+        case "library_read":
+            return ok ? "Read from the library: \(string("arg") ?? "an article")" : "Couldn't read from the library"
+        case "web_research":
+            if payload["blocked"] == .bool(true) { return "Web research refused: search the library first" }
+            let secs = Int((number("seconds") ?? 0).rounded())
+            return ok ? "Web research: \(found("source")) for \(arg) in \(secs)s" : "Web research failed: \(arg)"
+        case "repo_wiki_search": return "Wiki: \(found("note")) for \(arg)"
+        case "repo_wiki_read": return ok ? "Read wiki note \(string("arg") ?? "")" : "No such wiki note"
+        case "code_map": return "Code map: \(arg)"
+        default: return "Looked something up"
+        }
+    }
+
+    /// 812, 4.3k, 150k.
+    static func tokens(_ n: Double) -> String {
+        if n < 1000 { return String(Int(n)) }
+        if n < 10000 { return String(format: "%.1fk", n / 1000) }
+        return "\(Int((n / 1000).rounded()))k"
     }
 
     /// Model calls and tool plumbing: collapsed by default on the phone.

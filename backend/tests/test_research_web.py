@@ -656,3 +656,54 @@ def test_tool_definitions_are_openai_shaped():
         assert tool['type'] == 'function'
         assert tool['function']['parameters']['type'] == 'object'
         assert tool['function']['parameters']['required']
+
+
+# --- The coding agent's Tavily override ---
+
+class _Tavily:
+    def __init__(self, seen):
+        self.seen = seen
+
+    def __call__(self, url, json=None, headers=None, timeout=None):
+        self.seen.update(url=url, json=json, headers=headers)
+        outer = self
+
+        class R:
+            def raise_for_status(self): pass
+            def json(self):
+                return {'results': [
+                    {'title': 'Flask streaming', 'url': 'https://ex.com/s', 'content': 'stream_with_context'},
+                    {'title': 'No URL', 'content': 'dropped'},
+                ]}
+        return R()
+
+
+def test_the_override_searches_tavily_with_its_own_key(client, monkeypatch):
+    _configure('brave', key='brave-key')
+    seen = {}
+    monkeypatch.setattr(web.requests, 'post', _Tavily(seen))
+    monkeypatch.setattr(web.requests, 'get', lambda *a, **k: pytest.fail('Brave must not be called'))
+    with web.search_override('tavily', ' tvly-key '):
+        assert web.search_provider() == 'tavily'
+        assert web.is_search_configured() is True
+        results = web.web_search('flask streaming', limit=3)
+    assert results == [{'title': 'Flask streaming', 'url': 'https://ex.com/s',
+                        'snippet': 'stream_with_context'}]
+    assert seen['url'] == 'https://api.tavily.com/search'
+    assert seen['headers']['Authorization'] == 'Bearer tvly-key'
+    assert seen['json'] == {'query': 'flask streaming', 'max_results': 3, 'search_depth': 'basic'}
+
+
+def test_outside_the_override_the_configured_provider_is_untouched(client):
+    _configure('brave', key='brave-key')
+    with web.search_override('tavily', 'tvly-key'):
+        pass
+    assert web.search_provider() == 'brave'
+
+
+def test_the_override_without_a_key_is_unavailable(client):
+    _configure('brave', key='brave-key')
+    with web.search_override('tavily', ''):
+        assert web.is_search_configured() is False
+        with pytest.raises(web.SearchUnavailable, match='Tavily'):
+            web.web_search('flask')

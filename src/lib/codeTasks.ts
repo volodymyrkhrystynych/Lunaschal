@@ -114,10 +114,21 @@ export function eventLabel(e: CodeTaskEvent): string {
         case 'call': {
           const ran = Math.round(num(p.ran) ?? 0);
           const waited = num(p.waited) ?? 0;
+          let label = `Model: ${ran}s`;
+          // What llama-server prefilled versus reused: a long call with a big
+          // "new" number is a lost prompt cache, not a slow model.
+          const prefilled = num(p.prefilled);
+          if (prefilled !== undefined) {
+            const cached = num(p.cached) ?? 0;
+            label += ` · ${tokens(prefilled)} new`;
+            if (cached > 0) label += `, ${tokens(cached)} cached`;
+          }
           return waited >= 1
-            ? `Model: ${ran}s (waited ${Math.round(waited)}s for the GPU)`
-            : `Model: ${ran}s`;
+            ? `${label} (waited ${Math.round(waited)}s for the GPU)`
+            : label;
         }
+        case 'lookup':
+          return lookupLabel(p);
         case 'preempted':
           return 'Paused for a chat message';
         case 'paused':
@@ -135,6 +146,51 @@ export function eventLabel(e: CodeTaskEvent): string {
       }
     default:
       return e.kind;
+  }
+}
+
+/** 812, 4.3k, 150k. */
+export function tokens(n: number): string {
+  if (n < 1000) return String(Math.trunc(n));
+  if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
+  return `${Math.round(n / 1000)}k`;
+}
+
+/** A library, wiki, code-map or web lookup the agent made through the host. */
+function lookupLabel(p: Record<string, unknown>): string {
+  const rawArg = str(p.arg);
+  const arg = rawArg !== undefined ? `\u2018${rawArg}\u2019` : '';
+  const ok = p.ok === true;
+  const count = num(p.count);
+  const found = (noun: string) =>
+    count !== undefined
+      ? `${Math.trunc(count)} ${noun}${count === 1 ? '' : 's'}`
+      : `${noun}s`;
+  switch (p.tool) {
+    case 'library_search':
+      return ok
+        ? `Library: ${found('result')} for ${arg}`
+        : `Library search failed: ${arg}`;
+    case 'library_read':
+      return ok
+        ? `Read from the library: ${rawArg ?? 'an article'}`
+        : "Couldn't read from the library";
+    case 'web_research': {
+      if (p.blocked === true)
+        return 'Web research refused: search the library first';
+      const secs = Math.round(num(p.seconds) ?? 0);
+      return ok
+        ? `Web research: ${found('source')} for ${arg} in ${secs}s`
+        : `Web research failed: ${arg}`;
+    }
+    case 'repo_wiki_search':
+      return `Wiki: ${found('note')} for ${arg}`;
+    case 'repo_wiki_read':
+      return ok ? `Read wiki note ${rawArg ?? ''}` : 'No such wiki note';
+    case 'code_map':
+      return `Code map: ${arg}`;
+    default:
+      return 'Looked something up';
   }
 }
 
@@ -265,4 +321,119 @@ export function parseDiff(patch: string): DiffFile[] {
   }
   closeFile();
   return files;
+}
+
+export type TerminalStyle =
+  | 'prompt'
+  | 'text'
+  | 'tool'
+  | 'output'
+  | 'thought'
+  | 'dim'
+  | 'success'
+  | 'failure';
+
+export interface TerminalLine {
+  id: string;
+  style: TerminalStyle;
+  text: string;
+}
+
+const lowerFirst = (s: string) => s.slice(0, 1).toLowerCase() + s.slice(1);
+
+/**
+ * The event log laid out as a terminal session. Same lines as
+ * apple/LunaschalCore's CodeTerminal, so phone and desktop show one
+ * transcript: plumbing included as dim lines, noise (a pending tool, an
+ * allowed write) left out.
+ */
+export function terminalLines(events: CodeTaskEvent[]): TerminalLine[] {
+  const out: TerminalLine[] = [];
+  for (const e of events) {
+    const id = `e${e.seq}`;
+    const add = (style: TerminalStyle, text: string, suffix = '') =>
+      out.push({ id: id + suffix, style, text });
+    const p = e.payload;
+    switch (e.kind) {
+      case 'user':
+        add('prompt', '❯ ' + (str(p.text) ?? ''));
+        break;
+      case 'message':
+      case 'thought': {
+        const text = (str(p.text) ?? '').trim();
+        if (text) add(e.kind === 'message' ? 'text' : 'thought', text);
+        break;
+      }
+      case 'tool_call':
+        add('tool', '● ' + (str(p.title) ?? 'tool'));
+        break;
+      case 'tool_result':
+        if (p.status === 'failed') add('failure', '  ⎿ failed');
+        else if (p.status === 'completed') add('dim', '  ⎿ done');
+        break;
+      case 'permission':
+        if (p.decision !== 'allowed')
+          add(
+            'dim',
+            `  ⎿ refused: ${str(p.title) ?? str(p.kind) ?? 'a tool'} (the plan step is read-only)`
+          );
+        break;
+      case 'plan': {
+        const entries = Array.isArray(p.entries) ? p.entries : [];
+        if (!entries.length) break;
+        add(
+          'dim',
+          entries
+            .map(raw => {
+              const entry = (raw ?? {}) as Record<string, unknown>;
+              const mark =
+                entry.status === 'completed'
+                  ? '☒'
+                  : entry.status === 'in_progress'
+                    ? '◐'
+                    : '☐';
+              return `  ${mark} ${str(entry.content) ?? ''}`;
+            })
+            .join('\n')
+        );
+        break;
+      }
+      case 'proxy': {
+        const failed = p.action === 'stuck' || p.action === 'paused_out';
+        add(failed ? 'failure' : 'dim', '  · ' + lowerFirst(eventLabel(e)));
+        break;
+      }
+      case 'test': {
+        const exit = num(p.exit) ?? -1;
+        add(
+          exit === 0 ? 'success' : 'failure',
+          exit === 0 ? '✓ tests passed' : `✗ tests failed (exit ${exit})`
+        );
+        const tail = (str(p.tail) ?? '').trim();
+        if (tail) add('output', tail, '-tail');
+        break;
+      }
+      case 'status': {
+        const note = str(p.note);
+        const error = str(p.error);
+        const status = str(p.status);
+        if (note) add('dim', '  ! ' + note);
+        else if (error) add('failure', '✗ ' + error);
+        else if (status)
+          add('dim', `── ${statusLabel(status).toLowerCase()} ──`);
+        break;
+      }
+      default:
+        add('dim', eventLabel(e));
+    }
+  }
+  return out;
+}
+
+/** Dictation adds to what is typed, so a second clip carries on the first. */
+export function appendDictation(draft: string, words: string): string {
+  const w = words.trim();
+  if (!w) return draft;
+  if (!draft) return w;
+  return draft + (/\s$/.test(draft) ? '' : ' ') + w;
 }

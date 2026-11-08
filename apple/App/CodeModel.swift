@@ -27,6 +27,8 @@ final class CodeModel: ObservableObject {
     /// The last refused action, said under the button that caused it.
     @Published var notice: String?
     @Published private(set) var busy = false
+    /// A dictated clip is with the server, being turned into words.
+    @Published private(set) var transcribing = false
 
     let capture: CaptureModel
     private var fixture: CodeFixture?
@@ -170,6 +172,26 @@ final class CodeModel: ObservableObject {
     private func replace(_ task: CodeTask) {
         if let i = tasks.firstIndex(where: { $0.id == task.id }) { tasks[i] = task }
         if let detail = details[task.id] { details[task.id] = CodeTaskDetail(task: task, events: detail.events) }
+    }
+
+    // MARK: Dictation
+
+    /// The words in a dictated clip, for a text field. Deletes the clip either way.
+    func transcribe(_ clip: URL) async -> String? {
+        defer { try? FileManager.default.removeItem(at: clip) }
+        guard fixture == nil else { return nil }
+        guard let api = capture.chatAPI() else { notice = "Connect to your server first."; return nil }
+        notice = nil
+        transcribing = true
+        defer { transcribing = false }
+        do {
+            let words = try await api.transcribe(clip: clip)
+            if words.isEmpty { notice = "No speech was heard in that recording." }
+            return words.isEmpty ? nil : words
+        } catch {
+            notice = "Couldn't transcribe that: \(error.localizedDescription)"
+            return nil
+        }
     }
 
     // MARK: Push
