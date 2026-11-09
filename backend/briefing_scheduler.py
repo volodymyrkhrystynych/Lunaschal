@@ -68,14 +68,26 @@ def run_nightly() -> None:
 
 
 def _run_nightly() -> None:
+    """The passes, each inside its own thinking scope.
+
+    This thread is the one place where nobody is waiting on the model, so it is
+    where thinking is switched on — per pass, with a cap sized to how many calls
+    the pass makes and how long it has (see each module's THINKING_BUDGET). The
+    passes themselves never ask for thinking, so the same code run on demand —
+    Settings' "Run now", a wiki rebuild — answers at interactive speed.
+    """
     import time as _time
 
+    from backend.ai import oddities as oddities_ai
+    from backend.ai.llm import briefing_thinking_budget, overnight_thinking
+    from backend.lifewiki import job as wiki_job
     from backend.lifewiki.job import DEFAULT_BUDGET_SECONDS, run_life_wiki_pass
 
     try:
-        result = run_life_wiki_pass(
-            deadline=_time.monotonic() + DEFAULT_BUDGET_SECONDS
-        )
+        with overnight_thinking(wiki_job.THINKING_BUDGET):
+            result = run_life_wiki_pass(
+                deadline=_time.monotonic() + DEFAULT_BUDGET_SECONDS
+            )
         if result.get('facts') or result.get('articles'):
             print(f'Life-wiki pass: {result["facts"]} facts, '
                   f'{result["articles"]} articles, '
@@ -89,14 +101,16 @@ def _run_nightly() -> None:
     # reason as the wiki: the briefing is the thing the user wakes up to.
     try:
         from backend.oddities_job import run_oddities_pass
-        result = run_oddities_pass()
+        with overnight_thinking(oddities_ai.THINKING_BUDGET):
+            result = run_oddities_pass()
         if result['clusters']:
             print(f'Server oddities: {result["clusters"]} kinds from '
                   f'{result["events"]} events, {result["notes"]} notes written')
     except Exception as e:
         print(f'Server oddities pass failed, briefing continuing: {e}')
 
-    run_briefing()
+    with overnight_thinking(briefing_thinking_budget()):
+        run_briefing()
 
 
 # How long the phone sync log keeps superseded versions. A device that hasn't

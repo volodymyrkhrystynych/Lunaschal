@@ -102,7 +102,7 @@ def get_settings():
         'briefingModel': s.get('briefing_model'),
         'briefingThinking': bool(s.get('briefing_thinking', 0)),
         'briefingMaxTokens': s.get('briefing_max_tokens') or 16384,
-        'briefingThinkingBudget': s.get('briefing_thinking_budget') or 6144,
+        'briefingThinkingBudget': s.get('briefing_thinking_budget') or 16384,
         'websearchSearchProvider': s.get('websearch_search_provider') or '',
         # Never echo the key itself back to the client.
         'hasWebsearchSearchKey': bool(s.get('websearch_search_key')),

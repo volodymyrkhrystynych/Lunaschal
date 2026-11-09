@@ -45,6 +45,11 @@ logger = logging.getLogger(__name__)
 # night, exactly as the code wiki does.
 MAX_ARTICLES_PER_RUN = 6
 
+# Thinking cap per call when the overnight switch is on: one extraction plus up
+# to MAX_ARTICLES_PER_RUN renders must fit in DEFAULT_BUDGET_SECONDS, and seven
+# calls at this cap are ~28 minutes of thinking at ~34 tok/s in the worst case.
+THINKING_BUDGET = 8192
+
 # Wall-clock budget for one run, in seconds. The briefing window is two hours
 # and the briefing itself is the thing that must not be missed, so this leaves
 # it well over an hour. Running out is not a failure: the pass does less and the
@@ -184,7 +189,7 @@ def _fold_observations(raw_facts: list[dict], touched_by_source: dict, now: int)
     return folded
 
 
-def render_article(article: dict, now: int, gen: dict | None = None) -> dict | None:
+def render_article(article: dict, now: int) -> dict | None:
     """Regenerate one article's prose from its current facts.
 
     Deliberately never shown its own previous content — that is the whole
@@ -195,7 +200,7 @@ def render_article(article: dict, now: int, gen: dict | None = None) -> dict | N
         return None
     written = prompts.write_article(
         article['slug'], article.get('title'),
-        facts_mod.format_facts(live, with_ids=True), gen=gen,
+        facts_mod.format_facts(live, with_ids=True),
     )
     if not written:
         return None
@@ -242,12 +247,7 @@ def run_life_wiki_pass(now: int | None = None, deadline: float | None = None,
         f'- {a["slug"]}: {a["title"]} — {a.get("summary") or ""}' for a in index
     )
 
-    # Thinking for every model call in the pass, when the overnight switch is
-    # on. Read once, so the extract and the renders agree for the whole run.
-    from backend.ai.llm import overnight_generation_opts
-    gen = overnight_generation_opts()
-
-    raw_facts = prompts.extract_facts(digest_mod.render(window), index_lines, gen=gen)
+    raw_facts = prompts.extract_facts(digest_mod.render(window), index_lines)
     if not raw_facts:
         return result
 
@@ -267,7 +267,7 @@ def run_life_wiki_pass(now: int | None = None, deadline: float | None = None,
         article = wiki.get_article_by_id(article_id)
         if article is None:
             continue
-        if render_article(article, now, gen):
+        if render_article(article, now):
             result['articles'] += 1
 
     return result

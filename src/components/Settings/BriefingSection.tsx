@@ -15,14 +15,14 @@ export function BriefingSection() {
   });
   const [hourInput, setHourInput] = useState('5');
   const [maxTokensInput, setMaxTokensInput] = useState('16384');
-  const [budgetInput, setBudgetInput] = useState('6144');
+  const [budgetInput, setBudgetInput] = useState('16384');
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (settings) {
       setHourInput(String(settings.briefingHour ?? 5));
       setMaxTokensInput(String(settings.briefingMaxTokens ?? 16384));
-      setBudgetInput(String(settings.briefingThinkingBudget ?? 6144));
+      setBudgetInput(String(settings.briefingThinkingBudget ?? 16384));
     }
   }, [settings]);
 
@@ -101,10 +101,10 @@ export function BriefingSection() {
   const commitBudget = () => {
     const budget = Math.min(
       32768,
-      Math.max(256, parseInt(budgetInput, 10) || 6144)
+      Math.max(256, parseInt(budgetInput, 10) || 16384)
     );
     setBudgetInput(String(budget));
-    if (budget !== (settings?.briefingThinkingBudget ?? 6144)) {
+    if (budget !== (settings?.briefingThinkingBudget ?? 16384)) {
       saveBudget.mutate(budget);
     }
   };
@@ -199,7 +199,8 @@ export function BriefingSection() {
               Worth turning on here even though chat leaves it off: the
               overnight passes run while you're asleep, so the extra tokens cost
               you nothing. Applies to all three — the life wiki, the server
-              oddities notes and the briefing.
+              oddities notes and the briefing. Running the briefing by hand
+              doesn't think, since you're waiting for it.
             </p>
           </div>
           {briefingThinking && (
@@ -222,10 +223,11 @@ export function BriefingSection() {
                 className="mt-1 w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
               />
               <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                The most each call may think before it's told to answer. It's
+                The most the briefing may think before it's told to answer. It's
                 added on top of the output limit, so a long think can't use up
-                the room the answer needs. At ~34 tokens/s, 6144 is about three
-                minutes per call.
+                the room the answer needs. At ~34 tokens/s, 16384 is about eight
+                minutes at most. The other passes make many calls each, so they
+                use smaller fixed limits.
               </p>
             </div>
           )}

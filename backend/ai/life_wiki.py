@@ -162,17 +162,15 @@ def build_extract_request(digest_text: str, index_lines: str) -> str:
     return '\n\n'.join(parts)
 
 
-def extract_facts(digest_text: str, index_lines: str = '',
-                  gen: dict | None = None) -> list[dict]:
+def extract_facts(digest_text: str, index_lines: str = '') -> list[dict]:
     """Facts from one window, or [] on any failure.
 
     [] is a real outcome and not an error: most days add nothing that will still
     matter in a month, and a pass that invents something to justify itself is
     the failure mode this whole design is arranged against.
 
-    `gen` is extra `chat_json` kwargs — the nightly pass passes
-    `overnight_generation_opts()` to turn thinking on; a user-pressed rebuild
-    passes nothing and stays fast.
+    Thinks only inside the nightly thread's scope; a user-pressed rebuild has
+    none and stays fast.
     """
     if not is_ai_configured() or not digest_text.strip():
         return []
@@ -182,7 +180,6 @@ def extract_facts(digest_text: str, index_lines: str = '',
             system=EXTRACT_SYSTEM,
             schema=_EXTRACT_SCHEMA,
             max_tokens=EXTRACT_MAX_TOKENS,
-            **(gen or {}),
         )
     except Exception as e:
         logger.warning('Life-wiki extraction failed: %s', e)
@@ -209,7 +206,7 @@ def build_write_request(slug: str, existing_title: str | None,
 
 
 def write_article(slug: str, existing_title: str | None,
-                  facts_text: str, gen: dict | None = None) -> dict | None:
+                  facts_text: str) -> dict | None:
     """{title, summary, content, supersedes} for the article, or None.
 
     None where `code_wiki.write_article` returns None: the call failed, or there
@@ -223,7 +220,6 @@ def write_article(slug: str, existing_title: str | None,
             system=WRITE_SYSTEM,
             schema=_WRITE_SCHEMA,
             max_tokens=WRITE_MAX_TOKENS,
-            **(gen or {}),
         )
     except Exception as e:
         logger.warning('Life-wiki write failed for %s: %s', slug, e)

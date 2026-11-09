@@ -24,7 +24,7 @@ function settings(over: Partial<AppSettings> = {}) {
     briefingModel: null,
     briefingThinking: true,
     briefingMaxTokens: 16384,
-    briefingThinkingBudget: 6144,
+    briefingThinkingBudget: 16384,
     ...over,
   } as AppSettings;
 }
@@ -61,7 +61,7 @@ describe('BriefingSection thinking budget', () => {
   it('shows the saved budget and saves a new one on blur', async () => {
     vi.mocked(api.settings.get).mockResolvedValue(settings());
     renderSection();
-    await waitFor(() => expect(budgetInput().value).toBe('6144'));
+    await waitFor(() => expect(budgetInput().value).toBe('16384'));
 
     fireEvent.change(budgetInput(), { target: { value: '4096' } });
     fireEvent.blur(budgetInput());
@@ -75,7 +75,7 @@ describe('BriefingSection thinking budget', () => {
   it('clamps an out-of-range budget to the server range', async () => {
     vi.mocked(api.settings.get).mockResolvedValue(settings());
     renderSection();
-    await waitFor(() => expect(budgetInput().value).toBe('6144'));
+    await waitFor(() => expect(budgetInput().value).toBe('16384'));
 
     fireEvent.change(budgetInput(), { target: { value: '99999' } });
     fireEvent.blur(budgetInput());
@@ -90,7 +90,7 @@ describe('BriefingSection thinking budget', () => {
   it('does not save when the value is unchanged', async () => {
     vi.mocked(api.settings.get).mockResolvedValue(settings());
     renderSection();
-    await waitFor(() => expect(budgetInput().value).toBe('6144'));
+    await waitFor(() => expect(budgetInput().value).toBe('16384'));
 
     fireEvent.blur(budgetInput());
     expect(api.settings.updateAI).not.toHaveBeenCalled();

@@ -21,6 +21,8 @@ budget llama-server enforces (`thinking_budget`, see `_request_kwargs`).
 import json
 import logging
 import re
+import threading
+from contextlib import contextmanager
 
 from backend.ai import service
 from backend.ai.provider import get_llama_client, get_model, get_provider_config
@@ -58,21 +60,51 @@ def default_generation_opts() -> dict:
     """Thinking + output ceiling for the default (conversational) model, read from
     user settings. The context window is deliberately absent — it belongs to the
     server, not the request. Structured `chat_json` calls manage both themselves.
+
+    `llm_thinking` is a preference about *waiting*, so it only speaks for a
+    call somebody is waiting on. A background call through the same helpers
+    gets `thinking=None` and is decided by the thread instead (`_resolve_thinking`).
     """
     from backend.ai.provider import get_settings
     s = get_settings() or {}
+    interactive = service.current_priority() == service.Priority.INTERACTIVE
     return {
-        'thinking': bool(s.get('llm_thinking')),
+        'thinking': bool(s.get('llm_thinking')) if interactive else None,
         'max_tokens': s.get('llm_max_tokens') or LLM_MAX_TOKENS,
     }
 
 
-# Default cap on the thinking channel for the overnight passes (the life wiki,
-# the server-oddities notes and the briefing). Qwen3.6 answers noticeably better
-# with thinking on, and overnight the cost is only time — but an uncapped think
-# can run for many thousands of tokens at ~34 tok/s, and the life-wiki pass has
-# a wall-clock budget to fit inside. A cap, not a target: most thinks end sooner.
-OVERNIGHT_THINKING_BUDGET = 6144
+# ---------------------------------------------------------------- thinking
+#
+# Whether a call thinks, and for how long, depends on whether anyone is waiting
+# for it — which, like priority, is a property of the thread rather than of
+# the call. Three tiers:
+#
+# - **Somebody is waiting** (P1: a chat reply, a tapped button). Off, unless
+#   Settings' `llm_thinking` asks for it, and then capped short: unbudgeted,
+#   Qwen3.6 spent 1948 tokens — 34 s — thinking about a trivial question.
+# - **Daytime background** (P2: polish, metadata, captions). Off. Nobody is
+#   blocked, but the result is on screen within seconds, and a longer P2 call
+#   is a likelier target for preemption, which throws its thinking away.
+# - **Overnight** — the passes in the briefing thread, which wrap themselves in
+#   `overnight_thinking(budget)`. Long, since the only cost is time nobody sees.
+#
+# Every think is capped. A cap is what lets `_request_kwargs` keep the answer's
+# full room on top of it, so a long think can never leave the answer truncated.
+
+# How long a waited-on call may think when `llm_thinking` is on: about 20–30 s
+# at the chat model's speed. Short budgets do cost accuracy (a 64-token cap
+# answered a simple question wrong in testing), which is why the default is off
+# rather than a smaller number.
+INTERACTIVE_THINKING_BUDGET = 1024
+
+# The cap for a background call that turned thinking on without naming one.
+BACKGROUND_THINKING_BUDGET = 4096
+
+# The briefing's default budget (the Settings value overrides it). It is one
+# call and the one that is read, so it gets the most; the per-entry passes set
+# their own smaller caps beside their code.
+OVERNIGHT_THINKING_BUDGET = 16384
 
 # Injected just before the closing think tag when a budget runs out, so the
 # model wraps up rather than breaking off mid-thought. The wording is the one
@@ -81,19 +113,76 @@ THINKING_BUDGET_MESSAGE = (
     '\n\nConsidering the limited time, I have to give the answer now.\n'
 )
 
+# What a cut-off think costs beyond the budget itself, all of it counted against
+# `max_tokens`: the injected message (~14 tokens on Qwen3.6) and the think tags
+# (~4). Measured against Qwen3.6 35B A3B on llama.cpp b10621 at budgets of 64,
+# 256 and 512 — 18 each time. Without it, a call whose answer needed most of
+# its ceiling came back truncated mid-JSON. Rounded up for other templates.
+THINKING_BUDGET_OVERHEAD = 64
 
-def overnight_generation_opts() -> dict:
-    """Thinking switch + budget for the nightly passes, read from settings.
+_scope = threading.local()
+_UNSET = object()
 
-    One setting for all three because they share one thread and one purpose —
-    nobody is waiting on any of them — and `briefing_thinking` keeps its name
-    because it predates the other two using it. Returns kwargs for `chat_json`.
+
+@contextmanager
+def thinking_scope(budget: int | None):
+    """Decide thinking for every model call on this thread that doesn't decide
+    for itself: think up to `budget` tokens, or not at all when it is None/0.
+
+    Only calls on the GPU (chat-model) lane follow it. The CPU lane's model has
+    a 16k context, where a long think next to an image could not fit.
     """
+    prev = getattr(_scope, 'budget', _UNSET)
+    _scope.budget = budget or None
+    try:
+        yield
+    finally:
+        if prev is _UNSET:
+            del _scope.budget
+        else:
+            _scope.budget = prev
+
+
+def overnight_thinking(budget: int):
+    """`thinking_scope` for a nightly pass: `budget` while Settings' overnight
+    switch (`briefing_thinking`, named for the first pass that used it) is on,
+    no thinking while it is off."""
     from backend.ai.provider import get_settings
     s = get_settings() or {}
-    thinking = bool(s.get('briefing_thinking'))
-    budget = s.get('briefing_thinking_budget') or OVERNIGHT_THINKING_BUDGET
-    return {'thinking': thinking, 'thinking_budget': budget if thinking else None}
+    return thinking_scope(budget if s.get('briefing_thinking') else None)
+
+
+def briefing_thinking_budget() -> int:
+    """The briefing's own cap: the Settings value, else the default."""
+    from backend.ai.provider import get_settings
+    s = get_settings() or {}
+    return s.get('briefing_thinking_budget') or OVERNIGHT_THINKING_BUDGET
+
+
+def _resolve_thinking(thinking: bool | None, budget: int | None,
+                      model: str | None) -> tuple[bool, int | None]:
+    """(think?, cap) for one request.
+
+    A caller that passes `thinking` explicitly has decided, and keeps its
+    decision — given a cap for its tier if it named none. A caller that passes
+    None is decided by the thread: a `thinking_scope` if one is open and the
+    call is on the GPU lane, otherwise no thinking.
+    """
+    if thinking is None:
+        scoped = getattr(_scope, 'budget', _UNSET)
+        if scoped is _UNSET or scoped is None:
+            return False, None
+        alias = model or get_model(get_provider_config())
+        if service.lane_for(alias) != service.GPU:
+            return False, None
+        return True, scoped
+    if not thinking:
+        return False, None
+    if budget:
+        return True, budget
+    interactive = service.current_priority() == service.Priority.INTERACTIVE
+    return True, (INTERACTIVE_THINKING_BUDGET if interactive
+                  else BACKGROUND_THINKING_BUDGET)
 
 
 _FENCE_RE = re.compile(r'^```(?:json)?\s*|\s*```$', re.IGNORECASE)
@@ -134,9 +223,10 @@ def _messages(prompt: str, system: str | None = None) -> list[dict]:
     return messages
 
 
-def _request_kwargs(*, thinking: bool, max_tokens: int | None,
+def _request_kwargs(*, thinking: bool | None, max_tokens: int | None,
                     schema: dict | None = None,
-                    thinking_budget: int | None = None) -> dict:
+                    thinking_budget: int | None = None,
+                    model: str | None = None) -> dict:
     """The non-message half of a chat request.
 
     `chat_template_kwargs` rides in `extra_body` because it is a llama.cpp
@@ -155,7 +245,13 @@ def _request_kwargs(*, thinking: bool, max_tokens: int | None,
     answer". Per-request budgets need llama.cpp b9982+ (earlier builds silently
     ignore the field) and are only honoured while the server's own
     `--reasoning-budget` is unset, which llama/presets.ini leaves it.
+
+    `thinking=None` means "the caller has no opinion": the thread decides, and
+    `model` says which lane the call is on (see `_resolve_thinking`). A
+    `max_tokens` beyond the context window is not an error to llama-server —
+    it is only a ceiling — so the sum can be generous without risk.
     """
+    thinking, thinking_budget = _resolve_thinking(thinking, thinking_budget, model)
     kwargs: dict = {
         'extra_body': {'chat_template_kwargs': {'enable_thinking': thinking}},
     }
@@ -163,7 +259,7 @@ def _request_kwargs(*, thinking: bool, max_tokens: int | None,
         kwargs['extra_body']['reasoning_budget_tokens'] = thinking_budget
         kwargs['extra_body']['reasoning_budget_message'] = THINKING_BUDGET_MESSAGE
         if max_tokens:
-            max_tokens += thinking_budget
+            max_tokens += thinking_budget + THINKING_BUDGET_OVERHEAD
     if max_tokens:
         kwargs['max_tokens'] = max_tokens
     if schema is not None:
@@ -330,7 +426,7 @@ def _complete(*, messages: list[dict], label: str, model: str | None = None,
 
 
 def chat_json(prompt: str, system: str | None = None, model: str | None = None,
-              max_tokens: int = JSON_MAX_TOKENS, thinking: bool = False,
+              max_tokens: int = JSON_MAX_TOKENS, thinking: bool | None = None,
               schema: dict | None = None,
               thinking_budget: int | None = None) -> dict:
     """Blocking JSON completion; returns the parsed object.
@@ -340,15 +436,14 @@ def chat_json(prompt: str, system: str | None = None, model: str | None = None,
     "the model wrote prose instead of JSON" failures. Without one the call still
     works and falls back to `_parse_json_response`.
 
-    Thinking is off by default: for these structured calls it only adds latency,
-    and the answer is machine-read rather than shown to the user. Overnight
-    callers turn it on with `overnight_generation_opts()`, which also sets
-    `thinking_budget` (see `_request_kwargs` for how it meets `max_tokens`).
+    Thinking is left to the thread by default: off, except inside an overnight
+    pass's `thinking_scope`. Pass `thinking`/`thinking_budget` to decide for
+    this call (see `_request_kwargs` for how the budget meets `max_tokens`).
     """
     message, _ = _complete(
         messages=_messages(prompt, system), model=model, label='chat_json',
         **_request_kwargs(thinking=thinking, max_tokens=max_tokens, schema=schema,
-                          thinking_budget=thinking_budget),
+                          thinking_budget=thinking_budget, model=model),
     )
     return _parse_json_response(_content(message))
 
@@ -443,7 +538,7 @@ def chat_stream_events(messages: list[dict]):
     with service.slot(lane=service.lane_for(alias), label='chat_stream') as cancel:
         stream = client.chat.completions.create(
             model=alias, messages=messages, stream=True, timeout=_TIMEOUT,
-            **_request_kwargs(**default_generation_opts()),
+            **_request_kwargs(**default_generation_opts(), model=alias),
         )
         for chunk in _iter_stream(stream, cancel):
             if not chunk.choices:

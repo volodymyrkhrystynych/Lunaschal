@@ -40,7 +40,7 @@ def _fake_extract(monkeypatch, facts):
 
 
 def _fake_write(monkeypatch, **overrides):
-    def write(slug, existing_title, facts_text, gen=None):
+    def write(slug, existing_title, facts_text):
         return {
             'title': overrides.get('title', 'Health and training'),
             'summary': overrides.get('summary', 'How they train.'),
@@ -83,7 +83,7 @@ def test_the_render_reads_the_facts_and_not_the_previous_prose(client, monkeypat
 
     seen = {}
 
-    def write(slug, existing_title, facts_text, gen=None):
+    def write(slug, existing_title, facts_text):
         seen['facts_text'] = facts_text
         return {'title': 'Health and training', 'summary': 's',
                 'content': 'DISTINCTIVE PROSE THE SECOND RENDER MUST NOT SEE'}
@@ -150,7 +150,7 @@ def test_a_contradiction_supersedes_rather_than_edits(client, monkeypatch):
     }])
     monkeypatch.setattr(
         job.prompts, 'write_article',
-        lambda slug, title, facts_text, gen=None: {
+        lambda slug, title, facts_text: {
             'title': 'Health and training', 'summary': 's', 'content': 'c',
             'supersedes': [stale['id']],
         },
@@ -180,7 +180,7 @@ def test_a_locked_fact_survives_the_pass_trying_to_supersede_it(client, monkeypa
 
     monkeypatch.setattr(
         job.prompts, 'write_article',
-        lambda slug, title, facts_text, gen=None: {
+        lambda slug, title, facts_text: {
             'title': 'Health and training', 'summary': 's', 'content': 'c',
             'supersedes': [fact['id']],
         },
@@ -571,33 +571,73 @@ def test_a_reworded_slug_under_the_same_title_still_lands_on_it(client, monkeypa
 # --- thinking ------------------------------------------------------------
 
 
-def test_the_nightly_pass_thinks_when_the_overnight_switch_is_on(client, monkeypatch):
-    """Every model call in the pass gets the overnight thinking opts; a
-    user-pressed rebuild does not, since someone is waiting on it."""
+def test_each_nightly_pass_thinks_under_its_own_cap(client, monkeypatch):
+    """The nightly thread is where nobody is waiting, so it is where thinking
+    is switched on — per pass, sized to how many calls the pass makes. The
+    briefing's cap is the Settings value; the others are fixed."""
+    from backend import briefing_scheduler
+    from backend.ai import llm, oddities as oddities_ai
+
     db = get_db()
     db.execute('INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)')
-    db.execute('UPDATE settings SET briefing_thinking=1, briefing_thinking_budget=2048 WHERE id=1')
+    db.execute('UPDATE settings SET briefing_thinking=1, briefing_thinking_budget=12000 WHERE id=1')
+    db.commit()
+
+    seen = {}
+
+    def record(name, result):
+        def run(*a, **k):
+            seen[name] = getattr(llm._scope, 'budget', 'unset')
+            return result
+        return run
+
+    monkeypatch.setattr('backend.lifewiki.job.run_life_wiki_pass', record(
+        'wiki', {'facts': 0, 'articles': 0, 'observationsFolded': 0}))
+    monkeypatch.setattr('backend.oddities_job.run_oddities_pass', record(
+        'oddities', {'clusters': 0}))
+    monkeypatch.setattr(briefing_scheduler, 'run_briefing', record('briefing', None))
+
+    briefing_scheduler.run_nightly()
+    assert seen == {
+        'wiki': job.THINKING_BUDGET,
+        'oddities': oddities_ai.THINKING_BUDGET,
+        'briefing': 12000,
+    }
+    # Nothing leaks out of the thread's scopes once the night is over.
+    assert not hasattr(llm._scope, 'budget')
+
+    # With the overnight switch off every scope opens empty: no thinking.
+    db.execute('UPDATE settings SET briefing_thinking=0 WHERE id=1')
+    db.commit()
+    briefing_scheduler.run_nightly()
+    assert set(seen.values()) == {None}
+
+
+def test_the_nightly_caps_fit_their_passes():
+    """The per-call caps are sized to the passes' wall-clock budgets: every
+    call in a pass hitting its cap must still fit, at a slow 34 tok/s."""
+    slow = 34
+    wiki_calls = 1 + job.MAX_ARTICLES_PER_RUN
+    assert wiki_calls * job.THINKING_BUDGET / slow < job.DEFAULT_BUDGET_SECONDS
+
+
+def test_a_rebuild_does_not_think(client, monkeypatch):
+    """A user-pressed rebuild opens no scope — someone is waiting on it."""
+    from backend.ai import llm
+    db = get_db()
+    db.execute('INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)')
+    db.execute('UPDATE settings SET briefing_thinking=1 WHERE id=1')
     db.commit()
     entry = _journal(db, 'Went to GoodLife, third time this week')
     fact = {'slug': 'health-and-training', 'title': 'Health and training',
             'statement': 'Trains three times a week.', 'source': f'journal:{entry}'}
-    seen = []
-
-    def extract(digest_text, index_lines='', gen=None):
-        seen.append(('extract', gen))
-        return [fact]
-
-    def write(slug, existing_title, facts_text, gen=None):
-        seen.append(('write', gen))
-        return {'title': 'Health and training', 'summary': 's', 'content': 'c'}
-
-    monkeypatch.setattr(job.prompts, 'extract_facts', extract)
-    monkeypatch.setattr(job.prompts, 'write_article', write)
-
+    monkeypatch.setattr(job.prompts, 'extract_facts', lambda *a, **k: [fact])
+    monkeypatch.setattr(job.prompts, 'write_article', lambda *a, **k: {
+        'title': 'Health and training', 'summary': 's', 'content': 'c'})
     job.run_life_wiki_pass()
-    on = {'thinking': True, 'thinking_budget': 2048}
-    assert seen == [('extract', on), ('write', on)]
 
-    seen.clear()
+    scopes = []
+    monkeypatch.setattr(job.prompts, 'extract_facts',
+                        lambda *a, **k: scopes.append(getattr(llm._scope, 'budget', None)) or [fact])
     job.rebuild_article('health-and-training')
-    assert seen and all(gen is None for _, gen in seen)
+    assert scopes and all(s is None for s in scopes)

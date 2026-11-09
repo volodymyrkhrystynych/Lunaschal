@@ -141,7 +141,7 @@ def test_get_settings_briefing_generation_defaults(client):
     # briefing runs overnight.
     assert data['briefingThinking'] is False
     assert data['briefingMaxTokens'] == 16384
-    assert data['briefingThinkingBudget'] == 6144
+    assert data['briefingThinkingBudget'] == 16384
 
 
 def test_patch_settings_updates_briefing_thinking_and_max_tokens(client):

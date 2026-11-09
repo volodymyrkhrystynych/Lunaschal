@@ -258,7 +258,7 @@ def test_snippet_refuses_paths_outside_the_repo():
     assert ai._snippet({'file': 'backend/nope.py', 'line': 1}) is None
 
 
-def test_annotate_thinks_when_the_overnight_switch_is_on(client, monkeypatch):
+def test_annotate_leaves_thinking_to_the_nightly_scope(client, monkeypatch):
     captured = {}
 
     def fake_chat_json(prompt, system=None, schema=None, **kw):
@@ -270,12 +270,4 @@ def test_annotate_thinks_when_the_overnight_switch_is_on(client, monkeypatch):
             'count': 1, 'days': 1, 'template': 'boom', 'sample': 'boom', 'frame': None}
 
     ai.annotate([item])
-    assert captured == {'thinking': False, 'thinking_budget': None}
-
-    db = get_db()
-    db.execute('INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)')
-    db.execute('UPDATE settings SET briefing_thinking=1 WHERE id=1')
-    db.commit()
-    ai.annotate([item])
-    assert captured['thinking'] is True
-    assert captured['thinking_budget'] == 6144
+    assert 'thinking' not in captured and 'thinking_budget' not in captured

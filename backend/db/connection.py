@@ -1470,10 +1470,10 @@ def _ensure_briefing_settings(db: sqlite3.Connection) -> None:
         # overnight, so this is deliberately generous.
         db.execute('ALTER TABLE settings ADD COLUMN briefing_max_tokens INTEGER DEFAULT 16384')
     if 'briefing_thinking_budget' not in cols:
-        # Token cap on the thinking channel for all three overnight passes, used
-        # only while briefing_thinking is on. Default mirrors
-        # backend/ai/llm.py's OVERNIGHT_THINKING_BUDGET.
-        db.execute('ALTER TABLE settings ADD COLUMN briefing_thinking_budget INTEGER DEFAULT 6144')
+        # Token cap on the briefing's thinking channel, used only while
+        # briefing_thinking is on (the other overnight passes have fixed caps
+        # in code). Default mirrors backend/ai/llm.py's OVERNIGHT_THINKING_BUDGET.
+        db.execute('ALTER TABLE settings ADD COLUMN briefing_thinking_budget INTEGER DEFAULT 16384')
     if 'briefing_num_ctx' not in cols:
         # Retired, twice over: the context window was first collapsed into one
         # shared setting, and is now fixed at llama-server load time and not
