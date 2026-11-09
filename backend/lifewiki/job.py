@@ -45,11 +45,6 @@ logger = logging.getLogger(__name__)
 # night, exactly as the code wiki does.
 MAX_ARTICLES_PER_RUN = 6
 
-# Thinking cap per call when the overnight switch is on: one extraction plus up
-# to MAX_ARTICLES_PER_RUN renders must fit in DEFAULT_BUDGET_SECONDS, and seven
-# calls at this cap are ~28 minutes of thinking at ~34 tok/s in the worst case.
-THINKING_BUDGET = 8192
-
 # Wall-clock budget for one run, in seconds. The briefing window is two hours
 # and the briefing itself is the thing that must not be missed, so this leaves
 # it well over an hour. Running out is not a failure: the pass does less and the

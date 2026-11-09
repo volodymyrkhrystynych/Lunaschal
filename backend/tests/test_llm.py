@@ -254,7 +254,7 @@ def test_a_scope_belongs_to_its_thread(monkeypatch):
     assert seen['chat_template_kwargs']['enable_thinking'] is False
 
 
-def test_overnight_thinking_follows_the_settings_switch(client, monkeypatch):
+def test_overnight_thinking_follows_the_settings(client, monkeypatch):
     from backend.db import connection
     _lanes(monkeypatch)
     monkeypatch.setattr(llm, 'get_provider_config', lambda: {})
@@ -264,7 +264,7 @@ def test_overnight_thinking_follows_the_settings_switch(client, monkeypatch):
         return _request_kwargs(thinking=None, max_tokens=10)['extra_body']
 
     # Off by default: the scope opens with no budget.
-    with llm.overnight_thinking(4096):
+    with llm.overnight_thinking():
         assert think()['chat_template_kwargs']['enable_thinking'] is False
 
     db = connection.get_db()
@@ -273,20 +273,21 @@ def test_overnight_thinking_follows_the_settings_switch(client, monkeypatch):
     )
     db.execute('UPDATE settings SET briefing_thinking=1 WHERE id=1')
     db.commit()
-    with llm.overnight_thinking(4096):
-        assert think()['reasoning_budget_tokens'] == 4096
+    with llm.overnight_thinking():
+        assert think()['reasoning_budget_tokens'] == llm.OVERNIGHT_THINKING_BUDGET == 49152
 
-
-def test_briefing_thinking_budget_reads_settings(client):
-    from backend.db import connection
-    assert llm.briefing_thinking_budget() == llm.OVERNIGHT_THINKING_BUDGET == 16384
-    db = connection.get_db()
-    db.execute(
-        'INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)'
-    )
     db.execute('UPDATE settings SET briefing_thinking_budget=2048 WHERE id=1')
     db.commit()
-    assert llm.briefing_thinking_budget() == 2048
+    with llm.overnight_thinking():
+        assert think()['reasoning_budget_tokens'] == 2048
+
+
+def test_an_overnight_call_comes_to_about_sixty_thousand_tokens():
+    """48k of thinking on top of a typical answer ceiling: the cap stops a
+    runaway rather than rationing reasoning, and the answer keeps its room."""
+    kwargs = _request_kwargs(thinking=True, max_tokens=12_000,
+                             thinking_budget=llm.OVERNIGHT_THINKING_BUDGET)
+    assert kwargs['max_tokens'] == 12_000 + 49152 + llm.THINKING_BUDGET_OVERHEAD
 
 
 def test_default_generation_opts_reads_settings(client):

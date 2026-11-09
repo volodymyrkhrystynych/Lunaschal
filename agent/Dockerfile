@@ -57,7 +57,11 @@ RUN chmod 0755 /usr/local/bin/agent-entrypoint
 
 # Qwen Code reads its OpenAI-compatible endpoint from the environment. The
 # URL is socat's end of the model socket; the proxy rewrites the model name.
+# QWEN_STREAM_MAX_LIFETIME_MS=0 lifts its 15-minute cap on one response, which a
+# 48k-token think (~25 minutes) would hit; the proxy's keepalives hold the
+# stream open meanwhile. Its per-request timeout is lifted in settings.json.
 ENV PATH=/opt/venv/bin:$PATH \
+    QWEN_STREAM_MAX_LIFETIME_MS=0 \
     PYTEST_BIN=/opt/venv/bin/pytest \
     OPENAI_BASE_URL=http://127.0.0.1:8080/v1 \
     OPENAI_API_KEY=local \

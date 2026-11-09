@@ -1,5 +1,20 @@
 {
-  "security": { "auth": { "selectedType": "openai" } },
-  "model": { "name": "local" },
-  "privacy": { "usageStatisticsEnabled": false }
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "model": {
+    "name": "local",
+    "generationConfig": {
+      "contextWindowSize": 190000,
+      "timeout": 0
+    }
+  },
+  "privacy": {
+    "usageStatisticsEnabled": false
+  },
+  "context": {
+    "autoCompactThreshold": 0.65
+  }
 }

@@ -15,14 +15,14 @@ export function BriefingSection() {
   });
   const [hourInput, setHourInput] = useState('5');
   const [maxTokensInput, setMaxTokensInput] = useState('16384');
-  const [budgetInput, setBudgetInput] = useState('16384');
+  const [budgetInput, setBudgetInput] = useState('49152');
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (settings) {
       setHourInput(String(settings.briefingHour ?? 5));
       setMaxTokensInput(String(settings.briefingMaxTokens ?? 16384));
-      setBudgetInput(String(settings.briefingThinkingBudget ?? 16384));
+      setBudgetInput(String(settings.briefingThinkingBudget ?? 49152));
     }
   }, [settings]);
 
@@ -100,11 +100,11 @@ export function BriefingSection() {
 
   const commitBudget = () => {
     const budget = Math.min(
-      32768,
-      Math.max(256, parseInt(budgetInput, 10) || 16384)
+      81920,
+      Math.max(256, parseInt(budgetInput, 10) || 49152)
     );
     setBudgetInput(String(budget));
-    if (budget !== (settings?.briefingThinkingBudget ?? 16384)) {
+    if (budget !== (settings?.briefingThinkingBudget ?? 49152)) {
       saveBudget.mutate(budget);
     }
   };
@@ -209,13 +209,13 @@ export function BriefingSection() {
                 htmlFor="briefing-thinking-budget"
                 className="text-sm text-[var(--color-text-muted)]"
               >
-                Thinking budget, tokens (256–32768)
+                Thinking budget, tokens (256–81920)
               </label>
               <input
                 id="briefing-thinking-budget"
                 type="number"
                 min={256}
-                max={32768}
+                max={81920}
                 step={256}
                 value={budgetInput}
                 onChange={e => setBudgetInput(e.target.value)}
@@ -223,11 +223,12 @@ export function BriefingSection() {
                 className="mt-1 w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
               />
               <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                The most the briefing may think before it's told to answer. It's
-                added on top of the output limit, so a long think can't use up
-                the room the answer needs. At ~34 tokens/s, 16384 is about eight
-                minutes at most. The other passes make many calls each, so they
-                use smaller fixed limits.
+                The most each overnight call may think before it's told to
+                answer. It's added on top of the output limit, so a long think
+                can't use up the room the answer needs. It's there to stop a
+                runaway, not to ration thinking: at ~34 tokens/s, 49152 is about
+                25 minutes, and whatever a pass can't finish in its time waits
+                for the next night.
               </p>
             </div>
           )}

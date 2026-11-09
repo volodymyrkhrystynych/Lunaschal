@@ -86,11 +86,15 @@ def default_generation_opts() -> dict:
 # - **Daytime background** (P2: polish, metadata, captions). Off. Nobody is
 #   blocked, but the result is on screen within seconds, and a longer P2 call
 #   is a likelier target for preemption, which throws its thinking away.
-# - **Overnight** — the passes in the briefing thread, which wrap themselves in
-#   `overnight_thinking(budget)`. Long, since the only cost is time nobody sees.
+# - **Overnight** — the passes in the briefing thread, each run inside
+#   `overnight_thinking()`. Long, since the only cost is time nobody sees.
 #
 # Every think is capped. A cap is what lets `_request_kwargs` keep the answer's
 # full room on top of it, so a long think can never leave the answer truncated.
+# Overnight the cap is there to stop a runaway, not to ration reasoning: Qwen's
+# model card puts no budget on thinking at all, only a 32,768-token output
+# length for most queries (81,920 for the hardest), and capped thinking is
+# reported to cost real accuracy.
 
 # How long a waited-on call may think when `llm_thinking` is on: about 20–30 s
 # at the chat model's speed. Short budgets do cost accuracy (a 64-token cap
@@ -101,10 +105,21 @@ INTERACTIVE_THINKING_BUDGET = 1024
 # The cap for a background call that turned thinking on without naming one.
 BACKGROUND_THINKING_BUDGET = 4096
 
-# The briefing's default budget (the Settings value overrides it). It is one
-# call and the one that is read, so it gets the most; the per-entry passes set
-# their own smaller caps beside their code.
-OVERNIGHT_THINKING_BUDGET = 16384
+# The overnight passes' default budget (Settings → Briefing overrides it).
+# With each call's own answer ceiling on top it comes to about 60k tokens a
+# call — the same total the code agent gets (backend/codeagent/proxy.py). A
+# think that long takes ~25 minutes at ~34 tok/s, which is what each pass's
+# wall-clock deadline is for: work that doesn't fit waits for the next night.
+OVERNIGHT_THINKING_BUDGET = 49152
+
+# The chat model's context window — [qwen36]'s `ctx-size` in llama/presets.ini,
+# one pool every slot may address — and the fraction of it at which anything
+# holding a long conversation with that model compacts: Chat
+# (backend/chat/compaction.py) and every coding-agent harness
+# (agent/config/*). 65% leaves ~66k free, room for the longest single call
+# either makes: a 48k think plus its answer. Tests hold all of them to these.
+CONTEXT_WINDOW_TOKENS = 190_000
+COMPACT_AT = 0.65
 
 # Injected just before the closing think tag when a budget runs out, so the
 # model wraps up rather than breaking off mid-thought. The wording is the one
@@ -143,20 +158,17 @@ def thinking_scope(budget: int | None):
             _scope.budget = prev
 
 
-def overnight_thinking(budget: int):
-    """`thinking_scope` for a nightly pass: `budget` while Settings' overnight
-    switch (`briefing_thinking`, named for the first pass that used it) is on,
-    no thinking while it is off."""
+def overnight_thinking():
+    """`thinking_scope` for a nightly pass, from Settings → Briefing: the
+    budget (`briefing_thinking_budget`, else OVERNIGHT_THINKING_BUDGET) while
+    the overnight switch (`briefing_thinking`) is on, no thinking while it is
+    off. Both keep the briefing's name because it was the first pass to use
+    them."""
     from backend.ai.provider import get_settings
     s = get_settings() or {}
-    return thinking_scope(budget if s.get('briefing_thinking') else None)
-
-
-def briefing_thinking_budget() -> int:
-    """The briefing's own cap: the Settings value, else the default."""
-    from backend.ai.provider import get_settings
-    s = get_settings() or {}
-    return s.get('briefing_thinking_budget') or OVERNIGHT_THINKING_BUDGET
+    if not s.get('briefing_thinking'):
+        return thinking_scope(None)
+    return thinking_scope(s.get('briefing_thinking_budget') or OVERNIGHT_THINKING_BUDGET)
 
 
 def _resolve_thinking(thinking: bool | None, budget: int | None,

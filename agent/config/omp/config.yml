@@ -1,0 +1,7 @@
+# omp's own settings, beside models.yml (keys from src/session/context-settings.ts
+# in @oh-my-pi/pi-coding-agent 18.12.2). Compact at 65% of the 190k window,
+# which leaves the proxy's 60k turn ceiling (backend/codeagent/proxy.py) free;
+# backend/tests/test_codeagent_container.py holds the three harnesses to it.
+compaction:
+  enabled: true
+  thresholdPercent: 65

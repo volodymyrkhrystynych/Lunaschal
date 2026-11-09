@@ -13,9 +13,6 @@ from pathlib import Path
 from backend.ai.llm import chat_json
 
 MAX_ITEMS = 8
-
-# Thinking cap for the notes when the overnight switch is on: one short call.
-THINKING_BUDGET = 4096
 NOTE_MAX = 320
 SNIPPET_RADIUS = 6
 
@@ -104,7 +101,7 @@ def annotate(items: list[dict]) -> dict[str, str]:
         'required': ['notes'],
         'additionalProperties': False,
     }
-    # Thinks inside the nightly thread's scope (THINKING_BUDGET).
+    # Thinks inside the nightly thread's scope (backend/briefing_scheduler.py).
     result = chat_json(build_prompt(items), system=SYSTEM_PROMPT, schema=schema)
     notes = {}
     for entry in (result or {}).get('notes') or []:

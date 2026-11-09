@@ -24,7 +24,9 @@ refresh() { mkdir -p "$(dirname "$2")"; cp "$1" "$2"; }
 for f in models.json settings.json extensions/lunaschal.js; do
   refresh "/opt/agent-config/pi/$f" "$HOME/.pi/agent/$f"
 done
-refresh /opt/agent-config/omp/models.yml "$HOME/.omp/agent/models.yml"
+for f in models.yml config.yml; do
+  refresh "/opt/agent-config/omp/$f" "$HOME/.omp/agent/$f"
+done
 
 # Installed dependencies, linked into the clone. The repo's .gitignore says
 # `node_modules/` and `.venv/` — patterns with a trailing slash match only

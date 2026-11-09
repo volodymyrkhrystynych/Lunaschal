@@ -182,23 +182,66 @@ def test_the_agent_gets_the_whole_context_pool():
 
 def test_pi_speaks_qwen_to_llama_server():
     """Without thinkingFormat pi sends OpenAI's reasoning_effort, which
-    llama-server ignores: the thinking level silently did nothing."""
+    llama-server ignores: the thinking level silently did nothing. The budget
+    goes out under the field that ends a think cleanly rather than
+    mid-sentence, and the default level is the long overnight-sized one."""
     import json
+    from backend.codeagent import proxy
     pi = json.loads((_root() / 'agent/config/pi/models.json').read_text())
     [model] = pi['providers']['lunaschal']['models']
     assert model['compat']['thinkingFormat'] == 'qwen-chat-template'
-    assert model['compat']['thinkingTokenBudgetField'] == 'thinking_budget_tokens'
-
-
-def test_compaction_leaves_room_for_the_longest_reply():
-    """The proxy floors max_tokens at MIN_MAX_TOKENS, so compaction must keep
-    at least that much of the window free or a full-length reply overflows."""
-    import json
-    from backend.codeagent import proxy
+    assert model['compat']['thinkingTokenBudgetField'] == 'reasoning_budget_tokens'
+    assert model['maxTokens'] == proxy.MIN_MAX_TOKENS
     settings = json.loads((_root() / 'agent/config/pi/settings.json').read_text())
-    assert settings['compaction']['reserveTokens'] >= proxy.MIN_MAX_TOKENS
-    assert settings['httpIdleTimeoutMs'] == 0
+    level = settings['defaultThinkingLevel']
+    assert settings['thinkingBudgets'][level] == proxy.THINKING_BUDGET
     assert {'grep', 'find', 'ls'} <= set(settings['defaultTools'])
+
+
+def test_the_context_window_constant_is_the_servers():
+    from backend.ai import llm
+    assert llm.CONTEXT_WINDOW_TOKENS == _ctx_size()
+
+
+def test_every_harness_compacts_at_the_same_point_and_leaves_a_turn_free():
+    """All three compact at COMPACT_AT of the window, the same point Chat
+    does, and that leaves room for the proxy's longest turn — a full think
+    plus its answer. Each harness spells it differently: pi as a reserve,
+    omp as a percentage, Qwen Code as a fraction of a window it must be told."""
+    import json
+    import re
+    from backend.ai import llm
+    from backend.chat import compaction
+    from backend.codeagent import proxy
+    window = _ctx_size()
+    trigger = int(window * llm.COMPACT_AT)
+    assert window - trigger >= proxy.MIN_MAX_TOKENS
+    assert compaction.SOFT_LIMIT_TOKENS == trigger
+
+    pi = json.loads((_root() / 'agent/config/pi/settings.json').read_text())
+    assert pi['compaction']['enabled'] is True
+    assert window - pi['compaction']['reserveTokens'] == trigger
+    assert pi['httpIdleTimeoutMs'] == 0
+
+    omp = (_root() / 'agent/config/omp/config.yml').read_text()
+    assert int(re.search(r'thresholdPercent:\s*(\d+)', omp).group(1)) == round(llm.COMPACT_AT * 100)
+    omp_models = (_root() / 'agent/config/omp/models.yml').read_text()
+    assert int(re.search(r'maxTokens:\s*(\d+)', omp_models).group(1)) == proxy.MIN_MAX_TOKENS
+
+    qwen = json.loads((_root() / 'agent/config/qwen/settings.json').read_text())
+    assert qwen['context']['autoCompactThreshold'] == llm.COMPACT_AT
+    # Qwen Code guesses the window from the model's name, and "local" names
+    # nothing: without this it compacts against a window that isn't ours.
+    assert qwen['model']['generationConfig']['contextWindowSize'] == window
+
+
+def test_qwen_code_does_not_abort_a_long_think():
+    """A 48k think runs ~25 minutes. Qwen Code's defaults abort a request at 2
+    minutes and a stream at 15; the proxy's keepalives cannot reset the second."""
+    import json
+    qwen = json.loads((_root() / 'agent/config/qwen/settings.json').read_text())
+    assert qwen['model']['generationConfig']['timeout'] == 0
+    assert 'QWEN_STREAM_MAX_LIFETIME_MS=0' in (_root() / 'agent/Dockerfile').read_text()
 
 
 def test_entrypoint_refreshes_the_files_that_are_ours():
@@ -208,6 +251,9 @@ def test_entrypoint_refreshes_the_files_that_are_ours():
     for f in ('models.json', 'settings.json', 'extensions/lunaschal.js'):
         assert f in entry
         assert (_root() / 'agent/config/pi' / f).is_file()
+    for f in ('models.yml', 'config.yml'):
+        assert f in entry
+        assert (_root() / 'agent/config/omp' / f).is_file()
 
 
 def test_nothing_but_extensions_sits_in_the_extensions_folder():

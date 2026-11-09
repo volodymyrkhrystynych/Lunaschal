@@ -571,16 +571,15 @@ def test_a_reworded_slug_under_the_same_title_still_lands_on_it(client, monkeypa
 # --- thinking ------------------------------------------------------------
 
 
-def test_each_nightly_pass_thinks_under_its_own_cap(client, monkeypatch):
+def test_every_nightly_pass_thinks_with_the_overnight_budget(client, monkeypatch):
     """The nightly thread is where nobody is waiting, so it is where thinking
-    is switched on — per pass, sized to how many calls the pass makes. The
-    briefing's cap is the Settings value; the others are fixed."""
+    is switched on — every pass, with the Settings budget."""
     from backend import briefing_scheduler
-    from backend.ai import llm, oddities as oddities_ai
+    from backend.ai import llm
 
     db = get_db()
     db.execute('INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)')
-    db.execute('UPDATE settings SET briefing_thinking=1, briefing_thinking_budget=12000 WHERE id=1')
+    db.execute('UPDATE settings SET briefing_thinking=1, briefing_thinking_budget=40000 WHERE id=1')
     db.commit()
 
     seen = {}
@@ -598,11 +597,7 @@ def test_each_nightly_pass_thinks_under_its_own_cap(client, monkeypatch):
     monkeypatch.setattr(briefing_scheduler, 'run_briefing', record('briefing', None))
 
     briefing_scheduler.run_nightly()
-    assert seen == {
-        'wiki': job.THINKING_BUDGET,
-        'oddities': oddities_ai.THINKING_BUDGET,
-        'briefing': 12000,
-    }
+    assert seen == {'wiki': 40000, 'oddities': 40000, 'briefing': 40000}
     # Nothing leaks out of the thread's scopes once the night is over.
     assert not hasattr(llm._scope, 'budget')
 
@@ -611,14 +606,6 @@ def test_each_nightly_pass_thinks_under_its_own_cap(client, monkeypatch):
     db.commit()
     briefing_scheduler.run_nightly()
     assert set(seen.values()) == {None}
-
-
-def test_the_nightly_caps_fit_their_passes():
-    """The per-call caps are sized to the passes' wall-clock budgets: every
-    call in a pass hitting its cap must still fit, at a slow 34 tok/s."""
-    slow = 34
-    wiki_calls = 1 + job.MAX_ARTICLES_PER_RUN
-    assert wiki_calls * job.THINKING_BUDGET / slow < job.DEFAULT_BUDGET_SECONDS
 
 
 def test_a_rebuild_does_not_think(client, monkeypatch):
