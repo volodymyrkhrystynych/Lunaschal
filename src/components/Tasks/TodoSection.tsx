@@ -132,7 +132,6 @@ export function TodoSection({
                 if (transcribeTodo.status === 'idle') transcribeTodo.start();
                 else transcribeTodo.stop();
               }}
-              disabled={transcribeTodo.status !== 'recording'}
               className="shrink-0"
             />
           </div>

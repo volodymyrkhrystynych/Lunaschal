@@ -13,6 +13,39 @@ import { api, DailyTask, TodoItem } from '../../hooks/api';
 import { dueInputToUnix } from '../../lib/todos';
 import { TasksSection } from './index';
 
+// Mock useRecorder so the recording button works in tests.
+let recorderState = { status: 'idle' as const, starting: false };
+const mockStart = vi.fn(() => {
+  recorderState.status = 'recording';
+  recorderState.starting = false;
+});
+const mockStop = vi.fn(() => {
+  recorderState.status = 'idle';
+  recorderState.starting = false;
+});
+vi.mock('@/hooks/useRecorder', () => ({
+  useRecorder: (_onTranscript: (text: string) => void) => {
+    // Return a proxy that always reads from the current recorderState
+    return new Proxy(
+      {
+        status: recorderState.status as const,
+        starting: recorderState.starting,
+        error: '',
+        canTranscribe: true,
+        start: mockStart,
+        stop: mockStop,
+      },
+      {
+        get(target, prop) {
+          if (prop === 'status') return recorderState.status;
+          if (prop === 'starting') return recorderState.starting;
+          return target[prop as keyof typeof target];
+        },
+      }
+    );
+  },
+}));
+
 vi.mock('../../hooks/api', () => ({
   api: {
     shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
@@ -29,6 +62,7 @@ vi.mock('../../hooks/api', () => ({
     todos: {
       list: vi.fn().mockResolvedValue([]),
       create: vi.fn().mockResolvedValue({ id: 'nt' }),
+      transcribe: vi.fn().mockResolvedValue({ id: 'nt' }),
       update: vi.fn().mockResolvedValue({ success: true }),
       remove: vi.fn().mockResolvedValue({ success: true }),
     },
@@ -419,6 +453,51 @@ describe('delete protection', () => {
     renderTasks();
     await screen.findByText('Morning pages');
     expect(screen.getByTitle('Show delete buttons')).not.toBeNull();
+  });
+});
+
+describe('voice-to-do transcribe button', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders the recording button next to the add-to-do button', async () => {
+    renderTasks();
+    await screen.findByText('Fix the bike');
+
+    const addBtn = screen.getByRole('button', { name: /Add to-do/ });
+    expect(addBtn).not.toBeNull();
+
+    // The recording button is a sibling in the same flex container
+    const micBtn = screen.getByRole('button', { name: /Transcribe/ });
+    expect(micBtn).not.toBeNull();
+  });
+
+  it('calls start then stop on the recorder when clicking the mic button', async () => {
+    renderTasks();
+    await screen.findByText('Fix the bike');
+
+    const micBtn = screen.getByRole('button', { name: /Transcribe/ });
+    // Button should not be disabled
+    expect(micBtn.disabled).toBe(false);
+    // First click starts recording
+    fireEvent.click(micBtn);
+    expect(mockStart).toHaveBeenCalledOnce();
+    expect(mockStop).not.toHaveBeenCalled();
+
+    // Second click stops recording
+    fireEvent.click(micBtn);
+    expect(mockStop).toHaveBeenCalledOnce();
+  });
+
+  it('does not show the transcribe button in the Archive list', async () => {
+    renderTasks();
+    await screen.findByText('Fix the bike');
+
+    fireEvent.click(screen.getByRole('button', { name: /Archive/ }));
+    await screen.findByText('Learn accordion');
+
+    expect(screen.queryByRole('button', { name: /Transcribe/ })).toBeNull();
   });
 });
 
