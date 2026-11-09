@@ -120,7 +120,8 @@ def test_late_caption_uses_current_entry_after_merge(client, monkeypatch):
     photo = shot(client, 3)
     response, _ = record(client)
     aid = photo['attachment']['id']
-    monkeypatch.setattr(journal, '_do_attachment_caption', lambda *a: 'Discord conversation')
+    # It came through the screenshot shortcut, so it takes the screenshot prompt.
+    monkeypatch.setattr(journal, '_do_screenshot_caption', lambda *a: 'Discord conversation')
     notify = Mock()
     monkeypatch.setattr(journal, '_notify_subscribers', notify)
     journal._transcribe_attachment_bg(aid, photo['id'], 'image', 'unused', 'Screenshot', now=True)

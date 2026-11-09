@@ -245,3 +245,17 @@ def test_a_model_that_will_not_fit_says_so(configured, monkeypatch, tmp_path):
     )
     with pytest.raises(VisionUnavailable, match='could not load'):
         images_ai.caption_image(_png(tmp_path))
+
+
+def test_a_screenshot_is_transcribed_not_described_as_a_photo(configured, monkeypatch, tmp_path):
+    client = _FakeClient(content='Discord chat: "ship it friday".')
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
+
+    assert images_ai.caption_screenshot(_png(tmp_path)) == 'Discord chat: "ship it friday".'
+    call = client.completions.calls[0]
+    assert call['messages'][0]['content'] == images_ai._SCREENSHOT_SYSTEM
+    assert 'transcribe' in call['messages'][0]['content']
+    assert call['max_tokens'] == images_ai._SCREENSHOT_MAX_TOKENS
+    # Its name is a capture time, not anything the user called it.
+    text, _image = call['messages'][1]['content']
+    assert 'called it' not in text['text']

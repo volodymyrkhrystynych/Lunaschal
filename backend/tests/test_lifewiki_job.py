@@ -431,6 +431,7 @@ def test_the_briefing_runs_even_when_the_wiki_pass_explodes(client, monkeypatch)
         raise RuntimeError('llama-server died')
 
     ran = {}
+    monkeypatch.setattr('backend.journal.digest_job.run_entry_digest_pass', explode)
     monkeypatch.setattr('backend.lifewiki.job.run_life_wiki_pass', explode)
     monkeypatch.setattr('backend.oddities_job.run_oddities_pass', explode)
     monkeypatch.setattr(briefing_scheduler, 'run_briefing',
@@ -440,12 +441,16 @@ def test_the_briefing_runs_even_when_the_wiki_pass_explodes(client, monkeypatch)
     assert ran['briefing'] is True
 
 
-def test_the_wiki_pass_and_oddities_scan_run_before_the_briefing(client, monkeypatch):
+def test_the_digests_wiki_pass_and_oddities_scan_run_before_the_briefing(client, monkeypatch):
     """The whole reason they share a thread: the briefing reads what the pass
     writes, so a wiki mid-rewrite is the failure two daemons would produce."""
     from backend import briefing_scheduler
 
     order = []
+    # Entry descriptions first: the wiki and the briefing both read them.
+    monkeypatch.setattr('backend.journal.digest_job.run_entry_digest_pass',
+                        lambda **k: order.append('digests') or {
+                            'written': 0, 'failed': 0, 'unsettled': 0, 'timedOut': False})
     monkeypatch.setattr('backend.lifewiki.job.run_life_wiki_pass',
                         lambda **k: order.append('wiki') or {'facts': 0, 'articles': 0,
                                                              'observationsFolded': 0})
@@ -457,7 +462,7 @@ def test_the_wiki_pass_and_oddities_scan_run_before_the_briefing(client, monkeyp
                         lambda: order.append('briefing'))
 
     briefing_scheduler.run_nightly()
-    assert order == ['wiki', 'oddities', 'briefing']
+    assert order == ['digests', 'wiki', 'oddities', 'briefing']
 
 
 def test_the_briefing_is_shown_what_the_wiki_knows(client, monkeypatch):
@@ -590,6 +595,8 @@ def test_every_nightly_pass_thinks_with_the_overnight_budget(client, monkeypatch
             return result
         return run
 
+    monkeypatch.setattr('backend.journal.digest_job.run_entry_digest_pass', record(
+        'digests', {'written': 0, 'failed': 0, 'unsettled': 0, 'timedOut': False}))
     monkeypatch.setattr('backend.lifewiki.job.run_life_wiki_pass', record(
         'wiki', {'facts': 0, 'articles': 0, 'observationsFolded': 0}))
     monkeypatch.setattr('backend.oddities_job.run_oddities_pass', record(
@@ -597,7 +604,7 @@ def test_every_nightly_pass_thinks_with_the_overnight_budget(client, monkeypatch
     monkeypatch.setattr(briefing_scheduler, 'run_briefing', record('briefing', None))
 
     briefing_scheduler.run_nightly()
-    assert seen == {'wiki': 40000, 'oddities': 40000, 'briefing': 40000}
+    assert seen == {'digests': 40000, 'wiki': 40000, 'oddities': 40000, 'briefing': 40000}
     # Nothing leaks out of the thread's scopes once the night is over.
     assert not hasattr(llm._scope, 'budget')
 

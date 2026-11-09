@@ -65,7 +65,7 @@ def get_recent_journal_entries(now: int | None = None) -> list[dict]:
     from backend.db.connection import get_db
     now = now if now is not None else int(time.time())
     rows = get_db().execute(
-        '''SELECT title, content, created_at FROM journal_entries
+        '''SELECT id, title, content, digest, created_at FROM journal_entries
            WHERE created_at >= ?
              AND id NOT IN (SELECT journal_entry_id FROM journal_entry_fic_refs)
            ORDER BY created_at DESC LIMIT ?''',
@@ -81,18 +81,31 @@ def _format_entry_time(ts: int, now: int) -> str:
     return f"{day} {dt.strftime('%H:%M')}"
 
 
-def format_journal_context(entries: list[dict], now: int | None = None) -> str:
+def format_journal_context(entries: list[dict], now: int | None = None,
+                           use_digest: bool = False) -> str:
+    """The journal block of a prompt.
+
+    `use_digest` swaps an entry's body for its nightly description
+    (backend/journal/digest_job.py) where it has one — the overnight briefing
+    does, so an entry made of screenshots or a recording reads as what they
+    contained rather than as a title over an empty body. The chat system
+    prompt leaves it off: it is rebuilt on every message, and an entry written
+    an hour ago has no description yet anyway.
+    """
     if not entries:
         return ''
     now = now if now is not None else int(time.time())
     parts = []
     for e in entries:
-        content = e['content']
+        digest = e.get('digest') if use_digest else None
+        content = digest or e['content']
         if len(content) > JOURNAL_MAX_CHARS:
             content = content[:JOURNAL_MAX_CHARS] + '…'
         header = f"[{_format_entry_time(e['created_at'], now)}]"
         if e.get('title'):
             header += f" {e['title']}"
+        if digest:
+            header += ' (described, with its attachments)'
         parts.append(f"{header}\n{content}")
     return (
         "Here is what the user wrote in their journal over the last 24 hours "

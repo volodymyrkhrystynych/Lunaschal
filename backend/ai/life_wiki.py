@@ -50,6 +50,11 @@ Do not record:
 - anything you are inferring rather than reading. If they did a thing twice, \
 that is two events, not a habit — wait.
 
+Some journal entries carry a line marked "Described, with its attachments — not \
+their words". That is a machine's account of the photos, screenshots or \
+recordings they saved: evidence of what they looked at, kept or did, never of \
+what they think, feel or prefer. Cite the entry as usual when you use it.
+
 Every fact must cite the entry it came from, using the exact bracketed id shown \
 beside that entry, and must be one plain sentence written about them in the \
 third person.

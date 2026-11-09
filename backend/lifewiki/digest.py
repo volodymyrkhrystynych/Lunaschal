@@ -49,6 +49,25 @@ def window_bounds(end_day: str, days: int) -> tuple[int, int]:
     return day_bounds(first.isoformat())[0], day_bounds(last.isoformat())[1]
 
 
+def _journal_line(r) -> str:
+    """One journal entry: its own words, then — when the nightly pass wrote one
+    — the description of it with its attachments, labelled as a machine's.
+
+    The label is the point. The wiki's rule is that it never learns from the
+    assistant's own prose, and the description is model-written; but for an
+    entry that is only screenshots or a recording it is the only account there
+    is. So it comes in marked, and the extract prompt is told to read it as
+    evidence of what they saved or looked at, never of what they think.
+    """
+    line = (f'[journal:{r["id"]}] {_when(r["created_at"])}'
+            + (f' — {r["title"]}' if r['title'] else ''))
+    if (r['content'] or '').strip():
+        line += f'\n{_clip(r["content"])}'
+    if r['digest']:
+        line += f'\n(Described, with its attachments — not their words: {_clip(r["digest"])})'
+    return line
+
+
 def gather(end_day: str | None = None, days: int = 1, db=None) -> dict:
     """Read the window. Returns {'sources': {name: [line, ...]}, ...}."""
     from backend.db.connection import get_db
@@ -59,16 +78,11 @@ def gather(end_day: str | None = None, days: int = 1, db=None) -> dict:
     sources: dict[str, list[str]] = {}
 
     rows = db.execute(
-        'SELECT id, title, content, tags, created_at FROM journal_entries'
+        'SELECT id, title, content, digest, tags, created_at FROM journal_entries'
         ' WHERE created_at >= ? AND created_at < ? ORDER BY created_at LIMIT ?',
         (start, end, MAX_JOURNAL),
     ).fetchall()
-    sources['journal'] = [
-        f'[journal:{r["id"]}] {_when(r["created_at"])}'
-        + (f' — {r["title"]}' if r['title'] else '')
-        + f'\n{_clip(r["content"])}'
-        for r in rows
-    ]
+    sources['journal'] = [_journal_line(r) for r in rows]
 
     # User messages only. The assistant's own replies are the least reliable
     # thing in the database to build a standing fact from — it would be learning
@@ -202,16 +216,11 @@ def for_sources(citations: list[tuple[str, str]], db=None) -> dict:
 
     if wanted.get('journal'):
         rows = _fetch(
-            'SELECT id, title, content, created_at FROM journal_entries'
+            'SELECT id, title, content, digest, created_at FROM journal_entries'
             ' WHERE id IN ({placeholders}) ORDER BY created_at',
             wanted['journal'],
         )
-        sources['journal'] = [
-            f'[journal:{r["id"]}] {_when(r["created_at"])}'
-            + (f' — {r["title"]}' if r['title'] else '')
-            + f'\n{_clip(r["content"])}'
-            for r in rows
-        ]
+        sources['journal'] = [_journal_line(r) for r in rows]
 
     if wanted.get('message'):
         rows = _fetch(

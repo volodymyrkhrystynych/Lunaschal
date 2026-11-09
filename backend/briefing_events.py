@@ -76,7 +76,7 @@ def gather_day(db, today: str) -> dict:
         sources.append(item)
         return item
 
-    for row in db.execute('SELECT id,title,content,raw_content,latitude,longitude,location_source,created_at FROM journal_entries'
+    for row in db.execute('SELECT id,title,content,raw_content,digest,latitude,longitude,location_source,created_at FROM journal_entries'
                           ' WHERE created_at>=? AND created_at<? ORDER BY created_at', (start, end)):
         item = add('journal', row)
         item['chapterCommentary'] = [dict(r) for r in db.execute(

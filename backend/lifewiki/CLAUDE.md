@@ -65,6 +65,7 @@ research changed it twice.
   then an FTS hit on the title.
 - **The assistant's own replies are never in the digest.** Building a standing
   fact from its own prose is the shortest path to a confident invention.
+- **An entry's nightly description comes in labelled.** `digest._journal_line` appends `journal_entries.digest` (backend/journal/digest_job.py) after the entry's own words, marked *not their words*, and the extract prompt is told to read it as evidence of what they saved or looked at, never of what they think. It is model prose, which the rule above would keep out, but for an entry that is only screenshots or a recording it is the only account there is.
 - **Notebook `diary/` is excluded.** Those become journal entries via
   `backend/notebook_diary_scheduler.py`, and counting both would let one day's
   thought be two pieces of evidence for the same fact.
