@@ -15,7 +15,8 @@ force this module onto Ollama's native endpoint — and both are now *better*:
 Thinking is a boolean, not a level: the chat model has one thinking channel,
 toggled by a chat-template kwarg — there is no low/medium/high/max to map onto.
 That was true of Gemma 4 and stays true of Qwen3.6, which is why the swap needed
-no change here.
+no change here. What *can* be graded is how long it runs: a per-request token
+budget llama-server enforces (`thinking_budget`, see `_request_kwargs`).
 """
 import json
 import logging
@@ -66,6 +67,35 @@ def default_generation_opts() -> dict:
     }
 
 
+# Default cap on the thinking channel for the overnight passes (the life wiki,
+# the server-oddities notes and the briefing). Qwen3.6 answers noticeably better
+# with thinking on, and overnight the cost is only time — but an uncapped think
+# can run for many thousands of tokens at ~34 tok/s, and the life-wiki pass has
+# a wall-clock budget to fit inside. A cap, not a target: most thinks end sooner.
+OVERNIGHT_THINKING_BUDGET = 6144
+
+# Injected just before the closing think tag when a budget runs out, so the
+# model wraps up rather than breaking off mid-thought. The wording is the one
+# Qwen's own thinking-budget example uses.
+THINKING_BUDGET_MESSAGE = (
+    '\n\nConsidering the limited time, I have to give the answer now.\n'
+)
+
+
+def overnight_generation_opts() -> dict:
+    """Thinking switch + budget for the nightly passes, read from settings.
+
+    One setting for all three because they share one thread and one purpose —
+    nobody is waiting on any of them — and `briefing_thinking` keeps its name
+    because it predates the other two using it. Returns kwargs for `chat_json`.
+    """
+    from backend.ai.provider import get_settings
+    s = get_settings() or {}
+    thinking = bool(s.get('briefing_thinking'))
+    budget = s.get('briefing_thinking_budget') or OVERNIGHT_THINKING_BUDGET
+    return {'thinking': thinking, 'thinking_budget': budget if thinking else None}
+
+
 _FENCE_RE = re.compile(r'^```(?:json)?\s*|\s*```$', re.IGNORECASE)
 _THINK_RE = re.compile(r'<think>.*?</think>', re.IGNORECASE | re.DOTALL)
 
@@ -105,7 +135,8 @@ def _messages(prompt: str, system: str | None = None) -> list[dict]:
 
 
 def _request_kwargs(*, thinking: bool, max_tokens: int | None,
-                    schema: dict | None = None) -> dict:
+                    schema: dict | None = None,
+                    thinking_budget: int | None = None) -> dict:
     """The non-message half of a chat request.
 
     `chat_template_kwargs` rides in `extra_body` because it is a llama.cpp
@@ -114,10 +145,25 @@ def _request_kwargs(*, thinking: bool, max_tokens: int | None,
     was true of Gemma 4 and is true of Qwen3.6. Being explicit is also what
     makes the setting safe across a model swap: a template that doesn't know
     the kwarg ignores it, so the worst case is the default, never a crash.
+
+    `thinking_budget` caps the thinking channel: llama-server counts reasoning
+    tokens and, at the cap, injects THINKING_BUDGET_MESSAGE and the closing tag
+    so the answer starts. It is *added* to `max_tokens` rather than carved out
+    of it, because llama-server counts thinking against `max_tokens` too — a
+    long think used to be able to spend the whole ceiling and leave the answer
+    empty. With the two summed, `max_tokens` keeps meaning "room for the
+    answer". Per-request budgets need llama.cpp b9982+ (earlier builds silently
+    ignore the field) and are only honoured while the server's own
+    `--reasoning-budget` is unset, which llama/presets.ini leaves it.
     """
     kwargs: dict = {
         'extra_body': {'chat_template_kwargs': {'enable_thinking': thinking}},
     }
+    if thinking and thinking_budget:
+        kwargs['extra_body']['reasoning_budget_tokens'] = thinking_budget
+        kwargs['extra_body']['reasoning_budget_message'] = THINKING_BUDGET_MESSAGE
+        if max_tokens:
+            max_tokens += thinking_budget
     if max_tokens:
         kwargs['max_tokens'] = max_tokens
     if schema is not None:
@@ -285,7 +331,8 @@ def _complete(*, messages: list[dict], label: str, model: str | None = None,
 
 def chat_json(prompt: str, system: str | None = None, model: str | None = None,
               max_tokens: int = JSON_MAX_TOKENS, thinking: bool = False,
-              schema: dict | None = None) -> dict:
+              schema: dict | None = None,
+              thinking_budget: int | None = None) -> dict:
     """Blocking JSON completion; returns the parsed object.
 
     Pass `schema` (a JSON Schema object) to have llama-server constrain the output
@@ -294,11 +341,14 @@ def chat_json(prompt: str, system: str | None = None, model: str | None = None,
     works and falls back to `_parse_json_response`.
 
     Thinking is off by default: for these structured calls it only adds latency,
-    and the answer is machine-read rather than shown to the user.
+    and the answer is machine-read rather than shown to the user. Overnight
+    callers turn it on with `overnight_generation_opts()`, which also sets
+    `thinking_budget` (see `_request_kwargs` for how it meets `max_tokens`).
     """
     message, _ = _complete(
         messages=_messages(prompt, system), model=model, label='chat_json',
-        **_request_kwargs(thinking=thinking, max_tokens=max_tokens, schema=schema),
+        **_request_kwargs(thinking=thinking, max_tokens=max_tokens, schema=schema,
+                          thinking_budget=thinking_budget),
     )
     return _parse_json_response(_content(message))
 

@@ -10,7 +10,7 @@ different call sites), and a model looking at them side by side can say so.
 import json
 from pathlib import Path
 
-from backend.ai.llm import chat_json
+from backend.ai.llm import chat_json, overnight_generation_opts
 
 MAX_ITEMS = 8
 NOTE_MAX = 320
@@ -101,7 +101,10 @@ def annotate(items: list[dict]) -> dict[str, str]:
         'required': ['notes'],
         'additionalProperties': False,
     }
-    result = chat_json(build_prompt(items), system=SYSTEM_PROMPT, schema=schema)
+    # Only ever called from the nightly pass, so it thinks when the overnight
+    # switch is on.
+    result = chat_json(build_prompt(items), system=SYSTEM_PROMPT, schema=schema,
+                       **overnight_generation_opts())
     notes = {}
     for entry in (result or {}).get('notes') or []:
         if not isinstance(entry, dict):

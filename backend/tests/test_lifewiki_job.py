@@ -40,7 +40,7 @@ def _fake_extract(monkeypatch, facts):
 
 
 def _fake_write(monkeypatch, **overrides):
-    def write(slug, existing_title, facts_text):
+    def write(slug, existing_title, facts_text, gen=None):
         return {
             'title': overrides.get('title', 'Health and training'),
             'summary': overrides.get('summary', 'How they train.'),
@@ -83,7 +83,7 @@ def test_the_render_reads_the_facts_and_not_the_previous_prose(client, monkeypat
 
     seen = {}
 
-    def write(slug, existing_title, facts_text):
+    def write(slug, existing_title, facts_text, gen=None):
         seen['facts_text'] = facts_text
         return {'title': 'Health and training', 'summary': 's',
                 'content': 'DISTINCTIVE PROSE THE SECOND RENDER MUST NOT SEE'}
@@ -150,7 +150,7 @@ def test_a_contradiction_supersedes_rather_than_edits(client, monkeypatch):
     }])
     monkeypatch.setattr(
         job.prompts, 'write_article',
-        lambda slug, title, facts_text: {
+        lambda slug, title, facts_text, gen=None: {
             'title': 'Health and training', 'summary': 's', 'content': 'c',
             'supersedes': [stale['id']],
         },
@@ -180,7 +180,7 @@ def test_a_locked_fact_survives_the_pass_trying_to_supersede_it(client, monkeypa
 
     monkeypatch.setattr(
         job.prompts, 'write_article',
-        lambda slug, title, facts_text: {
+        lambda slug, title, facts_text, gen=None: {
             'title': 'Health and training', 'summary': 's', 'content': 'c',
             'supersedes': [fact['id']],
         },
@@ -566,3 +566,38 @@ def test_a_reworded_slug_under_the_same_title_still_lands_on_it(client, monkeypa
     job.run_life_wiki_pass()
 
     assert len(wiki.list_articles(kind=wiki.LIFE_KIND)) == 1
+
+
+# --- thinking ------------------------------------------------------------
+
+
+def test_the_nightly_pass_thinks_when_the_overnight_switch_is_on(client, monkeypatch):
+    """Every model call in the pass gets the overnight thinking opts; a
+    user-pressed rebuild does not, since someone is waiting on it."""
+    db = get_db()
+    db.execute('INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)')
+    db.execute('UPDATE settings SET briefing_thinking=1, briefing_thinking_budget=2048 WHERE id=1')
+    db.commit()
+    entry = _journal(db, 'Went to GoodLife, third time this week')
+    fact = {'slug': 'health-and-training', 'title': 'Health and training',
+            'statement': 'Trains three times a week.', 'source': f'journal:{entry}'}
+    seen = []
+
+    def extract(digest_text, index_lines='', gen=None):
+        seen.append(('extract', gen))
+        return [fact]
+
+    def write(slug, existing_title, facts_text, gen=None):
+        seen.append(('write', gen))
+        return {'title': 'Health and training', 'summary': 's', 'content': 'c'}
+
+    monkeypatch.setattr(job.prompts, 'extract_facts', extract)
+    monkeypatch.setattr(job.prompts, 'write_article', write)
+
+    job.run_life_wiki_pass()
+    on = {'thinking': True, 'thinking_budget': 2048}
+    assert seen == [('extract', on), ('write', on)]
+
+    seen.clear()
+    job.rebuild_article('health-and-training')
+    assert seen and all(gen is None for _, gen in seen)

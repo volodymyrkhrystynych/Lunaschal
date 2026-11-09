@@ -184,7 +184,7 @@ def _fold_observations(raw_facts: list[dict], touched_by_source: dict, now: int)
     return folded
 
 
-def render_article(article: dict, now: int) -> dict | None:
+def render_article(article: dict, now: int, gen: dict | None = None) -> dict | None:
     """Regenerate one article's prose from its current facts.
 
     Deliberately never shown its own previous content — that is the whole
@@ -195,7 +195,7 @@ def render_article(article: dict, now: int) -> dict | None:
         return None
     written = prompts.write_article(
         article['slug'], article.get('title'),
-        facts_mod.format_facts(live, with_ids=True),
+        facts_mod.format_facts(live, with_ids=True), gen=gen,
     )
     if not written:
         return None
@@ -242,7 +242,12 @@ def run_life_wiki_pass(now: int | None = None, deadline: float | None = None,
         f'- {a["slug"]}: {a["title"]} — {a.get("summary") or ""}' for a in index
     )
 
-    raw_facts = prompts.extract_facts(digest_mod.render(window), index_lines)
+    # Thinking for every model call in the pass, when the overnight switch is
+    # on. Read once, so the extract and the renders agree for the whole run.
+    from backend.ai.llm import overnight_generation_opts
+    gen = overnight_generation_opts()
+
+    raw_facts = prompts.extract_facts(digest_mod.render(window), index_lines, gen=gen)
     if not raw_facts:
         return result
 
@@ -262,7 +267,7 @@ def run_life_wiki_pass(now: int | None = None, deadline: float | None = None,
         article = wiki.get_article_by_id(article_id)
         if article is None:
             continue
-        if render_article(article, now):
+        if render_article(article, now, gen):
             result['articles'] += 1
 
     return result

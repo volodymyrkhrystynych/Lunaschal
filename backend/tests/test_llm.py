@@ -138,6 +138,59 @@ def test_chat_json_defaults_thinking_off(monkeypatch):
     assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is False
 
 
+def test_request_kwargs_sends_a_thinking_budget_and_adds_it_to_the_ceiling():
+    """llama-server counts thinking against max_tokens, so the budget is added
+    on top: max_tokens keeps meaning room for the answer, and a long think can
+    no longer spend it."""
+    kwargs = _request_kwargs(thinking=True, max_tokens=2048, thinking_budget=4096)
+    assert kwargs['extra_body']['reasoning_budget_tokens'] == 4096
+    assert kwargs['extra_body']['reasoning_budget_message'] == llm.THINKING_BUDGET_MESSAGE
+    assert kwargs['max_tokens'] == 2048 + 4096
+
+
+def test_request_kwargs_ignores_a_budget_while_thinking_is_off():
+    kwargs = _request_kwargs(thinking=False, max_tokens=2048, thinking_budget=4096)
+    assert 'reasoning_budget_tokens' not in kwargs['extra_body']
+    assert 'reasoning_budget_message' not in kwargs['extra_body']
+    assert kwargs['max_tokens'] == 2048
+
+
+def test_request_kwargs_without_a_budget_leaves_thinking_unbounded():
+    # Every caller that predates the budget sends exactly what it always did.
+    kwargs = _request_kwargs(thinking=True, max_tokens=2048)
+    assert 'reasoning_budget_tokens' not in kwargs['extra_body']
+    assert kwargs['max_tokens'] == 2048
+
+
+def test_chat_json_passes_the_thinking_budget_through(monkeypatch):
+    captured = _stub_client(monkeypatch, {})
+    llm.chat_json('hi', thinking=True, thinking_budget=1024, max_tokens=512)
+    assert captured['extra_body']['reasoning_budget_tokens'] == 1024
+    assert captured['max_tokens'] == 1536
+
+
+def test_overnight_generation_opts_reads_settings(client):
+    from backend.ai.llm import OVERNIGHT_THINKING_BUDGET, overnight_generation_opts
+    from backend.db import connection
+
+    # Off by default, and no budget is sent while it is off.
+    assert overnight_generation_opts() == {'thinking': False, 'thinking_budget': None}
+
+    db = connection.get_db()
+    db.execute(
+        'INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)'
+    )
+    db.execute('UPDATE settings SET briefing_thinking=1 WHERE id=1')
+    db.commit()
+    assert overnight_generation_opts() == {
+        'thinking': True, 'thinking_budget': OVERNIGHT_THINKING_BUDGET,
+    }
+
+    db.execute('UPDATE settings SET briefing_thinking_budget=2048 WHERE id=1')
+    db.commit()
+    assert overnight_generation_opts() == {'thinking': True, 'thinking_budget': 2048}
+
+
 def test_default_generation_opts_reads_settings(client):
     from backend.ai.llm import LLM_MAX_TOKENS, default_generation_opts
     from backend.db import connection

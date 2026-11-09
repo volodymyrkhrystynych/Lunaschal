@@ -176,6 +176,7 @@ def test_generate_briefing_passes_thinking_and_max_tokens_from_settings(client, 
     # Defaults: no thinking, generous ceiling.
     briefing_mod.generate_briefing(ctx)
     assert captured['thinking'] is False
+    assert captured['thinking_budget'] is None
     assert captured['max_tokens'] == briefing_mod.BRIEFING_MAX_TOKENS
     # The completion is grammar-constrained to the briefing's shape, which is what
     # makes FALLBACK_BRIEFING a rare path rather than a routine one.
@@ -197,7 +198,15 @@ def test_generate_briefing_passes_thinking_and_max_tokens_from_settings(client, 
     briefing_mod.generate_briefing(ctx)
     assert captured['thinking'] is True
     assert captured['max_tokens'] == 8000
+    # Thinking brings its budget with it, the overnight default unless set.
+    from backend.ai.llm import OVERNIGHT_THINKING_BUDGET
+    assert captured['thinking_budget'] == OVERNIGHT_THINKING_BUDGET
     assert 'num_ctx' not in captured
+
+    db.execute('UPDATE settings SET briefing_thinking_budget=3000 WHERE id=1')
+    db.commit()
+    briefing_mod.generate_briefing(ctx)
+    assert captured['thinking_budget'] == 3000
 
 
 def test_build_prompt_is_pure_and_mentions_data(client):
