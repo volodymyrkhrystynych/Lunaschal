@@ -198,9 +198,9 @@ export function BriefingSection() {
             <p className="text-xs text-[var(--color-text-muted)] mt-1">
               Worth turning on here even though chat leaves it off: the
               overnight passes run while you're asleep, so the extra tokens cost
-              you nothing. Applies to all three — the life wiki, the server
-              oddities notes and the briefing. Running the briefing by hand
-              doesn't think, since you're waiting for it.
+              you nothing. Applies to all four — the entry descriptions, the
+              life wiki, the server oddities notes and the briefing. Running the
+              briefing by hand doesn't think, since you're waiting for it.
             </p>
           </div>
           {briefingThinking && (

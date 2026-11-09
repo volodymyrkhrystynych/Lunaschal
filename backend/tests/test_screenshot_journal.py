@@ -407,3 +407,43 @@ def test_screenshot_session_migration_allows_an_entry_without_an_event():
     )
     assert event_fk[6] == 'SET NULL'
     db.close()
+
+
+def test_a_screenshot_upload_is_flagged_and_captioned_with_the_screenshot_prompt(
+        client, monkeypatch, tmp_path):
+    from backend.routes import journal
+    monkeypatch.setenv('JOURNAL_ROOT', str(tmp_path / 'media'))
+    real_caption_job = journal._transcribe_attachment_bg
+    monkeypatch.setattr(journal, '_transcribe_attachment_bg', lambda *a, **kw: None)
+
+    resp = _upload(client, '01J00000000000000000000003', '2026-09-12T18:04:17-04:00')
+    assert resp.status_code == 201
+    body = resp.get_json()
+    aid, entry_id = body['attachment']['id'], body['id']
+    assert get_db().execute(
+        'SELECT is_screenshot FROM journal_attachments WHERE id=?', (aid,)
+    ).fetchone()[0] == 1
+
+    used = []
+    monkeypatch.setattr(journal, '_do_screenshot_caption',
+                        lambda p: used.append('screenshot') or 'A Discord chat.')
+    monkeypatch.setattr(journal, '_do_attachment_caption',
+                        lambda p, n: used.append('photo') or 'A photo.')
+    real_caption_job(aid, entry_id, 'image', 'unused', 'Screenshot', now=True)
+
+    assert used == ['screenshot']
+    assert get_db().execute(
+        'SELECT transcript FROM journal_attachments WHERE id=?', (aid,)
+    ).fetchone()[0] == 'A Discord chat.'
+
+
+def test_an_ordinary_upload_is_not_a_screenshot(client, monkeypatch, tmp_path):
+    from backend.routes import journal
+    monkeypatch.setenv('JOURNAL_ROOT', str(tmp_path / 'media'))
+    monkeypatch.setattr(journal, '_transcribe_attachment_bg', lambda *a, **kw: None)
+    entry_id = client.post('/api/journal', json={'content': 'A photo.'}).get_json()['id']
+    resp = client.post(f'/api/journal/{entry_id}/attachments', data={
+        'file': (io.BytesIO(_png()), 'photo.png', 'image/png'),
+    })
+    assert resp.status_code == 201
+    assert not journal._is_screenshot(resp.get_json()['id'])

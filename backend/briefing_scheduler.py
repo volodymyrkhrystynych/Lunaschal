@@ -1,7 +1,9 @@
-"""Overnight-briefing daemon, and the two passes that feed it.
+"""Overnight-briefing daemon, and the three passes that feed it.
 
-(The second, the server-oddities scan in backend/oddities_job.py, runs between
-the life wiki and the briefing; the notes below about ordering apply to it too.)
+(The entry-digest pass in backend/journal/digest_job.py runs first, since the
+life wiki and the briefing both read the descriptions it writes; the
+server-oddities scan in backend/oddities_job.py runs between the life wiki and
+the briefing. The notes below about ordering apply to both.)
 
 Like the chat-title sweep (backend/chat_title_scheduler.py), there is no general
 scheduler in the Flask backend — this is a small daemon thread that fires once
@@ -50,7 +52,8 @@ def _briefing_settings() -> tuple[bool, int]:
 
 
 def run_nightly() -> None:
-    """The life-wiki pass, then the briefing. Order is the point.
+    """Entry digests, the life-wiki pass, the oddities scan, then the briefing.
+    Order is the point.
 
     A failing wiki pass must not cost the briefing: the briefing is the thing
     the user wakes up to, and a picture one night out of date is a far smaller
@@ -68,7 +71,7 @@ def run_nightly() -> None:
 
 
 def _run_nightly() -> None:
-    """The passes, each inside its own thinking scope.
+    """The four passes, each inside its own thinking scope.
 
     This thread is the one place where nobody is waiting on the model, so it is
     where thinking is switched on, with the long overnight budget
@@ -80,6 +83,23 @@ def _run_nightly() -> None:
 
     from backend.ai.llm import overnight_thinking
     from backend.lifewiki.job import DEFAULT_BUDGET_SECONDS, run_life_wiki_pass
+
+    # First, because the life wiki and the briefing both read what it writes:
+    # one description per entry, built from its text and every attachment's
+    # reading together. Wrapped like the others — without it the readers fall
+    # back to the entry's title and body, which is what they always had.
+    try:
+        from backend.journal import digest_job
+        with overnight_thinking():
+            result = digest_job.run_entry_digest_pass(
+                deadline=_time.monotonic() + digest_job.DEFAULT_BUDGET_SECONDS
+            )
+        if result['written'] or result['failed']:
+            print(f'Entry digests: {result["written"]} written, '
+                  f'{result["failed"]} failed, {result["unsettled"]} still settling'
+                  + (' (hit its budget)' if result['timedOut'] else ''))
+    except Exception as e:
+        print(f'Entry digest pass failed, briefing continuing: {e}')
 
     try:
         with overnight_thinking():

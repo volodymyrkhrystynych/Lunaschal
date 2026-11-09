@@ -474,6 +474,19 @@ def seed_calendar(db, journal_ids):
          time.strftime('%Y-%m-%d', end_local), time.strftime('%H:%M:%S', end_local),
          captured_start, captured_end),
     )
+    # The run's images came through the shortcut, so they carry the flag that
+    # gets them the transcribing caption prompt, and the entry has the nightly
+    # description the briefing reads in place of its empty body.
+    db.execute('UPDATE journal_attachments SET is_screenshot=1 WHERE entry_id=?',
+               (journal_ids[-1],))
+    db.execute(
+        'UPDATE journal_entries SET digest=?, digest_inputs_hash=?, digested_at=? WHERE id=?',
+        ('They took a run of screenshots while comparing two standing desks on a '
+         'retailer\'s site — the "Uplift V2" at $799 and the "Flexispot E7" at $649 — '
+         'including the E7\'s spec table (lift capacity 355 lb, height 22.8"–48.4") '
+         'and a review that called its motor "quiet enough for calls".',
+         'seed', captured_end, journal_ids[-1]),
+    )
     db.execute(
         'INSERT INTO calendar_events (id, title, description, date, time, end_time, all_day, tags, created_at) '
         'VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)',

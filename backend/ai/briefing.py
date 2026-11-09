@@ -148,7 +148,7 @@ def build_briefing_prompt(context: dict) -> str:
             lines.append(f"- {item['title']}: {status}{reason}")
         lines.append('')
 
-    journal = format_journal_context(context['journal'], context['now'])
+    journal = format_journal_context(context['journal'], context['now'], use_digest=True)
     if journal:
         lines += [journal, '']
 

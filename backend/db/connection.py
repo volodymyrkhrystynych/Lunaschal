@@ -115,7 +115,7 @@ TIMESTAMP_COLS = frozenset({
     'applied_at', 'closed_at', 'purge_after', 'purged_at', 'fetched_at',
     'scanned_at', 'queued_at', 'last_run_at', 'triage_at', 'occurred_at',
     'added_at', 'archived_at', 'archive_restored_at', 'ready_at',
-    'captured_at', 'last_seen_at',
+    'captured_at', 'last_seen_at', 'digested_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -263,6 +263,7 @@ def init_db() -> None:
     _ensure_journal_attachment_youtube(db)
     _ensure_journal_attachment_capture(db)
     _ensure_journal_attachment_webpage(db)
+    _ensure_journal_entry_digest(db)
     _migrate_flashcards_to_learning(db)
     _ensure_prevent_sleep(db)
     _ensure_briefing_settings(db)
@@ -2630,6 +2631,35 @@ def _ensure_journal_attachment_webpage(db: sqlite3.Connection) -> None:
     if 'archive_lease_until' not in cols:
         db.execute(
             'ALTER TABLE journal_attachments ADD COLUMN archive_lease_until INTEGER'
+        )
+    db.commit()
+
+
+def _ensure_journal_entry_digest(db: sqlite3.Connection) -> None:
+    """The nightly per-entry description, and the flag that tells a screenshot
+    from a photo.
+
+    `digest` is written by backend/journal/digest.py: one model call per entry
+    that reads the body and every attachment's caption/transcript together, so
+    the briefing and the life wiki get one account of an entry instead of a
+    title over an empty body. `digest_inputs_hash` is what those inputs hashed
+    to when it was written; a mismatch is what makes the next pass redo it.
+
+    `is_screenshot` is set by `POST /api/journal/screenshots` on the attachment
+    rather than inferred from the entry, because a screenshot run can merge into
+    a recording's entry and must still be captioned as a screenshot.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
+    if 'digest' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN digest TEXT')
+    if 'digest_inputs_hash' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN digest_inputs_hash TEXT')
+    if 'digested_at' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN digested_at INTEGER')
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_attachments)')}
+    if 'is_screenshot' not in cols:
+        db.execute(
+            'ALTER TABLE journal_attachments ADD COLUMN is_screenshot INTEGER NOT NULL DEFAULT 0'
         )
     db.commit()
 

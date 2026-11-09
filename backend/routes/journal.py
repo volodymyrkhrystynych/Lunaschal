@@ -903,7 +903,7 @@ def list_attachments(id):
 def _store_attachment(
     entry_id: str, file, name: str | None, attachment_id: str | None = None,
     *, media_only: bool = False, created_at: int | None = None,
-    captured_at: int | None = None, motion=None,
+    captured_at: int | None = None, motion=None, screenshot: bool = False,
 ):
     """Save one uploaded file as an attachment of `entry_id`.
 
@@ -925,6 +925,8 @@ def _store_attachment(
     `captured_at` is when the photo or video was *taken*, as the phone read it
     off the file; without it the file's own EXIF or QuickTime date is used.
     `motion` is a Live Photo's paired clip, accepted only beside an image.
+    `screenshot` marks an image from the screenshot shortcut, so its caption
+    transcribes the screen instead of describing a photo.
     """
     # NOT `or not file.filename`: a voice memo dragged out of the iOS Voice Memos
     # app arrives as a File with an empty name, and rejecting it here turned a
@@ -1057,14 +1059,15 @@ def _store_attachment(
             '(id, entry_id, kind, name, path, mime, size, position,'
             ' transcript_status, description_status, latitude, longitude, exif,'
             ' duration_seconds, thumb_path, captured_at, motion_path, motion_mime,'
-            ' motion_size, created_at)'
-            ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            ' motion_size, is_screenshot, created_at)'
+            ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (attachment_id, entry_id, kind, name, str(path), mime,
              size, position, transcript_status, description_status,
              latitude, longitude, exif_block,
              duration, str(storage.thumb_path(attachment_id)) if has_poster else None,
              captured_at, str(motion_path) if motion_path else None,
              (motion.mimetype or None) if motion is not None else None, motion_size,
+             1 if screenshot and kind == 'image' else 0,
              created_at if created_at is not None else int(time.time())),
         )
         db.commit()
@@ -1334,7 +1337,7 @@ def upload_screenshot():
         try:
             attachment, failure = _store_attachment(
                 session['entry_id'], file, name, attachment_id,
-                media_only=True, created_at=captured_at,
+                media_only=True, created_at=captured_at, screenshot=True,
             )
         except Exception:
             if created_entry:
@@ -2270,6 +2273,22 @@ def _do_attachment_caption(path: str, name: str) -> str:
     return caption_image(p, hint=name)
 
 
+def _do_screenshot_caption(path: str) -> str:
+    from backend.ai.images import caption_screenshot
+
+    p = storage.resolve_stored_path(path)
+    if p is None or not p.is_file():
+        raise RuntimeError('The image file is missing')
+    return caption_screenshot(p)
+
+
+def _is_screenshot(attachment_id: str) -> bool:
+    row = get_db().execute(
+        'SELECT is_screenshot FROM journal_attachments WHERE id=?', (attachment_id,)
+    ).fetchone()
+    return bool(row and row['is_screenshot'])
+
+
 def _deliver_idea_transcript(entry_id: str, text: str) -> None:
     """Hand the transcript to the idea this entry was dictated for, if any.
 
@@ -2333,6 +2352,8 @@ def _transcribe_attachment_bg(
             # keeping from a clip filmed to talk into is what was said.
             if kind in ('audio', 'video', 'youtube'):
                 text = _do_attachment_audio(path)
+            elif _is_screenshot(attachment_id):
+                text = _do_screenshot_caption(path)
             else:
                 text = _do_attachment_caption(path, name)
             status, error = 'done', None
@@ -2599,7 +2620,7 @@ def _metadata_context(entry_id: str) -> str | None:
     db = get_db()
     rows = db.execute(
         'SELECT kind, name, transcript, transcript_status,'
-        ' description, description_status'
+        ' description, description_status, is_screenshot'
         ' FROM journal_attachments'
         " WHERE entry_id=? AND kind IN ('image','youtube','webpage','audio','video')"
         ' ORDER BY position',
@@ -2612,7 +2633,8 @@ def _metadata_context(entry_id: str) -> str | None:
         described = r['description_status'] == 'done' and r['description']
         if r['kind'] == 'image':
             if transcribed:
-                lines.append(f"Photo — {r['name']}: {r['transcript']}")
+                label = 'Screenshot' if r['is_screenshot'] else 'Photo'
+                lines.append(f"{label} — {r['name']}: {r['transcript']}")
             continue
         if r['kind'] == 'webpage':
             if transcribed:
