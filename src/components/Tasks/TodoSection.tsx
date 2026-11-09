@@ -1,5 +1,7 @@
 import { api, TodoItem, TodoList, TodoPayload } from '../../hooks/api';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { RecordingButton } from '../RecordingButton';
+import { useRecorder } from '@/hooks/useRecorder';
 import { TodoForm } from './TodoForm';
 import { TodoRow } from './TodoRow';
 import type { TaskSection } from './index';
@@ -47,6 +49,13 @@ export function TodoSection({
   onUpdateTodo,
 }: TodoSectionProps) {
   const queryClient = useQueryClient();
+
+  // Voice-to-do: record, transcribe client-side, send transcript to the
+  // backend which runs it through the LLM and creates the todo in one shot.
+  const transcribeTodo = useRecorder(text => {
+    void api.todos.transcribe(text);
+  });
+
   const deleteTodo = useMutation({
     mutationFn: (id: string) => api.todos.remove(id),
     onSuccess: () => {
@@ -110,12 +119,23 @@ export function TodoSection({
         (creating ? (
           <TodoForm list={activeList} onCancel={onCancelCreate} />
         ) : (
-          <button
-            onClick={onStartCreate}
-            className="w-full mb-3 px-3 py-2 rounded-lg border border-dashed border-white/15 text-left text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/30 transition-colors"
-          >
-            + Add to-do…
-          </button>
+          <div className="flex items-center gap-2 mb-3">
+            <button
+              onClick={onStartCreate}
+              className="flex-1 px-3 py-2 rounded-lg border border-dashed border-white/15 text-left text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/30 transition-colors"
+            >
+              + Add to-do…
+            </button>
+            <RecordingButton
+              status={transcribeTodo.status}
+              onClick={() => {
+                if (transcribeTodo.status === 'idle') transcribeTodo.start();
+                else transcribeTodo.stop();
+              }}
+              disabled={transcribeTodo.status !== 'recording'}
+              className="shrink-0"
+            />
+          </div>
         ))}
 
       <div className="space-y-2">

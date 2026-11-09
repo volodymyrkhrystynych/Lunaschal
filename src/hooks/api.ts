@@ -5313,6 +5313,8 @@ export const api = {
     list: () => get<TodoItem[]>('/api/tasks/todos'),
     create: (data: TodoPayload & { title: string; id?: string }) =>
       post<{ id: string }>('/api/tasks/todos', data),
+    transcribe: (text: string) =>
+      post<{ id: string }>('/api/tasks/todos/transcribe', { text }),
     update: (id: string, data: TodoPayload) =>
       patch<{ success: boolean }>(`/api/tasks/todos/${id}`, data),
     remove: (id: string) => del<{ success: boolean }>(`/api/tasks/todos/${id}`),

@@ -8,9 +8,11 @@ from ulid import ULID
 from backend.capture_time import optional_capture_time
 from backend.db.connection import get_db, mapping_to_dict, row_to_dict
 from backend.day_boundary import day_bounds, day_key_for
+from backend.ai.todo import extract_todo_fields
 from backend.habit_streaks import summary as streak_summary
 from backend.todo_recurrence import (
-    next_due, normalize_list, parse_priority as _parse_priority,
+    next_due, normalize_list, parse_due_date,
+    parse_priority as _parse_priority,
     parse_repeat as _parse_repeat,
 )
 
@@ -726,6 +728,49 @@ def promote_chat_todo(chat_todo_id):
     if err:
         return jsonify({'error': err}), 400
     db.execute('DELETE FROM chat_todos WHERE id=?', (chat_todo_id,))
+    db.commit()
+    return jsonify({'id': todo_id}), 201
+
+
+@bp.post('/todos/transcribe')
+def transcribe_todo():
+    """Transcribe a spoken sentence into a to-do item.
+
+    The client sends already-transcribed text (via ``/api/transcribe``).  The
+    backend runs it through the LLM to extract title, notes, priority, and due
+    date, then inserts a new todos row.  If the LLM is unavailable or returns
+    nothing useful, the raw transcript becomes the title with default priority.
+    """
+    body = request.json or {}
+    text = (body.get('text') or '').strip()
+    if not text:
+        return jsonify({'error': 'text required'}), 400
+
+    db = get_db()
+    fields = extract_todo_fields(text)
+    if fields is None:
+        # LLM unavailable or returned empty Ã¢ÂÂ fall back to raw transcript
+        fields = {'title': text[:100].strip(), 'notes': None, 'priority': None, 'due': None}
+
+    # Build the body for _insert_todo_row, converting due from YYYY-MM-DD to
+    # unix timestamp via the existing date parser.
+    insert_body: dict = {
+        'title': fields['title'],
+        'notes': fields.get('notes'),
+        'priority': fields.get('priority'),
+    }
+    due_str = fields.get('due')
+    if due_str:
+        due_ts, err = parse_due_date(due_str)
+        if err:
+            due_ts = None  # invalid date from the LLM Ã¢ÂÂ drop it
+        insert_body['due'] = due_ts
+    else:
+        insert_body['due'] = None
+
+    todo_id, err = _insert_todo_row(db, insert_body)
+    if err:
+        return jsonify({'error': err}), 400
     db.commit()
     return jsonify({'id': todo_id}), 201
 
