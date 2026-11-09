@@ -162,7 +162,9 @@ def test_generate_briefing_uses_model_override(client, monkeypatch):
     assert captured['model'] == 'llama3.1:70b'
 
 
-def test_generate_briefing_passes_thinking_and_max_tokens_from_settings(client, monkeypatch):
+def test_generate_briefing_passes_max_tokens_and_leaves_thinking_to_the_thread(client, monkeypatch):
+    """Thinking is the nightly thread's scope, not this call's: "Run now" in
+    Settings goes through the same function with somebody waiting on it."""
     captured = {}
 
     def fake_chat_json(prompt, system=None, model=None, **kwargs):
@@ -173,9 +175,9 @@ def test_generate_briefing_passes_thinking_and_max_tokens_from_settings(client, 
     ctx = {'now': NOW, 'today': TODAY, 'journal': [], 'daily_tasks': [],
            'todos': [], 'calendar': [], 'learning_due': 0}
 
-    # Defaults: no thinking, generous ceiling.
+    # Defaults: a generous ceiling, and no opinion about thinking.
     briefing_mod.generate_briefing(ctx)
-    assert captured['thinking'] is False
+    assert 'thinking' not in captured and 'thinking_budget' not in captured
     assert captured['max_tokens'] == briefing_mod.BRIEFING_MAX_TOKENS
     # The completion is grammar-constrained to the briefing's shape, which is what
     # makes FALLBACK_BRIEFING a rare path rather than a routine one.
@@ -195,8 +197,8 @@ def test_generate_briefing_passes_thinking_and_max_tokens_from_settings(client, 
     )
     db.commit()
     briefing_mod.generate_briefing(ctx)
-    assert captured['thinking'] is True
     assert captured['max_tokens'] == 8000
+    assert 'thinking' not in captured
     assert 'num_ctx' not in captured
 
 

@@ -68,14 +68,24 @@ def run_nightly() -> None:
 
 
 def _run_nightly() -> None:
+    """The passes, each inside its own thinking scope.
+
+    This thread is the one place where nobody is waiting on the model, so it is
+    where thinking is switched on, with the long overnight budget
+    (backend/ai/llm.py). The passes themselves never ask for thinking, so the
+    same code run on demand — Settings' "Run now", a wiki rebuild — answers at
+    interactive speed. Each pass's own deadline is what bounds the night.
+    """
     import time as _time
 
+    from backend.ai.llm import overnight_thinking
     from backend.lifewiki.job import DEFAULT_BUDGET_SECONDS, run_life_wiki_pass
 
     try:
-        result = run_life_wiki_pass(
-            deadline=_time.monotonic() + DEFAULT_BUDGET_SECONDS
-        )
+        with overnight_thinking():
+            result = run_life_wiki_pass(
+                deadline=_time.monotonic() + DEFAULT_BUDGET_SECONDS
+            )
         if result.get('facts') or result.get('articles'):
             print(f'Life-wiki pass: {result["facts"]} facts, '
                   f'{result["articles"]} articles, '
@@ -89,14 +99,16 @@ def _run_nightly() -> None:
     # reason as the wiki: the briefing is the thing the user wakes up to.
     try:
         from backend.oddities_job import run_oddities_pass
-        result = run_oddities_pass()
+        with overnight_thinking():
+            result = run_oddities_pass()
         if result['clusters']:
             print(f'Server oddities: {result["clusters"]} kinds from '
                   f'{result["events"]} events, {result["notes"]} notes written')
     except Exception as e:
         print(f'Server oddities pass failed, briefing continuing: {e}')
 
-    run_briefing()
+    with overnight_thinking():
+        run_briefing()
 
 
 # How long the phone sync log keeps superseded versions. A device that hasn't

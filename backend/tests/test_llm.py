@@ -78,6 +78,7 @@ def test_request_kwargs_disables_thinking_explicitly():
 def test_request_kwargs_enables_thinking():
     kwargs = _request_kwargs(thinking=True, max_tokens=None)
     assert kwargs['extra_body']['chat_template_kwargs']['enable_thinking'] is True
+    # No ceiling to add the budget to, so none is invented.
     assert 'max_tokens' not in kwargs
 
 
@@ -138,6 +139,157 @@ def test_chat_json_defaults_thinking_off(monkeypatch):
     assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is False
 
 
+def test_request_kwargs_sends_a_thinking_budget_and_adds_it_to_the_ceiling():
+    """llama-server counts thinking against max_tokens, so the budget is added
+    on top: max_tokens keeps meaning room for the answer, and a long think can
+    no longer spend it."""
+    kwargs = _request_kwargs(thinking=True, max_tokens=2048, thinking_budget=4096)
+    assert kwargs['extra_body']['reasoning_budget_tokens'] == 4096
+    assert kwargs['extra_body']['reasoning_budget_message'] == llm.THINKING_BUDGET_MESSAGE
+    assert kwargs['max_tokens'] == 2048 + 4096 + llm.THINKING_BUDGET_OVERHEAD
+
+
+def test_request_kwargs_ignores_a_budget_while_thinking_is_off():
+    kwargs = _request_kwargs(thinking=False, max_tokens=2048, thinking_budget=4096)
+    assert 'reasoning_budget_tokens' not in kwargs['extra_body']
+    assert 'reasoning_budget_message' not in kwargs['extra_body']
+    assert kwargs['max_tokens'] == 2048
+
+
+def test_explicit_thinking_without_a_budget_is_capped_for_a_waiting_caller():
+    """Every think is capped, so the answer's room can be kept on top of it.
+    Unbudgeted, Qwen3.6 thought for 34 s about a trivial question."""
+    kwargs = _request_kwargs(thinking=True, max_tokens=2048)
+    assert kwargs['extra_body']['reasoning_budget_tokens'] == llm.INTERACTIVE_THINKING_BUDGET
+    assert kwargs['max_tokens'] == (
+        2048 + llm.INTERACTIVE_THINKING_BUDGET + llm.THINKING_BUDGET_OVERHEAD
+    )
+
+
+def test_explicit_thinking_without_a_budget_is_capped_in_the_background():
+    from backend.ai import service
+    with service.background():
+        kwargs = _request_kwargs(thinking=True, max_tokens=2048)
+    assert kwargs['extra_body']['reasoning_budget_tokens'] == llm.BACKGROUND_THINKING_BUDGET
+
+
+def test_chat_json_passes_the_thinking_budget_through(monkeypatch):
+    captured = _stub_client(monkeypatch, {})
+    llm.chat_json('hi', thinking=True, thinking_budget=1024, max_tokens=512)
+    assert captured['extra_body']['reasoning_budget_tokens'] == 1024
+    assert captured['max_tokens'] == 1536 + llm.THINKING_BUDGET_OVERHEAD
+
+
+# --- Thinking decided by the thread ---
+#
+# Calls that don't choose thinking for themselves are decided by where they
+# run: off by default (somebody may be waiting), long inside an overnight pass's
+# scope (nobody is).
+
+def _lanes(monkeypatch):
+    """qwen36 is the GPU chat model; anything else is the CPU lane."""
+    from backend.ai import service
+    monkeypatch.setattr(service, 'lane_for',
+                        lambda alias: service.GPU if alias == 'qwen36' else service.CPU)
+
+
+def test_a_thinking_scope_turns_thinking_on_for_undecided_calls(monkeypatch):
+    captured = _stub_client(monkeypatch, {})
+    _lanes(monkeypatch)
+    with llm.thinking_scope(8192):
+        llm.chat_json('hi', max_tokens=1000)
+    assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is True
+    assert captured['extra_body']['reasoning_budget_tokens'] == 8192
+    # The answer keeps its whole 1000 tokens on top of the think.
+    assert captured['max_tokens'] == 1000 + 8192 + llm.THINKING_BUDGET_OVERHEAD
+
+
+def test_a_scope_without_a_budget_means_no_thinking(monkeypatch):
+    captured = _stub_client(monkeypatch, {})
+    _lanes(monkeypatch)
+    with llm.thinking_scope(None):
+        llm.chat_json('hi', max_tokens=1000)
+    assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is False
+    assert captured['max_tokens'] == 1000
+
+
+def test_an_explicit_choice_beats_the_scope(monkeypatch):
+    captured = _stub_client(monkeypatch, {})
+    _lanes(monkeypatch)
+    with llm.thinking_scope(8192):
+        llm.chat_json('hi', thinking=False)
+    assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is False
+
+
+def test_the_scope_skips_the_cpu_lane(monkeypatch):
+    """The CPU model has a 16k context; a long think beside an image would not
+    fit in it."""
+    captured = _stub_client(monkeypatch, {})
+    _lanes(monkeypatch)
+    with llm.thinking_scope(8192):
+        llm.chat_json('hi', model='gemma4-12b-omni')
+    assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is False
+    assert 'reasoning_budget_tokens' not in captured['extra_body']
+
+
+def test_scopes_nest_and_restore():
+    with llm.thinking_scope(8192):
+        with llm.thinking_scope(None):
+            assert _request_kwargs(thinking=None, max_tokens=10)['max_tokens'] == 10
+        assert llm._scope.budget == 8192
+    assert not hasattr(llm._scope, 'budget')
+
+
+def test_a_scope_belongs_to_its_thread(monkeypatch):
+    import threading
+    _lanes(monkeypatch)
+    monkeypatch.setattr(llm, 'get_provider_config', lambda: {})
+    monkeypatch.setattr(llm, 'get_model', lambda *a, **k: 'qwen36')
+    seen = {}
+    with llm.thinking_scope(8192):
+        t = threading.Thread(target=lambda: seen.update(
+            _request_kwargs(thinking=None, max_tokens=10)['extra_body']))
+        t.start()
+        t.join()
+    assert seen['chat_template_kwargs']['enable_thinking'] is False
+
+
+def test_overnight_thinking_follows_the_settings(client, monkeypatch):
+    from backend.db import connection
+    _lanes(monkeypatch)
+    monkeypatch.setattr(llm, 'get_provider_config', lambda: {})
+    monkeypatch.setattr(llm, 'get_model', lambda *a, **k: 'qwen36')
+
+    def think():
+        return _request_kwargs(thinking=None, max_tokens=10)['extra_body']
+
+    # Off by default: the scope opens with no budget.
+    with llm.overnight_thinking():
+        assert think()['chat_template_kwargs']['enable_thinking'] is False
+
+    db = connection.get_db()
+    db.execute(
+        'INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)'
+    )
+    db.execute('UPDATE settings SET briefing_thinking=1 WHERE id=1')
+    db.commit()
+    with llm.overnight_thinking():
+        assert think()['reasoning_budget_tokens'] == llm.OVERNIGHT_THINKING_BUDGET == 49152
+
+    db.execute('UPDATE settings SET briefing_thinking_budget=2048 WHERE id=1')
+    db.commit()
+    with llm.overnight_thinking():
+        assert think()['reasoning_budget_tokens'] == 2048
+
+
+def test_an_overnight_call_comes_to_about_sixty_thousand_tokens():
+    """48k of thinking on top of a typical answer ceiling: the cap stops a
+    runaway rather than rationing reasoning, and the answer keeps its room."""
+    kwargs = _request_kwargs(thinking=True, max_tokens=12_000,
+                             thinking_budget=llm.OVERNIGHT_THINKING_BUDGET)
+    assert kwargs['max_tokens'] == 12_000 + 49152 + llm.THINKING_BUDGET_OVERHEAD
+
+
 def test_default_generation_opts_reads_settings(client):
     from backend.ai.llm import LLM_MAX_TOKENS, default_generation_opts
     from backend.db import connection
@@ -173,8 +325,33 @@ def test_chat_messages_applies_default_generation_opts(client, monkeypatch):
     db.commit()
 
     assert llm.chat_text('hello') == 'hello there'
-    assert captured['max_tokens'] == 1234
+    # The setting's ceiling stays room for the answer; the short interactive
+    # think is added on top.
+    assert captured['max_tokens'] == (
+        1234 + llm.INTERACTIVE_THINKING_BUDGET + llm.THINKING_BUDGET_OVERHEAD
+    )
     assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is True
+    assert captured['extra_body']['reasoning_budget_tokens'] == llm.INTERACTIVE_THINKING_BUDGET
+
+
+def test_the_chat_thinking_setting_does_not_reach_background_calls(client, monkeypatch):
+    """`llm_thinking` is a preference about waiting. A P2 call through the same
+    helper is nobody's wait, and stays off outside an overnight scope."""
+    from backend.ai import service
+    from backend.db import connection
+    captured = _stub_client(monkeypatch, {}, content='hello there')
+    db = connection.get_db()
+    db.execute(
+        'INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)'
+    )
+    db.execute('UPDATE settings SET llm_thinking=1, llm_max_tokens=1234 WHERE id=1')
+    db.commit()
+
+    with service.background():
+        assert llm.default_generation_opts()['thinking'] is None
+        llm.chat_text('hello')
+    assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is False
+    assert captured['max_tokens'] == 1234
 
 
 # --- Reassembling a tool turn from stream deltas ---

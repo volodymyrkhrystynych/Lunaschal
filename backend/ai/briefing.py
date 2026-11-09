@@ -357,17 +357,16 @@ def _briefing_generation_opts() -> dict:
     """User-tunable generation knobs for the briefing, falling back to the module
     defaults when unset.
 
-    Thinking and output ceiling only — the context window is not a per-request
-    setting at all, since llama-server allocates the KV cache when it loads the
-    model. Thinking is genuinely worth enabling here even though the chat path
-    leaves it off: the briefing runs overnight, so latency is free.
+    The output ceiling only — the context window is not a per-request setting
+    at all, since llama-server allocates the KV cache when it loads the model.
+    Thinking is not decided here: the nightly thread opens a scope with the
+    briefing's budget (backend/briefing_scheduler.py), while "Run now" in
+    Settings has none, since somebody is waiting on it. The ceiling is room for
+    the answer — a budget is added on top of it.
     """
     from backend.ai.provider import get_settings
     s = get_settings() or {}
-    return {
-        'thinking': bool(s.get('briefing_thinking')),
-        'max_tokens': s.get('briefing_max_tokens') or BRIEFING_MAX_TOKENS,
-    }
+    return {'max_tokens': s.get('briefing_max_tokens') or BRIEFING_MAX_TOKENS}
 
 
 def generate_briefing(context: dict) -> dict:

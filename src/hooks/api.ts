@@ -972,6 +972,7 @@ export interface AppSettings {
   briefingModel: string | null;
   briefingThinking: boolean;
   briefingMaxTokens: number;
+  briefingThinkingBudget: number;
   /** '' | 'brave' | 'searxng' — empty means the web-search chat tab
    * degrades to an explanatory failure instead of searching. */
   websearchSearchProvider: string;

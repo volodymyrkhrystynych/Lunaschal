@@ -168,6 +168,9 @@ def extract_facts(digest_text: str, index_lines: str = '') -> list[dict]:
     [] is a real outcome and not an error: most days add nothing that will still
     matter in a month, and a pass that invents something to justify itself is
     the failure mode this whole design is arranged against.
+
+    Thinks only inside the nightly thread's scope; a user-pressed rebuild has
+    none and stays fast.
     """
     if not is_ai_configured() or not digest_text.strip():
         return []

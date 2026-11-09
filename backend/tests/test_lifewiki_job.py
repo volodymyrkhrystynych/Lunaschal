@@ -566,3 +566,65 @@ def test_a_reworded_slug_under_the_same_title_still_lands_on_it(client, monkeypa
     job.run_life_wiki_pass()
 
     assert len(wiki.list_articles(kind=wiki.LIFE_KIND)) == 1
+
+
+# --- thinking ------------------------------------------------------------
+
+
+def test_every_nightly_pass_thinks_with_the_overnight_budget(client, monkeypatch):
+    """The nightly thread is where nobody is waiting, so it is where thinking
+    is switched on — every pass, with the Settings budget."""
+    from backend import briefing_scheduler
+    from backend.ai import llm
+
+    db = get_db()
+    db.execute('INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)')
+    db.execute('UPDATE settings SET briefing_thinking=1, briefing_thinking_budget=40000 WHERE id=1')
+    db.commit()
+
+    seen = {}
+
+    def record(name, result):
+        def run(*a, **k):
+            seen[name] = getattr(llm._scope, 'budget', 'unset')
+            return result
+        return run
+
+    monkeypatch.setattr('backend.lifewiki.job.run_life_wiki_pass', record(
+        'wiki', {'facts': 0, 'articles': 0, 'observationsFolded': 0}))
+    monkeypatch.setattr('backend.oddities_job.run_oddities_pass', record(
+        'oddities', {'clusters': 0}))
+    monkeypatch.setattr(briefing_scheduler, 'run_briefing', record('briefing', None))
+
+    briefing_scheduler.run_nightly()
+    assert seen == {'wiki': 40000, 'oddities': 40000, 'briefing': 40000}
+    # Nothing leaks out of the thread's scopes once the night is over.
+    assert not hasattr(llm._scope, 'budget')
+
+    # With the overnight switch off every scope opens empty: no thinking.
+    db.execute('UPDATE settings SET briefing_thinking=0 WHERE id=1')
+    db.commit()
+    briefing_scheduler.run_nightly()
+    assert set(seen.values()) == {None}
+
+
+def test_a_rebuild_does_not_think(client, monkeypatch):
+    """A user-pressed rebuild opens no scope — someone is waiting on it."""
+    from backend.ai import llm
+    db = get_db()
+    db.execute('INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)')
+    db.execute('UPDATE settings SET briefing_thinking=1 WHERE id=1')
+    db.commit()
+    entry = _journal(db, 'Went to GoodLife, third time this week')
+    fact = {'slug': 'health-and-training', 'title': 'Health and training',
+            'statement': 'Trains three times a week.', 'source': f'journal:{entry}'}
+    monkeypatch.setattr(job.prompts, 'extract_facts', lambda *a, **k: [fact])
+    monkeypatch.setattr(job.prompts, 'write_article', lambda *a, **k: {
+        'title': 'Health and training', 'summary': 's', 'content': 'c'})
+    job.run_life_wiki_pass()
+
+    scopes = []
+    monkeypatch.setattr(job.prompts, 'extract_facts',
+                        lambda *a, **k: scopes.append(getattr(llm._scope, 'budget', None)) or [fact])
+    job.rebuild_article('health-and-training')
+    assert scopes and all(s is None for s in scopes)

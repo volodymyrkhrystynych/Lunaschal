@@ -51,7 +51,13 @@ and Settings → Logs shows it (label `code_agent`). Three things happen there t
   prevents it (that is what the app's own tool loop does), but Qwen needs thinking for anything
   non-trivial, so the proxy **promotes** a complete, schema-valid call to a real `tool_calls` entry,
   **pokes** the model to re-emit a broken one (at most twice), and otherwise records **stuck**.
-- *A floor on `max_tokens`* (32k): at 8k, file writes were cut off and saved half-written
+- *A capped think, and a floor on `max_tokens` above it* (60k): every turn carries llama-server's
+  `reasoning_budget_tokens` (48k unless the harness sent its own) with the app's wrap-up message, and
+  `max_tokens` leaves at least 12k for the answer beyond it. Qwen's model card sets no thinking budget,
+  only a 32k–81,920-token output length, so the cap stops a runaway rather than rationing reasoning; a
+  harness that sends no budget (omp, Qwen Code) could otherwise think through the whole ceiling and
+  end the turn having done nothing. The answer's floor is what the old 32k ceiling was for: at 8k,
+  file writes were cut off and saved half-written
   ([doug.sh's omp tuning notes](https://doug.sh/posts/tuning-a-local-coding-agent-oh-my-pi/)).
 - *Qwen's coding sampler* (temperature 0.6, top-p 0.95, top-k 20, min-p 0, presence 0), filled in
   where the agent sent none. The `[qwen36]` preset runs Qwen's general-thinking sampler (1.0) because
@@ -162,12 +168,19 @@ source, and the important ones are pinned by `test_codeagent_container.py`):
   `preserve_thinking`. Without it pi sends OpenAI's `reasoning_effort`, which llama-server ignores,
   so the thinking level did nothing. `preserve_thinking` is what Qwen's model card recommends for
   agents. It also keeps the prompt prefix identical turn to turn, which the prompt cache needs.
-- `thinkingTokenBudgetField: "thinking_budget_tokens"` plus `thinkingBudgets` (medium = 8k) cap a
-  turn's reasoning, which shares `max_tokens` with the answer. A llama.cpp build that predates
-  per-request budgets ignores the field.
+- `thinkingTokenBudgetField: "reasoning_budget_tokens"` with `defaultThinkingLevel: "high"` (48k in
+  `thinkingBudgets`) caps a turn's reasoning, which shares `max_tokens` (60k) with the answer. That
+  field, unlike `thinking_budget_tokens`, ends a think with the wrap-up message rather than
+  mid-sentence; the proxy renames the other one anyway. A llama.cpp build that predates per-request
+  budgets ignores both.
 - `contextWindow` is the server's whole `ctx-size` (190k). `kv-unified` lets one slot address the
-  whole pool. `compaction.reserveTokens: 32768` (the proxy's `max_tokens` floor) means a session tops
-  out near 157k, which also leaves room for a chat arriving meanwhile.
+  whole pool. **All three harnesses compact at 65% of it** (~123k), the app-wide `COMPACT_AT` in
+  `backend/ai/llm.py` that Chat uses too, which leaves a full 60k turn free. Each spells it its own
+  way: pi as `compaction.reserveTokens: 66500`, omp as `compaction.thresholdPercent: 65` in its
+  `config.yml`, Qwen Code as `context.autoCompactThreshold: 0.65` — plus `contextWindowSize`, since
+  Qwen Code guesses the window from the model's name and `local` names nothing. Qwen Code also needs
+  its request timeout and its 15-minute stream lifetime lifted (`settings.json`, the Dockerfile),
+  or it aborts a long think.
 - `defaultTools` adds pi's own `grep`/`find`/`ls`: structured, truncated output is easier on a 3B-active
   model than raw shell output.
 - `httpIdleTimeoutMs: 0`: the proxy's keepalives already cover a long call. A client timeout would
@@ -198,7 +211,7 @@ A one-off check, also on the server: `python -m backend.codeagent.run --repo lun
 - **No iOS builds in the container** (it is Linux). The PR's CI covers it: Actions macOS runners are free
   on public repos, and `apple.yml` already builds the app.
 - `kv-unified` means the agent's context comes out of the same 190k pool as chat. The agent may use
-  all of it. Compaction keeps it under ~157k, and a chat preempts the agent's request. **Not yet
+  all of it. Compaction keeps it under ~123k plus one turn, and a chat preempts the agent's request. **Not yet
   measured:** whether llama-server evicts an idle agent slot's cache when a long chat needs the room,
   and how much re-prefill the agent's next turn then pays. The `prefilled`/`cached` numbers on each
   model call are how to tell.

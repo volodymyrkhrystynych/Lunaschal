@@ -101,6 +101,7 @@ def annotate(items: list[dict]) -> dict[str, str]:
         'required': ['notes'],
         'additionalProperties': False,
     }
+    # Thinks inside the nightly thread's scope (backend/briefing_scheduler.py).
     result = chat_json(build_prompt(items), system=SYSTEM_PROMPT, schema=schema)
     notes = {}
     for entry in (result or {}).get('notes') or []:

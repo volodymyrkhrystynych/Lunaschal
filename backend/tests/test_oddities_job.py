@@ -256,3 +256,18 @@ def test_annotate_keeps_only_known_ids_and_trims(monkeypatch):
 def test_snippet_refuses_paths_outside_the_repo():
     assert ai._snippet({'file': '../../etc/passwd', 'line': 1}) is None
     assert ai._snippet({'file': 'backend/nope.py', 'line': 1}) is None
+
+
+def test_annotate_leaves_thinking_to_the_nightly_scope(client, monkeypatch):
+    captured = {}
+
+    def fake_chat_json(prompt, system=None, schema=None, **kw):
+        captured.update(kw)
+        return {'notes': []}
+
+    monkeypatch.setattr(ai, 'chat_json', fake_chat_json)
+    item = {'fingerprint': 'aaa', 'unit': 'lunaschal', 'kind': 'error', 'status': 'new',
+            'count': 1, 'days': 1, 'template': 'boom', 'sample': 'boom', 'frame': None}
+
+    ai.annotate([item])
+    assert 'thinking' not in captured and 'thinking_budget' not in captured
