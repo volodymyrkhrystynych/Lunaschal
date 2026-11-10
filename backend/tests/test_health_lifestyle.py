@@ -186,3 +186,29 @@ def test_sleep_endpoint_returns_all_seven_days_and_rejects_bad_dates(client):
     assert days[-1]['asleepMinutes'] == 465
     for bad in ('bad', '2026-02-30', '0001-01-01'):
         assert client.get(f'/api/apple-health/sleep?to={bad}').status_code == 400
+
+
+def test_workout_without_an_indoor_flag_defaults_to_outside(client):
+    ingest.ingest({'workouts': [{**workout(), 'metadata': {}}]})
+    assert client.get('/api/lifestyle/workouts').get_json()[0]['locationType'] == 'outside'
+
+
+def test_workout_flagged_indoor_is_left_for_the_user_to_place(client):
+    ingest.ingest({'workouts': [{**workout(), 'metadata': {'HKIndoorWorkout': True}}]})
+    assert client.get('/api/lifestyle/workouts').get_json()[0]['locationType'] == 'unassigned'
+
+
+def test_startup_moves_unplaced_imports_outside_and_leaves_the_rest(client):
+    plain, indoor, placed = (workout(), {**workout(), 'metadata': {'HKIndoorWorkout': True}}, workout())
+    ingest.ingest({'workouts': [plain, indoor, placed]})
+    db = get_db()
+    session = {h.lower(): s for h, s in db.execute('SELECT health_id, session_id FROM health_workout_links')}
+    # Emulate imports made under the old rule, where no flag meant unassigned.
+    db.execute("UPDATE workout_sessions SET location_type='unassigned' WHERE id IN (?, ?)",
+               (session[plain['uuid']], session[indoor['uuid']]))
+    db.execute("UPDATE workout_sessions SET location_type='building' WHERE id=?", (session[placed['uuid']],))
+    _ensure_health_lifestyle(db)
+    got = {r['id']: r['locationType'] for r in client.get('/api/lifestyle/workouts').get_json()}
+    assert got[session[plain['uuid']]] == 'outside'
+    assert got[session[indoor['uuid']]] == 'unassigned'
+    assert got[session[placed['uuid']]] == 'building'

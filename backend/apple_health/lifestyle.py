@@ -43,8 +43,8 @@ def reconcile(db):
     ).fetchall():
         sid = str(ULID())
         metadata = json.loads(row['metadata'] or '{}')
-        # A sport cannot establish location: walking may be a treadmill.
-        location = 'outside' if metadata.get('HKIndoorWorkout') is False else 'unassigned'
+        # Outside unless HealthKit says indoor; a treadmill names no room.
+        location = 'unassigned' if metadata.get('HKIndoorWorkout') is True else 'outside'
         start, end = int(row['start_ts']), int(row['end_ts'])
         name = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', row['activity_name']).replace('_', ' ').title()
         db.execute(
