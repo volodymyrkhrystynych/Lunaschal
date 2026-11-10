@@ -459,7 +459,18 @@ what each device can currently do and which work remains device-only.
   queues in the Chat tab's recording outbox and is answered by the server, and
   what the agent proposes arrives as editable confirm cards. One opened from a
   chapter knows which, and the agent can propose adding to it or replacing a
-  quoted passage, never rewriting it. Canon imports stay on the desktop.
+  quoted passage, never rewriting it. Selecting text in a chapter offers
+  "Discuss rewrite" (in the edit menu and on the keyboard bar): it opens a
+  discussion about that passage in a sheet, with the passage kept in view, and
+  the rewrite arrives as a card that replaces exactly those words. Chapters,
+  notes and discussions have Rename and Delete in their swipe menus (a book's
+  Rename opens its details); renaming a chapter or note works offline, while
+  discussions need the server. The book's Canon section links imported Fandom
+  wikis to it, searches them and reads a page with its attribution, and can
+  start an import from a wiki's address — online only, since a dump is far too
+  big for the phone. Edit-menu offering passed as an app unit test; swipe
+  rename/delete, the passage sheet and canon search passed in simulator against
+  the fixture.
   Screens, offline editing, relaunch survival and the conflict choices passed in
   simulator against a fixture, and the app's decoding and sync passed against
   real responses from the Flask routes. Not yet run over a network against a

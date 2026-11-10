@@ -1342,6 +1342,87 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Update this note?"].waitForExistence(timeout: 5))
     }
 
+    private func openWritingBook(_ app: XCUIApplication) {
+        openMore(app, "Writing")
+        let project = app.buttons["writing-project"].firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        project.tap()
+    }
+
+    // Renaming works offline: the new title is a draft like any typed text.
+    func testWritingRenamesAndDeletesAChapterBySwipe() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        openWritingBook(app)
+        let favour = app.staticTexts["The Favour"]
+        XCTAssertTrue(favour.waitForExistence(timeout: 5))
+        favour.swipeLeft()
+        app.buttons["writing-rename"].firstMatch.tap()
+        let field = app.alerts.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "The Favour".count))
+        field.typeText("The Debt")
+        app.alerts.buttons["Save"].firstMatch.tap()
+        let renamed = app.staticTexts["The Debt"]
+        XCTAssertTrue(renamed.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.images["Not yet on the server"].exists)
+
+        renamed.swipeLeft()
+        app.buttons["writing-delete"].firstMatch.tap()
+        let confirm = app.buttons["Delete “The Debt”"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+        XCTAssertTrue(renamed.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["The Wreck"].exists)
+    }
+
+    // Highlight a sentence, ask about it, and the rewrite comes back as a card
+    // that replaces exactly that passage.
+    func testWritingDiscussesAHighlightedPassage() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        let editor = openWritingChapter(app)
+        editor.tap()
+        let discuss = app.buttons["writing-discuss-selection"]
+        XCTAssertTrue(discuss.waitForExistence(timeout: 5))
+        XCTAssertFalse(discuss.isEnabled)
+        editor.doubleTap()
+        expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: discuss)
+        waitForExpectations(timeout: 5)
+        discuss.tap()
+        XCTAssertTrue(app.otherElements["writing-passage"].waitForExistence(timeout: 5)
+                      || app.staticTexts["writing-passage"].exists)
+        XCTAssertTrue(app.staticTexts["Change this chapter?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Update Chapter"].exists)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+    }
+
+    func testWritingSearchesCanonAndOpensAPage() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-writingFixture")
+        app.launch()
+        openWritingBook(app)
+        let canon = app.segmentedControls.buttons["Canon"]
+        XCTAssertTrue(canon.waitForExistence(timeout: 5))
+        canon.tap()
+        XCTAssertTrue(app.staticTexts["Salt Roads Wiki"].waitForExistence(timeout: 5))
+        app.buttons["writing-canon-search"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("Vell\n")
+        let hit = app.buttons["writing-canon-hit"].firstMatch
+        XCTAssertTrue(hit.waitForExistence(timeout: 5))
+        hit.tap()
+        let article = app.staticTexts["writing-canon-article"]
+        XCTAssertTrue(article.waitForExistence(timeout: 5))
+        XCTAssertTrue(article.label.contains("licence was withdrawn"))
+        XCTAssertTrue(app.staticTexts["Source: saltroads.fandom.com (Fandom wiki), CC BY-SA 3.0."].exists)
+    }
+
     func testWritingStartsANewBookAndOpensIt() {
         let app = XCUIApplication()
         app.launchArguments.append("-writingFixture")

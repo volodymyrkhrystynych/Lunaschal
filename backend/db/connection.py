@@ -2749,6 +2749,9 @@ def _ensure_writing_editor_columns(db: sqlite3.Connection) -> None:
         # Plain TEXT: a deleted chapter must not block or cascade into its
         # discussions, and backend/writing/discuss.py joins through the chapter.
         ('conversations', 'writing_chapter_id', 'TEXT'),
+        # The words highlighted when a discussion was opened from a selection;
+        # backend/writing/discuss.py quotes them in the prompt.
+        ('conversations', 'writing_passage', 'TEXT'),
     ):
         cols = {r[1] for r in db.execute(f'PRAGMA table_info({table})')}
         if column not in cols:

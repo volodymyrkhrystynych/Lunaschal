@@ -24,6 +24,8 @@ final class WritingEditorModel: ObservableObject {
     @Published private(set) var waitingClips = 0
     /// The document was deleted and the author has dealt with it.
     @Published private(set) var gone = false
+    /// A highlighted passage the author asked to talk through.
+    @Published var discussing: WritingPassageRequest?
     @Published var problem: String?
 
     weak var textView: UITextView?
@@ -79,6 +81,21 @@ final class WritingEditorModel: ObservableObject {
     }
 
     func cursorMoved(to location: Int) { cursor = location }
+
+    /// Opens a discussion about the selected words, with everything typed so
+    /// far on disk first so the discussion is about the text on screen.
+    func discuss(_ passage: String) {
+        persist()
+        discussing = WritingPassageRequest(passage: passage)
+    }
+
+    /// The selection as a passage, or nil when there is nothing (or too much)
+    /// to discuss. Only a chapter's prose is rewritten this way, not a note.
+    func passage(in view: UITextView) -> String? {
+        guard key.kind == .chapter else { return nil }
+        let range = view.selectedRange
+        return WritingPassage.selection(in: view.text ?? "", location: range.location, length: range.length)
+    }
 
     private func scheduleSave() {
         persistTask?.cancel()
@@ -183,6 +200,11 @@ final class WritingEditorModel: ObservableObject {
     }
 }
 
+struct WritingPassageRequest: Identifiable {
+    let id = UUID()
+    let passage: String
+}
+
 private struct WritingStoreFailure: LocalizedError {
     let message: String
     var errorDescription: String? { message }
@@ -236,6 +258,7 @@ struct WritingTextEditor: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var model: WritingEditorModel
         private weak var mic: UIBarButtonItem?
+        private weak var discuss: UIBarButtonItem?
         private weak var count: UILabel?
         private var shownRecording = false
 
@@ -252,7 +275,33 @@ struct WritingTextEditor: UIViewRepresentable {
 
         func textViewDidChangeSelection(_ textView: UITextView) {
             let cursor = textView.selectedRange.location
-            MainActor.assumeIsolated { model.cursorMoved(to: cursor) }
+            MainActor.assumeIsolated {
+                model.cursorMoved(to: cursor)
+                // Only when it changes: see `update` for why the bar is touched sparingly.
+                let canDiscuss = model.passage(in: textView) != nil
+                if discuss?.isEnabled != canDiscuss { discuss?.isEnabled = canDiscuss }
+            }
+        }
+
+        /// "Discuss rewrite" beside Cut/Copy/Paste for a selected passage.
+        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
+                      suggestedActions: [UIMenuElement]) -> UIMenu? {
+            MainActor.assumeIsolated {
+                guard let passage = model.passage(in: textView) else { return nil }
+                let discuss = UIAction(title: "Discuss rewrite", image: UIImage(systemName: "text.bubble")) {
+                    [weak self] _ in MainActor.assumeIsolated { self?.model.discuss(passage) }
+                }
+                return UIMenu(children: [discuss] + suggestedActions)
+            }
+        }
+
+        /// What the keyboard bar's button does: the same as the menu item.
+        func discussSelection(in textView: UITextView) {
+            MainActor.assumeIsolated {
+                guard let passage = model.passage(in: textView) else { return }
+                textView.resignFirstResponder()
+                model.discuss(passage)
+            }
         }
 
         func makeBar(for view: UITextView) -> UIToolbar {
@@ -274,7 +323,17 @@ struct WritingTextEditor: UIViewRepresentable {
             label.textColor = .secondaryLabel
             label.accessibilityIdentifier = "writing-word-count"
             let done = button("keyboard.chevron.compact.down", "Hide keyboard") { [weak view] in view?.resignFirstResponder() }
-            bar.items = [undo, redo, mic, .flexibleSpace(), UIBarButtonItem(customView: label), .flexibleSpace(), done]
+            var items = [undo, redo, mic]
+            if MainActor.assumeIsolated({ model.key.kind == .chapter }) {
+                let discuss = button("text.bubble", "Discuss rewrite") { [weak self, weak view] in
+                    if let view { self?.discussSelection(in: view) }
+                }
+                discuss.accessibilityIdentifier = "writing-discuss-selection"
+                discuss.isEnabled = false
+                items.append(discuss)
+                self.discuss = discuss
+            }
+            bar.items = items + [.flexibleSpace(), UIBarButtonItem(customView: label), .flexibleSpace(), done]
             self.mic = mic
             count = label
             return bar
@@ -387,6 +446,12 @@ struct WritingEditorView: View {
         .sheet(isPresented: $showConflict) {
             NavigationStack {
                 WritingConflictView(model: model) { showConflict = false }
+            }
+        }
+        // Accepting a rewrite there changes this chapter, so take it in on the way back.
+        .sheet(item: $model.discussing, onDismiss: { model.reload() }) { request in
+            if let chapter = model.document {
+                WritingPassageSheet(writing: writing, chapter: chapter, passage: request.passage)
             }
         }
         .onAppear {
@@ -609,5 +674,46 @@ private struct WritingSidePanel: View {
             .frame(maxHeight: .infinity)
             .task { discussion = await writing.discussion(forChapter: editing.id, project: project) }
         }
+    }
+}
+
+/// The discussion about one highlighted passage: made when the sheet opens, and
+/// afterwards in the book's Discussions like any other, titled by its first words.
+private struct WritingPassageSheet: View {
+    @ObservedObject var writing: WritingModel
+    let chapter: WritingDocument
+    let passage: String
+    @State private var discussion: WritingDiscussion?
+    @State private var failed = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let discussion {
+                    WritingDiscussionView(model: WritingDiscussionModel(id: discussion.id, writing: writing),
+                                          title: discussion.displayTitle, passage: passage)
+                } else {
+                    VStack(spacing: 12) {
+                        if failed {
+                            Text(writing.problem ?? "Couldn't start the discussion.").foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                            Button("Try again") { Task { await start() } }
+                        } else {
+                            ProgressView()
+                        }
+                    }
+                    .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+        }
+        .task { if discussion == nil { await start() } }
+    }
+
+    private func start() async {
+        failed = false
+        discussion = await writing.passageDiscussion(chapter: chapter, passage: passage)
+        failed = discussion == nil
     }
 }

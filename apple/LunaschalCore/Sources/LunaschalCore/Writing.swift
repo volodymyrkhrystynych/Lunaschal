@@ -146,16 +146,39 @@ public struct WritingDiscussion: Codable, Hashable, Identifiable {
     public let title: String?
     /// The chapter it was opened from, which "this chapter" then means.
     public let writingChapterId: String?
+    /// The words highlighted when it was opened from a selection, if it was.
+    public let writingPassage: String?
     public let updatedAt: String?
 
-    public init(id: String, title: String?, writingChapterId: String? = nil, updatedAt: String? = nil) {
+    public init(id: String, title: String?, writingChapterId: String? = nil, writingPassage: String? = nil,
+                updatedAt: String? = nil) {
         self.id = id; self.title = title
-        self.writingChapterId = writingChapterId; self.updatedAt = updatedAt
+        self.writingChapterId = writingChapterId; self.writingPassage = writingPassage; self.updatedAt = updatedAt
     }
 
     public var displayTitle: String {
         let trimmed = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled discussion" : trimmed
+    }
+}
+
+/// A highlighted stretch of a chapter, to open a discussion about rewriting it.
+public enum WritingPassage {
+    /// The server's cap (`MAX_PASSAGE_CHARS` in backend/routes/writing.py).
+    public static let maxCharacters = 6000
+
+    /// The selected text, trimmed of the whitespace a drag tends to catch, or
+    /// nil when there is nothing to discuss or too much to call a passage.
+    /// `location`/`length` are UTF-16 offsets, as a text view reports them.
+    public static func selection(in text: String, location: Int, length: Int) -> String? {
+        let utf16 = text.utf16
+        guard length > 0, location >= 0, location + length <= utf16.count else { return nil }
+        let start = utf16.index(utf16.startIndex, offsetBy: location)
+        let end = utf16.index(start, offsetBy: length)
+        guard let lower = start.samePosition(in: text), let upper = end.samePosition(in: text) else { return nil }
+        let passage = text[lower..<upper].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !passage.isEmpty, passage.count <= maxCharacters else { return nil }
+        return passage
     }
 }
 
@@ -225,10 +248,14 @@ extension JournalAPI {
                                  from: await get("api/writing/projects/\(try Self.pathID(projectID))/conversations", [:]))
     }
 
-    public func createWritingDiscussion(projectID: String, chapterID: String? = nil) async throws -> String {
+    /// A discussion, optionally opened from a chapter and a passage of it;
+    /// the server titles a passage's discussion after its first words.
+    public func createWritingDiscussion(projectID: String, chapterID: String? = nil,
+                                        passage: String? = nil) async throws -> String {
         struct Reply: Decodable { let id: String }
         var body: [String: String] = [:]
         if let chapterID { body["chapterId"] = chapterID }
+        if let passage { body["passage"] = passage }
         let data = try await chatJSON("api/writing/projects/\(try Self.pathID(projectID))/conversations", body)
         return try JSONDecoder().decode(Reply.self, from: data).id
     }
@@ -251,6 +278,15 @@ extension JournalAPI {
             }
         }
         try await writingPatch("api/writing/projects/\(try Self.pathID(id))", Body(goal: wordsPerDay))
+    }
+
+    /// A discussion is a chat conversation, so it is renamed and deleted there.
+    public func renameWritingDiscussion(_ id: String, title: String) async throws {
+        try await writingPatch("api/chat/conversations/\(try Self.pathID(id))/title", ["title": title])
+    }
+
+    public func deleteWritingDiscussion(_ id: String) async throws {
+        try await send("api/chat/conversations/\(try Self.pathID(id))", method: "DELETE")
     }
 
     public func deleteWritingProject(_ id: String) async throws {

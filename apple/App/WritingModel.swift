@@ -14,6 +14,9 @@ final class WritingModel: ObservableObject {
     @Published private(set) var documents: [String: [WritingDocument]] = [:]
     @Published private(set) var discussions: [String: [WritingDiscussion]] = [:]
     @Published private(set) var stats: [String: WritingWordStats] = [:]
+    /// Every imported wiki, and which of them each book is linked to.
+    @Published private(set) var canonSources: [WritingCanonSource] = []
+    @Published private(set) var linkedCanon: [String: Set<String>] = [:]
     @Published var problem: String?
 
     let capture: CaptureModel
@@ -148,6 +151,18 @@ final class WritingModel: ObservableObject {
         } catch { report(error); return nil }
     }
 
+    /// A new title, on the phone first: it travels with the draft, so it
+    /// works offline and is revision-checked like any other edit.
+    func rename(_ document: WritingDocument, to title: String) {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, title != document.title else { return }
+        do {
+            try store.edit(document.key, project: document.projectId, title: title)
+            documents[document.projectId] = store.documents(project: document.projectId)
+            Task { await capture.pushWriting() }
+        } catch { report(error) }
+    }
+
     func delete(_ document: WritingDocument) async {
         if document.onServer, fixture == nil {
             guard let api = api() else { return report(needing: "Deleting") }
@@ -204,6 +219,98 @@ final class WritingModel: ObservableObject {
             return discussions[project]?.first { $0.id == created }
                 ?? WritingDiscussion(id: created, title: nil, writingChapterId: id)
         } catch { report(error); return nil }
+    }
+
+    /// A new discussion about one highlighted passage of a chapter. What was
+    /// typed goes up first: the rewrite it proposes is matched against the
+    /// server's copy of the chapter, so the passage has to be there.
+    func passageDiscussion(chapter: WritingDocument, passage: String) async -> WritingDiscussion? {
+        if let fixture { return fixture.passageDiscussion(chapter: chapter.id, passage: passage) }
+        guard let api = api() else { report(needing: "Discussing a passage"); return nil }
+        await capture.pushWriting()
+        do {
+            let created = try await api.createWritingDiscussion(projectID: chapter.projectId, chapterID: chapter.id,
+                                                                passage: passage)
+            await load(project: chapter.projectId)
+            return discussions[chapter.projectId]?.first { $0.id == created }
+                ?? WritingDiscussion(id: created, title: nil, writingChapterId: chapter.id, writingPassage: passage)
+        } catch { report(error); return nil }
+    }
+
+    func renameDiscussion(_ discussion: WritingDiscussion, project: String, to title: String) async {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        guard fixture == nil else { return }
+        guard let api = api() else { return report(needing: "Renaming a discussion") }
+        do {
+            try await api.renameWritingDiscussion(discussion.id, title: title)
+            await load(project: project)
+        } catch { report(error) }
+    }
+
+    func deleteDiscussion(_ discussion: WritingDiscussion, project: String) async {
+        guard fixture == nil else { return }
+        guard let api = api() else { return report(needing: "Deleting a discussion") }
+        do {
+            try await api.deleteWritingDiscussion(discussion.id)
+            discussions[project]?.removeAll { $0.id == discussion.id }
+        } catch { report(error) }
+    }
+
+    // MARK: Canon — online only; a wiki dump is far too big to keep on the phone.
+
+    func loadCanon(project: String) async {
+        if let fixture {
+            canonSources = fixture.canonSources
+            if linkedCanon[project] == nil { linkedCanon[project] = fixture.linkedCanon(project) }
+            return
+        }
+        guard let api = api() else { return report(needing: "Canon") }
+        do {
+            async let sources = api.writingCanonSources()
+            async let linked = api.writingProjectCanon(projectID: project)
+            canonSources = try await sources
+            linkedCanon[project] = Set(try await linked)
+        } catch { report(error) }
+    }
+
+    func setCanon(project: String, source: String, linked: Bool) async {
+        var ids = linkedCanon[project] ?? []
+        if linked { ids.insert(source) } else { ids.remove(source) }
+        if fixture == nil {
+            guard let api = api() else { return report(needing: "Linking a wiki") }
+            do { try await api.setWritingProjectCanon(projectID: project, sourceIDs: ids.sorted()) }
+            catch { return report(error) }
+        }
+        linkedCanon[project] = ids
+    }
+
+    func searchCanon(project: String, query: String) async -> [WritingCanonHit] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        if let fixture { return fixture.canonHits(query) }
+        guard let api = api() else { report(needing: "Searching canon"); return [] }
+        do { return try await api.searchWritingCanon(projectID: project, query: query) }
+        catch { report(error); return [] }
+    }
+
+    func canonArticle(project: String, id: String) async -> WritingCanonArticle? {
+        if let fixture { return fixture.canonArticle(id) }
+        guard let api = api() else { report(needing: "Reading canon"); return nil }
+        do { return try await api.writingCanonArticle(projectID: project, id: id) }
+        catch { report(error); return nil }
+    }
+
+    /// Starts a server-side import from a wiki's address; it shows up in the
+    /// list as importing, and can be linked once it is ready.
+    func importCanon(url: String, project: String) async {
+        let url = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty, fixture == nil else { return }
+        guard let api = api() else { return report(needing: "Importing a wiki") }
+        do {
+            _ = try await api.importWritingCanon(url: url)
+            await loadCanon(project: project)
+        } catch { report(error) }
     }
 
     func createDiscussion(project id: String) async -> String? {

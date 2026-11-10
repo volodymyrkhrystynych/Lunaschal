@@ -1389,6 +1389,14 @@ def seed_writing(db):
         'INSERT INTO writing_daily_words (project_id, day, words) VALUES (?, ?, ?)',
         (project_id, today_key(), 120),
     )
+    # A discussion opened from a highlighted sentence of that chapter, the way
+    # the phone's "Discuss rewrite" starts one.
+    db.execute(
+        'INSERT INTO conversations (id, title, writing_project_id, writing_chapter_id, writing_passage, created_at, updated_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (new_id(), 'Rewrite: The keeper climbs the same stairs…', project_id, chapter_id,
+         'The keeper climbs the same stairs every night', ts(11), ts(11)),
+    )
     # Context docs are what the scoped writing chat is allowed to see. The
     # character is pinned, so the discussion's prompt carries it on every turn.
     note_ids = {}

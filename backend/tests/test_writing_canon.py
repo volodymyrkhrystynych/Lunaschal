@@ -243,6 +243,28 @@ def test_upload_link_and_delete_through_the_routes(client, canon_root, tmp_path)
     assert client.get(f'/api/writing/projects/{pid}/canon').get_json() == {'sourceIds': []}
 
 
+def test_a_book_searches_and_reads_its_canon_over_http(client, canon_root, tmp_path):
+    pid, sid = _project(), _source(tmp_path)
+    _link(pid, sid)
+    hits = client.get(f'/api/writing/projects/{pid}/canon/search', query_string={'q': 'lock'}).get_json()
+    assert hits and hits[0]['sourceId'] == sid and hits[0]['title'].startswith('Mara Vell')
+    assert 'lock' in hits[0]['snippet']
+    article = client.get(f'/api/writing/projects/{pid}/canon/read', query_string={'id': hits[0]['id']}).get_json()
+    assert 'pick any lock' in article['text']
+    assert 'CC BY-SA' in article['attribution']
+
+
+def test_a_book_cannot_reach_canon_it_is_not_linked_to(client, canon_root, tmp_path):
+    linked, other = _project(), _project('Other')
+    sid = _source(tmp_path)
+    _link(linked, sid)
+    ref = client.get(f'/api/writing/projects/{linked}/canon/search', query_string={'q': 'lock'}).get_json()[0]['id']
+    assert client.get(f'/api/writing/projects/{other}/canon/search', query_string={'q': 'lock'}).get_json() == []
+    assert client.get(f'/api/writing/projects/{other}/canon/read', query_string={'id': ref}).status_code == 404
+    assert client.get(f'/api/writing/projects/{linked}/canon/read', query_string={'id': f'{sid}:99999'}).status_code == 404
+    assert client.get(f'/api/writing/projects/{linked}/canon/search').get_json() == []
+
+
 def test_fetching_a_private_address_is_refused(client, canon_root):
     resp = client.post('/api/writing/canon/fetch', json={'url': 'http://127.0.0.1/dump.xml.gz'})
     assert resp.status_code == 202

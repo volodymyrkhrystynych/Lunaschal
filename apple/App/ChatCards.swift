@@ -165,7 +165,7 @@ private struct ProposalForm: View {
                  + (reason.isEmpty ? "" : " — \(reason)"))
                 .font(.caption).foregroundStyle(.secondary)
             if replace {
-                Text(data["find"]?.text ?? "").font(.caption).foregroundStyle(.secondary).italic()
+                Text(data["find"]?.text ?? "").font(.caption).foregroundStyle(.secondary).strikethrough()
                     .padding(.leading, 8)
                     .accessibilityLabel("Replaces: \(data["find"]?.text ?? "")")
             }

@@ -39,7 +39,8 @@ private struct WritingProjectsView: View {
                 .accessibilityIdentifier("writing-project")
                 .swipeActions {
                     Button("Delete", role: .destructive) { deleting = project }
-                    Button("Edit") { editing = project }.tint(.blue)
+                    Button("Rename") { editing = project }.tint(.blue)
+                        .accessibilityIdentifier("writing-rename")
                 }
             }
             if writing.projects.isEmpty && writing.problem == nil {
@@ -167,7 +168,7 @@ private struct NewBookSheet: View {
 
 struct WritingProjectView: View {
     enum Section: String, CaseIterable, Identifiable {
-        case chapters = "Chapters", notes = "Notes", discussions = "Discussions"
+        case chapters = "Chapters", notes = "Notes", discussions = "Discussions", canon = "Canon"
         var id: Self { self }
     }
 
@@ -179,6 +180,10 @@ struct WritingProjectView: View {
     @State private var settingGoal = false
     @State private var goalText = ""
     @State private var deleting: WritingDocument?
+    @State private var renaming: WritingDocument?
+    @State private var renamingDiscussion: WritingDiscussion?
+    @State private var deletingDiscussion: WritingDiscussion?
+    @State private var renameText = ""
     /// A chapter or note just made, opened straight away.
     @State private var opened: WritingDocument?
     /// A discussion just created from the toolbar, opened straight away.
@@ -189,7 +194,9 @@ struct WritingProjectView: View {
     private var discussions: [WritingDiscussion] { writing.discussions[project.id] ?? [] }
     private var goal: Int? { writing.stats[project.id]?.dailyWordGoal ?? project.dailyWordGoal }
 
-    var body: some View {
+    var body: some View { dialogs(list) }
+
+    private var list: some View {
         List {
             Picker("Section", selection: $section) {
                 ForEach(Section.allCases) { Text($0.rawValue).tag($0) }
@@ -202,60 +209,11 @@ struct WritingProjectView: View {
             }
 
             switch section {
-            case .chapters:
-                wordsToday
-                ForEach(chapters) { chapter in
-                    NavigationLink { WritingEditorView(writing: writing, document: chapter) } label: {
-                        HStack {
-                            Text(chapter.title)
-                            Spacer()
-                            documentState(chapter)
-                            Text(WritingStats.words(chapter.content), format: .number)
-                                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                        }
-                    }
-                    .swipeActions { Button("Delete", role: .destructive) { deleting = chapter } }
-                    .accessibilityIdentifier("writing-chapter")
-                }
-                .onMove { from, to in
-                    var ids = chapters.map(\.id)
-                    ids.move(fromOffsets: from, toOffset: to)
-                    Task { await writing.reorder(project: project.id, ids: ids) }
-                }
-                if chapters.isEmpty { Text("No chapters yet — tap + to start one.").foregroundStyle(.secondary) }
-            case .notes:
-                ForEach(notes) { note in
-                    NavigationLink { WritingEditorView(writing: writing, document: note) } label: {
-                        HStack {
-                            Text(WritingDocType.label(note.docType)).font(.caption).foregroundStyle(.secondary)
-                            Text(note.title)
-                            Spacer()
-                            documentState(note)
-                            if note.pinned {
-                                Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary)
-                                    .accessibilityLabel("Pinned")
-                            }
-                        }
-                    }
-                    .swipeActions {
-                        Button("Delete", role: .destructive) { deleting = note }
-                        Button(note.pinned ? "Unpin" : "Pin") {
-                            Task { await writing.setPinned(note, !note.pinned) }
-                        }
-                        .tint(.orange)
-                    }
-                    .accessibilityIdentifier("writing-note")
-                }
-                if notes.isEmpty { Text("No notes yet").foregroundStyle(.secondary) }
-            case .discussions:
-                ForEach(discussions) { discussion in
-                    NavigationLink {
-                        WritingDiscussionView(model: WritingDiscussionModel(id: discussion.id, writing: writing),
-                                              title: discussion.displayTitle)
-                    } label: { Text(discussion.displayTitle) }
-                    .accessibilityIdentifier("writing-discussion")
-                }
-                if discussions.isEmpty { Text("No discussions yet").foregroundStyle(.secondary) }
+            case .chapters: chapterRows
+            case .notes: noteRows
+            case .discussions: discussionRows
+            case .canon:
+                WritingCanonSection(writing: writing, project: project)
             }
         }
         .navigationTitle(project.title)
@@ -264,20 +222,22 @@ struct WritingProjectView: View {
             if section == .chapters, chapters.count > 1 {
                 ToolbarItem(placement: .topBarTrailing) { EditButton() }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    if section == .discussions {
-                        Task {
-                            if let id = await writing.createDiscussion(project: project.id) {
-                                newDiscussion = WritingDiscussion(id: id, title: nil)
+            if section != .canon {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        if section == .discussions {
+                            Task {
+                                if let id = await writing.createDiscussion(project: project.id) {
+                                    newDiscussion = WritingDiscussion(id: id, title: nil)
+                                }
                             }
+                        } else {
+                            adding = true
                         }
-                    } else {
-                        adding = true
-                    }
-                } label: { Label(addLabel, systemImage: "plus") }
-                .disabled(section == .discussions && writing.fixture != nil)
-                .accessibilityIdentifier("writing-add")
+                    } label: { Label(addLabel, systemImage: "plus") }
+                    .disabled(section == .discussions && writing.fixture != nil)
+                    .accessibilityIdentifier("writing-add")
+                }
             }
         }
         .navigationDestination(item: $newDiscussion) { discussion in
@@ -292,6 +252,10 @@ struct WritingProjectView: View {
                 WritingEditorView(writing: writing, document: document)
             }
         }
+    }
+
+    private func dialogs<Content: View>(_ content: Content) -> some View {
+        content
         .alert(addLabel, isPresented: $adding) {
             TextField("Title", text: $newTitle)
             Button("Add") {
@@ -317,6 +281,28 @@ struct WritingProjectView: View {
                 Task { await writing.delete(document) }
             }
         } message: { _ in Text("Its history goes too. This can't be undone.") }
+        .alert("Rename", isPresented: Binding(
+            get: { renaming != nil || renamingDiscussion != nil },
+            set: { if !$0 { renaming = nil; renamingDiscussion = nil } }
+        )) {
+            TextField("Title", text: $renameText).accessibilityIdentifier("writing-rename-field")
+            Button("Save") {
+                if let document = renaming { writing.rename(document, to: renameText) }
+                if let discussion = renamingDiscussion {
+                    Task { await writing.renameDiscussion(discussion, project: project.id, to: renameText) }
+                }
+                renaming = nil; renamingDiscussion = nil
+            }
+            .accessibilityIdentifier("writing-rename-save")
+            Button("Cancel", role: .cancel) { renaming = nil; renamingDiscussion = nil }
+        }
+        .confirmationDialog("Delete this discussion?", isPresented: Binding(
+            get: { deletingDiscussion != nil }, set: { if !$0 { deletingDiscussion = nil } }
+        ), titleVisibility: .visible, presenting: deletingDiscussion) { discussion in
+            Button("Delete “\(discussion.displayTitle)”", role: .destructive) {
+                Task { await writing.deleteDiscussion(discussion, project: project.id) }
+            }
+        } message: { _ in Text("Its messages go too. Notes and chapters it changed stay as they are.") }
         .task { await writing.load(project: project.id) }
         .refreshable {
             await writing.loadProjects()
@@ -325,12 +311,91 @@ struct WritingProjectView: View {
         .onChange(of: writing.capture.writingTick) { _, _ in writing.reloadDocuments() }
     }
 
+    @ViewBuilder private var chapterRows: some View {
+        wordsToday
+        ForEach(chapters) { chapter in
+            NavigationLink { WritingEditorView(writing: writing, document: chapter) } label: {
+                HStack {
+                    Text(chapter.title)
+                    Spacer()
+                    documentState(chapter)
+                    Text(WritingStats.words(chapter.content), format: .number)
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
+            .swipeActions {
+                Button("Delete", role: .destructive) { deleting = chapter }
+                    .accessibilityIdentifier("writing-delete")
+                renameButton { renaming = chapter; renameText = chapter.title }
+            }
+            .accessibilityIdentifier("writing-chapter")
+        }
+        .onMove { from, to in
+            var ids = chapters.map(\.id)
+            ids.move(fromOffsets: from, toOffset: to)
+            Task { await writing.reorder(project: project.id, ids: ids) }
+        }
+        if chapters.isEmpty { Text("No chapters yet — tap + to start one.").foregroundStyle(.secondary) }
+    }
+
+    @ViewBuilder private var noteRows: some View {
+        ForEach(notes) { note in
+            NavigationLink { WritingEditorView(writing: writing, document: note) } label: {
+                HStack {
+                    Text(WritingDocType.label(note.docType)).font(.caption).foregroundStyle(.secondary)
+                    Text(note.title)
+                    Spacer()
+                    documentState(note)
+                    if note.pinned {
+                        Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel("Pinned")
+                    }
+                }
+            }
+            .swipeActions {
+                Button("Delete", role: .destructive) { deleting = note }
+                    .accessibilityIdentifier("writing-delete")
+                renameButton { renaming = note; renameText = note.title }
+                Button(note.pinned ? "Unpin" : "Pin") {
+                    Task { await writing.setPinned(note, !note.pinned) }
+                }
+                .tint(.orange)
+            }
+            .accessibilityIdentifier("writing-note")
+        }
+        if notes.isEmpty { Text("No notes yet").foregroundStyle(.secondary) }
+    }
+
+    @ViewBuilder private var discussionRows: some View {
+        ForEach(discussions) { discussion in
+            NavigationLink {
+                WritingDiscussionView(model: WritingDiscussionModel(id: discussion.id, writing: writing),
+                                      title: discussion.displayTitle, passage: discussion.writingPassage)
+            } label: {
+                Label(discussion.displayTitle,
+                      systemImage: discussion.writingPassage == nil ? "bubble.left.and.bubble.right" : "text.bubble")
+            }
+            .swipeActions {
+                // A discussion lives on the server, so these need it.
+                Button("Delete", role: .destructive) { deletingDiscussion = discussion }
+                    .accessibilityIdentifier("writing-delete")
+                renameButton { renamingDiscussion = discussion; renameText = discussion.title ?? "" }
+            }
+            .accessibilityIdentifier("writing-discussion")
+        }
+        if discussions.isEmpty { Text("No discussions yet").foregroundStyle(.secondary) }
+    }
+
     private var addLabel: String {
         switch section {
         case .chapters: return "New chapter"
         case .notes: return "New note"
-        case .discussions: return "New discussion"
+        case .discussions, .canon: return "New discussion"
         }
+    }
+
+    private func renameButton(_ action: @escaping () -> Void) -> some View {
+        Button("Rename", action: action).tint(.blue).accessibilityIdentifier("writing-rename")
     }
 
     /// Today across every device, and how far along the goal that is.
@@ -377,15 +442,31 @@ private struct OpenedDocument: Hashable {
 struct WritingDiscussionView: View {
     @StateObject var model: WritingDiscussionModel
     let title: String
+    /// The highlighted words a discussion was opened about, kept in view.
+    let passage: String?
     @FocusState private var typing: Bool
 
-    init(model: WritingDiscussionModel, title: String) {
+    init(model: WritingDiscussionModel, title: String, passage: String? = nil) {
         _model = StateObject(wrappedValue: model)
         self.title = title
+        self.passage = passage
     }
 
     var body: some View {
         VStack(spacing: 0) {
+            if let passage, !passage.isEmpty {
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 1.5).fill(Color.accentColor).frame(width: 3)
+                    Text(passage).font(.callout).italic().foregroundStyle(.secondary).lineLimit(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal).padding(.vertical, 8)
+                .background(.bar)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Passage: \(passage)")
+                .accessibilityIdentifier("writing-passage")
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
@@ -495,6 +576,133 @@ private struct WritingMessageRow: View {
                 }
             }
             if !isUser { Spacer(minLength: 48) }
+        }
+    }
+}
+
+// MARK: Canon
+
+/// The original work's wikis, imported on the server: which are linked to this
+/// book (and so searchable by its discussions), and a way into them.
+private struct WritingCanonSection: View {
+    @ObservedObject var writing: WritingModel
+    let project: WritingProject
+    @State private var importing = false
+    @State private var importURL = ""
+
+    private var linked: Set<String> { writing.linkedCanon[project.id] ?? [] }
+
+    var body: some View {
+        Group {
+            NavigationLink {
+                WritingCanonSearchView(writing: writing, project: project)
+            } label: {
+                Label("Search canon", systemImage: "magnifyingglass")
+            }
+            .disabled(linked.isEmpty)
+            .accessibilityIdentifier("writing-canon-search")
+            if linked.isEmpty {
+                Text("Link a wiki below to search it here and in this book's discussions.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            ForEach(writing.canonSources) { source in
+                Toggle(isOn: Binding(
+                    get: { linked.contains(source.id) },
+                    set: { on in Task { await writing.setCanon(project: project.id, source: source.id, linked: on) } }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(source.displayName)
+                        Text(source.summary).font(.caption)
+                            .foregroundStyle(source.status == "error" ? Color.red : Color.secondary)
+                    }
+                }
+                .disabled(source.status == "importing" && !linked.contains(source.id))
+                .accessibilityIdentifier("writing-canon-source")
+            }
+            Button { importing = true } label: { Label("Import a wiki…", systemImage: "square.and.arrow.down") }
+                .disabled(writing.fixture != nil)
+        }
+        .task { await writing.loadCanon(project: project.id) }
+        .alert("Import a wiki", isPresented: $importing) {
+            TextField("https://example.fandom.com", text: $importURL)
+                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button("Import") {
+                let url = importURL
+                importURL = ""
+                Task { await writing.importCanon(url: url, project: project.id) }
+            }
+            Button("Cancel", role: .cancel) { importURL = "" }
+        } message: {
+            Text("The server downloads the wiki's dump and imports it in the background. Large wikis take a while.")
+        }
+    }
+}
+
+private struct WritingCanonSearchView: View {
+    @ObservedObject var writing: WritingModel
+    let project: WritingProject
+    @State private var query = ""
+    @State private var hits: [WritingCanonHit] = []
+    @State private var searched = false
+
+    var body: some View {
+        List(hits) { hit in
+            NavigationLink { WritingCanonArticleView(writing: writing, project: project, hit: hit) } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(hit.title)
+                    Text(hit.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                    if (writing.linkedCanon[project.id]?.count ?? 0) > 1 {
+                        Text(hit.sourceName).font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .accessibilityIdentifier("writing-canon-hit")
+        }
+        .overlay {
+            if hits.isEmpty {
+                Text(searched ? "Nothing in the linked wikis matches." : "Search a character, place or event.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search canon")
+        .onSubmit(of: .search) {
+            Task {
+                hits = await writing.searchCanon(project: project.id, query: query)
+                searched = true
+            }
+        }
+        .navigationTitle("Canon")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct WritingCanonArticleView: View {
+    @ObservedObject var writing: WritingModel
+    let project: WritingProject
+    let hit: WritingCanonHit
+    @State private var article: WritingCanonArticle?
+    @State private var loaded = false
+
+    var body: some View {
+        ScrollView {
+            if let article {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(article.text).textSelection(.enabled)
+                        .accessibilityIdentifier("writing-canon-article")
+                    Text(article.attribution).font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: 720, alignment: .leading).padding()
+            } else if loaded {
+                Text(writing.problem ?? "Couldn't open this page.").foregroundStyle(.secondary).padding()
+            } else {
+                ProgressView().padding()
+            }
+        }
+        .navigationTitle(article?.title ?? hit.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            article = await writing.canonArticle(project: project.id, id: hit.id)
+            loaded = true
         }
     }
 }

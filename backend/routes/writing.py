@@ -401,6 +401,18 @@ def list_discussions(project_id):
     return jsonify([row_to_dict(r) for r in rows])
 
 
+# A selection is a passage to work on, not a chapter to paste: past this the
+# prompt would be carrying a chapter, which writing_read already reads.
+MAX_PASSAGE_CHARS = 6000
+
+
+def _passage_title(passage: str | None) -> str | None:
+    if not passage:
+        return None
+    words = ' '.join(passage.split())
+    return 'Rewrite: ' + (words if len(words) <= 40 else words[:40].rstrip() + '…')
+
+
 @bp.post('/projects/<project_id>/conversations')
 def create_discussion(project_id):
     body = request.json or {}
@@ -412,9 +424,17 @@ def create_discussion(project_id):
             'SELECT 1 FROM writing_chapters WHERE id=? AND project_id=?',
             (chapter_id, project_id)).fetchone():
         return jsonify({'error': 'that chapter is not in this project'}), 400
+    passage = body.get('passage')
+    if passage is not None:
+        if not isinstance(passage, str) or not passage.strip() or chapter_id is None:
+            return jsonify({'error': 'a passage needs its text and the chapter it is from'}), 400
+        if len(passage) > MAX_PASSAGE_CHARS:
+            return jsonify({'error': f'select under {MAX_PASSAGE_CHARS:,} characters'}), 400
     db.execute(
-        'INSERT INTO conversations(id, title, writing_project_id, writing_chapter_id, created_at, updated_at) VALUES (?,?,?,?,?,?)',
-        (id, body.get('title') or 'New Discussion', project_id, chapter_id, now, now),
+        'INSERT INTO conversations(id, title, writing_project_id, writing_chapter_id, writing_passage,'
+        ' created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+        (id, body.get('title') or _passage_title(passage) or 'New Discussion', project_id, chapter_id,
+         passage, now, now),
     )
     db.commit()
     return jsonify({'id': id}), 201
@@ -586,3 +606,24 @@ def set_project_canon(project_id):
     )
     db.commit()
     return jsonify({'sourceIds': list(dict.fromkeys(ids))})
+
+
+# The phone's canon browser: the same project-scoped search and read the
+# discussion's canon_search / canon_read run, so a person sees exactly what the
+# model can see — and nothing from a wiki this book is not linked to.
+
+@bp.get('/projects/<project_id>/canon/search')
+def search_project_canon(project_id):
+    try:
+        limit = max(1, min(int(request.args.get('limit', 20)), 50))
+    except ValueError:
+        limit = 20
+    return jsonify(canon_tools.CanonTools(project_id).hits(request.args.get('q', ''), limit))
+
+
+@bp.get('/projects/<project_id>/canon/read')
+def read_project_canon(project_id):
+    try:
+        return jsonify(canon_tools.CanonTools(project_id).article(request.args.get('id', '')))
+    except LookupError:
+        return jsonify({'error': 'Not found'}), 404

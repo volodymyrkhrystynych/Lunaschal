@@ -337,6 +337,47 @@ def test_a_discussion_outlives_its_chapter(client):
     assert 'The Storm' not in prompt
 
 
+# --- A discussion opened from a highlighted passage ---
+
+def test_a_highlighted_passage_is_quoted_and_names_the_discussion(client):
+    pid = _project(client)
+    chapter = _document(client, pid, 'chapters', 'The Storm')
+    passage = 'The wind took the lamp and the sea took the wind, and the keeper did not move at all.'
+    cid = _discussion(client, pid, chapterId=chapter, passage=passage)
+    _toolset, prompt, _pid = discuss.run_config(cid)
+    assert f'<<<\n{passage}\n>>>' in prompt
+    assert 'replace_passage' in prompt
+    title = get_db().execute('SELECT title FROM conversations WHERE id=?', (cid,)).fetchone()['title']
+    assert title == 'Rewrite: The wind took the lamp and the sea took…'
+
+
+def test_a_discussion_without_a_passage_quotes_nothing(client):
+    pid = _project(client)
+    chapter = _document(client, pid, 'chapters', 'The Storm')
+    _toolset, prompt, _pid = discuss.run_config(_discussion(client, pid, chapterId=chapter))
+    assert '<<<' not in prompt
+
+
+@pytest.mark.parametrize('body', [
+    {'passage': 'No chapter to come from.'},
+    {'passage': '   '},
+    {'passage': 7},
+    {'passage': 'x' * 6001},
+])
+def test_a_passage_needs_text_and_its_chapter(client, body):
+    pid = _project(client)
+    if body['passage'] != 'No chapter to come from.':
+        body = {**body, 'chapterId': _document(client, pid, 'chapters')}
+    assert client.post(f'/api/writing/projects/{pid}/conversations', json=body).status_code == 400
+
+
+def test_an_explicit_title_beats_the_passage(client):
+    pid = _project(client)
+    chapter = _document(client, pid, 'chapters')
+    cid = _discussion(client, pid, chapterId=chapter, passage='Some words.', title='Pacing')
+    assert get_db().execute('SELECT title FROM conversations WHERE id=?', (cid,)).fetchone()['title'] == 'Pacing'
+
+
 # --- Chapter proposals ---
 
 def _chapter_with(client, pid, content, title='The Storm'):

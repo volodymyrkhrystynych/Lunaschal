@@ -109,6 +109,46 @@ struct WritingFixture {
 
     var discussions: [WritingDiscussion] { discussionsByProject.values.flatMap { $0 } }
 
+    static let passageDiscussionID = "01K7WRITINGFIXTUREDISCUSS4"
+
+    /// A discussion opened from any selection: the canned one, holding a
+    /// rewrite of whatever was highlighted, staged as a card.
+    func passageDiscussion(chapter: String, passage: String) -> WritingDiscussion {
+        WritingDiscussion(id: Self.passageDiscussionID, title: "Rewrite: \(passage.prefix(40))",
+                          writingChapterId: chapter, writingPassage: passage)
+    }
+
+    // MARK: Canon
+
+    let canonSources = [
+        WritingCanonSource(id: "01K7WRITINGFIXTURECANON001", name: "Salt Roads Wiki", wikiHost: "saltroads.fandom.com",
+                           pages: 1204),
+        WritingCanonSource(id: "01K7WRITINGFIXTURECANON002", name: "Lighthouse Wiki",
+                           wikiHost: "lighthouses.fandom.com", pages: 312),
+    ]
+
+    func linkedCanon(_ project: String) -> Set<String> {
+        project == Self.salt ? ["01K7WRITINGFIXTURECANON001"] : []
+    }
+
+    func canonHits(_ query: String) -> [WritingCanonHit] {
+        [WritingCanonHit(id: "01K7WRITINGFIXTURECANON001:7", sourceId: "01K7WRITINGFIXTURECANON001",
+                         sourceName: "Salt Roads Wiki", title: "Port Ash › Notable families",
+                         snippet: "The Vells were pilots of the harbour for four generations…"),
+         WritingCanonHit(id: "01K7WRITINGFIXTURECANON001:12", sourceId: "01K7WRITINGFIXTURECANON001",
+                         sourceName: "Salt Roads Wiki", title: "Quell",
+                         snippet: "A clerk of the Harbour Guild who records ship arrivals…")]
+    }
+
+    func canonArticle(_ id: String) -> WritingCanonArticle? {
+        guard let hit = canonHits("").first(where: { $0.id == id }) else { return nil }
+        return WritingCanonArticle(id: id, title: hit.title, text: """
+            \(hit.snippet.replacingOccurrences(of: "…", with: "."))
+
+            The family's licence was withdrawn after the war, when the Guild took the harbour.
+            """, attribution: "Source: saltroads.fandom.com (Fandom wiki), CC BY-SA 3.0.")
+    }
+
     func discussions(for project: String) -> [WritingDiscussion] { discussionsByProject[project] ?? [] }
 
     func revisions(_ noteID: String) -> [WritingNoteRevision] {
@@ -187,6 +227,23 @@ struct WritingFixture {
                     makes him the harbourmaster, which your notes already mark as the main divergence — so I'll treat \
                     yours as the version that counts.
                     """, metadata: steps),
+            ])
+        case Self.passageDiscussionID:
+            let card = #"""
+            {"proposals": [{"id": "p3", "kind": "writing_chapter_update", "status": "pending",
+              "data": {"chapterId": "01K7WRITINGFIXTURECHAPTER1", "title": "The Wreck", "mode": "replace_passage",
+                       "find": "Mara came up through the hatch with the ledger against her ribs and no air left to be frightened with.",
+                       "content": "Mara kicked up through the hatch, the ledger pressed flat to her ribs, her lungs too empty to spare any fear.",
+                       "reason": "tighter rhythm, and the fear lands at the end"}}],
+             "steps": [{"tool": "writing_read", "ok": true, "title": "The Wreck", "kind": "chapter"},
+                       {"tool": "propose_chapter_update", "ok": true, "arg": "change to \"The Wreck\""}]}
+            """#
+            return ChatConversation(id: id, messages: [
+                Self.message("01K7WRITINGFIXTUREMESSAGE9", "user", 30, "This sentence feels flat. Can it hit harder?"),
+                Self.message("01K7WRITINGFIXTUREMESSAGEA", "assistant", 31, """
+                    The image is good; it's the rhythm that sags — "no air left to be frightened with" arrives after \
+                    the action is over. Ending on the fear keeps the tension in the sentence. I've staged a version.
+                    """, metadata: card),
             ])
         case "01K7WRITINGFIXTUREDISCUSS3":
             return ChatConversation(id: id, messages: [

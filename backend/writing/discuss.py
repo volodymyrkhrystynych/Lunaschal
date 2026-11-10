@@ -74,18 +74,34 @@ def project_for_conversation(conversation_id: str | None) -> str | None:
     return row['pid'] if row else None
 
 
+# A discussion opened from a selection is about those words. The rewrite is
+# staged as a replace_passage card, never written, and `find` must be the
+# passage as it stands — the tool refuses text the chapter doesn't contain.
+PASSAGE = (
+    '\n\nThe author highlighted this passage in it and wants to rewrite it:\n'
+    '<<<\n{passage}\n>>>\n'
+    'Work on that passage: say what is and is not working, ask what they are '
+    'after if it is unclear, and offer alternatives. When a version is ready '
+    '(or the author asks for one), stage it with propose_chapter_update, mode '
+    'replace_passage, find set to the passage exactly as quoted above (or the '
+    'exact part of it you are changing), and content set to the new text. '
+    'Never rewrite the rest of the chapter.'
+)
+
+
 def chapter_for_conversation(conversation_id: str | None) -> tuple | None:
-    """(position, title) of the chapter a discussion was opened from, or None.
-    Joined through the chapter, so a deleted one reads as none at all."""
+    """(position, title, passage) of the chapter a discussion was opened
+    from, or None; `passage` is the highlighted text, or None. Joined through
+    the chapter, so a deleted one reads as none at all."""
     if not conversation_id:
         return None
     row = get_db().execute(
-        'SELECT ch.position, ch.title FROM conversations c'
+        'SELECT ch.position, ch.title, c.writing_passage FROM conversations c'
         ' JOIN writing_chapters ch ON ch.id = c.writing_chapter_id'
         ' AND ch.project_id = c.writing_project_id WHERE c.id = ?',
         (conversation_id,),
     ).fetchone()
-    return (row['position'], row['title']) if row else None
+    return (row['position'], row['title'], row['writing_passage']) if row else None
 
 
 def _has_canon(project_id: str) -> bool:
@@ -130,10 +146,13 @@ def system_prompt(project_id: str, chapter: tuple | None = None) -> str:
             '\n'.join(f'- [{n["doc_type"]}] {n["title"]}' for n in others)
 
     if chapter:
-        position, name = chapter
+        position, name, *rest = chapter
         prompt += (f'\n\nThe author opened this discussion from chapter {position + 1}, '
                    f'"{name}", and "this chapter" means that one. Read it with '
                    'writing_read before commenting on what it says.')
+        passage = rest[0] if rest else None
+        if passage and passage.strip():
+            prompt += PASSAGE.format(passage=passage)
 
     prompt += f'\n\n{BRIEF}\n\n{NOTEBOOK}\n\n{CHAPTERS}'
     if _has_canon(project_id):
