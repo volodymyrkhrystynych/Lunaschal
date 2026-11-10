@@ -9,7 +9,7 @@
     "dev:flask": ".venv/bin/flask --app backend.app run --port 5001 --debug",
     "dev:desktop": "python main.py --dev",
     "build": "vite build",
-    "test": "vitest run --config vitest.config.mjs --configLoader native",
+    "test": "vitest run",
     "test:watch": "vitest",
     "test:backend": "scripts/test-backend.sh",
     "test:all": "npm run test:backend && npm run test",

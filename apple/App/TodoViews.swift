@@ -21,6 +21,14 @@ struct TodoView: View {
     @State private var explaining = false
     @State private var goalEditing: GoalEditing?
     @State private var expanded: Set<GoalHorizon> = [.week]
+    @StateObject private var dictation: Dictation
+
+    init(todo: TodoModel) {
+        self.todo = todo
+        _dictation = StateObject(wrappedValue: Dictation(capture: todo.capture) { [weak todo] in
+            todo?.capture.chatAPI() != nil
+        })
+    }
 
     var body: some View {
         List {
@@ -57,6 +65,7 @@ struct TodoView: View {
                 do { try await Task.sleep(for: .seconds(120)) } catch { return }
             }
         }
+        .onDisappear { dictation.cancel() }
         .sheet(isPresented: $creating) {
             TodoEditor(heading: "New to-do", draft: TodoDraft()) { todo.create($0) }
         }
@@ -217,8 +226,18 @@ struct TodoView: View {
             .pickerStyle(.segmented)
             .accessibilityIdentifier("todo-list-picker")
             if list == "todo" {
-                Button { creating = true } label: { Label("Add to-do", systemImage: "plus") }
-                    .accessibilityIdentifier("todo-add")
+                // Borderless, or the row is one button and a tap on the mic opens the form.
+                HStack {
+                    Button { creating = true } label: { Label("Add to-do", systemImage: "plus") }
+                        .accessibilityIdentifier("todo-add")
+                    Spacer()
+                    TodoMicButton(dictation: dictation, todo: todo)
+                }
+                .buttonStyle(.borderless)
+                if let notice = todo.dictationNotice ?? dictation.error {
+                    Text(notice).font(.footnote).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("todo-dictation-notice")
+                }
             }
             ForEach(items) { item in
                 TodoRow(todo: item, toggle: { todo.toggle(item) }, open: { editing = item })
@@ -243,6 +262,36 @@ struct TodoView: View {
     private func addTask() {
         let title = newTask
         if todo.addTask(title) { newTask = "" }
+    }
+}
+
+/// Say a to-do: tap to record, tap again to stop, and it is on the list.
+private struct TodoMicButton: View {
+    @ObservedObject var dictation: Dictation
+    @ObservedObject var todo: TodoModel
+
+    var body: some View {
+        Button {
+            Task {
+                await dictation.toggle { clip in
+                    Task { @MainActor in await todo.dictate(clip) }
+                }
+            }
+        } label: {
+            Group {
+                if dictation.status == .starting || todo.dictating {
+                    ProgressView()
+                } else {
+                    Image(systemName: dictation.status == .recording ? "stop.circle.fill" : "mic")
+                        .foregroundStyle(dictation.status == .recording ? Color.red : Color.accentColor)
+                }
+            }
+            .font(.title3)
+            .frame(width: 36, height: 36)
+        }
+        .disabled(dictation.status == .starting || todo.dictating)
+        .accessibilityLabel(dictation.status == .recording ? "Stop and add to-do" : "Dictate a to-do")
+        .accessibilityIdentifier("todo-dictate")
     }
 }
 

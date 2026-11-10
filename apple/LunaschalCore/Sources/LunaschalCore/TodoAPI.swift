@@ -85,6 +85,15 @@ extension JournalAPI: TodoTransport {
         try await todoCall("api/tasks/todos", method: "POST", draft)
     }
 
+    /// A spoken sentence made into one to-do by the server's model, with no
+    /// confirm step. `id` is minted by the phone: a replay returns the row
+    /// already made, and `TodoDictation.fallbackDraft` reuses it, so a reply
+    /// lost on the way back can never leave two to-dos.
+    public func createTodo(fromSpeech words: String, id: String) async throws {
+        try await todoCall("api/tasks/todos/transcribe", method: "POST",
+                           TodoDictation.Body(text: words, id: try Self.pathID(id)))
+    }
+
     /// Replaces every field the form sets; `id` is ignored.
     public func editTodo(_ id: String, _ draft: TodoDraft) async throws {
         var fields = draft

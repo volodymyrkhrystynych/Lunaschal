@@ -244,4 +244,24 @@ final class TodoOutboxTests: XCTestCase {
         do { _ = try await TodoSync(outbox: outbox).run(using: transport); XCTFail() } catch {}
         XCTAssertEqual(try outbox.list().count, 1, "Signed out keeps it too")
     }
+
+    func testDictatedToDoFallsBackToTheWordsAsSaid() {
+        let short = TodoDictation.fallbackDraft(id: "01ABC", words: "  buy milk \n")
+        XCTAssertEqual(short.id, "01ABC")
+        XCTAssertEqual(short.title, "buy milk")
+        XCTAssertEqual(short.notes, "")
+        XCTAssertEqual(short.list, "todo")
+
+        let long = String(repeating: "word ", count: 40).trimmingCharacters(in: .whitespaces)
+        let cut = TodoDictation.fallbackDraft(id: "01ABD", words: long)
+        XCTAssertLessThanOrEqual(cut.title.count, TodoDictation.titleLimit)
+        XCTAssertTrue(long.hasPrefix(cut.title))
+        XCTAssertEqual(cut.notes, long, "a cut title keeps the whole sentence in the notes")
+    }
+
+    func testDictatedToDoSendsTheWordsWithThePhonesID() throws {
+        let body = try JSONEncoder().encode(TodoDictation.Body(text: "call the dentist", id: "01ABC"))
+        let fields = try JSONSerialization.jsonObject(with: body) as? [String: String]
+        XCTAssertEqual(fields, ["text": "call the dentist", "id": "01ABC"])
+    }
 }

@@ -15,6 +15,10 @@ final class TodoModel: ObservableObject {
     /// Why the lists couldn't be fetched, while offline or signed out: a
     /// word or two for the title bar, and what it means.
     @Published private(set) var loadProblem: (short: String, detail: String)?
+    /// A dictated to-do between Stop and the list showing it.
+    @Published private(set) var dictating = false
+    /// What became of the last dictated to-do, when it needs saying.
+    @Published var dictationNotice: String?
 
     let capture: CaptureModel
     private let cacheURL: URL
@@ -186,6 +190,35 @@ final class TodoModel: ObservableObject {
     }
 
     func edit(_ todo: TodoItem, _ draft: TodoDraft) { queue(.editTodo(id: todo.id, draft)) }
+
+    /// The mic beside "Add to-do": transcribe the clip, hand the words to the
+    /// server's model to sort into fields, and show the result. No confirm
+    /// step. Once there are words they are never dropped: if the server can't
+    /// take them, they are queued as a plain to-do under the same id, which is
+    /// a no-op there if the server made it after all. Deletes the clip.
+    func dictate(_ clip: URL) async {
+        defer { try? FileManager.default.removeItem(at: clip) }
+        guard let api = capture.chatAPI() else { dictationNotice = "Connect to your server first."; return }
+        dictationNotice = nil
+        dictating = true
+        defer { dictating = false }
+        let words: String
+        do {
+            words = try await api.transcribe(clip: clip)
+        } catch {
+            dictationNotice = "Couldn't transcribe that: \(error.localizedDescription)"
+            return
+        }
+        guard !words.isEmpty else { dictationNotice = "No speech was heard in that recording."; return }
+        let id = ULID.make()
+        do {
+            try await api.createTodo(fromSpeech: words, id: id)
+            await refresh()
+        } catch {
+            queue(.createTodo(TodoDictation.fallbackDraft(id: id, words: words)))
+            dictationNotice = "Added as you said it; the server couldn't sort it into fields."
+        }
+    }
 
     func move(_ todo: TodoItem) { queue(.moveTodo(id: todo.id, list: todo.isArchived ? "todo" : "archive")) }
 

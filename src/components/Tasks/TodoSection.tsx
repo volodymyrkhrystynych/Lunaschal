@@ -2,6 +2,7 @@ import { api, TodoItem, TodoList, TodoPayload } from '../../hooks/api';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { RecordingButton } from '../RecordingButton';
 import { useRecorder } from '@/hooks/useRecorder';
+import { ulid } from '@/lib/ulid';
 import { TodoForm } from './TodoForm';
 import { TodoRow } from './TodoRow';
 import type { TaskSection } from './index';
@@ -50,11 +51,24 @@ export function TodoSection({
 }: TodoSectionProps) {
   const queryClient = useQueryClient();
 
-  // Voice-to-do: record, transcribe client-side, send transcript to the
-  // backend which runs it through the LLM and creates the todo in one shot.
-  const transcribeTodo = useRecorder(text => {
-    void api.todos.transcribe(text);
+  // Voice-to-do: record, transcribe, and send the words to the backend, which
+  // runs them through the LLM and creates the to-do in one shot. The id is
+  // minted here so a retried request cannot make a second to-do.
+  const createFromSpeech = useMutation({
+    mutationFn: ({ text, id }: { text: string; id: string }) =>
+      api.todos.transcribe(text, id),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['todos'] });
+    },
   });
+  const transcribeTodo = useRecorder(text => {
+    if (text.trim()) createFromSpeech.mutate({ text, id: ulid() });
+  });
+  const voiceError =
+    transcribeTodo.error ||
+    (createFromSpeech.error
+      ? `Couldn't create the to-do: ${createFromSpeech.error.message}`
+      : '');
 
   const deleteTodo = useMutation({
     mutationFn: (id: string) => api.todos.remove(id),
@@ -127,15 +141,28 @@ export function TodoSection({
               + Add to-do…
             </button>
             <RecordingButton
-              status={transcribeTodo.status}
+              status={
+                createFromSpeech.isPending ? 'saving' : transcribeTodo.status
+              }
+              starting={transcribeTodo.starting}
+              action="dictate"
+              title="Say a to-do — it is added straight to the list"
+              testId="todo-dictate"
               onClick={() => {
-                if (transcribeTodo.status === 'idle') transcribeTodo.start();
-                else transcribeTodo.stop();
+                if (transcribeTodo.status === 'idle') {
+                  createFromSpeech.reset();
+                  void transcribeTodo.start();
+                } else transcribeTodo.stop();
               }}
               className="shrink-0"
             />
           </div>
         ))}
+      {activeList !== 'archive' && !creating && voiceError && (
+        <p role="alert" className="-mt-2 mb-3 text-xs text-red-400">
+          {voiceError}
+        </p>
+      )}
 
       <div className="space-y-2">
         {active.map(renderTodo)}
