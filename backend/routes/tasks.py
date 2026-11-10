@@ -1,10 +1,14 @@
+import logging
 import re
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 
+from backend import todo_storage
+from backend.ai import jobs
+from backend.ai.service import InferencePaused, Preempted
 from backend.capture_time import optional_capture_time
 from backend.db.connection import get_db, mapping_to_dict, row_to_dict
 from backend.day_boundary import day_bounds, day_key_for
@@ -17,6 +21,7 @@ from backend.todo_recurrence import (
 )
 
 bp = Blueprint('tasks', __name__, url_prefix='/api/tasks')
+logger = logging.getLogger(__name__)
 
 # Daily tasks are the habits. Still capped: a list worth ticking every day
 # stays short, and the phone's largest Habits widget has room for this many.
@@ -759,6 +764,19 @@ def transcribe_todo():
     if client_id and db.execute('SELECT 1 FROM todos WHERE id=?', (client_id,)).fetchone():
         return jsonify({'id': client_id}), 200
 
+    todo_id, err = _todo_from_speech(db, text, client_id)
+    if err:
+        return jsonify({'error': err}), 400
+    db.commit()
+    return jsonify({'id': todo_id}), 201
+
+
+def _todo_from_speech(db, text: str, todo_id: str | None) -> tuple[str | None, str | None]:
+    """Insert the to-do a spoken sentence describes; the caller commits.
+
+    Shared by the synchronous route above and the recording job below, so a
+    to-do said into the phone comes out the same whichever way it arrived.
+    """
     fields = extract_todo_fields(text, day_key_for())
     if fields is None:
         title = text[:TITLE_LIMIT].strip()
@@ -775,17 +793,179 @@ def transcribe_todo():
         if err:
             due_ts = None  # an unparseable date from the model is dropped, not fatal
 
-    todo_id, err = _insert_todo_row(db, {
-        'id': client_id,
+    return _insert_todo_row(db, {
+        'id': todo_id,
         'title': fields['title'],
         'notes': fields.get('notes'),
         'priority': fields.get('priority'),
         'due': due_ts,
     })
-    if err:
-        return jsonify({'error': err}), 400
+
+
+# --- Spoken to-dos ------------------------------------------------------------
+#
+# The phone's mic beside "Add to-do". It used to upload the clip to
+# /api/transcribe, wait for the words, then wait again on /todos/transcribe, and
+# delete the clip whatever happened — so a recording made offline, or one the
+# server failed on, was simply gone. This is the journal/food/chat recording
+# contract instead: the phone keeps the clip until this route has it, re-POSTs
+# on every reconnect, and the id it minted is both the recording's and the
+# to-do's, so a replay is a no-op checked before the file is read. Stopping the
+# recording is the last thing the user waits for.
+
+MAX_AUDIO_BYTES = 100 * 1024 * 1024
+
+
+@bp.post('/todos/recordings')
+def create_todo_recording():
+    audio = request.files.get('audio')
+    if audio is None or not audio.filename:
+        return jsonify({'error': 'Missing audio file'}), 400
+    recording_id = (request.form.get('id') or '').strip()
+    if not recording_id:
+        return jsonify({'error': 'id is required'}), 400
+
+    db = get_db()
+    # Before the file is read: a retry must not stream the clip to disk again
+    # only to find it already here, or already a to-do.
+    existing = db.execute('SELECT * FROM todo_recordings WHERE id=?', (recording_id,)).fetchone()
+    if existing is not None:
+        return jsonify(_recording_dict(existing)), 200
+    if db.execute('SELECT 1 FROM todos WHERE id=?', (recording_id,)).fetchone():
+        return jsonify({'id': recording_id, 'status': 'done'}), 200
+
+    ext = todo_storage.audio_ext(audio.mimetype, audio.filename)
+    path = todo_storage.clip_path(recording_id, ext) if ext else None
+    if path is None:
+        return jsonify({'error': 'Unsupported file type — audio only'}), 400
+    try:
+        captured_at = optional_capture_time(request.form)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Streamed to disk, not read() into memory: this also runs on 8 GB machines.
+    audio.save(path)
+    size = path.stat().st_size
+    if size == 0 or size > MAX_AUDIO_BYTES:
+        todo_storage.delete_recording_dir(recording_id)
+        return jsonify({
+            'error': 'That recording was empty' if size == 0 else 'That recording is too large'
+        }), 400 if size == 0 else 413
+
+    clock = int(time.time())
+    db.execute(
+        'INSERT INTO todo_recordings(id, path, mime, status, captured_at, created_at)'
+        " VALUES (?,?,?,'pending',?,?)",
+        (recording_id, str(path), audio.mimetype, min(captured_at, clock) if captured_at else None, clock),
+    )
+    jobs.enqueue('todo.transcribe_recording', recording_id, commit=False)
     db.commit()
-    return jsonify({'id': todo_id}), 201
+    return jsonify(_recording_dict(_load_recording(db, recording_id))), 201
+
+
+@bp.get('/todos/recordings')
+def list_todo_recordings():
+    """Spoken to-dos that are not on the list yet: still being transcribed, or
+    failed. A finished one is just a to-do, and the list already shows it."""
+    rows = get_db().execute(
+        "SELECT * FROM todo_recordings WHERE status IN ('pending','error') ORDER BY created_at"
+    ).fetchall()
+    return jsonify([_recording_dict(r) for r in rows])
+
+
+@bp.delete('/todos/recordings/<recording_id>')
+def delete_todo_recording(recording_id):
+    """Dismiss a failed one, clip and all. A pending one is refused: its job is
+    about to make the to-do, and deleting under it would race that."""
+    db = get_db()
+    row = _load_recording(db, recording_id)
+    if row is None:
+        return jsonify({'error': 'not found'}), 404
+    if row['status'] == 'pending':
+        return jsonify({'error': 'Still being transcribed'}), 409
+    db.execute('DELETE FROM todo_recordings WHERE id=?', (recording_id,))
+    db.commit()
+    todo_storage.delete_recording_dir(recording_id)
+    return jsonify({'success': True})
+
+
+def _load_recording(db, recording_id: str):
+    return db.execute('SELECT * FROM todo_recordings WHERE id=?', (recording_id,)).fetchone()
+
+
+def _recording_dict(row) -> dict:
+    d = row_to_dict(row)
+    d.pop('path', None)  # a server path is nothing a client should hold
+    d.pop('mime', None)
+    d['capturedAt'] = (
+        datetime.fromtimestamp(row['captured_at'], tz=timezone.utc).isoformat()
+        if row['captured_at'] else None
+    )
+    return d
+
+
+def _finish_recording(db, recording_id: str, status: str, error: str | None = None) -> None:
+    if status == 'done':
+        db.execute("UPDATE todo_recordings SET status='done', error=NULL, path=NULL WHERE id=?",
+                   (recording_id,))
+        db.commit()
+        todo_storage.delete_recording_dir(recording_id)
+    else:
+        db.execute('UPDATE todo_recordings SET status=?, error=? WHERE id=?',
+                   (status, error, recording_id))
+        db.commit()
+
+
+def _transcribe_recording_bg(recording_id: str, *, now: bool = False) -> None:
+    """Transcribe a spoken to-do and put it on the list.
+
+    The transcript is saved before the model is asked to sort it into fields,
+    so a run that is cancelled afterwards (`Preempted`, re-raised for the job
+    row to bring back) does not transcribe the clip twice. A paused GPU is not
+    waited out: `extract_todo_fields` comes back empty and the words become the
+    to-do as they were said, exactly as the synchronous route does — a pause
+    lasts hours, and the to-do is wanted now.
+    """
+    if not now:
+        jobs.enqueue('todo.transcribe_recording', recording_id)
+        return
+    from backend.routes import stt as stt_routes
+
+    db = get_db()
+    row = _load_recording(db, recording_id)
+    if row is None or row['status'] != 'pending':
+        return
+    if db.execute('SELECT 1 FROM todos WHERE id=?', (recording_id,)).fetchone():
+        _finish_recording(db, recording_id, 'done')  # made on an earlier run
+        return
+
+    text = (row['transcript'] or '').strip()
+    if not text:
+        path = todo_storage.resolve_stored_path(row['path']) if row['path'] else None
+        try:
+            if path is None or not path.is_file():
+                raise RuntimeError('The recording is missing')
+            text = (stt_routes.transcribe_file(path) or '').strip()
+        except (InferencePaused, Preempted):
+            raise
+        except Exception as e:
+            logger.warning('Transcribing to-do recording %s failed: %s', recording_id, e)
+            _finish_recording(db, recording_id, 'error', str(e) or 'Failed')
+            return
+        if not text:
+            _finish_recording(db, recording_id, 'error', 'No speech was heard in that recording.')
+            return
+        db.execute('UPDATE todo_recordings SET transcript=? WHERE id=?', (text, recording_id))
+        db.commit()
+
+    _, err = _todo_from_speech(db, text, recording_id)
+    if err:
+        db.rollback()
+        _finish_recording(db, recording_id, 'error', err)
+        return
+    db.commit()
+    _finish_recording(db, recording_id, 'done')
 
 
 @bp.get('/events')

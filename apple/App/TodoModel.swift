@@ -15,10 +15,9 @@ final class TodoModel: ObservableObject {
     /// Why the lists couldn't be fetched, while offline or signed out: a
     /// word or two for the title bar, and what it means.
     @Published private(set) var loadProblem: (short: String, detail: String)?
-    /// A dictated to-do between Stop and the list showing it.
-    @Published private(set) var dictating = false
-    /// What became of the last dictated to-do, when it needs saying.
-    @Published var dictationNotice: String?
+    /// Spoken to-dos the server has but hasn't put on the list yet: being
+    /// transcribed, or failed. As of the last fetch.
+    @Published private(set) var serverRecordings: [ServerTodoRecording] = []
 
     let capture: CaptureModel
     private let cacheURL: URL
@@ -31,6 +30,7 @@ final class TodoModel: ObservableObject {
     private var fetchedAt: Date
     private var watching: AnyCancellable?
     private var refusalWatch: AnyCancellable?
+    private var recordingWatch: AnyCancellable?
 
     init(capture: CaptureModel) {
         self.capture = capture
@@ -41,6 +41,7 @@ final class TodoModel: ObservableObject {
         lastQueue = capture.todoQueue
         watching = capture.$todoQueue.sink { [weak self] queue in self?.queueChanged(queue) }
         refusalWatch = capture.$todoRefusals.sink { [weak self] _ in self?.objectWillChange.send() }
+        recordingWatch = capture.$todoRecordingQueue.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     /// What the tab shows.
@@ -53,6 +54,12 @@ final class TodoModel: ObservableObject {
     }
     var todos: [TodoItem] { lists.todos }
     var waiting: Int { capture.todoQueue.count }
+    /// Spoken to-dos still on this phone.
+    var localRecordings: [TodoRecording] { capture.todoRecordingQueue }
+    /// A spoken to-do is on its way: worth fetching again soon.
+    var awaitingRecordings: Bool {
+        capture.todoRecordingQueue.contains { $0.state == .pending } || serverRecordings.contains { !$0.failed }
+    }
     var refusals: [String] { capture.todoRefusals }
 
     /// The tab's badge: to-dos due today or overdue.
@@ -86,10 +93,13 @@ final class TodoModel: ObservableObject {
             // A server from before goals answers 404; the lists still load.
             async let fetchedGoals = try? api.currentGoals()
             async let fetchedReviews = try? api.coachReviews(days: 1)
+            // A server from before spoken to-dos answers 404: nothing pending.
+            async let fetchedRecordings = try? api.todoRecordings()
             let (tasks, todos) = try await (fetchedTasks, fetchedTodos)
             let yesterday = HabitStreaks.adding(-1, to: DayKey.of(Date()))
             server = TodoLists(tasks: tasks, todos: todos, goals: await fetchedGoals ?? server.goals,
                                review: await fetchedReviews?.review(of: yesterday))
+            serverRecordings = await fetchedRecordings ?? []
             fetchedAt = started
             sent.removeAll { $0.at < started }
             loadProblem = nil
@@ -191,32 +201,20 @@ final class TodoModel: ObservableObject {
 
     func edit(_ todo: TodoItem, _ draft: TodoDraft) { queue(.editTodo(id: todo.id, draft)) }
 
-    /// The mic beside "Add to-do": transcribe the clip, hand the words to the
-    /// server's model to sort into fields, and show the result. No confirm
-    /// step. Once there are words they are never dropped: if the server can't
-    /// take them, they are queued as a plain to-do under the same id, which is
-    /// a no-op there if the server made it after all. Deletes the clip.
-    func dictate(_ clip: URL) async {
-        defer { try? FileManager.default.removeItem(at: clip) }
-        guard let api = capture.chatAPI() else { dictationNotice = "Connect to your server first."; return }
-        dictationNotice = nil
-        dictating = true
-        defer { dictating = false }
-        let words: String
+    /// The mic beside "Add to-do": the clip is queued and sent, and the
+    /// server transcribes it and makes the to-do. Nothing here waits for that.
+    func dictated(_ clip: URL) { capture.queueTodoRecording(clip) }
+
+    func discard(_ recording: TodoRecording) { capture.discard(recording) }
+
+    /// Drops one the server failed on, clip and all.
+    func dismiss(_ recording: ServerTodoRecording) async {
+        guard let api = capture.chatAPI() else { return }
         do {
-            words = try await api.transcribe(clip: clip)
+            try await api.dismissTodoRecording(recording.id)
+            serverRecordings.removeAll { $0.id == recording.id }
         } catch {
-            dictationNotice = "Couldn't transcribe that: \(error.localizedDescription)"
-            return
-        }
-        guard !words.isEmpty else { dictationNotice = "No speech was heard in that recording."; return }
-        let id = ULID.make()
-        do {
-            try await api.createTodo(fromSpeech: words, id: id)
-            await refresh()
-        } catch {
-            queue(.createTodo(TodoDictation.fallbackDraft(id: id, words: words)))
-            dictationNotice = "Added as you said it; the server couldn't sort it into fields."
+            capture.message = error.localizedDescription
         }
     }
 

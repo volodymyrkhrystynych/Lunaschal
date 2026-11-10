@@ -1664,6 +1664,19 @@ def seed_lifestyle(db):
             'VALUES (?, ?, ?, ?, ?, ?, ?)',
             (new_id(), title, done, ts(1) if done else None, lst, ts(5), ts(1)),
         )
+    # A spoken to-do that has already become one (only 'done' and 'error' are
+    # settled states; a 'pending' row would wait on an llm_jobs row that isn't
+    # seeded). Its clip is deleted once transcribed, hence no path.
+    spoken_id = new_id()
+    db.execute(
+        'INSERT INTO todos (id, title, done, list, created_at, updated_at) VALUES (?, ?, 0, ?, ?, ?)',
+        (spoken_id, 'Call the dentist', 'todo', ts(2), ts(2)),
+    )
+    db.execute(
+        "INSERT INTO todo_recordings (id, path, mime, status, transcript, captured_at, created_at) "
+        "VALUES (?, NULL, 'audio/mp4', 'done', ?, ?, ?)",
+        (spoken_id, 'call the dentist about the cleaning', ts(2), ts(2)),
+    )
 
     session_id = new_id()
     db.execute(

@@ -75,6 +75,12 @@ def _chat_transcribe_recording(target_id, payload):
     _transcribe_recording_bg(target_id, payload['message_id'], payload['path'], now=True)
 
 
+@jobs.handler('todo.transcribe_recording')
+def _todo_transcribe_recording(target_id, payload):
+    from backend.routes.tasks import _transcribe_recording_bg
+    _transcribe_recording_bg(target_id, now=True)
+
+
 @jobs.handler('chat.compaction')
 def _chat_compaction(target_id, payload):
     from backend.chat.compaction import run_pending

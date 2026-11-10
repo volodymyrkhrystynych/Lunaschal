@@ -10,6 +10,7 @@ the route falls back to the transcript itself.
 from datetime import date
 
 from backend.ai.llm import chat_json
+from backend.ai.service import Preempted
 
 TITLE_LIMIT = 100
 
@@ -80,7 +81,11 @@ def extract_todo_fields(transcript: str, today: str) -> dict | None:
     """
     try:
         data = chat_json(_prompt(transcript, today), system=_TODO_SYSTEM, schema=_TODO_SCHEMA)
-    except Exception:  # noqa: BLE001 — LLM down; the caller falls back
+    except Preempted:
+        # Only background work is preempted (a spoken to-do's job), and that
+        # wants the model's fields once the lane is free, not the fallback now.
+        raise
+    except Exception:  # noqa: BLE001 — LLM down or paused; the caller falls back
         return None
     if not isinstance(data, dict):
         return None

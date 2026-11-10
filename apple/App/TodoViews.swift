@@ -25,8 +25,10 @@ struct TodoView: View {
 
     init(todo: TodoModel) {
         self.todo = todo
+        // Offline is fine: the clip waits on the phone. Only a phone with no
+        // server at all has nowhere to send it.
         _dictation = StateObject(wrappedValue: Dictation(capture: todo.capture) { [weak todo] in
-            todo?.capture.chatAPI() != nil
+            todo?.capture.server != nil
         })
     }
 
@@ -59,13 +61,16 @@ struct TodoView: View {
             await todo.refresh()
         }
         // Fresh while it's on screen; a pass that touches to-dos refreshes it too.
+        // Every few seconds while a spoken to-do is being made, so it turns up
+        // soon after the server has it.
         .task {
             while !Task.isCancelled {
                 await todo.refresh()
-                do { try await Task.sleep(for: .seconds(120)) } catch { return }
+                do { try await Task.sleep(for: .seconds(todo.awaitingRecordings ? 4 : 120)) } catch { return }
             }
         }
-        .onDisappear { dictation.cancel() }
+        // Leaving mid-sentence keeps what was said: it is queued like any other clip.
+        .onDisappear { dictation.stop() }
         .sheet(isPresented: $creating) {
             TodoEditor(heading: "New to-do", draft: TodoDraft()) { todo.create($0) }
         }
@@ -234,9 +239,31 @@ struct TodoView: View {
                     TodoMicButton(dictation: dictation, todo: todo)
                 }
                 .buttonStyle(.borderless)
-                if let notice = todo.dictationNotice ?? dictation.error {
+                if let notice = dictation.error {
                     Text(notice).font(.footnote).foregroundStyle(.secondary)
                         .accessibilityIdentifier("todo-dictation-notice")
+                }
+                ForEach(todo.localRecordings) { recording in
+                    SpokenTodoRow(text: recording.state == .failed
+                                      ? "Voice to-do not accepted: \(recording.lastError ?? "the server refused it")"
+                                      : "Voice to-do waiting to send",
+                                  working: false, failed: recording.state == .failed)
+                        .swipeActions(edge: .trailing) {
+                            Button("Delete", systemImage: "trash", role: .destructive) { todo.discard(recording) }
+                        }
+                }
+                ForEach(todo.serverRecordings) { recording in
+                    SpokenTodoRow(text: recording.failed
+                                      ? "Voice to-do failed: \(recording.error ?? "unknown error")"
+                                      : "Transcribing voice to-do…",
+                                  working: !recording.failed, failed: recording.failed)
+                        .swipeActions(edge: .trailing) {
+                            if recording.failed {
+                                Button("Dismiss", systemImage: "xmark", role: .destructive) {
+                                    Task { await todo.dismiss(recording) }
+                                }
+                            }
+                        }
                 }
             }
             ForEach(items) { item in
@@ -265,7 +292,27 @@ struct TodoView: View {
     }
 }
 
-/// Say a to-do: tap to record, tap again to stop, and it is on the list.
+/// A spoken to-do that isn't on the list yet.
+private struct SpokenTodoRow: View {
+    let text: String
+    let working: Bool
+    let failed: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if working { ProgressView() } else {
+                Image(systemName: failed ? "exclamationmark.triangle" : "waveform")
+                    .foregroundStyle(failed ? Color.orange : Color.secondary)
+            }
+            Text(text).font(.subheadline).foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("todo-spoken")
+    }
+}
+
+/// Say a to-do: tap to record, tap again to stop. The clip is kept and sent,
+/// and the server puts the to-do on the list; nothing waits for it here.
 private struct TodoMicButton: View {
     @ObservedObject var dictation: Dictation
     @ObservedObject var todo: TodoModel
@@ -274,12 +321,12 @@ private struct TodoMicButton: View {
         Button {
             Task {
                 await dictation.toggle { clip in
-                    Task { @MainActor in await todo.dictate(clip) }
+                    Task { @MainActor in todo.dictated(clip) }
                 }
             }
         } label: {
             Group {
-                if dictation.status == .starting || todo.dictating {
+                if dictation.status == .starting {
                     ProgressView()
                 } else {
                     Image(systemName: dictation.status == .recording ? "stop.circle.fill" : "mic")
@@ -289,7 +336,7 @@ private struct TodoMicButton: View {
             .font(.title3)
             .frame(width: 36, height: 36)
         }
-        .disabled(dictation.status == .starting || todo.dictating)
+        .disabled(dictation.status == .starting)
         .accessibilityLabel(dictation.status == .recording ? "Stop and add to-do" : "Dictate a to-do")
         .accessibilityIdentifier("todo-dictate")
     }

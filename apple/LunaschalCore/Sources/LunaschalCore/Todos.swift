@@ -367,25 +367,3 @@ public enum TodoRules {
         return interval == 1 ? "every \(unit)" : "every \(interval) \(unit)s"
     }
 }
-
-/// The to-do list's mic button: the words go to the server, which sorts them
-/// into title, notes, priority and due date (`POST /api/tasks/todos/transcribe`).
-public enum TodoDictation {
-    /// The server's title limit, and where its own fallback cuts.
-    public static let titleLimit = 100
-
-    struct Body: Encodable, Equatable {
-        let text: String
-        let id: String
-    }
-
-    /// What is queued when the server couldn't take the words: the to-do as
-    /// said, cut the way the server cuts it, and the whole sentence in the
-    /// notes when the title had to be cut. Same id, so if the server did make
-    /// the to-do after all, this create is a no-op there.
-    public static func fallbackDraft(id: String, words: String) -> TodoDraft {
-        let said = words.trimmingCharacters(in: .whitespacesAndNewlines)
-        let title = String(said.prefix(titleLimit)).trimmingCharacters(in: .whitespacesAndNewlines)
-        return TodoDraft(id: id, title: title, notes: title == said ? "" : said)
-    }
-}
