@@ -1,5 +1,8 @@
 import { api, TodoItem, TodoList, TodoPayload } from '../../hooks/api';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { RecordingButton } from '../RecordingButton';
+import { useRecorder } from '@/hooks/useRecorder';
+import { ulid } from '@/lib/ulid';
 import { TodoForm } from './TodoForm';
 import { TodoRow } from './TodoRow';
 import type { TaskSection } from './index';
@@ -47,6 +50,26 @@ export function TodoSection({
   onUpdateTodo,
 }: TodoSectionProps) {
   const queryClient = useQueryClient();
+
+  // Voice-to-do: record, transcribe, and send the words to the backend, which
+  // runs them through the LLM and creates the to-do in one shot. The id is
+  // minted here so a retried request cannot make a second to-do.
+  const createFromSpeech = useMutation({
+    mutationFn: ({ text, id }: { text: string; id: string }) =>
+      api.todos.transcribe(text, id),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['todos'] });
+    },
+  });
+  const transcribeTodo = useRecorder(text => {
+    if (text.trim()) createFromSpeech.mutate({ text, id: ulid() });
+  });
+  const voiceError =
+    transcribeTodo.error ||
+    (createFromSpeech.error
+      ? `Couldn't create the to-do: ${createFromSpeech.error.message}`
+      : '');
+
   const deleteTodo = useMutation({
     mutationFn: (id: string) => api.todos.remove(id),
     onSuccess: () => {
@@ -110,13 +133,36 @@ export function TodoSection({
         (creating ? (
           <TodoForm list={activeList} onCancel={onCancelCreate} />
         ) : (
-          <button
-            onClick={onStartCreate}
-            className="w-full mb-3 px-3 py-2 rounded-lg border border-dashed border-white/15 text-left text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/30 transition-colors"
-          >
-            + Add to-do…
-          </button>
+          <div className="flex items-center gap-2 mb-3">
+            <button
+              onClick={onStartCreate}
+              className="flex-1 px-3 py-2 rounded-lg border border-dashed border-white/15 text-left text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/30 transition-colors"
+            >
+              + Add to-do…
+            </button>
+            <RecordingButton
+              status={
+                createFromSpeech.isPending ? 'saving' : transcribeTodo.status
+              }
+              starting={transcribeTodo.starting}
+              action="dictate"
+              title="Say a to-do — it is added straight to the list"
+              testId="todo-dictate"
+              onClick={() => {
+                if (transcribeTodo.status === 'idle') {
+                  createFromSpeech.reset();
+                  void transcribeTodo.start();
+                } else transcribeTodo.stop();
+              }}
+              className="shrink-0"
+            />
+          </div>
         ))}
+      {activeList !== 'archive' && !creating && voiceError && (
+        <p role="alert" className="-mt-2 mb-3 text-xs text-red-400">
+          {voiceError}
+        </p>
+      )}
 
       <div className="space-y-2">
         {active.map(renderTodo)}

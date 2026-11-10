@@ -321,6 +321,11 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.textFields["chat-input"].waitForExistence(timeout: 5))
         selectTab(app, "Todo")
         XCTAssertTrue(app.buttons["todo-add"].waitForExistence(timeout: 5))
+        // The mic sits beside it; with no server it says so instead of recording.
+        let mic = app.buttons["todo-dictate"]
+        XCTAssertTrue(mic.waitForExistence(timeout: 5))
+        mic.tap()
+        XCTAssertTrue(app.staticTexts["todo-dictation-notice"].waitForExistence(timeout: 5))
         openMore(app, "Library")
         // The workout log is Capture's Workout page, not a More row.
         XCTAssertFalse(app.buttons["more-Workout log"].exists)

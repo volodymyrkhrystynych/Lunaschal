@@ -5,6 +5,7 @@ import {
   fireEvent,
   screen,
   waitFor,
+  act,
   within,
 } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -12,6 +13,51 @@ import { ShortcutProvider } from '../../shortcuts/ShortcutProvider';
 import { api, DailyTask, TodoItem } from '../../hooks/api';
 import { dueInputToUnix } from '../../lib/todos';
 import { TasksSection } from './index';
+import type { RecorderStatus } from '../../hooks/useRecorder';
+
+// Mock useRecorder so the recording button works in tests.
+let recorderState: {
+  status: RecorderStatus;
+  starting: boolean;
+  error: string;
+} = {
+  status: 'idle',
+  starting: false,
+  error: '',
+};
+let deliverTranscript: (text: string) => void = () => {};
+const mockStart = vi.fn(() => {
+  recorderState.status = 'recording';
+  recorderState.starting = false;
+});
+const mockStop = vi.fn(() => {
+  recorderState.status = 'idle';
+  recorderState.starting = false;
+});
+vi.mock('@/hooks/useRecorder', () => ({
+  useRecorder: (onTranscript: (text: string) => void) => {
+    deliverTranscript = onTranscript;
+    // Return a proxy that always reads from the current recorderState
+    return new Proxy(
+      {
+        status: recorderState.status,
+        starting: recorderState.starting,
+        error: '',
+        canTranscribe: true,
+        start: mockStart,
+        stop: mockStop,
+      },
+      {
+        get(target, prop) {
+          if (prop === 'status') return recorderState.status;
+          if (prop === 'starting') return recorderState.starting;
+          if (prop === 'error') return recorderState.error;
+          return target[prop as keyof typeof target];
+        },
+      }
+    );
+  },
+}));
 
 vi.mock('../../hooks/api', () => ({
   api: {
@@ -29,6 +75,7 @@ vi.mock('../../hooks/api', () => ({
     todos: {
       list: vi.fn().mockResolvedValue([]),
       create: vi.fn().mockResolvedValue({ id: 'nt' }),
+      transcribe: vi.fn().mockResolvedValue({ id: 'nt' }),
       update: vi.fn().mockResolvedValue({ success: true }),
       remove: vi.fn().mockResolvedValue({ success: true }),
     },
@@ -419,6 +466,94 @@ describe('delete protection', () => {
     renderTasks();
     await screen.findByText('Morning pages');
     expect(screen.getByTitle('Show delete buttons')).not.toBeNull();
+  });
+});
+
+describe('voice-to-do transcribe button', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    recorderState.error = '';
+  });
+
+  it('creates the to-do from the words with a minted id and refreshes the list', async () => {
+    renderTasks();
+    await screen.findByText('Fix the bike');
+    const listCalls = vi.mocked(api.todos.list).mock.calls.length;
+
+    await act(async () => deliverTranscript('buy milk tomorrow'));
+
+    expect(api.todos.transcribe).toHaveBeenCalledOnce();
+    const [text, id] = vi.mocked(api.todos.transcribe).mock.calls[0];
+    expect(text).toBe('buy milk tomorrow');
+    expect(id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    await waitFor(() =>
+      expect(vi.mocked(api.todos.list).mock.calls.length).toBeGreaterThan(
+        listCalls
+      )
+    );
+  });
+
+  it('shows why a spoken to-do was not created', async () => {
+    vi.mocked(api.todos.transcribe).mockRejectedValueOnce(
+      new Error('title required')
+    );
+    renderTasks();
+    await screen.findByText('Fix the bike');
+
+    await act(async () => deliverTranscript('mumble'));
+
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'title required'
+    );
+  });
+
+  it('shows a recorder error, such as a denied microphone', async () => {
+    recorderState.error = 'Microphone access denied';
+    renderTasks();
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'Microphone access denied'
+    );
+  });
+
+  it('renders the recording button next to the add-to-do button', async () => {
+    renderTasks();
+    await screen.findByText('Fix the bike');
+
+    const addBtn = screen.getByRole('button', { name: /Add to-do/ });
+    expect(addBtn).not.toBeNull();
+
+    // The recording button is a sibling in the same flex container
+    const micBtn = screen.getByRole('button', { name: /Dictate/ });
+    expect(micBtn).not.toBeNull();
+  });
+
+  it('calls start then stop on the recorder when clicking the mic button', async () => {
+    renderTasks();
+    await screen.findByText('Fix the bike');
+
+    const micBtn = screen.getByRole<HTMLButtonElement>('button', {
+      name: /Dictate/,
+    });
+    // Button should not be disabled
+    expect(micBtn.disabled).toBe(false);
+    // First click starts recording
+    fireEvent.click(micBtn);
+    expect(mockStart).toHaveBeenCalledOnce();
+    expect(mockStop).not.toHaveBeenCalled();
+
+    // Second click stops recording
+    fireEvent.click(micBtn);
+    expect(mockStop).toHaveBeenCalledOnce();
+  });
+
+  it('does not show the transcribe button in the Archive list', async () => {
+    renderTasks();
+    await screen.findByText('Fix the bike');
+
+    fireEvent.click(screen.getByRole('button', { name: /Archive/ }));
+    await screen.findByText('Learn accordion');
+
+    expect(screen.queryByRole('button', { name: /Dictate/ })).toBeNull();
   });
 });
 

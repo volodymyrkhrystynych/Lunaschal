@@ -8,9 +8,11 @@ from ulid import ULID
 from backend.capture_time import optional_capture_time
 from backend.db.connection import get_db, mapping_to_dict, row_to_dict
 from backend.day_boundary import day_bounds, day_key_for
+from backend.ai.todo import TITLE_LIMIT, extract_todo_fields
 from backend.habit_streaks import summary as streak_summary
 from backend.todo_recurrence import (
-    next_due, normalize_list, parse_priority as _parse_priority,
+    next_due, normalize_list, parse_due_date,
+    parse_priority as _parse_priority,
     parse_repeat as _parse_repeat,
 )
 
@@ -726,6 +728,62 @@ def promote_chat_todo(chat_todo_id):
     if err:
         return jsonify({'error': err}), 400
     db.execute('DELETE FROM chat_todos WHERE id=?', (chat_todo_id,))
+    db.commit()
+    return jsonify({'id': todo_id}), 201
+
+
+@bp.post('/todos/transcribe')
+def transcribe_todo():
+    """Turn a spoken sentence into a to-do, with no confirmation step.
+
+    The client sends already-transcribed text (via ``/api/transcribe``) and,
+    optionally, an ``id`` it minted. The model extracts title, notes, priority
+    and due date, resolving relative dates against today's 4am day. If it is
+    unavailable (a paused GPU is normal), the transcript itself becomes the
+    to-do: the first line's worth as the title and, when that had to be cut,
+    the whole of it as the notes, so nothing that was said is lost.
+
+    A replayed ``id`` returns the existing row without asking the model again,
+    which is what lets the phone retry, or fall back to a plain create with the
+    same id, without making two to-dos.
+    """
+    body = request.json or {}
+    text = (body.get('text') or '').strip()
+    if not text:
+        return jsonify({'error': 'text required'}), 400
+    client_id = body.get('id')
+    if client_id is not None and (not isinstance(client_id, str) or not client_id.strip()):
+        return jsonify({'error': 'id must be a non-empty string'}), 400
+
+    db = get_db()
+    if client_id and db.execute('SELECT 1 FROM todos WHERE id=?', (client_id,)).fetchone():
+        return jsonify({'id': client_id}), 200
+
+    fields = extract_todo_fields(text, day_key_for())
+    if fields is None:
+        title = text[:TITLE_LIMIT].strip()
+        fields = {
+            'title': title,
+            'notes': text if title != text else None,
+            'priority': None,
+            'due': None,
+        }
+
+    due_ts = None
+    if fields.get('due'):
+        due_ts, err = parse_due_date(fields['due'])
+        if err:
+            due_ts = None  # an unparseable date from the model is dropped, not fatal
+
+    todo_id, err = _insert_todo_row(db, {
+        'id': client_id,
+        'title': fields['title'],
+        'notes': fields.get('notes'),
+        'priority': fields.get('priority'),
+        'due': due_ts,
+    })
+    if err:
+        return jsonify({'error': err}), 400
     db.commit()
     return jsonify({'id': todo_id}), 201
 

@@ -385,7 +385,7 @@ what each device can currently do and which work remains device-only.
   far. Routing is unit tested (`CoachNotificationTests`) and the app builds;
   APNs cannot reach a simulator, so delivery is unverified until a TestFlight
   build after the signing steps in SIGNING.md. Payloads for `xcrun simctl
-  push` are in `tools/push-fixtures/`.
+push` are in `tools/push-fixtures/`.
 - Todo opens with Goals: the overarching goal (a block of text) and
   collapsible This week / month / quarter / year sections, each listing its
   open goals (a goal with a daily rule shows its streak and prize) or "Not

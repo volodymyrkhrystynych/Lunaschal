@@ -5337,6 +5337,9 @@ export const api = {
     list: () => get<TodoItem[]>('/api/tasks/todos'),
     create: (data: TodoPayload & { title: string; id?: string }) =>
       post<{ id: string }>('/api/tasks/todos', data),
+    /** A spoken sentence → one to-do, extracted by the model, no confirm step. */
+    transcribe: (text: string, id?: string) =>
+      post<{ id: string }>('/api/tasks/todos/transcribe', { text, id }),
     update: (id: string, data: TodoPayload) =>
       patch<{ success: boolean }>(`/api/tasks/todos/${id}`, data),
     remove: (id: string) => del<{ success: boolean }>(`/api/tasks/todos/${id}`),
