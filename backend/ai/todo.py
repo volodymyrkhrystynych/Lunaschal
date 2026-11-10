@@ -97,3 +97,43 @@ def extract_todo_fields(transcript: str, today: str) -> dict | None:
         'priority': _priority(data.get('priority')),
         'due': due if isinstance(due, str) else None,
     }
+
+
+MAX_STEPS = 4
+
+_BREAKDOWN_SYSTEM = (
+    "The user keeps putting off one task. Split it into 2 to "
+    f"{MAX_STEPS} small, concrete first steps, each doable in under half an "
+    "hour, in the order they'd be done. The first step should be the easiest "
+    "possible way to start. Phrase each as an action, short enough for a "
+    'checklist. Return JSON: {"steps": ["..."]}.'
+)
+
+_BREAKDOWN_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'steps': {
+            'type': 'array', 'minItems': 1, 'maxItems': MAX_STEPS,
+            'items': {'type': 'string'},
+        },
+    },
+    'required': ['steps'],
+    'additionalProperties': False,
+}
+
+
+def break_down_todo(title: str, notes: str | None = None) -> list[str]:
+    """Smaller first steps for something the day plan kept offering and the
+    user kept skipping (the `todo_review` card's "break it down"). Raises on a
+    model failure — the user pressed the button and is waiting for an answer —
+    and returns [] when the model had nothing to offer."""
+    prompt = f'Task: {title}' + (f'\nDetails: {notes}' if notes else '')
+    data = chat_json(prompt, system=_BREAKDOWN_SYSTEM, schema=_BREAKDOWN_SCHEMA)
+    steps = data.get('steps') if isinstance(data, dict) else None
+    if not isinstance(steps, list):
+        return []
+    out = []
+    for step in steps[:MAX_STEPS]:
+        if isinstance(step, str) and step.strip():
+            out.append(step.strip()[:TITLE_LIMIT])
+    return out

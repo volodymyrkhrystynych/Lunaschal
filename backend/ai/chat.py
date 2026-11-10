@@ -221,14 +221,28 @@ def format_plate_context(now: int | None = None) -> str:
         lines += ['Their goals:', goals, '']
 
     todos_today = db.execute(
-        'SELECT title, done FROM chat_todos WHERE day_key=? ORDER BY done, created_at',
+        'SELECT title, done, source_type FROM chat_todos WHERE day_key=? ORDER BY done, created_at',
         (today,),
     ).fetchall()
     if todos_today:
         lines.append("On today's list (the bar above the chat box):")
         for t in todos_today:
             mark = 'done' if t['done'] else 'not done'
-            lines.append(f'- {t["title"]} — {mark}')
+            link = {'todo': ' (their to-do)', 'daily': ' (their daily task)'}.get(t['source_type'], '')
+            lines.append(f'- {t["title"]}{link} — {mark}')
+        lines.append('')
+
+    from backend import day_plan
+    conv = db.execute(
+        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL',
+        (today,),
+    ).fetchone()
+    offered = day_plan.pending_cards(db, conv['id'] if conv else None)
+    if offered:
+        # Already offered as cards (from their journal, or carried over); they
+        # only have to answer the card, so don't add these again.
+        lines.append('Offered as cards in this chat, waiting for their answer:')
+        lines += [f'- {t}' for t in offered]
         lines.append('')
 
     daily = pending_daily_tasks(db, today)

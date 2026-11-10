@@ -202,6 +202,17 @@ def _ensure_workout_quick_entry(db):
     db.commit()
 
 
+def _ensure_chat_todo_source(db):
+    cols = {r[1] for r in db.execute('PRAGMA table_info(chat_todos)')}
+    for name in ('source_type', 'source_id', 'reason'):
+        if name not in cols:
+            db.execute(f'ALTER TABLE chat_todos ADD COLUMN {name} TEXT')
+    # Here rather than in schema.sql, which runs before the columns exist on an
+    # older database.
+    db.execute('CREATE INDEX IF NOT EXISTS idx_chat_todos_source ON chat_todos(source_type, source_id)')
+    db.commit()
+
+
 def _ensure_health_lifestyle(db):
     from backend.apple_health.lifestyle import KG_PER_LB, reconcile
     cols = {r[1] for r in db.execute('PRAGMA table_info(body_weight_logs)')}
@@ -374,6 +385,7 @@ def init_db() -> None:
     _ensure_inference_pause_settings(db)
     _ensure_mobile_sync(db)
     _ensure_code_agent_settings(db)
+    _ensure_chat_todo_source(db)
     # No _reset_stale_torrents() belongs below: the torrent client runs in its
     # own container and outlives this process, so Lunaschal never holds an
     # in-flight torrent state that a restart could orphan. See the comment on

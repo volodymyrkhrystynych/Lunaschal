@@ -819,6 +819,9 @@ export interface DelegateProposalRecord {
   // Set on a briefing's carried-over to-do: the day key it was left
   // unfinished on (backend/briefing_job.py's stage_carryover_todos).
   carriedFrom?: string;
+  // Set on a to-do card heard in a journal entry (backend/journal/todos.py):
+  // that entry's id.
+  fromJournal?: string;
   evidence?: string;
   sources?: { id: string; label: string; recordedAt: string }[];
   id: string;
@@ -837,7 +840,9 @@ export interface DelegateProposalRecord {
     | 'screenshot_titles'
     | 'habit_plan'
     | 'habit'
-    | 'writing_chapter_update';
+    | 'writing_chapter_update'
+    // "You keep skipping this — keep it or let it go?" (backend/briefing_job.py).
+    | 'todo_review';
   data: Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
   resolvedAt?: number;
@@ -852,6 +857,10 @@ export interface DelegateProposalRecord {
     revisionId?: string | null;
     renamed?: number;
     skipped?: { entryId: string; reason: string }[];
+    // A resolved todo_review card: what was done with the item.
+    choice?: 'drop' | 'snooze' | 'breakdown';
+    steps?: string[];
+    until?: string;
   };
 }
 
@@ -1783,7 +1792,16 @@ export interface ChatTodoItem {
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  // What the row stands for (backend/day_plan.py). 'todo' and 'daily' are live
+  // links — ticking either side ticks both — while 'goal' and 'journal' only
+  // say where the suggestion came from.
+  sourceType?: ChatTodoSource | null;
+  sourceId?: string | null;
+  // One line on why it is on today's plan.
+  reason?: string | null;
 }
+
+export type ChatTodoSource = 'todo' | 'daily' | 'goal' | 'journal';
 
 export interface ChatTodoPayload {
   title?: string;
