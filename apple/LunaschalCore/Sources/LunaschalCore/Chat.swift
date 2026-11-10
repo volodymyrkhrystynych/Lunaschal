@@ -169,6 +169,8 @@ public struct AgentStep: Equatable {
             return succeeded ? "Read \(kind == "chapter" ? "chapter" : "note"): \(target)" : failed("Couldn't open \"\(target)\"", dash: true)
         case "propose_note", "propose_note_update":
             return succeeded ? "Staged \(target)" : failed("Couldn't stage that note", dash: true)
+        case "propose_chapter_update":
+            return succeeded ? "Staged \(target)" : failed("Couldn't stage that change", dash: true)
         case "canon_search":
             guard succeeded else { return failed("Couldn't search the canon wiki", dash: true) }
             return (count ?? 0) > 0 ? "Searched the canon wiki for \"\(target)\" (\(count!))"
@@ -264,7 +266,8 @@ public struct ChatProposal: Equatable, Identifiable {
         return ["calendar": "Save as calendar event?", "calorie": "Log calories?", "food": "Add to your food log?",
                 "recipe": "Save this recipe?", "recipe_link": "Link this meal to that recipe?",
                 "flashcards": "Generate flashcards?", "todo": "Keep this for today?", "writing_note": "Add to the notes?",
-                "writing_note_update": "Update this note?", "screenshot_titles": "Rename these screenshots?",
+                "writing_note_update": "Update this note?", "writing_chapter_update": "Change this chapter?",
+                "screenshot_titles": "Rename these screenshots?",
                 "habit": "Start a new habit?",
                 "habit_plan": "Make this the plan for “\(data["habitTitle"]?.string ?? "this habit")”?"][kind] ?? "Save this?"
     }
@@ -273,7 +276,8 @@ public struct ChatProposal: Equatable, Identifiable {
         if reconstructionDay != nil { return "Approve event" }
         return ["calendar": "Save", "calorie": "Log", "food": "Log Meal", "recipe": "Save", "recipe_link": "Link",
                 "flashcards": "Queue Cards", "todo": "Add to today", "writing_note": "Add Note",
-                "writing_note_update": "Update Note", "screenshot_titles": "Rename",
+                "writing_note_update": "Update Note", "writing_chapter_update": "Update Chapter",
+                "screenshot_titles": "Rename",
                 "habit_plan": "Use as cue", "habit": "Add habit"][kind] ?? "Save"
     }
 
@@ -299,6 +303,8 @@ public struct ChatProposal: Equatable, Identifiable {
             let renamed = result["renamed"]?.int ?? 0
             let skipped = result["skipped"]?.array?.count ?? 0
             return "Renamed \(renamed) screenshot run\(renamed == 1 ? "" : "s")" + (skipped > 0 ? " — \(skipped) skipped" : "")
+        case "writing_chapter_update":
+            return "Changed “\(data["title"]?.string ?? "")” — the earlier version is in its history"
         default: return "Resolved"
         }
     }

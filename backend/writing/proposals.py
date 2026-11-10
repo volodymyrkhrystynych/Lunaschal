@@ -1,4 +1,5 @@
-"""The Writing discussion's two proposal tools: a new note, or an addition to one.
+"""The Writing discussion's proposal tools: a new note, an addition to one, or a
+change to a chapter.
 
 This is what turns a discussion into a working notebook for the book. Before
 it, the only way a decision made in conversation reached the project's notes
@@ -17,6 +18,11 @@ to add one fact routinely loses three others, and the author would have to
 diff the card against the note to notice. Replace exists for the case where
 the author has asked for exactly that.
 
+A chapter goes further: there is no way to propose rewriting one at all. It is
+the author's own prose and the long document, where a dropped paragraph is
+hardest to notice, so a change either adds to the end or replaces one passage
+quoted exactly, and the accept checks that quote still appears exactly once.
+
 Bound to one project, and fails closed the way `WritingTools(None)` does: with
 no project there is nothing to propose into, so every call is refused.
 """
@@ -25,6 +31,7 @@ import json
 from backend.db.connection import get_db
 from backend.delegate.tools import _refused, _staged
 from backend.recall import pick_one, unknown_tool
+from backend.writing.chapters import word_count
 from backend.writing.notes import DOC_TYPES, MAX_NOTE_CHARS, normalize_doc_type
 
 TOOLS = [
@@ -91,6 +98,40 @@ TOOLS = [
             },
         },
     },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'propose_chapter_update',
+            'description': (
+                'Propose a change to a chapter (by its title, as writing_list '
+                'shows it): add text to its end, or replace one passage. A '
+                'passage must be quoted exactly from writing_read, and long '
+                'enough to appear only once. You cannot rewrite a whole chapter. '
+                'Only propose prose when the author asked for it. The author '
+                'confirms on a card; nothing is saved until they do.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'chapter': {'type': 'string', 'description': 'The chapter title.'},
+                    'mode': {'type': 'string', 'enum': ['append', 'replace_passage']},
+                    'find': {
+                        'type': 'string',
+                        'description': 'For replace_passage: the exact text to replace.',
+                    },
+                    'content': {
+                        'type': 'string',
+                        'description': 'The text to add, or the replacement passage.',
+                    },
+                    'reason': {
+                        'type': 'string',
+                        'description': 'One line: what this change does.',
+                    },
+                },
+                'required': ['chapter', 'content'],
+            },
+        },
+    },
 ]
 
 TOOL_NAMES = {t['function']['name'] for t in TOOLS}
@@ -147,7 +188,7 @@ class WritingProposals:
         if len(content) > MAX_NOTE_CHARS:
             return _refused(tool, f'keep it under {MAX_NOTE_CHARS:,} characters')
         rows = get_db().execute(
-            'SELECT id, title, doc_type, updated_at FROM writing_context_docs'
+            'SELECT id, title, doc_type, updated_at, revision FROM writing_context_docs'
             ' WHERE project_id=?',
             (self.project_id,),
         ).fetchall()
@@ -164,9 +205,50 @@ class WritingProposals:
             # The raw unix time, compared at accept: an edit made after this
             # card was staged makes the card stale rather than overwritten.
             'baseUpdatedAt': hit['updated_at'],
+            'baseRevision': hit['revision'],
         }
         verb = 'rewrite of' if mode == 'replace' else 'addition to'
         return _staged('writing_note_update', tool, data, f'{verb} "{hit["title"]}"')
+
+    def propose_chapter_update(self, args: dict) -> tuple[str, dict]:
+        tool = 'propose_chapter_update'
+        wanted = str(args.get('chapter') or args.get('title') or '').strip()
+        content = str(args.get('content') or '').strip()
+        mode = str(args.get('mode') or 'append').strip().lower()
+        find = str(args.get('find') or '')
+        if mode not in ('append', 'replace_passage'):
+            return _refused(tool, "mode must be 'append' or 'replace_passage'; "
+                                  'a whole chapter cannot be rewritten')
+        if not content:
+            return _refused(tool, 'nothing to add')
+        if len(content) > MAX_NOTE_CHARS:
+            return _refused(tool, f'keep it under {MAX_NOTE_CHARS:,} characters')
+        rows = get_db().execute(
+            'SELECT id, title, content FROM writing_chapters WHERE project_id=?',
+            (self.project_id,),
+        ).fetchall()
+        hit, reason = pick_one(rows, wanted, lambda r: r['title'])
+        if hit is None:
+            if reason == 'ambiguous':
+                return _refused(tool, f'several chapters match "{wanted}"; use the full title')
+            return _refused(tool, f'no chapter called "{wanted}" — check writing_list')
+        if mode == 'replace_passage':
+            if not find.strip():
+                return _refused(tool, 'replace_passage needs the exact text in find')
+            matches = (hit['content'] or '').count(find)
+            if matches == 0:
+                return _refused(tool, 'that exact text is not in the chapter — '
+                                      'read it again with writing_read and quote it exactly')
+            if matches > 1:
+                return _refused(tool, f'that text appears {matches} times — quote '
+                                      'more of it so it is unique')
+        data = {
+            'chapterId': hit['id'], 'title': hit['title'], 'mode': mode,
+            'find': find if mode == 'replace_passage' else '',
+            'content': content, 'reason': str(args.get('reason') or '').strip(),
+        }
+        verb = 'change to' if mode == 'replace_passage' else f'{word_count(content)} words added to'
+        return _staged('writing_chapter_update', tool, data, f'{verb} "{hit["title"]}"')
 
     def run_tool(self, name: str, args: dict) -> tuple[str, dict]:
         args = args if isinstance(args, dict) else {}
@@ -181,4 +263,6 @@ class WritingProposals:
             }
         if name == 'propose_note':
             return self.propose_note(args)
+        if name == 'propose_chapter_update':
+            return self.propose_chapter_update(args)
         return self.propose_note_update(args)

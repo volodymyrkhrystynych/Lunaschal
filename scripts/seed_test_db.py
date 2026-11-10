@@ -1369,13 +1369,33 @@ def seed_chat(db):
 def seed_writing(db):
     project_id = new_id()
     db.execute(
-        'INSERT INTO writing_projects (id, title, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO writing_projects (id, title, description, daily_word_goal, created_at, updated_at) VALUES (?, ?, ?, 300, ?, ?)',
         (project_id, 'Notes on lighthouse keeping', 'A short piece inspired by research on 19th-century lighthouses.', ts(12), ts(12)),
     )
+    chapter_id = new_id()
     db.execute(
-        'INSERT INTO writing_chapters (id, project_id, title, content, position, created_at, updated_at) '
-        'VALUES (?, ?, ?, ?, 0, ?, ?)',
-        (new_id(), project_id, 'Opening', 'The keeper climbs the same stairs every night, and every night they are different.', ts(12), ts(12)),
+        'INSERT INTO writing_chapters (id, project_id, title, content, position, revision, created_at, updated_at) '
+        'VALUES (?, ?, ?, ?, 0, 1, ?, ?)',
+        (chapter_id, project_id, 'Opening', 'The keeper climbs the same stairs every night, and every night they are different.', ts(12), ts(12)),
+    )
+    # The chapter's first draft, for its history panel, and a day of writing
+    # for the phone's word count.
+    db.execute(
+        'INSERT INTO writing_chapter_revisions (id, chapter_id, title, content, source, message_id, created_at) '
+        "VALUES (?, ?, 'Opening', ?, 'edit', NULL, ?)",
+        (new_id(), chapter_id, 'The keeper climbs the stairs.', ts(12)),
+    )
+    db.execute(
+        'INSERT INTO writing_daily_words (project_id, day, words) VALUES (?, ?, ?)',
+        (project_id, today_key(), 120),
+    )
+    # A discussion opened from a highlighted sentence of that chapter, the way
+    # the phone's "Discuss rewrite" starts one.
+    db.execute(
+        'INSERT INTO conversations (id, title, writing_project_id, writing_chapter_id, writing_passage, created_at, updated_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (new_id(), 'Rewrite: The keeper climbs the same stairs…', project_id, chapter_id,
+         'The keeper climbs the same stairs every night', ts(11), ts(11)),
     )
     # Context docs are what the scoped writing chat is allowed to see. The
     # character is pinned, so the discussion's prompt carries it on every turn.

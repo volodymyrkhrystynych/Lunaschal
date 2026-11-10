@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
+import { documentKey } from '../../lib/writingDocuments';
 import { useWritingChapterUpdate } from '../../offline/mutationDefaults';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import {
@@ -9,6 +10,8 @@ import {
   getStoredFontSize,
   setStoredChapterFontSize,
 } from '../../lib/fontSize';
+import { ConflictBanner } from './ConflictBanner';
+import { useDocumentConflict } from './useDocumentConflict';
 
 interface Props {
   chapterId: string;
@@ -29,7 +32,8 @@ export function ChapterEditor({ chapterId }: Props) {
   );
   const [fontSize, setFontSize] = useState(getStoredChapterFontSize);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const loadedChapterRef = useRef<string | null>(null);
+  const saveStatusRef = useRef(saveStatus);
+  saveStatusRef.current = saveStatus;
 
   const adjustFontSize = (delta: number) => {
     setFontSize(px => setStoredChapterFontSize(px + delta));
@@ -46,20 +50,36 @@ export function ChapterEditor({ chapterId }: Props) {
     enabled: !!chapterId,
   });
 
-  // Offline-queueable: debounced autosave is an idempotent last-write-wins
-  // PATCH, so it replays cleanly on reconnect.
+  // Offline-queueable: each save names the revision it was edited from, read
+  // when it is sent, so it replays cleanly on reconnect and a device that
+  // moved on in the meantime is noticed rather than overwritten.
   const updateChapter = useWritingChapterUpdate({
-    onSuccess: () => setSaveStatus('saved'),
+    onSuccess: reply => {
+      if (reply.conflict) {
+        setSaveStatus('unsaved');
+        conflict.refused();
+      } else {
+        setSaveStatus('saved');
+      }
+    },
+    onError: () => setSaveStatus('unsaved'),
   });
 
-  useEffect(() => {
-    if (chapter && loadedChapterRef.current !== chapterId) {
-      setContent(chapter.content);
-      setTitle(chapter.title);
-      setSaveStatus('saved');
-      loadedChapterRef.current = chapterId;
-    }
-  }, [chapter, chapterId]);
+  const conflict = useDocumentConflict({
+    documentKey: documentKey('chapter', chapterId),
+    document: chapter,
+    isClean: () => saveStatusRef.current === 'saved',
+    load: (loaded, text) => {
+      setContent(text);
+      setTitle(loaded.title);
+      setSaveStatus(text === loaded.content ? 'saved' : 'unsaved');
+    },
+    fetchLatest: () => api.writing.getChapter(chapterId),
+    saveText: (text, baseRevision) => {
+      setSaveStatus('saving');
+      updateChapter.mutate({ chapterId, content: text, baseRevision });
+    },
+  });
 
   useEffect(() => {
     return () => {
@@ -71,9 +91,17 @@ export function ChapterEditor({ chapterId }: Props) {
     setContent(value);
     setSaveStatus('unsaved');
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    if (conflict.conflict) {
+      conflict.holdEdit(value);
+      return;
+    }
     saveTimerRef.current = setTimeout(() => {
       setSaveStatus('saving');
-      updateChapter.mutate({ chapterId, content: value });
+      updateChapter.mutate({
+        chapterId,
+        content: value,
+        baseRevision: chapter?.revision,
+      });
     }, SAVE_DEBOUNCE_MS);
   };
 
@@ -81,7 +109,11 @@ export function ChapterEditor({ chapterId }: Props) {
     const trimmed = title.trim();
     if (!trimmed) return;
     setEditingTitle(false);
-    updateChapter.mutate({ chapterId, title: trimmed });
+    updateChapter.mutate({
+      chapterId,
+      title: trimmed,
+      baseRevision: chapter?.revision,
+    });
   };
 
   if (isLoading) {
@@ -141,6 +173,13 @@ export function ChapterEditor({ chapterId }: Props) {
           <span className={statusColor}>{statusLabel}</span>
         </div>
       </div>
+
+      {conflict.conflict && (
+        <ConflictBanner
+          onKeepMine={() => void conflict.keepMine(content)}
+          onLoadLatest={() => void conflict.loadLatest()}
+        />
+      )}
 
       <textarea
         data-chapter-editor

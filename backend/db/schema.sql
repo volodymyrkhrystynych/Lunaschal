@@ -773,6 +773,8 @@ CREATE TABLE IF NOT EXISTS writing_projects (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT,
+    -- Words a day the author is aiming for; NULL means no goal.
+    daily_word_goal INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -783,6 +785,8 @@ CREATE TABLE IF NOT EXISTS writing_chapters (
     title TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
     position INTEGER NOT NULL DEFAULT 0,
+    -- Moves with every text or title write; see backend/writing/revisioned.py.
+    revision INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -796,6 +800,8 @@ CREATE TABLE IF NOT EXISTS writing_context_docs (
     -- Read into every turn of the project's discussions (backend/writing/discuss.py).
     -- Replaced a checkbox set the browser held, which a second client could not see.
     pinned INTEGER NOT NULL DEFAULT 0,
+    -- Moves with every text or title write; see backend/writing/revisioned.py.
+    revision INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -819,6 +825,30 @@ CREATE TABLE IF NOT EXISTS writing_context_doc_revisions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_writing_doc_revisions_doc ON writing_context_doc_revisions(doc_id, created_at DESC);
+
+-- The same history for a chapter (backend/writing/chapters.py). 'edit' coalesces
+-- over five minutes rather than one, since a chapter is the long document.
+CREATE TABLE IF NOT EXISTS writing_chapter_revisions (
+    id TEXT PRIMARY KEY,
+    chapter_id TEXT NOT NULL REFERENCES writing_chapters(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL,
+    message_id TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_writing_chapter_revisions_chapter ON writing_chapter_revisions(chapter_id, created_at DESC);
+
+-- Net words added to a project's chapters per 4am day, across every device.
+-- Kept rather than derived because no record of old text survives a save, and
+-- signed because a day of cutting really does end below where it started.
+CREATE TABLE IF NOT EXISTS writing_daily_words (
+    project_id TEXT NOT NULL REFERENCES writing_projects(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    words INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (project_id, day)
+);
 
 -- A canon source: one Fandom (MediaWiki) wiki imported from its XML dump into a
 -- docpack-format SQLite file under CANON_ROOT (backend/writing/canon_import.py).

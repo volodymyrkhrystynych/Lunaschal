@@ -836,7 +836,8 @@ export interface DelegateProposalRecord {
     // Names for screenshot runs (backend/journal/screenshot_titles.py).
     | 'screenshot_titles'
     | 'habit_plan'
-    | 'habit';
+    | 'habit'
+    | 'writing_chapter_update';
   data: Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
   resolvedAt?: number;
@@ -1628,11 +1629,21 @@ export interface WritingProject {
   updatedAt: string;
 }
 
+/** `conflict` is set by the offline layer, never by the server: a 409 is caught
+ * there so the queue keeps the text rather than dropping a "permanent" failure. */
+export interface WritingSaveResult {
+  success: boolean;
+  revision?: number;
+  conflict?: boolean;
+}
+
 export interface WritingChapterSummary {
   id: string;
   projectId: string;
   title: string;
   position: number;
+  // Moves with every text or title write (backend/writing/revisioned.py).
+  revision?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -1649,6 +1660,8 @@ export interface WritingNoteSummary {
   // 0/1 from SQLite. A pinned note rides in every turn of the project's
   // discussions (backend/writing/discuss.py).
   pinned?: number | boolean;
+  // Moves with every text or title write (backend/writing/revisioned.py).
+  revision?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -5209,9 +5222,13 @@ export const api = {
       get<WritingChapter>(`/api/writing/chapters/${chapterId}`),
     updateChapter: (
       chapterId: string,
-      data: { title?: string; content?: string }
+      data: { title?: string; content?: string; baseRevision?: number }
     ) =>
-      patch<{ success: boolean }>(`/api/writing/chapters/${chapterId}`, data),
+      sendWithStatus<WritingSaveResult>(
+        'PATCH',
+        `/api/writing/chapters/${chapterId}`,
+        data
+      ),
     deleteChapter: (chapterId: string) =>
       del<{ success: boolean }>(`/api/writing/chapters/${chapterId}`),
 
@@ -5230,8 +5247,14 @@ export const api = {
         content?: string;
         docType?: string;
         pinned?: boolean;
+        baseRevision?: number;
       }
-    ) => patch<{ success: boolean }>(`/api/writing/notes/${noteId}`, data),
+    ) =>
+      sendWithStatus<WritingSaveResult>(
+        'PATCH',
+        `/api/writing/notes/${noteId}`,
+        data
+      ),
     noteRevisions: (noteId: string) =>
       get<WritingNoteRevision[]>(`/api/writing/notes/${noteId}/revisions`),
     restoreNoteRevision: (noteId: string, revisionId: string) =>

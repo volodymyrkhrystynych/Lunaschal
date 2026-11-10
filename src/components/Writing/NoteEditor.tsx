@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
+import { documentKey, resetRevision } from '../../lib/writingDocuments';
 import { useWritingNoteUpdate } from '../../offline/mutationDefaults';
 import { DOC_TYPE_LABELS, type DocType } from './WritingNav';
 import { NoteHistory } from './NoteHistory';
+import { ConflictBanner } from './ConflictBanner';
+import { useDocumentConflict } from './useDocumentConflict';
 
 interface Props {
   noteId: string;
@@ -20,7 +23,8 @@ export function NoteEditor({ noteId }: Props) {
     'saved'
   );
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const loadedNoteRef = useRef<string | null>(null);
+  const saveStatusRef = useRef(saveStatus);
+  saveStatusRef.current = saveStatus;
 
   const { data: note, isLoading } = useQuery({
     queryKey: ['writing', 'note', noteId],
@@ -28,20 +32,35 @@ export function NoteEditor({ noteId }: Props) {
     enabled: !!noteId,
   });
 
-  // Offline-queueable: idempotent last-write-wins PATCH; the registered
-  // defaults invalidate the writing caches on reconnect.
+  // Offline-queueable: each save names the revision it was edited from, read
+  // when it is sent; the registered defaults invalidate the writing caches.
   const updateNote = useWritingNoteUpdate({
-    onSuccess: () => setSaveStatus('saved'),
+    onSuccess: reply => {
+      if (reply.conflict) {
+        setSaveStatus('unsaved');
+        conflict.refused();
+      } else {
+        setSaveStatus('saved');
+      }
+    },
+    onError: () => setSaveStatus('unsaved'),
   });
 
-  useEffect(() => {
-    if (note && loadedNoteRef.current !== noteId) {
-      setContent(note.content);
-      setTitle(note.title);
-      setSaveStatus('saved');
-      loadedNoteRef.current = noteId;
-    }
-  }, [note, noteId]);
+  const conflict = useDocumentConflict({
+    documentKey: documentKey('note', noteId),
+    document: note,
+    isClean: () => saveStatusRef.current === 'saved',
+    load: (loaded, text) => {
+      setContent(text);
+      setTitle(loaded.title);
+      setSaveStatus(text === loaded.content ? 'saved' : 'unsaved');
+    },
+    fetchLatest: () => api.writing.getNote(noteId),
+    saveText: (text, baseRevision) => {
+      setSaveStatus('saving');
+      updateNote.mutate({ noteId, content: text, baseRevision });
+    },
+  });
 
   useEffect(() => {
     return () => {
@@ -53,9 +72,17 @@ export function NoteEditor({ noteId }: Props) {
     setContent(value);
     setSaveStatus('unsaved');
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    if (conflict.conflict) {
+      conflict.holdEdit(value);
+      return;
+    }
     saveTimerRef.current = setTimeout(() => {
       setSaveStatus('saving');
-      updateNote.mutate({ noteId, content: value });
+      updateNote.mutate({
+        noteId,
+        content: value,
+        baseRevision: note?.revision,
+      });
     }, SAVE_DEBOUNCE_MS);
   };
 
@@ -63,7 +90,7 @@ export function NoteEditor({ noteId }: Props) {
     const trimmed = title.trim();
     if (!trimmed) return;
     setEditingTitle(false);
-    updateNote.mutate({ noteId, title: trimmed });
+    updateNote.mutate({ noteId, title: trimmed, baseRevision: note?.revision });
   };
 
   if (isLoading) {
@@ -153,12 +180,20 @@ export function NoteEditor({ noteId }: Props) {
             noteId={noteId}
             onRestored={restored => {
               if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+              resetRevision(documentKey('note', noteId), restored.revision);
               setContent(restored.content);
               setTitle(restored.title);
               setSaveStatus('saved');
             }}
           />
         </div>
+      )}
+
+      {conflict.conflict && (
+        <ConflictBanner
+          onKeepMine={() => void conflict.keepMine(content)}
+          onLoadLatest={() => void conflict.loadLatest()}
+        />
       )}
 
       <textarea

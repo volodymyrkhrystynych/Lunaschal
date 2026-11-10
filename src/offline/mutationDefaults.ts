@@ -25,7 +25,14 @@ import {
   type Selfie,
   type TodoItem,
   type TodoPayload,
+  type WritingSaveResult,
 } from '../hooks/api';
+import {
+  baseRevision,
+  documentKey,
+  holdConflict,
+  rememberRevision,
+} from '../lib/writingDocuments';
 import {
   assembleBlob,
   deleteRecording,
@@ -269,12 +276,14 @@ export interface WritingChapterUpdateVars {
   chapterId: string;
   title?: string;
   content?: string;
+  baseRevision?: number;
 }
 export interface WritingNoteUpdateVars {
   noteId: string;
   title?: string;
   content?: string;
   docType?: string;
+  baseRevision?: number;
 }
 export interface LearningAttemptVars {
   id: string;
@@ -863,28 +872,59 @@ const fanficSetReadCfg = (
   onSettled: () => qc.invalidateQueries({ queryKey: ['fanfic'] }),
 });
 
+/** Sends one chapter or note save. A 409 resolves rather than rejects: an
+ * `ApiError` 4xx is what `isTerminal` reads as permanent, and a queued save
+ * failing that way would take its text with it. Holding the text here is what
+ * survives a reload, since the editor that queued it may be long gone. */
+async function saveWritingDocument(
+  key: string,
+  vars: { content?: string; title?: string; baseRevision?: number },
+  send: (base: number | undefined) => Promise<WritingSaveResult>
+): Promise<WritingSaveResult> {
+  const writesText = vars.content !== undefined || vars.title !== undefined;
+  const base = writesText ? baseRevision(key, vars.baseRevision) : undefined;
+  try {
+    const reply = await send(base);
+    rememberRevision(key, reply.revision);
+    return reply;
+  } catch (e) {
+    if (!(e instanceof ApiError) || e.status !== 409) throw e;
+    if (vars.content !== undefined) holdConflict(key, vars.content);
+    return { success: false, conflict: true };
+  }
+}
+
 const writingChapterUpdateCfg = (
   qc: QueryClient
-): Cfg<{ success: boolean }, WritingChapterUpdateVars> => ({
+): Cfg<WritingSaveResult, WritingChapterUpdateVars> => ({
   ...ONLINE,
+  // One at a time, so each save's base is the revision the last one made.
+  scope: { id: 'writing-document' },
   mutationFn: vars =>
-    api.writing.updateChapter(vars.chapterId, {
-      title: vars.title,
-      content: vars.content,
-    }),
+    saveWritingDocument(documentKey('chapter', vars.chapterId), vars, base =>
+      api.writing.updateChapter(vars.chapterId, {
+        title: vars.title,
+        content: vars.content,
+        baseRevision: base,
+      })
+    ),
   onSettled: () => qc.invalidateQueries({ queryKey: ['writing'] }),
 });
 
 const writingNoteUpdateCfg = (
   qc: QueryClient
-): Cfg<{ success: boolean }, WritingNoteUpdateVars> => ({
+): Cfg<WritingSaveResult, WritingNoteUpdateVars> => ({
   ...ONLINE,
+  scope: { id: 'writing-document' },
   mutationFn: vars =>
-    api.writing.updateNote(vars.noteId, {
-      title: vars.title,
-      content: vars.content,
-      docType: vars.docType,
-    }),
+    saveWritingDocument(documentKey('note', vars.noteId), vars, base =>
+      api.writing.updateNote(vars.noteId, {
+        title: vars.title,
+        content: vars.content,
+        docType: vars.docType,
+        baseRevision: base,
+      })
+    ),
   onSettled: () => qc.invalidateQueries({ queryKey: ['writing'] }),
 });
 
@@ -1719,7 +1759,7 @@ export const useFanficSetRead = (
 ) => useOfflineMutation(MUTATION_KEYS.fanficSetRead, fanficSetReadCfg, o);
 
 export const useWritingChapterUpdate = (
-  o?: CallerOptions<{ success: boolean }, WritingChapterUpdateVars>
+  o?: CallerOptions<WritingSaveResult, WritingChapterUpdateVars>
 ) =>
   useOfflineMutation(
     MUTATION_KEYS.writingChapterUpdate,
@@ -1728,7 +1768,7 @@ export const useWritingChapterUpdate = (
   );
 
 export const useWritingNoteUpdate = (
-  o?: CallerOptions<{ success: boolean }, WritingNoteUpdateVars>
+  o?: CallerOptions<WritingSaveResult, WritingNoteUpdateVars>
 ) =>
   useOfflineMutation(MUTATION_KEYS.writingNoteUpdate, writingNoteUpdateCfg, o);
 

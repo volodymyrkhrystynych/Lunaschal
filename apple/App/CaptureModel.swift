@@ -98,6 +98,16 @@ final class CaptureModel: ObservableObject {
     let ficImports: FicImportOutbox
     let screenshots: ScreenshotOutbox
     private let todoSyncer: TodoSync
+    let writingStore: WritingStore
+    let writingClips: WritingDictationStore
+    private let writingSyncer: WritingSync
+    private let writingDictationSyncer: WritingDictationSync
+    /// Moves when a pass may have changed a book, for screens showing one.
+    @Published private(set) var writingTick = 0
+    /// What the server wouldn't take, until a Writing screen has shown it.
+    @Published var writingRefusals: [String] = []
+    /// The editor on screen, which owns its document's text while it's open.
+    weak var openWritingEditor: WritingEditorModel?
     /// Jobs feed decisions the server hasn't had yet, and what it last turned down.
     @Published private(set) var jobQueue: [JobDecisionOp] = []
     @Published var jobRefusals: [String] = []
@@ -204,6 +214,14 @@ final class CaptureModel: ObservableObject {
         todoOutbox = try TodoOutbox(root: store.root.appendingPathComponent("todo-outbox", isDirectory: true))
         todoSyncer = TodoSync(outbox: todoOutbox)
         widgetTodoOutbox = SharedSignIn.container().flatMap { try? TodoWidgetFiles.outbox(in: $0) }
+        let fixture = WritingFixture.ifAsked()
+        let writingRoot = store.root.appendingPathComponent(fixture == nil ? "writing" : "writing-fixture", isDirectory: true)
+        try fixture?.prepare(root: writingRoot)
+        writingStore = try WritingStore(root: writingRoot)
+        try fixture?.seed(writingStore)
+        writingSyncer = WritingSync(store: writingStore)
+        writingClips = try WritingDictationStore(root: writingRoot.appendingPathComponent("clips", isDirectory: true))
+        writingDictationSyncer = WritingDictationSync(clips: writingClips)
         jobStore = try JobStore(root: store.root.appendingPathComponent("jobs", isDirectory: true))
         jobSyncer = JobSync(store: jobStore)
         calendarOutbox = try CalendarOutbox(root: store.root.appendingPathComponent("calendar-outbox", isDirectory: true))
@@ -951,6 +969,56 @@ final class CaptureModel: ObservableObject {
         return true
     }
 
+    /// Drafts and spoken clips go up and changed books come down. Everything
+    /// stays on disk if this fails, so it waits for the next pass without
+    /// holding up the uploads after it.
+    @discardableResult
+    private func sendWriting(using api: JournalAPI, pull: Bool = true) async throws -> Bool {
+        var failure: Error?
+        do {
+            writingRefusals += try await writingSyncer.push(using: api)
+            let refused = try await writingDictationSyncer.run(using: api) { [weak self] clip, text in
+                try self?.deliverDictation(clip, text)
+            }
+            writingRefusals += refused
+            writingRefusals += try await writingSyncer.push(using: api)
+            if pull { try await writingSyncer.pull(using: api) }
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+            failure = error
+        }
+        writingTick += 1
+        if let failure, failure is URLError { throw failure }
+        return failure == nil
+    }
+
+    /// Sends what is waiting now, rather than at the next pass. False when the
+    /// server couldn't be reached, and the text simply stays on the phone.
+    @discardableResult
+    func pushWriting(pull: Bool = false) async -> Bool {
+        openWritingEditor?.persist()
+        guard let api = chatAPI() else { return false }
+        return (try? await sendWriting(using: api, pull: pull)) ?? false
+    }
+
+    /// A clip's words go to the open editor, which owns that text, or else into
+    /// the document's draft. A document that has since gone gets a note, because
+    /// the audio is about to be deleted.
+    private func deliverDictation(_ clip: WritingClip, _ text: String) throws {
+        if let editor = openWritingEditor, editor.key == clip.key {
+            try editor.insertDictation(clip, text)
+            return
+        }
+        guard let document = writingStore.document(clip.key, project: clip.projectId) else {
+            try writingStore.create(.note, project: clip.projectId, title: "Dictated text", content: text)
+            return
+        }
+        let insertion = clip.anchor.inserting(text, into: document.content)
+        try writingStore.edit(clip.key, project: clip.projectId, content: insertion.text)
+        try writingClips.shift(clip.key, location: insertion.location, removed: 0,
+                               inserted: insertion.inserted.utf16.count)
+    }
+
     /// Links shared or typed while the server was out of reach. One the server
     /// refuses is reported once and dropped; a server error waits for the next
     /// pass without holding up the uploads after it.
@@ -1399,6 +1467,7 @@ final class CaptureModel: ObservableObject {
                 changed.insert(SyncChanges.chat)
             }
             if try await timed("to-dos", { try await sendTodoChanges(using: api) }) { changed.insert(SyncChanges.todos) }
+            try await timed("writing", { try await sendWriting(using: api) })
             try await timed("job decisions") { try await sendJobDecisions(using: api) }
             try await timed("fic imports") { try await sendFicImports(using: api) }
             if try await timed("calendar changes", { try await sendCalendarEvents(using: api) }) {
@@ -1500,6 +1569,7 @@ final class CaptureModel: ObservableObject {
             try await timed("replica upkeep") { try await replicaSyncer.maintain() }
             // Anything ticked off while this pass was busy uploading.
             if try await timed("to-dos", { try await sendTodoChanges(using: api) }) { changed.insert(SyncChanges.todos) }
+            try await timed("writing", { try await sendWriting(using: api) })
             if full || changed.contains("journal_entries") { tidyCaptures() }
             let retry = try transfers.all().compactMap(\.retryAt).min()
             syncMessage = retry.map { "Uploads will retry after \($0.formatted(date: .omitted, time: .shortened))." }
