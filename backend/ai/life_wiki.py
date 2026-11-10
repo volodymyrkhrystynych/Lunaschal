@@ -50,6 +50,11 @@ Do not record:
 - anything you are inferring rather than reading. If they did a thing twice, \
 that is two events, not a habit — wait.
 
+Some journal entries carry a line marked "Described, with its attachments — not \
+their words". That is a machine's account of the photos, screenshots or \
+recordings they saved: evidence of what they looked at, kept or did, never of \
+what they think, feel or prefer. Cite the entry as usual when you use it.
+
 Every fact must cite the entry it came from, using the exact bracketed id shown \
 beside that entry, and must be one plain sentence written about them in the \
 third person.
@@ -168,6 +173,9 @@ def extract_facts(digest_text: str, index_lines: str = '') -> list[dict]:
     [] is a real outcome and not an error: most days add nothing that will still
     matter in a month, and a pass that invents something to justify itself is
     the failure mode this whole design is arranged against.
+
+    Thinks only inside the nightly thread's scope; a user-pressed rebuild has
+    none and stays fast.
     """
     if not is_ai_configured() or not digest_text.strip():
         return []

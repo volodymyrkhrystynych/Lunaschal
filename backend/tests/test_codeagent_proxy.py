@@ -88,6 +88,31 @@ def test_prepare_rewrites_the_model_and_floors_max_tokens():
     assert BODY['model'] == 'local'  # not mutated
 
 
+def test_a_turn_without_a_budget_gets_one_with_the_wrap_up_message():
+    """omp and Qwen Code send no budget; unbudgeted, a think can spend the
+    whole ceiling and leave the turn with nothing done."""
+    from backend.ai.llm import THINKING_BUDGET_MESSAGE
+    out = proxy.prepare(BODY, 'qwen36')
+    assert out['reasoning_budget_tokens'] == proxy.THINKING_BUDGET == 49152
+    assert out['reasoning_budget_message'] == THINKING_BUDGET_MESSAGE
+    # The full think still leaves the answer its room.
+    assert out['max_tokens'] - out['reasoning_budget_tokens'] >= proxy.MIN_ANSWER_TOKENS
+
+
+def test_pis_budget_field_is_moved_to_the_one_that_ends_a_think_cleanly():
+    out = proxy.prepare({**BODY, 'thinking_budget_tokens': 8192}, 'qwen36')
+    assert 'thinking_budget_tokens' not in out
+    assert out['reasoning_budget_tokens'] == 8192
+    assert 'reasoning_budget_message' in out
+
+
+def test_a_harness_budget_is_kept_and_the_answer_room_grows_with_it():
+    out = proxy.prepare({**BODY, 'reasoning_budget_tokens': 70000, 'max_tokens': 4096},
+                        'qwen36')
+    assert out['reasoning_budget_tokens'] == 70000
+    assert out['max_tokens'] == 70000 + proxy.MIN_ANSWER_TOKENS
+
+
 def test_a_plain_call_is_logged_with_its_timings(events):
     gen = gen_for(Upstream(chunks(content='ok')), events)
     done = gen.complete(BODY)

@@ -25,12 +25,13 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import textwrap
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
 
-from backend.codeagent import mirror, tasks
+from backend.codeagent import mirror, tasks, testreport
 from backend.codeagent.acp import AcpClient, AcpError
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,8 @@ HARNESS_COMMANDS = {
 
 TEST_TIMEOUT = 3600
 TEST_TAIL_LINES = 200
+# The event carries less than the row: it is drawn in the terminal on every poll.
+TEST_EVENT_CHARS = 4000
 QUESTION = re.compile(r'^\s*QUESTION:\s*(.+?)\s*$', re.M)
 
 # What runs when a repo has no agent_test_command of its own. Detection runs in
@@ -82,12 +85,39 @@ BUILD_PROMPT = """{context}The user approved this plan:
 Implement it now in /work. Run the relevant tests and fix what fails. When you are done, \
 commit your work with git (clear commit messages) and finish with a short summary of what \
 changed and how the tests went. If you are blocked on a decision only the user can make, \
-stop and end your reply with one line that starts with QUESTION: and asks it."""
+stop and end your reply with one line that starts with QUESTION: and asks it.
 
-FOLLOWUP_PROMPT = """{text}
+{check}"""
+
+FOLLOWUP_PROMPT = """{last_check}{text}
 
 When you are done, commit any changes and finish with a short summary. If you need a \
-decision from the user, end your reply with one line that starts with QUESTION:."""
+decision from the user, end your reply with one line that starts with QUESTION:.
+
+{check}"""
+
+# Said in every build turn, because the user sees Lunaschal's run of this
+# command, not the agent's own: an agent that only ran the tests near its
+# change reported "all tests pass" four times over a suite that was failing.
+CHECK_NOTE = """When you finish, Lunaschal itself runs this in /work, and its result — not \
+yours — is what the user sees as "tests passed" or "tests failed":
+
+{script}
+
+Run that same command before you say the tests pass. Do not change the test scripts, \
+package.json or the test configuration to make it pass; if it cannot run in this \
+container, say so in your summary."""
+
+# The driver's own most recent result. Without it a follow-up like "the tests
+# still fail" reaches an agent that has never seen that run and, honestly,
+# cannot find it. Read from the last `test` event rather than the row: the row
+# is the *current* verdict and is cleared when a turn starts, while the event
+# outlives a turn that was cancelled or ended on a question.
+LAST_CHECK = """The last time Lunaschal ran the test command itself (at the end of an \
+earlier turn), it {verdict} (exit {exit}).{detail}
+
+The user says:
+"""
 
 FRESH_CONTEXT = """You are working in the git repository at /work. Your earlier session \
 could not be resumed; `git log` and `git status` show the work so far.
@@ -217,7 +247,11 @@ class Driver:
         cancel = cancel or threading.Event()
         task = tasks.get(task_id)
         phase = task['phase']
-        tasks.set_status(task_id, 'planning' if phase == 'plan' else 'running')
+        # A new turn makes any earlier verdict stale: whatever it ends in —
+        # done, a question, a cancel, an error — the code is no longer what was
+        # tested. The run itself stays readable in its `test` event.
+        tasks.set_status(task_id, 'planning' if phase == 'plan' else 'running',
+                         **({} if phase == 'plan' else {'test_exit': None, 'test_output': None}))
         proxy = client = None
         try:
             task = self._ensure_workspace(task)
@@ -229,7 +263,10 @@ class Driver:
             turn.muted = True
             session_id, fresh = self._session(client, task)
             turn.muted = False
-            text = self._prompt_for(task, fresh)
+            # One read per turn: the command the agent is told to run is the
+            # one it is judged by, even if the setting changes mid-turn.
+            script = self._test_script(task)
+            text = self._prompt_for(task, fresh, script)
             tasks.update(task_id, pending_input=None)
             stop = self._prompt(client, session_id, text, cancel)
             turn.flush()
@@ -239,7 +276,7 @@ class Driver:
                 tasks.append_event(task_id, 'status', {'note': f'agent stopped: {stop}'})
             if phase == 'plan':
                 return self._finish_plan(task, turn.reply)
-            return self._finish_build(task, turn.reply)
+            return self._finish_build(task, turn.reply, script)
         except Exception as e:
             if cancel.is_set():
                 return tasks.set_status(task_id, 'cancelled')
@@ -296,7 +333,7 @@ class Driver:
         tasks.update(task['id'], session_id=session_id)
         return session_id, True
 
-    def _prompt_for(self, task: dict, fresh: bool) -> str:
+    def _prompt_for(self, task: dict, fresh: bool, script: str | None = None) -> str:
         pending = task.get('pendingInput')
         context = FRESH_CONTEXT.format(prompt=task['prompt']) if fresh else ''
         if task['phase'] == 'plan':
@@ -305,10 +342,14 @@ class Driver:
             base = PLAN_PROMPT.format(branch=mirror.branch_for(task['id']), prompt=task['prompt'])
             return base + (f'\n\nThe user has reviewed an earlier plan and said:\n{pending}'
                            if pending else '')
+        script = script if script is not None else self._test_script(task)
+        check = CHECK_NOTE.format(script=textwrap.indent(script, '    '))
         if pending:
-            return (context + FOLLOWUP_PROMPT.format(text=pending)) if fresh else \
-                FOLLOWUP_PROMPT.format(text=pending)
-        return BUILD_PROMPT.format(context=context, plan=task.get('plan') or '(no plan recorded)')
+            followup = FOLLOWUP_PROMPT.format(text=pending, check=check,
+                                              last_check=_last_check(task))
+            return (context + followup) if fresh else followup
+        return BUILD_PROMPT.format(context=context, plan=task.get('plan') or '(no plan recorded)',
+                                   check=check)
 
     def _prompt(self, client: AcpClient, session_id: str, text: str,
                 cancel: threading.Event) -> str:
@@ -386,7 +427,7 @@ class Driver:
         result['head'] = head
         return result
 
-    def _finish_build(self, task: dict, reply: str) -> dict:
+    def _finish_build(self, task: dict, reply: str, script: str | None = None) -> dict:
         task_id = task['id']
         result = self._export(task)
         fields = {'summary': reply or None}
@@ -395,22 +436,44 @@ class Driver:
         question = question_in(reply)
         if question:
             tasks.open_approval(task_id, 'question', {'question': question, 'reply': reply})
+            # No test run this turn; run() already cleared the old verdict.
             return tasks.set_status(task_id, 'needs_input', **fields)
         tasks.set_status(task_id, 'testing', **fields)
-        exit_code, tail = self._run_tests(task)
-        tasks.append_event(task_id, 'test', {'exit': exit_code, 'tail': tail[-4000:]})
-        return tasks.set_status(task_id, 'done', test_exit=exit_code, test_output=tail)
+        exit_code, output = self._run_tests(task, script)
+        tasks.append_event(task_id, 'test', {
+            'exit': exit_code, 'tail': testreport.clip_report(output, TEST_EVENT_CHARS)})
+        return tasks.set_status(task_id, 'done', test_exit=exit_code, test_output=output)
 
-    def _run_tests(self, task: dict) -> tuple[int, str]:
+    def _test_script(self, task: dict) -> str:
         from backend.db.connection import get_db
         row = get_db().execute('SELECT agent_test_command FROM repos WHERE id=?',
                                (task['repoId'],)).fetchone()
-        script = (row['agent_test_command'] if row else '') or DEFAULT_TEST_SCRIPT
-        proc = self.runtime.run(task['id'], ['sh', '-c', script], timeout=TEST_TIMEOUT)
+        return (row['agent_test_command'] if row else '') or DEFAULT_TEST_SCRIPT
+
+    def _run_tests(self, task: dict, script: str | None = None) -> tuple[int, str]:
+        """Run the repo's test command; return its exit and a report of it —
+        what failed first, then the end of the output."""
+        script = script if script is not None else self._test_script(task)
+        # Merged in the shell so each line stays in the batch that wrote it:
+        # captured apart, all of stderr landed under whichever batch came last.
+        proc = self.runtime.run(task['id'], ['sh', '-c', f'{{ {script}\n}} 2>&1'],
+                                timeout=TEST_TIMEOUT)
         text = (proc.stdout or b'').decode(errors='replace') + \
             (proc.stderr or b'').decode(errors='replace')
-        tail = '\n'.join(text.splitlines()[-TEST_TAIL_LINES:])
-        return proc.returncode, tail
+        return proc.returncode, testreport.report(text, TEST_TAIL_LINES)
+
+
+def _last_check(task: dict) -> str:
+    """LAST_CHECK from the task's most recent test run, or '' if it has none."""
+    event = tasks.last_event(task['id'], 'test')
+    if event is None or event['payload'].get('exit') is None:
+        return ''
+    exit_code = event['payload']['exit']
+    if exit_code == 0:
+        return LAST_CHECK.format(verdict='passed', exit=0, detail='')
+    output = event['payload'].get('tail') or ''
+    detail = f'\n\n{output}' if output.strip() else ''
+    return LAST_CHECK.format(verdict='FAILED', exit=exit_code, detail=detail)
 
 
 def _describe(e: Exception, client: AcpClient | None) -> str:

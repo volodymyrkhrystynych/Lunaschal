@@ -76,6 +76,10 @@ public struct CodeTask: Codable, Equatable, Identifiable, Sendable {
     public var canCancel: Bool { isActive }
     public var canDiscard: Bool { !isActive && !isClosed }
     public var testsPassed: Bool? { testExit.map { $0 == 0 } }
+    /// The verdict worth showing: none while the agent is at work, because the
+    /// stored one describes code it is in the middle of changing. Same rule as
+    /// src/lib/codeTasks.ts's `testVerdict`.
+    public var testVerdict: Bool? { isActive ? nil : testsPassed }
     public var statusLabel: String { CodeTaskStatus.label(status) }
 
     public var linesAdded: Int { (diffStat ?? []).reduce(0) { $0 + ($1.added ?? 0) } }
@@ -109,6 +113,78 @@ public enum CodeTaskStatus {
     /// slow otherwise, when only a person can move the task on.
     public static func pollInterval(_ tasks: [CodeTask]) -> TimeInterval {
         tasks.contains(where: \.isActive) ? 3 : 20
+    }
+}
+
+/// What a running task is doing right now, for the banner that says the agent
+/// is at work. Same wording as `activity` in src/lib/codeTasks.ts.
+public struct CodeActivity: Equatable, Sendable {
+    public let headline: String
+    /// When the current status began, if the event log says.
+    public let since: Date?
+    /// The latest thing it did in this status, if anything.
+    public let doing: String?
+
+    public init(headline: String, since: Date?, doing: String?) {
+        self.headline = headline; self.since = since; self.doing = doing
+    }
+
+    public static func of(_ task: CodeTask, events: [CodeTaskEvent]) -> CodeActivity? {
+        guard task.isActive else { return nil }
+        let start = events.lastIndex { $0.kind == "status" && $0.payload["status"] == .string(task.status) }
+        var doing: String?
+        if task.status != "testing" {
+            let after = events[(start.map { $0 + 1 } ?? 0)...]
+            for event in after.reversed() {
+                if let step = step(event) { doing = step; break }
+            }
+        }
+        return CodeActivity(headline: headline(task.status),
+                            since: start.flatMap { JournalTimestamp.parse(events[$0].createdAt) },
+                            doing: doing)
+    }
+
+    static func headline(_ status: String) -> String {
+        switch status {
+        case "queued": return "Queued — starts when the agent is free"
+        case "planning": return "The agent is planning"
+        case "running": return "The agent is working"
+        case "testing": return "Running the test suite"
+        default: return CodeTaskStatus.label(status)
+        }
+    }
+
+    private static func step(_ event: CodeTaskEvent) -> String? {
+        switch event.kind {
+        case "tool_call":
+            var title = "a tool"
+            if case let .string(t)? = event.payload["title"] { title = t }
+            let line = (title.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? "")
+                .trimmingCharacters(in: .whitespaces)
+            return "Running: " + clip(line, 90)
+        case "thought": return "Thinking it over"
+        case "message": return "Writing its reply"
+        case "proxy": return clip(event.label, 90)
+        default: return nil
+        }
+    }
+
+    /// Cut at `n` Unicode scalars — what `Array.from` counts in codeTasks.ts.
+    static func clip(_ s: String, _ n: Int) -> String {
+        let scalars = s.unicodeScalars
+        guard scalars.count > n else { return s }
+        var out = String.UnicodeScalarView()
+        out.append(contentsOf: scalars.prefix(n - 1))
+        return String(out) + "…"
+    }
+
+    /// 45s, 3m 05s, 1h 02m.
+    public static func elapsed(_ seconds: TimeInterval) -> String {
+        let s = max(0, Int(seconds.rounded(.down)))
+        if s < 60 { return "\(s)s" }
+        let m = s / 60
+        if m < 60 { return "\(m)m " + String(format: "%02d", s % 60) + "s" }
+        return "\(m / 60)h " + String(format: "%02d", m % 60) + "m"
     }
 }
 

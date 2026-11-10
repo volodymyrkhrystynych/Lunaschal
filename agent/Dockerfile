@@ -36,6 +36,15 @@ RUN uv venv --python 3.13 /opt/venv \
 COPY package.json package-lock.json /opt/app/
 RUN cd /opt/app && npm ci --ignore-scripts --no-audit --no-fund
 
+# The root is read-only at run time, and Vite writes beside the node_modules it
+# finds: the bundled config goes to node_modules/.vite-temp (it tolerates
+# EACCES there but not the EROFS a read-only mount gives), and Vitest's cache
+# to node_modules/.vite. Both point into /tmp, which entrypoint.sh creates.
+# Without this `npm test` fails before a single test runs, and the agent
+# "fixed" it by rewriting package.json's test script — in the branch it pushed.
+RUN ln -s /tmp/vite-temp /opt/app/node_modules/.vite-temp \
+ && ln -s /tmp/vite-cache /opt/app/node_modules/.vite
+
 # The three agents, pinned. omp runs on Bun rather than Node.
 #
 # pi and pi-acp move together: pi-acp asks pi for commands that older pis do
@@ -57,7 +66,11 @@ RUN chmod 0755 /usr/local/bin/agent-entrypoint
 
 # Qwen Code reads its OpenAI-compatible endpoint from the environment. The
 # URL is socat's end of the model socket; the proxy rewrites the model name.
+# QWEN_STREAM_MAX_LIFETIME_MS=0 lifts its 15-minute cap on one response, which a
+# 48k-token think (~25 minutes) would hit; the proxy's keepalives hold the
+# stream open meanwhile. Its per-request timeout is lifted in settings.json.
 ENV PATH=/opt/venv/bin:$PATH \
+    QWEN_STREAM_MAX_LIFETIME_MS=0 \
     PYTEST_BIN=/opt/venv/bin/pytest \
     OPENAI_BASE_URL=http://127.0.0.1:8080/v1 \
     OPENAI_API_KEY=local \

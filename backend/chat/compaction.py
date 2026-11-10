@@ -12,14 +12,16 @@ from typing import Iterable
 
 from ulid import ULID
 
-from backend.ai.llm import chat_json
+from backend.ai.llm import COMPACT_AT, CONTEXT_WINDOW_TOKENS, chat_json
 from backend.db.connection import get_db
 
 logger = logging.getLogger(__name__)
 
 # Conservative defaults for the local 190K-token server. These are estimates,
 # not model limits; output, system prompt and tool transcripts need headroom.
-SOFT_LIMIT_TOKENS = 120_000
+# The soft limit is the app-wide compaction point (backend/ai/llm.py), shared
+# with the coding agent's harnesses.
+SOFT_LIMIT_TOKENS = int(CONTEXT_WINDOW_TOKENS * COMPACT_AT)
 HARD_LIMIT_TOKENS = 170_000
 RECENT_TARGET_TOKENS = 60_000
 CHARS_PER_TOKEN = 4

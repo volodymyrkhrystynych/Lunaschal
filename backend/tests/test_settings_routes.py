@@ -141,6 +141,7 @@ def test_get_settings_briefing_generation_defaults(client):
     # briefing runs overnight.
     assert data['briefingThinking'] is False
     assert data['briefingMaxTokens'] == 16384
+    assert data['briefingThinkingBudget'] == 49152
 
 
 def test_patch_settings_updates_briefing_thinking_and_max_tokens(client):
@@ -165,6 +166,21 @@ def test_patch_settings_clamps_briefing_max_tokens(client):
     # Garbage is ignored, leaving the prior valid value in place.
     client.patch('/api/settings/ai', json={'briefingMaxTokens': 'nope'})
     assert client.get('/api/settings').get_json()['briefingMaxTokens'] == 65536
+
+
+def test_patch_settings_updates_and_clamps_the_thinking_budget(client):
+    client.patch('/api/settings/ai', json={'briefingThinkingBudget': 4096})
+    assert client.get('/api/settings').get_json()['briefingThinkingBudget'] == 4096
+
+    client.patch('/api/settings/ai', json={'briefingThinkingBudget': 10})
+    assert client.get('/api/settings').get_json()['briefingThinkingBudget'] == 256
+
+    client.patch('/api/settings/ai', json={'briefingThinkingBudget': 10**9})
+    assert client.get('/api/settings').get_json()['briefingThinkingBudget'] == 81920
+
+    # Garbage is ignored, leaving the prior valid value in place.
+    client.patch('/api/settings/ai', json={'briefingThinkingBudget': 'lots'})
+    assert client.get('/api/settings').get_json()['briefingThinkingBudget'] == 81920
 
 
 def test_gpu_vram_route_serves_snapshot_plus_live_reading(client, monkeypatch):

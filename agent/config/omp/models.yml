@@ -12,4 +12,4 @@ providers:
         api: openai-completions
         reasoning: true
         contextWindow: 190000
-        maxTokens: 32768
+        maxTokens: 61440

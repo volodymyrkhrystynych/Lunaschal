@@ -43,6 +43,7 @@ import requests
 from flask import Flask, Response, jsonify, request
 
 from backend.ai import service
+from backend.ai.llm import THINKING_BUDGET_MESSAGE
 from backend.ai.provider import get_model, get_provider_config
 from backend.codeagent import toolfix
 
@@ -53,7 +54,16 @@ LABEL = 'code_agent'
 # alias on the way through, so swapping the model never touches the image.
 MODEL_NAME = 'local'
 
-MIN_MAX_TOKENS = 32768     # at 8k, file writes were cut off and saved half-written
+# A turn's output: up to THINKING_BUDGET of reasoning plus room for the answer.
+# Qwen's model card asks for no thinking budget at all, only a long output
+# length (32k for most queries, 81,920 for the hardest), so the budget is here to
+# stop a runaway, not to ration reasoning; time is not what is scarce for a task
+# nobody is watching. The answer's floor is what the old 32k ceiling was for: at
+# 8k, file writes were cut off and saved half-written. Every harness compacts at
+# backend/ai/llm.py's COMPACT_AT of the window, which leaves at least this free.
+THINKING_BUDGET = 49152
+MIN_ANSWER_TOKENS = 12000
+MIN_MAX_TOKENS = 61440
 MAX_CANCELS = 3            # backend/ai/jobs.py's threshold, for the same reason
 POKE_LIMIT = 2
 KEEPALIVE_SECONDS = 10.0
@@ -80,8 +90,16 @@ class UpstreamError(RuntimeError):
 
 def prepare(body: dict, alias: str) -> dict:
     """The request as it goes upstream: our alias, always streamed (so it can
-    be cancelled), the coding sampler where the client set none, and a floor
-    on max_tokens."""
+    be cancelled), the coding sampler where the client set none, a capped
+    think, and a floor on max_tokens that leaves the answer its room.
+
+    The budget is llama-server's per-request `reasoning_budget_tokens`, sent
+    with the wrap-up message the rest of the app uses (backend/ai/llm.py). A
+    harness's own budget is kept, whichever of llama-server's two field names
+    it used: pi sends `thinking_budget_tokens`, which works but cuts the think
+    off mid-sentence. One that sends none — omp, Qwen Code — gets ours, since
+    unbudgeted, a think can spend the whole ceiling and leave the turn empty.
+    """
     out = copy.deepcopy(body)
     for key, value in CODING_SAMPLER.items():
         out.setdefault(key, value)
@@ -89,9 +107,14 @@ def prepare(body: dict, alias: str) -> dict:
     out['stream'] = True
     out.pop('stream_options', None)
     out['stream_options'] = {'include_usage': True}
+    budget = (out.pop('thinking_budget_tokens', None)
+              or out.get('reasoning_budget_tokens') or THINKING_BUDGET)
+    out['reasoning_budget_tokens'] = int(budget)
+    out.setdefault('reasoning_budget_message', THINKING_BUDGET_MESSAGE)
     limit = out.get('max_tokens') or out.get('max_completion_tokens')
     out.pop('max_completion_tokens', None)
-    out['max_tokens'] = max(int(limit or 0), MIN_MAX_TOKENS)
+    out['max_tokens'] = max(int(limit or 0), MIN_MAX_TOKENS,
+                            int(budget) + MIN_ANSWER_TOKENS)
     return out
 
 

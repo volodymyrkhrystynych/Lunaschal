@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type CodeTask } from '@/hooks/api';
+import { api, type CodeTask, type CodeTaskEvent } from '@/hooks/api';
 import { useRecorder } from '@/hooks/useRecorder';
 import { RecordingButton } from '../RecordingButton';
 import {
+  activity,
   appendDictation,
+  appendEvents,
+  EVENT_PAGE,
   canContinue,
   canDiscard,
   canMessage,
   canPush,
+  elapsedLabel,
   isActive,
   lineTotals,
   needsYou,
@@ -16,6 +20,8 @@ import {
   pollIntervalMs,
   statusLabel,
   terminalLines,
+  testVerdict,
+  type CodeActivity,
   type TerminalLine,
 } from '@/lib/codeTasks';
 
@@ -92,6 +98,7 @@ export function CodeTasks() {
             <ul className="space-y-1">
               {list.map(t => {
                 const lines = lineTotals(t);
+                const verdict = testVerdict(t);
                 return (
                   <li key={t.id}>
                     <button
@@ -101,14 +108,17 @@ export function CodeTasks() {
                       <div className="text-sm text-[var(--color-text)]">
                         {t.title}
                       </div>
-                      <div className="text-xs text-[var(--color-text-muted)]">
-                        {statusLabel(t.status)}
-                        {lines.added + lines.removed > 0 &&
-                          ` · +${lines.added} −${lines.removed}`}
-                        {t.testExit !== null &&
-                          (t.testExit === 0
-                            ? ' · tests passed'
-                            : ' · tests failed')}
+                      <div className="text-xs text-[var(--color-text-muted)] flex items-center gap-1.5">
+                        {isActive(t) && <PulseDot />}
+                        <span>
+                          {statusLabel(t.status)}
+                          {lines.added + lines.removed > 0 &&
+                            ` · +${lines.added} −${lines.removed}`}
+                          {verdict &&
+                            (verdict === 'passed'
+                              ? ' · tests passed'
+                              : ' · tests failed')}
+                        </span>
                       </div>
                     </button>
                   </li>
@@ -190,7 +200,23 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const [diffOpen, setDiffOpen] = useState(false);
   const { data } = useQuery({
     queryKey: ['code', 'task', id],
-    queryFn: () => api.code.get(id),
+    queryFn: async () => {
+      // Fetch only what is new since the last poll, in pages, so a log
+      // longer than one page is still read to its end.
+      const held =
+        queryClient.getQueryData<{ task: CodeTask; events: CodeTaskEvent[] }>([
+          'code',
+          'task',
+          id,
+        ])?.events ?? [];
+      let events = held;
+      for (;;) {
+        const after = events.length ? events[events.length - 1].seq : 0;
+        const page = await api.code.get(id, after);
+        events = appendEvents(events, page.events);
+        if (page.events.length < EVENT_PAGE) return { task: page.task, events };
+      }
+    },
     refetchInterval: q =>
       q.state.data && isActive(q.state.data.task) ? 3000 : 20000,
   });
@@ -204,6 +230,7 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['code'] }),
   });
   const lines = terminalLines(data?.events ?? []);
+  const now = useTicker(!!data?.task && isActive(data.task));
   const scroller = useRef<HTMLDivElement>(null);
   // A terminal follows its newest line, unless you've scrolled up to read.
   const pinned = useRef(true);
@@ -219,6 +246,8 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
     );
   const question =
     task.pending?.kind === 'question' ? task.pending.request.question : null;
+  const working = activity(task, data?.events ?? []);
+  const verdict = testVerdict(task);
 
   return (
     <div className="h-full flex flex-col">
@@ -272,6 +301,7 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
         )}
       </div>
       <div className="border-t border-white/10 p-3 space-y-2">
+        {working && <ActivityBanner activity={working} now={now} />}
         {act.error && (
           <p className="text-xs text-red-400">{act.error.message}</p>
         )}
@@ -285,11 +315,11 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
               Approve &amp; build
             </button>
           )}
-          {task.testExit !== null && (
+          {verdict && (
             <span
-              className={`text-xs ${task.testExit === 0 ? 'text-green-400' : 'text-red-400'}`}
+              className={`text-xs ${verdict === 'passed' ? 'text-green-400' : 'text-red-400'}`}
             >
-              {task.testExit === 0
+              {verdict === 'passed'
                 ? '✓ Tests passed'
                 : `✗ Tests failed (exit ${task.testExit})`}
             </span>
@@ -406,6 +436,66 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
             >
               Send
             </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A clock that ticks once a second while `on`, for the elapsed time. */
+function useTicker(on: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!on) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [on]);
+  return now;
+}
+
+function PulseDot() {
+  return (
+    <span className="relative inline-flex h-2 w-2 shrink-0">
+      <span className="absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75 animate-ping" />
+      <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-400" />
+    </span>
+  );
+}
+
+/**
+ * Says, where the reply box would be, that the agent is at work: what it is
+ * doing, for how long. Without it a running follow-up looked exactly like a
+ * finished task with the previous run's verdict still showing.
+ */
+function ActivityBanner({
+  activity,
+  now,
+}: {
+  activity: CodeActivity;
+  now: number;
+}) {
+  return (
+    <div
+      className="flex items-center gap-2 rounded-lg bg-sky-500/10 border border-sky-400/30 px-3 py-2"
+      role="status"
+      data-testid="code-activity"
+    >
+      <PulseDot />
+      <div className="min-w-0">
+        <div className="text-sm text-sky-200">
+          {activity.headline}
+          {activity.since !== null && (
+            <span className="text-sky-300/70 tabular-nums">
+              {' · '}
+              {elapsedLabel(now - activity.since)}
+            </span>
+          )}
+        </div>
+        {activity.doing && (
+          <div className="text-xs text-neutral-400 font-mono truncate">
+            {activity.doing}
           </div>
         )}
       </div>

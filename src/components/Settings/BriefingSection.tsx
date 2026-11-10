@@ -15,12 +15,14 @@ export function BriefingSection() {
   });
   const [hourInput, setHourInput] = useState('5');
   const [maxTokensInput, setMaxTokensInput] = useState('16384');
+  const [budgetInput, setBudgetInput] = useState('49152');
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (settings) {
       setHourInput(String(settings.briefingHour ?? 5));
       setMaxTokensInput(String(settings.briefingMaxTokens ?? 16384));
+      setBudgetInput(String(settings.briefingThinkingBudget ?? 49152));
     }
   }, [settings]);
 
@@ -50,6 +52,12 @@ export function BriefingSection() {
   const saveMaxTokens = useMutation({
     mutationFn: (maxTokens: number) =>
       api.settings.updateAI({ briefingMaxTokens: maxTokens }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  });
+
+  const saveBudget = useMutation({
+    mutationFn: (budget: number) =>
+      api.settings.updateAI({ briefingThinkingBudget: budget }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
@@ -87,6 +95,17 @@ export function BriefingSection() {
     setMaxTokensInput(String(tokens));
     if (tokens !== (settings?.briefingMaxTokens ?? 16384)) {
       saveMaxTokens.mutate(tokens);
+    }
+  };
+
+  const commitBudget = () => {
+    const budget = Math.min(
+      81920,
+      Math.max(256, parseInt(budgetInput, 10) || 49152)
+    );
+    setBudgetInput(String(budget));
+    if (budget !== (settings?.briefingThinkingBudget ?? 49152)) {
+      saveBudget.mutate(budget);
     }
   };
 
@@ -177,12 +196,42 @@ export function BriefingSection() {
               </span>
             </label>
             <p className="text-xs text-[var(--color-text-muted)] mt-1">
-              Worth turning on here even though chat leaves it off: the briefing
-              runs while you're asleep, so the extra tokens cost you nothing.
-              Give it plenty of output tokens below if you do — thinking and the
-              answer share the same budget.
+              Worth turning on here even though chat leaves it off: the
+              overnight passes run while you're asleep, so the extra tokens cost
+              you nothing. Applies to all four — the entry descriptions, the
+              life wiki, the server oddities notes and the briefing. Running the
+              briefing by hand doesn't think, since you're waiting for it.
             </p>
           </div>
+          {briefingThinking && (
+            <div>
+              <label
+                htmlFor="briefing-thinking-budget"
+                className="text-sm text-[var(--color-text-muted)]"
+              >
+                Thinking budget, tokens (256–81920)
+              </label>
+              <input
+                id="briefing-thinking-budget"
+                type="number"
+                min={256}
+                max={81920}
+                step={256}
+                value={budgetInput}
+                onChange={e => setBudgetInput(e.target.value)}
+                onBlur={commitBudget}
+                className="mt-1 w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+              />
+              <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                The most each overnight call may think before it's told to
+                answer. It's added on top of the output limit, so a long think
+                can't use up the room the answer needs. It's there to stop a
+                runaway, not to ration thinking: at ~34 tokens/s, 49152 is about
+                25 minutes, and whatever a pass can't finish in its time waits
+                for the next night.
+              </p>
+            </div>
+          )}
           <div>
             <label className="text-sm text-[var(--color-text-muted)]">
               Output token limit (256–65536)

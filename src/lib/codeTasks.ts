@@ -437,3 +437,112 @@ export function appendDictation(draft: string, words: string): string {
   if (!draft) return w;
   return draft + (/\s$/.test(draft) ? '' : ' ') + w;
 }
+
+/**
+ * The test verdict worth showing: none while the agent is at work, because
+ * the stored one describes code it is in the middle of changing — a red
+ * "tests failed" under a running follow-up read as the follow-up's result.
+ */
+export function testVerdict(t: CodeTask): 'passed' | 'failed' | null {
+  if (isActive(t) || t.testExit === null || t.testExit === undefined)
+    return null;
+  return t.testExit === 0 ? 'passed' : 'failed';
+}
+
+const HEADLINES: Record<string, string> = {
+  queued: 'Queued — starts when the agent is free',
+  planning: 'The agent is planning',
+  running: 'The agent is working',
+  testing: 'Running the test suite',
+};
+
+export interface CodeActivity {
+  headline: string;
+  /** When the current status began (ms since the epoch), if known. */
+  since: number | null;
+  /** The latest thing it did in this status, if anything. */
+  doing: string | null;
+}
+
+/**
+ * What a running task is doing right now, for the banner that says so. Same
+ * wording as `CodeActivity` in LunaschalCore/CodeAgent.swift.
+ */
+export function activity(
+  t: CodeTask,
+  events: CodeTaskEvent[]
+): CodeActivity | null {
+  if (!isActive(t)) return null;
+  let start = -1;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind === 'status' && e.payload.status === t.status) {
+      start = i;
+      break;
+    }
+  }
+  const sinceEvent = start >= 0 ? events[start] : null;
+  const since = sinceEvent?.createdAt ? Date.parse(sinceEvent.createdAt) : NaN;
+  let doing: string | null = null;
+  if (t.status !== 'testing') {
+    for (let i = events.length - 1; i > start; i--) {
+      doing = stepLabel(events[i]);
+      if (doing) break;
+    }
+  }
+  return {
+    headline: HEADLINES[t.status] ?? statusLabel(t.status),
+    since: Number.isNaN(since) ? null : since,
+    doing,
+  };
+}
+
+function stepLabel(e: CodeTaskEvent): string | null {
+  switch (e.kind) {
+    case 'tool_call': {
+      const title = (str(e.payload.title) ?? 'a tool').split('\n')[0].trim();
+      return 'Running: ' + clip(title, 90);
+    }
+    case 'thought':
+      return 'Thinking it over';
+    case 'message':
+      return 'Writing its reply';
+    case 'proxy':
+      return clip(eventLabel(e), 90);
+    default:
+      return null;
+  }
+}
+
+/** Cut at `n` Unicode scalars — what Swift's `unicodeScalars` counts too. */
+export function clip(s: string, n: number): string {
+  const chars = Array.from(s);
+  return chars.length <= n ? s : chars.slice(0, n - 1).join('') + '…';
+}
+
+/**
+ * The events already held plus a page fetched after the last of them. The
+ * server returns at most 500 per request, oldest first, so a long task's log
+ * is read in pages and kept — reading it whole on every poll showed only its
+ * first 500 events, and `activity` then found the first turn's status.
+ */
+export function appendEvents(
+  held: CodeTaskEvent[],
+  page: CodeTaskEvent[]
+): CodeTaskEvent[] {
+  const last = held.length ? held[held.length - 1].seq : 0;
+  const fresh = page.filter(e => e.seq > last);
+  return fresh.length ? [...held, ...fresh] : held;
+}
+
+/** The page size `GET /api/code/tasks/<id>` returns at most. */
+export const EVENT_PAGE = 500;
+
+/** 45s, 3m 05s, 1h 02m. */
+export function elapsedLabel(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+}

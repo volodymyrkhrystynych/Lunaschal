@@ -1,12 +1,12 @@
 {
   "defaultProvider": "lunaschal",
   "defaultModel": "local",
-  "defaultThinkingLevel": "medium",
+  "defaultThinkingLevel": "high",
   "thinkingBudgets": {
     "minimal": 1024,
     "low": 4096,
     "medium": 8192,
-    "high": 16384
+    "high": 49152
   },
   "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls"],
   "enableInstallTelemetry": false,
@@ -14,7 +14,7 @@
   "httpIdleTimeoutMs": 0,
   "compaction": {
     "enabled": true,
-    "reserveTokens": 32768,
+    "reserveTokens": 66500,
     "keepRecentTokens": 20000
   }
 }

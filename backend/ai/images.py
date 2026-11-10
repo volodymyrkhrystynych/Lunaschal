@@ -64,7 +64,30 @@ _CHAT_SYSTEM = (
     "Return only the description."
 )
 
+# A screenshot is a picture of text far more often than of a scene, and the
+# photo prompt's "two or three sentences about what is in the frame" reduced an
+# article, a chat or a page of code to "a screenshot of a web page". What was on
+# the screen is the whole reason it was taken, so this one transcribes.
+_SCREENSHOT_SYSTEM = (
+    "You are reading a screenshot the user took, on behalf of an assistant that "
+    "cannot see images — your text is the only thing it will ever know about it. "
+    "First say in one sentence what it is: which app or website, and what kind "
+    "of screen (an article, a chat, an email, code, a map, a product page, a "
+    "video, settings). Then transcribe the text that carries the meaning, exactly "
+    "as written, spelling included: headings, names, the key sentences or "
+    "messages, numbers, prices, dates, URLs. Skip interface chrome — menus, "
+    "buttons, status bars, ads. If there is more text than fits, keep the most "
+    "important parts and say that some was left out. Say plainly when something "
+    "is unreadable rather than guessing. Do not speculate about why it was taken. "
+    "Return only the description."
+)
+
 _MAX_TOKENS = 300
+
+# Transcription is the point of the screenshot prompt, and text is where the
+# tokens go — twice the chat photo's room, since a screenshot is usually mostly
+# words.
+_SCREENSHOT_MAX_TOKENS = 1000
 
 # More room than a journal caption: quoting a menu or an ingredient label
 # verbatim is the point of this pass, and that is where the tokens go.
@@ -230,6 +253,20 @@ def describe_image(path: Path, *, system: str, prompt: str, max_tokens: int = _M
     if not text:
         raise VisionUnavailable('The model returned an empty description')
     return text
+
+
+def caption_screenshot(path: Path) -> str:
+    """Describe a screenshot attachment, transcribing its text.
+
+    No hint: a screenshot's name is its capture time, not anything the user
+    called it, so passing it as "the person who saved it called it" would only
+    mislead.
+    """
+    return describe_image(
+        path, system=_SCREENSHOT_SYSTEM,
+        prompt='Describe this screenshot and transcribe its important text.',
+        max_tokens=_SCREENSHOT_MAX_TOKENS,
+    )
 
 
 def caption_image(path: Path, hint: str | None = None) -> str:

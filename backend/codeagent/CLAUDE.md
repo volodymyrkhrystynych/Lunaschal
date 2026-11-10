@@ -22,10 +22,14 @@ ACP, with its model calls routed through the app's model service. Design record 
   names are served, arguments and results are clipped, and each task has a budget. The web goes
   through the shared `ResearchTools` gate (library first) and through Tavily on the code agent's own
   key (`web.search_override`), at P2. Nothing in the container gains network.
-- **Agent configs track the server**: pi's and omp's `contextWindow` equal `[qwen36]`'s `ctx-size`,
-  and pi's `compaction.reserveTokens` is at least `proxy.MIN_MAX_TOKENS`. Tests hold both.
+- **Agent configs track the server**: pi's and omp's `contextWindow` (and Qwen Code's
+  `contextWindowSize`) equal `[qwen36]`'s `ctx-size`, and all three compact at `llm.COMPACT_AT` of it,
+  which must leave `proxy.MIN_MAX_TOKENS` free. `test_codeagent_container.py` holds all of it.
 - **The plan phase leaves no changes**: write permissions refused, then `reset --hard` if dirty anyway.
 - **Tests are run by the driver after the agent finishes**; `test_exit` is ours, not the agent's claim.
+  So the agent is told that command up front and gets that run's result (failures first, from
+  `testreport.py`, since the kept tail loses them) at the start of its next follow-up, and the
+  clients hide the verdict while a task is active — see "result is measured" in the design record.
 - **`tasks.set_status` is the only way a task changes state**, so the push listener cannot be bypassed.
   In-flight states (`planning`/`running`/`testing`) become `interrupted` at startup; `queued` survives a
   restart, and the seeder must never write an in-flight state.

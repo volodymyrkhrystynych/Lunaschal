@@ -102,6 +102,7 @@ def get_settings():
         'briefingModel': s.get('briefing_model'),
         'briefingThinking': bool(s.get('briefing_thinking', 0)),
         'briefingMaxTokens': s.get('briefing_max_tokens') or 16384,
+        'briefingThinkingBudget': s.get('briefing_thinking_budget') or 49152,
         'websearchSearchProvider': s.get('websearch_search_provider') or '',
         # Never echo the key itself back to the client.
         'hasWebsearchSearchKey': bool(s.get('websearch_search_key')),
@@ -189,6 +190,7 @@ def update_ai():
         'briefingModel': 'briefing_model',
         'briefingThinking': 'briefing_thinking',
         'briefingMaxTokens': 'briefing_max_tokens',
+        'briefingThinkingBudget': 'briefing_thinking_budget',
         'repoContextEnabled': 'repo_context_enabled',
         'repoContextHour': 'repo_context_hour',
         'codeWikiArticles': 'code_wiki_articles',
@@ -252,6 +254,15 @@ def update_ai():
                 # would truncate every reply, or an absurd value.
                 try:
                     value = max(256, min(65536, int(value)))
+                except (TypeError, ValueError):
+                    continue
+            elif camel == 'briefingThinkingBudget':
+                # A budget under a few hundred tokens cuts most thinks off
+                # mid-thought, which measurably hurts the answer. The ceiling
+                # is the output length Qwen's model card gives for its
+                # hardest problems.
+                try:
+                    value = max(256, min(81920, int(value)))
                 except (TypeError, ValueError):
                     continue
             elif camel in ('chatTimeoutSeconds', 'researchSearchTimeoutSeconds',
