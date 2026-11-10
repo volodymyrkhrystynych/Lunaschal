@@ -36,6 +36,15 @@ RUN uv venv --python 3.13 /opt/venv \
 COPY package.json package-lock.json /opt/app/
 RUN cd /opt/app && npm ci --ignore-scripts --no-audit --no-fund
 
+# The root is read-only at run time, and Vite writes beside the node_modules it
+# finds: the bundled config goes to node_modules/.vite-temp (it tolerates
+# EACCES there but not the EROFS a read-only mount gives), and Vitest's cache
+# to node_modules/.vite. Both point into /tmp, which entrypoint.sh creates.
+# Without this `npm test` fails before a single test runs, and the agent
+# "fixed" it by rewriting package.json's test script — in the branch it pushed.
+RUN ln -s /tmp/vite-temp /opt/app/node_modules/.vite-temp \
+ && ln -s /tmp/vite-cache /opt/app/node_modules/.vite
+
 # The three agents, pinned. omp runs on Bun rather than Node.
 #
 # pi and pi-acp move together: pi-acp asks pi for commands that older pis do

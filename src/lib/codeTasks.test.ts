@@ -10,6 +10,9 @@ import {
   statusLabel,
   terminalLines,
   appendDictation,
+  activity,
+  elapsedLabel,
+  testVerdict,
 } from './codeTasks';
 
 const task = (status: string, extra: Partial<CodeTask> = {}): CodeTask => ({
@@ -313,5 +316,74 @@ describe('appendDictation', () => {
       'fix it\nand test it'
     );
     expect(appendDictation('fix it', '  ')).toBe('fix it');
+  });
+});
+
+describe('a running task', () => {
+  const at = (
+    seq: number,
+    kind: string,
+    payload: Record<string, unknown>,
+    createdAt: string | null = null
+  ): CodeTaskEvent => ({ seq, kind, payload, createdAt });
+
+  // The follow-up that looked finished: the previous run's red verdict stayed
+  // on screen while the agent worked on a fix.
+  it('shows no test verdict while the agent is at work', () => {
+    expect(testVerdict(task('running', { testExit: 1 }))).toBeNull();
+    expect(testVerdict(task('testing', { testExit: 1 }))).toBeNull();
+    expect(testVerdict(task('done', { testExit: 1 }))).toBe('failed');
+    expect(testVerdict(task('done', { testExit: 0 }))).toBe('passed');
+    expect(testVerdict(task('done'))).toBeNull();
+  });
+
+  it('says what it is doing and since when, counting only this status', () => {
+    const events = [
+      at(1, 'status', { status: 'running' }, '2026-11-09T10:00:00+00:00'),
+      at(2, 'tool_call', { title: 'old step' }),
+      at(3, 'test', { exit: 1 }),
+      at(4, 'status', { status: 'done' }),
+      at(5, 'user', { text: 'Tests still failed' }),
+      at(6, 'status', { status: 'queued' }),
+      at(7, 'status', { status: 'running' }, '2026-11-09T11:38:06+00:00'),
+      at(8, 'thought', { text: 'hm' }),
+      at(9, 'tool_call', {
+        title: 'cd /work && .venv/bin/pytest backend/tests -q\nmore',
+      }),
+    ];
+    const a = activity(task('running'), events)!;
+    expect(a.headline).toBe('The agent is working');
+    expect(a.since).toBe(Date.parse('2026-11-09T11:38:06Z'));
+    expect(a.doing).toBe(
+      'Running: cd /work && .venv/bin/pytest backend/tests -q'
+    );
+  });
+
+  it('has nothing to report before the first step, or once finished', () => {
+    const started = [at(1, 'status', { status: 'planning' })];
+    expect(activity(task('planning'), started)).toEqual({
+      headline: 'The agent is planning',
+      since: null,
+      doing: null,
+    });
+    expect(activity(task('done'), started)).toBeNull();
+  });
+
+  it('names the test suite while Lunaschal runs it', () => {
+    const events = [
+      at(1, 'tool_call', { title: 'git commit' }),
+      at(2, 'status', { status: 'testing' }),
+    ];
+    expect(activity(task('testing'), events)).toMatchObject({
+      headline: 'Running the test suite',
+      doing: null,
+    });
+  });
+
+  it('formats elapsed time', () => {
+    expect(elapsedLabel(45_000)).toBe('45s');
+    expect(elapsedLabel(185_000)).toBe('3m 05s');
+    expect(elapsedLabel(3_720_000)).toBe('1h 02m');
+    expect(elapsedLabel(-5)).toBe('0s');
   });
 });

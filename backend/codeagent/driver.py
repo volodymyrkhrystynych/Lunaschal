@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
 
-from backend.codeagent import mirror, tasks
+from backend.codeagent import mirror, tasks, testreport
 from backend.codeagent.acp import AcpClient, AcpError
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,8 @@ HARNESS_COMMANDS = {
 
 TEST_TIMEOUT = 3600
 TEST_TAIL_LINES = 200
+# The event carries less than the row: it is drawn in the terminal on every poll.
+TEST_EVENT_CHARS = 4000
 QUESTION = re.compile(r'^\s*QUESTION:\s*(.+?)\s*$', re.M)
 
 # What runs when a repo has no agent_test_command of its own. Detection runs in
@@ -82,12 +84,38 @@ BUILD_PROMPT = """{context}The user approved this plan:
 Implement it now in /work. Run the relevant tests and fix what fails. When you are done, \
 commit your work with git (clear commit messages) and finish with a short summary of what \
 changed and how the tests went. If you are blocked on a decision only the user can make, \
-stop and end your reply with one line that starts with QUESTION: and asks it."""
+stop and end your reply with one line that starts with QUESTION: and asks it.
 
-FOLLOWUP_PROMPT = """{text}
+{check}"""
+
+FOLLOWUP_PROMPT = """{last_check}{text}
 
 When you are done, commit any changes and finish with a short summary. If you need a \
-decision from the user, end your reply with one line that starts with QUESTION:."""
+decision from the user, end your reply with one line that starts with QUESTION:.
+
+{check}"""
+
+# Said in every build turn, because the user sees Lunaschal's run of this
+# command, not the agent's own: an agent that only ran the tests near its
+# change reported "all tests pass" four times over a suite that was failing.
+CHECK_NOTE = """When you finish, Lunaschal itself runs this in /work, and its result — not \
+yours — is what the user sees as "tests passed" or "tests failed":
+
+    {script}
+
+Run that same command before you say the tests pass. Do not change the test scripts, \
+package.json or the test configuration to make it pass; if it cannot run in this \
+container, say so in your summary."""
+
+# The driver's own result from the end of the previous turn. Without it a
+# follow-up like "the tests still fail" reaches an agent that has never seen
+# that run and, honestly, cannot find it.
+LAST_CHECK = """After your previous turn, Lunaschal ran the test command itself and it \
+{verdict} (exit {exit}).{detail}
+
+The user says:
+"""
+LAST_CHECK_CHARS = 6000
 
 FRESH_CONTEXT = """You are working in the git repository at /work. Your earlier session \
 could not be resumed; `git log` and `git status` show the work so far.
@@ -305,10 +333,13 @@ class Driver:
             base = PLAN_PROMPT.format(branch=mirror.branch_for(task['id']), prompt=task['prompt'])
             return base + (f'\n\nThe user has reviewed an earlier plan and said:\n{pending}'
                            if pending else '')
+        check = CHECK_NOTE.format(script=self._test_script(task))
         if pending:
-            return (context + FOLLOWUP_PROMPT.format(text=pending)) if fresh else \
-                FOLLOWUP_PROMPT.format(text=pending)
-        return BUILD_PROMPT.format(context=context, plan=task.get('plan') or '(no plan recorded)')
+            followup = FOLLOWUP_PROMPT.format(text=pending, check=check,
+                                              last_check=_last_check(task))
+            return (context + followup) if fresh else followup
+        return BUILD_PROMPT.format(context=context, plan=task.get('plan') or '(no plan recorded)',
+                                   check=check)
 
     def _prompt(self, client: AcpClient, session_id: str, text: str,
                 cancel: threading.Event) -> str:
@@ -395,22 +426,44 @@ class Driver:
         question = question_in(reply)
         if question:
             tasks.open_approval(task_id, 'question', {'question': question, 'reply': reply})
-            return tasks.set_status(task_id, 'needs_input', **fields)
+            # No test run this turn, and the code has moved on since the last
+            # one: its verdict would be shown — and fed back — as current.
+            return tasks.set_status(task_id, 'needs_input', test_exit=None, test_output=None,
+                                    **fields)
         tasks.set_status(task_id, 'testing', **fields)
-        exit_code, tail = self._run_tests(task)
-        tasks.append_event(task_id, 'test', {'exit': exit_code, 'tail': tail[-4000:]})
-        return tasks.set_status(task_id, 'done', test_exit=exit_code, test_output=tail)
+        exit_code, output = self._run_tests(task)
+        tasks.append_event(task_id, 'test', {
+            'exit': exit_code, 'tail': testreport.clip_report(output, TEST_EVENT_CHARS)})
+        return tasks.set_status(task_id, 'done', test_exit=exit_code, test_output=output)
 
-    def _run_tests(self, task: dict) -> tuple[int, str]:
+    def _test_script(self, task: dict) -> str:
         from backend.db.connection import get_db
         row = get_db().execute('SELECT agent_test_command FROM repos WHERE id=?',
                                (task['repoId'],)).fetchone()
-        script = (row['agent_test_command'] if row else '') or DEFAULT_TEST_SCRIPT
-        proc = self.runtime.run(task['id'], ['sh', '-c', script], timeout=TEST_TIMEOUT)
+        return (row['agent_test_command'] if row else '') or DEFAULT_TEST_SCRIPT
+
+    def _run_tests(self, task: dict) -> tuple[int, str]:
+        """Run the repo's test command; return its exit and a report of it —
+        what failed first, then the end of the output."""
+        proc = self.runtime.run(task['id'], ['sh', '-c', self._test_script(task)],
+                                timeout=TEST_TIMEOUT)
+        # 2>&1 order is lost by capturing the two apart; stderr last keeps
+        # npm's and the batch runner's closing complaints at the end.
         text = (proc.stdout or b'').decode(errors='replace') + \
             (proc.stderr or b'').decode(errors='replace')
-        tail = '\n'.join(text.splitlines()[-TEST_TAIL_LINES:])
-        return proc.returncode, tail
+        return proc.returncode, testreport.report(text, TEST_TAIL_LINES)
+
+
+def _last_check(task: dict) -> str:
+    """LAST_CHECK for a task whose previous turn ended in a test run, else ''."""
+    exit_code = task.get('testExit')
+    if exit_code is None:
+        return ''
+    if exit_code == 0:
+        return LAST_CHECK.format(verdict='passed', exit=0, detail='')
+    output = testreport.clip_report(task.get('testOutput') or '', LAST_CHECK_CHARS)
+    detail = f'\n\n{output}' if output.strip() else ''
+    return LAST_CHECK.format(verdict='FAILED', exit=exit_code, detail=detail)
 
 
 def _describe(e: Exception, client: AcpClient | None) -> str:

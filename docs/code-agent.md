@@ -42,16 +42,16 @@ task and the approved plan. The container stays up between phases.
 `backend/ai/service.py` at background priority, so a chat message preempts it, the GPU pause stops it,
 and Settings → Logs shows it (label `code_agent`). Three things happen there the agent never sees:
 
-- *Preemption becomes a slow reply.* The upstream request is closed (freeing the server slot), re-queued
+- _Preemption becomes a slow reply._ The upstream request is closed (freeing the server slot), re-queued
   behind the chat call, and sent again unchanged. Responses are therefore always **buffered** — a replay
   must not duplicate tokens — and a streaming agent gets SSE `: keepalive` comments meanwhile.
-- *Tool calls written inside the thinking block are repaired* (`toolfix.py`). Qwen 3.5/3.6 sometimes opens
+- _Tool calls written inside the thinking block are repaired_ (`toolfix.py`). Qwen 3.5/3.6 sometimes opens
   `<tool_call>` before closing its reasoning (llama.cpp #20837, #22684); llama-server then files the call
   as reasoning and the agent sees a turn that "finished" having done nothing. Turning thinking off
   prevents it (that is what the app's own tool loop does), but Qwen needs thinking for anything
   non-trivial, so the proxy **promotes** a complete, schema-valid call to a real `tool_calls` entry,
   **pokes** the model to re-emit a broken one (at most twice), and otherwise records **stuck**.
-- *A capped think, and a floor on `max_tokens` above it* (60k): every turn carries llama-server's
+- _A capped think, and a floor on `max_tokens` above it_ (60k): every turn carries llama-server's
   `reasoning_budget_tokens` (48k unless the harness sent its own) with the app's wrap-up message, and
   `max_tokens` leaves at least 12k for the answer beyond it. Qwen's model card sets no thinking budget,
   only a 32k–81,920-token output length, so the cap stops a runaway rather than rationing reasoning; a
@@ -59,7 +59,7 @@ and Settings → Logs shows it (label `code_agent`). Three things happen there t
   end the turn having done nothing. The answer's floor is what the old 32k ceiling was for: at 8k,
   file writes were cut off and saved half-written
   ([doug.sh's omp tuning notes](https://doug.sh/posts/tuning-a-local-coding-agent-oh-my-pi/)).
-- *Qwen's coding sampler* (temperature 0.6, top-p 0.95, top-k 20, min-p 0, presence 0), filled in
+- _Qwen's coding sampler_ (temperature 0.6, top-p 0.95, top-k 20, min-p 0, presence 0), filled in
   where the agent sent none. The `[qwen36]` preset runs Qwen's general-thinking sampler (1.0) because
   it serves every `chat_json` call in the app; without this the agent would write code at 1.0.
 
@@ -76,14 +76,15 @@ The container has no network, so the agent's lookups go to the host through its 
 (`agent/config/pi/extensions/lunaschal.js`). The host runs them with the app's own toolboxes
 (`backend/codeagent/lookups.py`):
 
-| Tool | Backed by | Offered when |
-|---|---|---|
-| `library_search` / `library_read` | the offline library: Kiwix plus the docs packages | always |
-| `web_research` | the Chat tab's research delegate, searching through **Tavily on the code agent's own key** | Settings → Research → Code agent is on (default) and a key is saved |
-| `repo_wiki_search` / `repo_wiki_read` | the repo's nightly code-wiki notes plus research notes | the repo has notes |
-| `code_map` | the repo's graphify graph (of the mirror, so main, not the agent's edits) | the repo has a graph |
+| Tool                                  | Backed by                                                                                  | Offered when                                                        |
+| ------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| `library_search` / `library_read`     | the offline library: Kiwix plus the docs packages                                          | always                                                              |
+| `web_research`                        | the Chat tab's research delegate, searching through **Tavily on the code agent's own key** | Settings → Research → Code agent is on (default) and a key is saved |
+| `repo_wiki_search` / `repo_wiki_read` | the repo's nightly code-wiki notes plus research notes                                     | the repo has notes                                                  |
+| `code_map`                            | the repo's graphify graph (of the mirror, so main, not the agent's edits)                  | the repo has a graph                                                |
 
 Rules:
+
 - **The endpoint is the boundary, not the extension.** The agent owns `$HOME` and can curl the
   socket. So names are checked against what the task was offered, arguments and results are clipped,
   and each task has a budget of 200 lookups and 20 web runs.
@@ -121,7 +122,7 @@ inputs changes.
 hooks on push, `diff.external` on diff). So the agent's commits leave the container as a **bundle on
 `docker exec`'s stdout** — not even its path is the agent's to choose — and are fetched into a
 host-owned bare repo, `out.git`, whose base objects come from the mirror through `alternates`. The
-review diff and the push both come from `out.git`. The workspace itself is cloned on the host *before*
+review diff and the push both come from `out.git`. The workspace itself is cloned on the host _before_
 the agent exists, with `--no-hardlinks` (shared inodes would let the container corrupt the mirror) and
 with `origin` removed.
 
@@ -132,6 +133,28 @@ The **result is measured, not reported**: after the agent finishes, Lunaschal ru
 command itself (`repos.agent_test_command`, default `npm run test:all` when the repo has it) and that
 exit code is what the phone and the PR show.
 
+That run and the agent's own used to be invisible to each other, and it showed: on one task the agent
+said "all 2574 tests pass" four times — it had run Vitest — while the driver's `test:all` failed five
+backend batches every time, and a follow-up saying so reached an agent that had never seen that run.
+So now, in both directions:
+
+- **Every build and follow-up prompt names the command** that decides pass/fail and asks the agent to
+  run it, and not to edit test scripts or config to get there (`driver.CHECK_NOTE`).
+- **A follow-up starts with the previous run's result** — passed, or failed with what failed
+  (`driver.LAST_CHECK`). A turn that ends on a question clears the stored result: the code has moved
+  on since, and the old verdict would be shown and fed back as current.
+- **What failed is found before the output is cut** (`testreport.py`). Only the last 200 lines are
+  kept, and the end of a batched backend run is its greenest part. The report puts each failing
+  batch's header, its `FAILED`/`ERROR` lines and its summary first — or, for a batch with no pytest
+  summary at all, that it crashed, with its last lines. Vitest's `FAIL`/`×` lines are found too.
+- **Neither client shows a verdict while the agent works** (`testVerdict`). Instead a banner says what
+  it is doing and for how long (`activity` / `CodeActivity`, shared wording on web and phone).
+
+The image links `node_modules/.vite-temp` and `.vite` into `/tmp`. Vite writes its bundled config
+there and copes with `EACCES` but not with `EROFS`, so on the read-only root every Vitest run failed
+before starting. The agent's workaround was to change `package.json`'s test script in the branch it
+pushed.
+
 ## Keeping the agent off `main` (free, on a public repo)
 
 1. **Structural**: the container has no credentials and no remote. Pushing happens on the host, from a
@@ -139,20 +162,20 @@ exit code is what the phone and the PR show.
    before git runs. The token travels as `GIT_CONFIG_*` env vars, never argv or a config file.
 2. **GitHub ruleset on `main`** (rulesets are free on public repos): require a pull request, block force
    pushes and deletion. You are on the bypass list.
-3. **A machine account** pushes and opens the PR. It is a collaborator but *not* on the bypass list,
+3. **A machine account** pushes and opens the PR. It is a collaborator but _not_ on the bypass list,
    so GitHub itself refuses its pushes to `main` even if layer 1 had a bug. Your own token would bypass
    layer 2, which is why this is not your token.
 
 ## Choosing the agent
 
-| | pi | omp | Qwen Code |
-|---|---|---|---|
-| Version pinned | 0.87.1 (+ `pi-acp` 0.0.34) | 18.12.2 (Bun 1.4.3) | 0.25.2 |
-| Driven over | ACP via the `pi-acp` adapter | native ACP (`omp acp`) | native ACP (`qwen --acp`) |
-| Prompt size | minimal — cheapest at 450 tok/s prefill | larger: many tools, subagents | largest (Gemini CLI fork) |
-| Edits | retyped text | hash-anchored lines: fewer output tokens | retyped text |
-| Permissions | none (the container is the sandbox) | over ACP | approval modes |
-| Reports with this model | positive (similar 3080 Ti setup) | positive after tuning | none found |
+|                         | pi                                      | omp                                      | Qwen Code                 |
+| ----------------------- | --------------------------------------- | ---------------------------------------- | ------------------------- |
+| Version pinned          | 0.87.1 (+ `pi-acp` 0.0.34)              | 18.12.2 (Bun 1.4.3)                      | 0.25.2                    |
+| Driven over             | ACP via the `pi-acp` adapter            | native ACP (`omp acp`)                   | native ACP (`qwen --acp`) |
+| Prompt size             | minimal — cheapest at 450 tok/s prefill | larger: many tools, subagents            | largest (Gemini CLI fork) |
+| Edits                   | retyped text                            | hash-anchored lines: fewer output tokens | retyped text              |
+| Permissions             | none (the container is the sandbox)     | over ACP                                 | approval modes            |
+| Reports with this model | positive (similar 3080 Ti setup)        | positive after tuning                    | none found                |
 
 **pi and `pi-acp` are pinned as a pair.** pi-acp asks pi for RPC commands older pis lack, and pi
 answers an unknown command with an error that carries no request id, so pi-acp waits on it forever. With
@@ -221,7 +244,7 @@ A one-off check, also on the server: `python -m backend.codeagent.run --repo lun
 ## One-time setup (manual)
 
 1. **Machine account**: create a second GitHub account, invite it to the repo with write access, create
-   a *classic* PAT with `public_repo` (a fine-grained token cannot act on another user's repo), and
+   a _classic_ PAT with `public_repo` (a fine-grained token cannot act on another user's repo), and
    store it in `settings.github_agent_token`.
 2. **Ruleset** on `main`: require a pull request, block force pushes, block deletion; bypass list = you.
 3. **Docker** on the server (already there for the torrent stack). The worker builds the image on first

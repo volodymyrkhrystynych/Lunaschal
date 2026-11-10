@@ -245,3 +245,81 @@ def test_acp_answers_unsupported_methods():
     result = client.request('anything', {}, timeout=10)
     assert result['echo']['id'] == 7 and result['echo']['error']['code'] == -32601
     client.close()
+
+
+# ------------------------------------------------- the driver's own test run
+
+def _build_task(repo_id, **fields):
+    t = tasks.create(repo_id, 'Change a.py')
+    tasks.update(t['id'], phase='build', plan='1. Change a.py', **fields)
+    return tasks.get(t['id'])
+
+
+def test_the_build_prompt_names_the_command_that_decides_pass_or_fail(repo_id):
+    d, _ = make_driver()
+    text = d._prompt_for(_build_task(repo_id), fresh=False)
+    assert 'echo tests ran; grep -c built a.py' in text
+    assert 'Run that same command before you say the tests pass' in text
+
+
+def test_the_default_command_is_named_when_the_repo_has_none(repo_id):
+    get_db().execute("UPDATE repos SET agent_test_command='' WHERE id=?", (repo_id,))
+    get_db().commit()
+    d, _ = make_driver()
+    assert driver.DEFAULT_TEST_SCRIPT in d._prompt_for(_build_task(repo_id), fresh=False)
+
+
+def test_a_follow_up_after_a_failed_run_carries_what_failed(repo_id):
+    d, _ = make_driver()
+    output = ('What failed:\n== backend test batch 2/21 (15 files) ==\n'
+              'FAILED backend/tests/test_b.py::test_two - boom\n\n'
+              '── end of the output ──\n5/21 batch(es) had failures')
+    task = _build_task(repo_id, pending_input='Tests still failed though',
+                       test_exit=1, test_output=output)
+    text = d._prompt_for(task, fresh=False)
+    assert 'Lunaschal ran the test command itself and it FAILED (exit 1)' in text
+    assert 'FAILED backend/tests/test_b.py::test_two - boom' in text
+    assert text.index('test_b.py::test_two') < text.index('Tests still failed though')
+    assert 'echo tests ran; grep -c built a.py' in text
+
+
+def test_a_follow_up_after_a_passing_run_says_so_and_one_with_no_run_says_nothing(repo_id):
+    d, _ = make_driver()
+    passed = d._prompt_for(_build_task(repo_id, pending_input='Rename it', test_exit=0,
+                                       test_output='ok'), fresh=False)
+    assert 'it passed (exit 0)' in passed
+    none = d._prompt_for(_build_task(repo_id, pending_input='Rename it'), fresh=False)
+    assert 'Lunaschal ran the test command' not in none
+
+
+def test_a_failing_run_is_reported_failures_first(repo_id):
+    batches = ['== backend test batch 1/2 (1 files) ==',
+               'FAILED backend/tests/test_b.py::test_two - boom',
+               '==== 1 failed in 0.1s ====',
+               '== backend test batch 2/2 (1 files) ==']
+    batches += ['==== 9 passed in 0.1s ===='] * 400
+    batches += ['1/2 batch(es) had failures']
+    script = 'printf "%s\\n" ' + ' '.join(f"'{l}'" for l in batches) + '; exit 1'
+    get_db().execute('UPDATE repos SET agent_test_command=? WHERE id=?', (script, repo_id))
+    get_db().commit()
+    t = tasks.create(repo_id, 'Change a.py')
+    d, _ = make_driver()
+    d.run(t['id'])
+    tasks.update(t['id'], phase='build')
+    out = d.run(t['id'])
+    assert out['testExit'] == 1
+    assert out['testOutput'].startswith('What failed:\n== backend test batch 1/2')
+    event = [e for e in tasks.events(t['id']) if e['kind'] == 'test'][-1]['payload']
+    assert 'test_b.py::test_two' in event['tail'] and len(event['tail']) <= driver.TEST_EVENT_CHARS
+    assert event['tail'].rstrip().endswith('1/2 batch(es) had failures')
+
+
+def test_a_turn_ending_in_a_question_drops_the_old_test_verdict(repo_id):
+    t = tasks.create(repo_id, 'Change a.py')
+    d, _ = make_driver()
+    d.run(t['id'])
+    tasks.update(t['id'], phase='build', pending_input='Do it, and ASK if unsure',
+                 test_exit=1, test_output='old failure')
+    out = d.run(t['id'])
+    assert out['status'] == 'needs_input'
+    assert out['testExit'] is None and out['testOutput'] is None

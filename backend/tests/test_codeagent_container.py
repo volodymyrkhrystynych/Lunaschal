@@ -261,3 +261,15 @@ def test_nothing_but_extensions_sits_in_the_extensions_folder():
     extension and fail on its vitest import."""
     folder = _root() / 'agent/config/pi/extensions'
     assert [p.name for p in folder.iterdir()] == ['lunaschal.js']
+
+
+def test_vite_can_write_its_temp_files_on_the_read_only_root():
+    # Vite bundles the config into node_modules/.vite-temp and tolerates only
+    # EACCES there; the read-only root raises EROFS and every vitest run died.
+    dockerfile = (_root() / 'agent/Dockerfile').read_text()
+    assert 'ln -s /tmp/vite-temp /opt/app/node_modules/.vite-temp' in dockerfile
+    assert 'ln -s /tmp/vite-cache /opt/app/node_modules/.vite' in dockerfile
+    entry = (_root() / 'agent/entrypoint.sh').read_text()
+    assert 'mkdir -p /tmp/vite-temp /tmp/vite-cache' in entry
+    # Created before `exec`, i.e. before any command can run.
+    assert entry.index('mkdir -p /tmp/vite-temp') < entry.index('exec "$@"')

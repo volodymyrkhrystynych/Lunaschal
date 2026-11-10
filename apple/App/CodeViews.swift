@@ -89,12 +89,16 @@ private struct CodeTaskRow: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(task.title).lineLimit(2)
             HStack(spacing: 8) {
+                if task.isActive {
+                    ProgressView().controlSize(.mini)
+                        .accessibilityLabel("The agent is working")
+                }
                 CodeStatusBadge(task: task)
                 if task.linesAdded + task.linesRemoved > 0 {
                     Text("+\(task.linesAdded) −\(task.linesRemoved)").font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                if let passed = task.testsPassed {
+                if let passed = task.testVerdict {
                     Image(systemName: passed ? "checkmark.circle" : "xmark.circle")
                         .foregroundStyle(passed ? .green : .red).font(.caption)
                         .accessibilityLabel(passed ? "Tests passed" : "Tests failed")
@@ -149,13 +153,17 @@ struct CodeTaskDetailView: View {
     }
 
     private var task: CodeTask? { code.task(taskID) }
-    private var lines: [CodeTerminalLine] { CodeTerminal.lines(code.details[taskID]?.events ?? []) }
+    private var events: [CodeTaskEvent] { code.details[taskID]?.events ?? [] }
+    private var lines: [CodeTerminalLine] { CodeTerminal.lines(events) }
 
     var body: some View {
         VStack(spacing: 0) {
             terminal
             if let task {
                 actionBar(task)
+                if let activity = CodeActivity.of(task, events: events) {
+                    CodeActivityBar(activity: activity) { Task { await code.cancel(taskID) } }
+                }
                 if task.canMessage { composer(task) }
             }
         }
@@ -233,7 +241,7 @@ struct CodeTaskDetailView: View {
     /// terminal is for reading, this is for the next step.
     @ViewBuilder private func actionBar(_ task: CodeTask) -> some View {
         let files = task.diffStat ?? []
-        let hasActions = task.awaitsPlanApproval || task.testsPassed != nil || !files.isEmpty || task.canPush
+        let hasActions = task.awaitsPlanApproval || task.testVerdict != nil || !files.isEmpty || task.canPush
             || task.canContinue || task.prUrl != nil || code.notice != nil || dictation.error != nil
         if hasActions {
             VStack(alignment: .leading, spacing: 6) {
@@ -250,7 +258,7 @@ struct CodeTaskDetailView: View {
                             .disabled(code.busy)
                             .accessibilityIdentifier("code-approve")
                         }
-                        if let passed = task.testsPassed {
+                        if let passed = task.testVerdict {
                             Label(passed ? "Tests passed" : "Tests failed",
                                   systemImage: passed ? "checkmark.circle.fill" : "xmark.circle.fill")
                                 .font(.caption)
@@ -315,6 +323,47 @@ struct CodeTaskDetailView: View {
         .padding(.horizontal, 12).padding(.vertical, 4)
         .background(Terminal.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+}
+
+/// Says, where the reply line would be, that the agent is at work: what it is
+/// doing and for how long, with Stop beside it. Without it a running follow-up
+/// looked exactly like a finished task with the previous run's verdict showing.
+struct CodeActivityBar: View {
+    let activity: CodeActivity
+    let stop: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView().tint(Terminal.prompt)
+            VStack(alignment: .leading, spacing: 2) {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    HStack(spacing: 4) {
+                        Text(activity.headline).foregroundStyle(Terminal.text)
+                        if let since = activity.since {
+                            Text("· " + CodeActivity.elapsed(context.date.timeIntervalSince(since)))
+                                .monospacedDigit()
+                                .foregroundStyle(Terminal.prompt.opacity(0.8))
+                        }
+                    }
+                    .font(.subheadline.weight(.medium))
+                }
+                if let doing = activity.doing {
+                    Text(doing).font(Terminal.font).foregroundStyle(Terminal.dim).lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            Spacer(minLength: 0)
+            Button(role: .destructive, action: stop) { Label("Stop", systemImage: "stop.circle") }
+                .buttonStyle(.bordered).controlSize(.small)
+                .accessibilityIdentifier("code-stop")
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Terminal.prompt.opacity(0.12))
+        .overlay(alignment: .top) { Divider() }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("code-activity")
     }
 }
 

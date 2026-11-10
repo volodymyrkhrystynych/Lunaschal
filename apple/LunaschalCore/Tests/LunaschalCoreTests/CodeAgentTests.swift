@@ -260,4 +260,66 @@ final class CodeAgentTests: XCTestCase {
         XCTAssertEqual(try JournalAPI.transcript(Data(#"{"text": " add a test ", "language": "en"}"#.utf8)), "add a test")
         XCTAssertThrowsError(try JournalAPI.transcript(Data(#"{"error": "x"}"#.utf8)))
     }
+
+    // MARK: A running task — src/lib/codeTasks.test.ts pins the same behaviour.
+
+    private func codeTask(_ status: String, testExit: Int? = nil) -> CodeTask {
+        CodeTask(id: "T", repoId: "R", title: "t", prompt: "p", harness: "pi", status: status,
+                 phase: "build", testExit: testExit)
+    }
+
+    private func event(_ seq: Int, _ kind: String, _ payload: [String: JSONValue], at: String?) -> CodeTaskEvent {
+        CodeTaskEvent(seq: seq, kind: kind, payload: payload, createdAt: at)
+    }
+
+    // The follow-up that looked finished: the previous run's red verdict stayed
+    // on screen while the agent worked on a fix.
+    func testNoTestVerdictWhileTheAgentIsAtWork() {
+        XCTAssertNil(codeTask("running", testExit: 1).testVerdict)
+        XCTAssertNil(codeTask("testing", testExit: 1).testVerdict)
+        XCTAssertEqual(codeTask("done", testExit: 1).testVerdict, false)
+        XCTAssertEqual(codeTask("done", testExit: 0).testVerdict, true)
+        XCTAssertNil(codeTask("done").testVerdict)
+    }
+
+    func testActivitySaysWhatItIsDoingAndSinceWhenCountingOnlyThisStatus() throws {
+        let events = [
+            event(1, "status", ["status": .string("running")], at: "2026-11-09T10:00:00+00:00"),
+            event(2, "tool_call", ["title": .string("old step")], at: nil),
+            event(3, "test", ["exit": .number(1)], at: nil),
+            event(4, "status", ["status": .string("done")], at: nil),
+            event(5, "user", ["text": .string("Tests still failed")], at: nil),
+            event(6, "status", ["status": .string("queued")], at: nil),
+            event(7, "status", ["status": .string("running")], at: "2026-11-09T11:38:06+00:00"),
+            event(8, "thought", ["text": .string("hm")], at: nil),
+            event(9, "tool_call", ["title": .string("cd /work && .venv/bin/pytest backend/tests -q\nmore")], at: nil),
+        ]
+        let activity = try XCTUnwrap(CodeActivity.of(codeTask("running"), events: events))
+        XCTAssertEqual(activity.headline, "The agent is working")
+        XCTAssertEqual(activity.since, JournalTimestamp.parse("2026-11-09T11:38:06Z"))
+        XCTAssertNotNil(activity.since)
+        XCTAssertEqual(activity.doing, "Running: cd /work && .venv/bin/pytest backend/tests -q")
+    }
+
+    func testActivityBeforeTheFirstStepOrOnceFinished() {
+        let started = [event(1, "status", ["status": .string("planning")], at: nil)]
+        XCTAssertEqual(CodeActivity.of(codeTask("planning"), events: started),
+                       CodeActivity(headline: "The agent is planning", since: nil, doing: nil))
+        XCTAssertNil(CodeActivity.of(codeTask("done"), events: started))
+    }
+
+    func testActivityNamesTheTestSuiteWhileLunaschalRunsIt() {
+        let events = [event(1, "tool_call", ["title": .string("git commit")], at: nil),
+                      event(2, "status", ["status": .string("testing")], at: nil)]
+        let activity = CodeActivity.of(codeTask("testing"), events: events)
+        XCTAssertEqual(activity?.headline, "Running the test suite")
+        XCTAssertNil(activity?.doing)
+    }
+
+    func testElapsedLabels() {
+        XCTAssertEqual(CodeActivity.elapsed(45), "45s")
+        XCTAssertEqual(CodeActivity.elapsed(185), "3m 05s")
+        XCTAssertEqual(CodeActivity.elapsed(3720), "1h 02m")
+        XCTAssertEqual(CodeActivity.elapsed(-1), "0s")
+    }
 }
