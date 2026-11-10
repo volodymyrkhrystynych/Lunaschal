@@ -436,26 +436,50 @@ what each device can currently do and which work remains device-only.
   the screen. The last feed loaded is kept, so it still reads offline.
   Passed in simulator offline; not yet run against a server or verified on
   device.
-- More → Writing (its own tab on iPad) is the desktop Writing tab's notes and
-  discussions, over `/api/writing` and the Chat tab's routes. A book's notes
-  can be read, edited (debounced save), retyped, pinned (a pinned note is read
-  into every discussion turn, on any device) and restored from their history.
+- More → Writing (its own tab on iPad) is the desktop Writing tab's chapters,
+  notes and discussions, over `/api/writing` and the Chat tab's routes. Whole
+  books are kept on the phone by `WritingStore`, one file per document, and
+  not in the replica. Text reaches that file within 0.4 s of typing stopping and
+  whenever the screen or the app goes away, so a failed save, an offline phone
+  or a killed app costs nothing; the status reads "On this phone" until the
+  server has it. Reading, editing, renaming and new chapters and notes work
+  offline. New books, deleting, reordering, pins, goals and discussions need
+  the server, and say so. Every save names the revision it was edited from: if
+  another device moved on, or deleted it, the text is held and the author chooses
+  between keeping theirs, a copy, or the server's. Chapters and notes both have
+  history with Restore. The editor is a `UITextView` with find, undo, a keyboard
+  bar and the cursor put back on reopening; the side panel (a column on a wide
+  iPad, a sheet on iPhone) shows notes or the chapter's discussion. The mic
+  records a clip kept with its place in the text, which moves as typing continues,
+  and transcribes through `/api/transcribe`; a clip waits offline, and its audio
+  goes only once the words are on disk. Chapters show words, and the book shows
+  net words today across devices against an optional goal.
   A discussion is an ordinary chat conversation the server knows belongs to
   the book, so typed turns stream through `/api/chat/stream`, a spoken turn
   queues in the Chat tab's recording outbox and is answered by the server, and
-  the notes the agent proposes arrive as the same editable confirm cards.
-  Fetched, not replicated: everything but a queued voice message needs the
-  server. New books can be started from the + on the book list (title and
-  description). Chapters and canon imports stay on the desktop.
-  Screens and the card passed in simulator against a fixture
-  (`testWritingShowsPinnedNotesAndANoteCard`); not yet run against a server
-  or verified on device.
+  what the agent proposes arrives as editable confirm cards. One opened from a
+  chapter knows which, and the agent can propose adding to it or replacing a
+  quoted passage, never rewriting it. Selecting text in a chapter offers
+  "Discuss rewrite" (in the edit menu and on the keyboard bar): it opens a
+  discussion about that passage in a sheet, with the passage kept in view, and
+  the rewrite arrives as a card that replaces exactly those words. Chapters,
+  notes and discussions have Rename and Delete in their swipe menus (a book's
+  Rename opens its details); renaming a chapter or note works offline, while
+  discussions need the server. The book's Canon section links imported Fandom
+  wikis to it, searches them and reads a page with its attribution, and can
+  start an import from a wiki's address — online only, since a dump is far too
+  big for the phone. Edit-menu offering passed as an app unit test; swipe
+  rename/delete, the passage sheet and canon search passed in simulator against
+  the fixture.
+  Screens, offline editing, relaunch survival and the conflict choices passed in
+  simulator against a fixture, and the app's decoding and sync passed against
+  real responses from the Flask routes. Not yet run over a network against a
+  server, or verified on device: dictation and a hardware keyboard in particular.
 - Learning (More → Learning) is the desktop Learning tab's Review, Queue and
   Browse over the same `/api/learning` routes, filtered by folder and tag.
   Review runs the desktop's two passes: answer each due card (typed, or
-  spoken with the mic button, which records, sends the clip to the server's
-  `/api/transcribe` and adds the words, marking the answer as spoken so the
-  server tidies the transcript before grading) or Flip past it, then see each answer beside the
+  spoken with the mic button, which records and hands the clip to the server,
+  which transcribes it, tidies the transcript and grades it) or Flip past it, then see each answer beside the
   card's with the server's claim-by-claim grade, polled in as it lands, and
   rate it with the suggestion highlighted. Each answer is saved as it's given,
   so leaving mid-session resumes it; ratings reuse the attempt id as the review

@@ -250,6 +250,7 @@ def init_db() -> None:
     _ensure_newspaper_last_read_at(db)
     _ensure_writing_project_id(db)
     _ensure_writing_note_pinned(db)
+    _ensure_writing_editor_columns(db)
     _ensure_conversation_day_key(db)
     _ensure_conversation_mode(db)
     _ensure_websearch_settings(db)
@@ -2738,6 +2739,24 @@ def _ensure_writing_note_pinned(db: sqlite3.Connection) -> None:
     if 'pinned' not in cols:
         db.execute('ALTER TABLE writing_context_docs ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
         db.commit()
+
+
+def _ensure_writing_editor_columns(db: sqlite3.Connection) -> None:
+    for table, column, definition in (
+        ('writing_chapters', 'revision', 'INTEGER NOT NULL DEFAULT 0'),
+        ('writing_context_docs', 'revision', 'INTEGER NOT NULL DEFAULT 0'),
+        ('writing_projects', 'daily_word_goal', 'INTEGER'),
+        # Plain TEXT: a deleted chapter must not block or cascade into its
+        # discussions, and backend/writing/discuss.py joins through the chapter.
+        ('conversations', 'writing_chapter_id', 'TEXT'),
+        # The words highlighted when a discussion was opened from a selection;
+        # backend/writing/discuss.py quotes them in the prompt.
+        ('conversations', 'writing_passage', 'TEXT'),
+    ):
+        cols = {r[1] for r in db.execute(f'PRAGMA table_info({table})')}
+        if column not in cols:
+            db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
+    db.commit()
 
 
 def _reset_stale_canon_imports(db: sqlite3.Connection) -> None:

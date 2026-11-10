@@ -1,9 +1,9 @@
 import SwiftUI
 import LunaschalCore
 
-/// More → Writing: a book's notes and discussions. Chapters stay on the
-/// desktop; on the phone a book is the notebook beside it and somewhere to
-/// talk ideas through, with what gets settled proposed back into the notes.
+/// More → Writing: a book's chapters, notes and discussions. Chapters and notes
+/// are kept on the phone and can be written offline; a discussion is somewhere
+/// to talk ideas through, with what gets settled proposed back into the book.
 struct WritingRootView: View {
     @StateObject private var writing: WritingModel
 
@@ -19,6 +19,8 @@ private struct WritingProjectsView: View {
     @State private var creating = false
     /// A book just started from the sheet, opened straight away.
     @State private var opened: WritingProject?
+    @State private var editing: WritingProject?
+    @State private var deleting: WritingProject?
 
     var body: some View {
         List {
@@ -35,6 +37,11 @@ private struct WritingProjectsView: View {
                     }
                 }
                 .accessibilityIdentifier("writing-project")
+                .swipeActions {
+                    Button("Delete", role: .destructive) { deleting = project }
+                    Button("Rename") { editing = project }.tint(.blue)
+                        .accessibilityIdentifier("writing-rename")
+                }
             }
             if writing.projects.isEmpty && writing.problem == nil {
                 Text("No books yet — tap + to start one.").foregroundStyle(.secondary)
@@ -53,11 +60,60 @@ private struct WritingProjectsView: View {
                 opened = project
             }
         }
+        .sheet(item: $editing) { project in BookDetailsSheet(writing: writing, project: project) }
+        .confirmationDialog("Delete this book?", isPresented: Binding(
+            get: { deleting != nil }, set: { if !$0 { deleting = nil } }
+        ), titleVisibility: .visible, presenting: deleting) { project in
+            Button("Delete “\(project.title)”", role: .destructive) {
+                Task { await writing.deleteProject(project) }
+            }
+        } message: { _ in
+            Text("Every chapter, note and discussion in it goes too. This can't be undone.")
+        }
         .navigationDestination(item: $opened) { project in
             WritingProjectView(writing: writing, project: project)
         }
         .task { await writing.loadProjects() }
         .refreshable { await writing.loadProjects() }
+    }
+}
+
+private struct BookDetailsSheet: View {
+    @ObservedObject var writing: WritingModel
+    let project: WritingProject
+    @State private var title = ""
+    @State private var description = ""
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section { TextField("Title", text: $title) }
+                Section {
+                    TextField("What is it about?", text: $description, axis: .vertical).lineLimit(3...8)
+                } footer: {
+                    Text("The description is part of every discussion about this book.")
+                }
+            }
+            .navigationTitle("Book details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        Task {
+                            await writing.updateProject(project, title: title, description: description)
+                            dismiss()
+                        }
+                    }
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .onAppear {
+                title = project.title
+                description = project.description ?? ""
+            }
+        }
     }
 }
 
@@ -110,24 +166,37 @@ private struct NewBookSheet: View {
     }
 }
 
-private struct WritingProjectView: View {
+struct WritingProjectView: View {
     enum Section: String, CaseIterable, Identifiable {
-        case notes = "Notes", discussions = "Discussions"
+        case chapters = "Chapters", notes = "Notes", discussions = "Discussions", canon = "Canon"
         var id: Self { self }
     }
 
     @ObservedObject var writing: WritingModel
     let project: WritingProject
-    @State private var section = Section.notes
-    @State private var newNoteTitle = ""
-    @State private var addingNote = false
+    @State private var section = Section.chapters
+    @State private var newTitle = ""
+    @State private var adding = false
+    @State private var settingGoal = false
+    @State private var goalText = ""
+    @State private var deleting: WritingDocument?
+    @State private var renaming: WritingDocument?
+    @State private var renamingDiscussion: WritingDiscussion?
+    @State private var deletingDiscussion: WritingDiscussion?
+    @State private var renameText = ""
+    /// A chapter or note just made, opened straight away.
+    @State private var opened: WritingDocument?
     /// A discussion just created from the toolbar, opened straight away.
     @State private var newDiscussion: WritingDiscussion?
 
-    private var notes: [WritingNote] { writing.notes[project.id] ?? [] }
+    private var chapters: [WritingDocument] { writing.chapters(project.id) }
+    private var notes: [WritingDocument] { writing.notes(project.id) }
     private var discussions: [WritingDiscussion] { writing.discussions[project.id] ?? [] }
+    private var goal: Int? { writing.stats[project.id]?.dailyWordGoal ?? project.dailyWordGoal }
 
-    var body: some View {
+    var body: some View { dialogs(list) }
+
+    private var list: some View {
         List {
             Picker("Section", selection: $section) {
                 ForEach(Section.allCases) { Text($0.rawValue).tag($0) }
@@ -135,201 +204,237 @@ private struct WritingProjectView: View {
             .pickerStyle(.segmented)
             .listRowBackground(Color.clear)
 
+            if let problem = writing.problem {
+                Text(problem).font(.footnote).foregroundStyle(.secondary)
+            }
+
             switch section {
-            case .notes:
-                ForEach(notes) { note in
-                    NavigationLink { WritingNoteView(writing: writing, noteID: note.id) } label: {
-                        HStack {
-                            Text(WritingDocType.label(note.docType)).font(.caption).foregroundStyle(.secondary)
-                            Text(note.title)
-                            Spacer()
-                            if note.pinned {
-                                Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary)
-                                    .accessibilityLabel("Pinned")
-                            }
-                        }
-                    }
-                    .swipeActions {
-                        Button(note.pinned ? "Unpin" : "Pin") {
-                            Task { _ = await writing.save(note, WritingNoteEdit(pinned: !note.pinned)) }
-                        }
-                        .tint(.orange)
-                    }
-                    .accessibilityIdentifier("writing-note")
-                }
-                if notes.isEmpty { Text("No notes yet").foregroundStyle(.secondary) }
-            case .discussions:
-                ForEach(discussions) { discussion in
-                    NavigationLink {
-                        WritingDiscussionView(model: WritingDiscussionModel(id: discussion.id, writing: writing),
-                                              title: discussion.displayTitle)
-                    } label: { Text(discussion.displayTitle) }
-                    .accessibilityIdentifier("writing-discussion")
-                }
-                if discussions.isEmpty { Text("No discussions yet").foregroundStyle(.secondary) }
+            case .chapters: chapterRows
+            case .notes: noteRows
+            case .discussions: discussionRows
+            case .canon:
+                WritingCanonSection(writing: writing, project: project)
             }
         }
         .navigationTitle(project.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    if section == .notes { addingNote = true }
-                    else {
-                        Task {
-                            if let id = await writing.createDiscussion(project: project.id) {
-                                newDiscussion = WritingDiscussion(id: id, title: nil)
+            if section == .chapters, chapters.count > 1 {
+                ToolbarItem(placement: .topBarTrailing) { EditButton() }
+            }
+            if section != .canon {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        if section == .discussions {
+                            Task {
+                                if let id = await writing.createDiscussion(project: project.id) {
+                                    newDiscussion = WritingDiscussion(id: id, title: nil)
+                                }
                             }
+                        } else {
+                            adding = true
                         }
-                    }
-                } label: { Label(section == .notes ? "New note" : "New discussion", systemImage: "plus") }
-                .disabled(writing.fixture != nil)
+                    } label: { Label(addLabel, systemImage: "plus") }
+                    .disabled(section == .discussions && writing.fixture != nil)
+                    .accessibilityIdentifier("writing-add")
+                }
             }
         }
         .navigationDestination(item: $newDiscussion) { discussion in
             WritingDiscussionView(model: WritingDiscussionModel(id: discussion.id, writing: writing),
                                   title: discussion.displayTitle)
         }
-        .alert("New note", isPresented: $addingNote) {
-            TextField("Title", text: $newNoteTitle)
+        .navigationDestination(item: Binding(
+            get: { opened.map { OpenedDocument(key: $0.key, project: $0.projectId) } },
+            set: { if $0 == nil { opened = nil } }
+        )) { target in
+            if let document = writing.store.document(target.key, project: target.project) {
+                WritingEditorView(writing: writing, document: document)
+            }
+        }
+    }
+
+    private func dialogs<Content: View>(_ content: Content) -> some View {
+        content
+        .alert(addLabel, isPresented: $adding) {
+            TextField("Title", text: $newTitle)
             Button("Add") {
-                let title = newNoteTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-                newNoteTitle = ""
-                if !title.isEmpty { Task { _ = await writing.createNote(project: project.id, title: title) } }
+                let title = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                newTitle = ""
+                guard !title.isEmpty else { return }
+                opened = writing.create(section == .chapters ? .chapter : .note, project: project.id, title: title)
             }
-            Button("Cancel", role: .cancel) { newNoteTitle = "" }
+            Button("Cancel", role: .cancel) { newTitle = "" }
         }
+        .alert("Daily goal", isPresented: $settingGoal) {
+            TextField("Words a day", text: $goalText).keyboardType(.numberPad)
+            Button("Save") {
+                let words = Int(goalText.trimmingCharacters(in: .whitespaces))
+                Task { await writing.setGoal(project, wordsPerDay: words.flatMap { $0 > 0 ? $0 : nil }) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Leave it empty for no goal.") }
+        .confirmationDialog("Delete this?", isPresented: Binding(
+            get: { deleting != nil }, set: { if !$0 { deleting = nil } }
+        ), titleVisibility: .visible, presenting: deleting) { document in
+            Button("Delete “\(document.title)”", role: .destructive) {
+                Task { await writing.delete(document) }
+            }
+        } message: { _ in Text("Its history goes too. This can't be undone.") }
+        .alert("Rename", isPresented: Binding(
+            get: { renaming != nil || renamingDiscussion != nil },
+            set: { if !$0 { renaming = nil; renamingDiscussion = nil } }
+        )) {
+            TextField("Title", text: $renameText).accessibilityIdentifier("writing-rename-field")
+            Button("Save") {
+                if let document = renaming { writing.rename(document, to: renameText) }
+                if let discussion = renamingDiscussion {
+                    Task { await writing.renameDiscussion(discussion, project: project.id, to: renameText) }
+                }
+                renaming = nil; renamingDiscussion = nil
+            }
+            .accessibilityIdentifier("writing-rename-save")
+            Button("Cancel", role: .cancel) { renaming = nil; renamingDiscussion = nil }
+        }
+        .confirmationDialog("Delete this discussion?", isPresented: Binding(
+            get: { deletingDiscussion != nil }, set: { if !$0 { deletingDiscussion = nil } }
+        ), titleVisibility: .visible, presenting: deletingDiscussion) { discussion in
+            Button("Delete “\(discussion.displayTitle)”", role: .destructive) {
+                Task { await writing.deleteDiscussion(discussion, project: project.id) }
+            }
+        } message: { _ in Text("Its messages go too. Notes and chapters it changed stay as they are.") }
         .task { await writing.load(project: project.id) }
-        .refreshable { await writing.load(project: project.id) }
+        .refreshable {
+            await writing.loadProjects()
+            await writing.load(project: project.id)
+        }
+        .onChange(of: writing.capture.writingTick) { _, _ in writing.reloadDocuments() }
+    }
+
+    @ViewBuilder private var chapterRows: some View {
+        wordsToday
+        ForEach(chapters) { chapter in
+            NavigationLink { WritingEditorView(writing: writing, document: chapter) } label: {
+                HStack {
+                    Text(chapter.title)
+                    Spacer()
+                    documentState(chapter)
+                    Text(WritingStats.words(chapter.content), format: .number)
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
+            .swipeActions {
+                Button("Delete", role: .destructive) { deleting = chapter }
+                    .accessibilityIdentifier("writing-delete")
+                renameButton { renaming = chapter; renameText = chapter.title }
+            }
+            .accessibilityIdentifier("writing-chapter")
+        }
+        .onMove { from, to in
+            var ids = chapters.map(\.id)
+            ids.move(fromOffsets: from, toOffset: to)
+            Task { await writing.reorder(project: project.id, ids: ids) }
+        }
+        if chapters.isEmpty { Text("No chapters yet — tap + to start one.").foregroundStyle(.secondary) }
+    }
+
+    @ViewBuilder private var noteRows: some View {
+        ForEach(notes) { note in
+            NavigationLink { WritingEditorView(writing: writing, document: note) } label: {
+                HStack {
+                    Text(WritingDocType.label(note.docType)).font(.caption).foregroundStyle(.secondary)
+                    Text(note.title)
+                    Spacer()
+                    documentState(note)
+                    if note.pinned {
+                        Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel("Pinned")
+                    }
+                }
+            }
+            .swipeActions {
+                Button("Delete", role: .destructive) { deleting = note }
+                    .accessibilityIdentifier("writing-delete")
+                renameButton { renaming = note; renameText = note.title }
+                Button(note.pinned ? "Unpin" : "Pin") {
+                    Task { await writing.setPinned(note, !note.pinned) }
+                }
+                .tint(.orange)
+            }
+            .accessibilityIdentifier("writing-note")
+        }
+        if notes.isEmpty { Text("No notes yet").foregroundStyle(.secondary) }
+    }
+
+    @ViewBuilder private var discussionRows: some View {
+        ForEach(discussions) { discussion in
+            NavigationLink {
+                WritingDiscussionView(model: WritingDiscussionModel(id: discussion.id, writing: writing),
+                                      title: discussion.displayTitle, passage: discussion.writingPassage)
+            } label: {
+                Label(discussion.displayTitle,
+                      systemImage: discussion.writingPassage == nil ? "bubble.left.and.bubble.right" : "text.bubble")
+            }
+            .swipeActions {
+                // A discussion lives on the server, so these need it.
+                Button("Delete", role: .destructive) { deletingDiscussion = discussion }
+                    .accessibilityIdentifier("writing-delete")
+                renameButton { renamingDiscussion = discussion; renameText = discussion.title ?? "" }
+            }
+            .accessibilityIdentifier("writing-discussion")
+        }
+        if discussions.isEmpty { Text("No discussions yet").foregroundStyle(.secondary) }
+    }
+
+    private var addLabel: String {
+        switch section {
+        case .chapters: return "New chapter"
+        case .notes: return "New note"
+        case .discussions, .canon: return "New discussion"
+        }
+    }
+
+    private func renameButton(_ action: @escaping () -> Void) -> some View {
+        Button("Rename", action: action).tint(.blue).accessibilityIdentifier("writing-rename")
+    }
+
+    /// Today across every device, and how far along the goal that is.
+    private var wordsToday: some View {
+        let words = writing.wordsToday(project.id)
+        return Button {
+            goalText = goal.map(String.init) ?? ""
+            settingGoal = true
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Today").foregroundStyle(.primary)
+                    Spacer()
+                    Text(goal.map { "\(words.formatted()) of \($0.formatted()) words" } ?? "\(words.formatted()) words")
+                        .foregroundStyle(.secondary).monospacedDigit()
+                }
+                .font(.subheadline)
+                if let progress = WritingStats.goalProgress(words: words, goal: goal) {
+                    ProgressView(value: progress)
+                }
+            }
+        }
+        .accessibilityIdentifier("writing-words-today")
+    }
+
+    @ViewBuilder private func documentState(_ document: WritingDocument) -> some View {
+        if document.hold != nil {
+            Image(systemName: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
+                .accessibilityLabel("Needs a decision")
+        } else if document.isDirty {
+            Image(systemName: "iphone").font(.caption).foregroundStyle(.secondary)
+                .accessibilityLabel("Not yet on the server")
+        }
     }
 }
 
-// MARK: Note
-
-private struct WritingNoteView: View {
-    @ObservedObject var writing: WritingModel
-    let noteID: String
-    @State private var note: WritingNote?
-    @State private var content = ""
-    @State private var saveTask: Task<Void, Never>?
-    @State private var status = "Saved"
-    @State private var showHistory = false
-
-    var body: some View {
-        Group {
-            if let note {
-                VStack(spacing: 0) {
-                    HStack {
-                        Picker("Type", selection: Binding(get: { note.docType }, set: { type in
-                            self.note?.docType = type
-                            Task { _ = await writing.save(note, WritingNoteEdit(docType: type)) }
-                        })) {
-                            ForEach(WritingDocType.all, id: \.id) { Text($0.label).tag($0.id) }
-                        }
-                        Toggle("Pinned", isOn: Binding(get: { note.pinned }, set: { on in
-                            self.note?.pinned = on
-                            Task { _ = await writing.save(note, WritingNoteEdit(pinned: on)) }
-                        }))
-                        .toggleStyle(.button)
-                        .accessibilityIdentifier("writing-note-pin")
-                        Spacer()
-                        Text(status).font(.caption).foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal).padding(.vertical, 6)
-                    TextEditor(text: $content)
-                        .padding(.horizontal, 8)
-                        .accessibilityIdentifier("writing-note-content")
-                        .onChange(of: content) { _, value in schedule(value) }
-                }
-                .navigationTitle(note.title)
-            } else {
-                ProgressView()
-            }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showHistory = true } label: { Label("History", systemImage: "clock.arrow.circlepath") }
-                    .disabled(note == nil)
-            }
-        }
-        .sheet(isPresented: $showHistory) {
-            NavigationStack {
-                NoteHistoryView(writing: writing, noteID: noteID) { restored in
-                    saveTask?.cancel()
-                    note = restored
-                    content = restored.content ?? ""
-                    status = "Saved"
-                    showHistory = false
-                }
-            }
-        }
-        .task {
-            guard note == nil, let loaded = await writing.note(noteID) else { return }
-            note = loaded
-            content = loaded.content ?? ""
-            status = "Saved"
-        }
-        // A pending edit is flushed rather than dropped when the screen goes.
-        .onDisappear { if status == "Unsaved" { flush(content) } }
-    }
-
-    private func schedule(_ value: String) {
-        guard let note, value != (note.content ?? "") || status != "Saved" else { return }
-        status = "Unsaved"
-        saveTask?.cancel()
-        saveTask = Task {
-            try? await Task.sleep(for: .seconds(1.5))
-            guard !Task.isCancelled else { return }
-            flush(value)
-        }
-    }
-
-    private func flush(_ value: String) {
-        guard let note else { return }
-        status = "Saving…"
-        Task {
-            if await writing.save(note, WritingNoteEdit(content: value)) {
-                self.note?.content = value
-                status = "Saved"
-            } else { status = "Unsaved" }
-        }
-    }
-}
-
-private struct NoteHistoryView: View {
-    @ObservedObject var writing: WritingModel
-    let noteID: String
-    let onRestored: (WritingNote) -> Void
-    @State private var revisions: [WritingNoteRevision]?
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        List {
-            if let revisions {
-                if revisions.isEmpty { Text("No earlier versions yet.").foregroundStyle(.secondary) }
-                ForEach(revisions) { revision in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text(revision.label).font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Restore") {
-                                Task { if let note = await writing.restore(noteID, revision: revision) { onRestored(note) } }
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        Text(revision.content.isEmpty ? "(empty)" : revision.content).lineLimit(5)
-                    }
-                }
-            } else {
-                ProgressView()
-            }
-        }
-        .navigationTitle("History")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
-        .task { revisions = await writing.revisions(noteID) }
-    }
+private struct OpenedDocument: Hashable {
+    let key: WritingDocumentKey
+    let project: String
 }
 
 // MARK: Discussion
@@ -337,20 +442,36 @@ private struct NoteHistoryView: View {
 struct WritingDiscussionView: View {
     @StateObject var model: WritingDiscussionModel
     let title: String
+    /// The highlighted words a discussion was opened about, kept in view.
+    let passage: String?
     @FocusState private var typing: Bool
 
-    init(model: WritingDiscussionModel, title: String) {
+    init(model: WritingDiscussionModel, title: String, passage: String? = nil) {
         _model = StateObject(wrappedValue: model)
         self.title = title
+        self.passage = passage
     }
 
     var body: some View {
         VStack(spacing: 0) {
+            if let passage, !passage.isEmpty {
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 1.5).fill(Color.accentColor).frame(width: 3)
+                    Text(passage).font(.callout).italic().foregroundStyle(.secondary).lineLimit(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal).padding(.vertical, 8)
+                .background(.bar)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Passage: \(passage)")
+                .accessibilityIdentifier("writing-passage")
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         if model.messages.isEmpty && !model.isStreaming {
-                            Text("Talk an idea through. What gets settled is proposed as a note for you to confirm.")
+                            Text("Talk an idea through. What gets settled is proposed for you to confirm.")
                                 .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity)
                                 .multilineTextAlignment(.center).padding(.vertical, 40)
                         }
@@ -455,6 +576,133 @@ private struct WritingMessageRow: View {
                 }
             }
             if !isUser { Spacer(minLength: 48) }
+        }
+    }
+}
+
+// MARK: Canon
+
+/// The original work's wikis, imported on the server: which are linked to this
+/// book (and so searchable by its discussions), and a way into them.
+private struct WritingCanonSection: View {
+    @ObservedObject var writing: WritingModel
+    let project: WritingProject
+    @State private var importing = false
+    @State private var importURL = ""
+
+    private var linked: Set<String> { writing.linkedCanon[project.id] ?? [] }
+
+    var body: some View {
+        Group {
+            NavigationLink {
+                WritingCanonSearchView(writing: writing, project: project)
+            } label: {
+                Label("Search canon", systemImage: "magnifyingglass")
+            }
+            .disabled(linked.isEmpty)
+            .accessibilityIdentifier("writing-canon-search")
+            if linked.isEmpty {
+                Text("Link a wiki below to search it here and in this book's discussions.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            ForEach(writing.canonSources) { source in
+                Toggle(isOn: Binding(
+                    get: { linked.contains(source.id) },
+                    set: { on in Task { await writing.setCanon(project: project.id, source: source.id, linked: on) } }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(source.displayName)
+                        Text(source.summary).font(.caption)
+                            .foregroundStyle(source.status == "error" ? Color.red : Color.secondary)
+                    }
+                }
+                .disabled(source.status == "importing" && !linked.contains(source.id))
+                .accessibilityIdentifier("writing-canon-source")
+            }
+            Button { importing = true } label: { Label("Import a wiki…", systemImage: "square.and.arrow.down") }
+                .disabled(writing.fixture != nil)
+        }
+        .task { await writing.loadCanon(project: project.id) }
+        .alert("Import a wiki", isPresented: $importing) {
+            TextField("https://example.fandom.com", text: $importURL)
+                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button("Import") {
+                let url = importURL
+                importURL = ""
+                Task { await writing.importCanon(url: url, project: project.id) }
+            }
+            Button("Cancel", role: .cancel) { importURL = "" }
+        } message: {
+            Text("The server downloads the wiki's dump and imports it in the background. Large wikis take a while.")
+        }
+    }
+}
+
+private struct WritingCanonSearchView: View {
+    @ObservedObject var writing: WritingModel
+    let project: WritingProject
+    @State private var query = ""
+    @State private var hits: [WritingCanonHit] = []
+    @State private var searched = false
+
+    var body: some View {
+        List(hits) { hit in
+            NavigationLink { WritingCanonArticleView(writing: writing, project: project, hit: hit) } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(hit.title)
+                    Text(hit.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                    if (writing.linkedCanon[project.id]?.count ?? 0) > 1 {
+                        Text(hit.sourceName).font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .accessibilityIdentifier("writing-canon-hit")
+        }
+        .overlay {
+            if hits.isEmpty {
+                Text(searched ? "Nothing in the linked wikis matches." : "Search a character, place or event.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search canon")
+        .onSubmit(of: .search) {
+            Task {
+                hits = await writing.searchCanon(project: project.id, query: query)
+                searched = true
+            }
+        }
+        .navigationTitle("Canon")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct WritingCanonArticleView: View {
+    @ObservedObject var writing: WritingModel
+    let project: WritingProject
+    let hit: WritingCanonHit
+    @State private var article: WritingCanonArticle?
+    @State private var loaded = false
+
+    var body: some View {
+        ScrollView {
+            if let article {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(article.text).textSelection(.enabled)
+                        .accessibilityIdentifier("writing-canon-article")
+                    Text(article.attribution).font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: 720, alignment: .leading).padding()
+            } else if loaded {
+                Text(writing.problem ?? "Couldn't open this page.").foregroundStyle(.secondary).padding()
+            } else {
+                ProgressView().padding()
+            }
+        }
+        .navigationTitle(article?.title ?? hit.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            article = await writing.canonArticle(project: project.id, id: hit.id)
+            loaded = true
         }
     }
 }

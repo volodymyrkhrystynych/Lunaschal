@@ -17,13 +17,15 @@ final class Dictation: NSObject, ObservableObject, AVAudioRecorderDelegate {
     @Published var error: String?
 
     private let capture: CaptureModel
-    private let available: () -> Bool
+    /// nil for a caller that can hold a clip until the server comes back.
+    private let available: (() -> Bool)?
     private var recorder: AVAudioRecorder?
     private var clip: URL?
     private var deliver: ((URL) -> Void)?
 
-    /// `available` says whether there is a server to send the clip to.
-    init(capture: CaptureModel, available: @escaping () -> Bool) {
+    /// `available` says whether there is a server to send the clip to; a
+    /// caller that keeps the clip until it can be sent passes nil.
+    init(capture: CaptureModel, available: (() -> Bool)? = nil) {
         self.capture = capture
         self.available = available
         super.init()
@@ -43,7 +45,7 @@ final class Dictation: NSObject, ObservableObject, AVAudioRecorderDelegate {
     }
 
     private func start(_ onClip: @escaping (URL) -> Void) async {
-        guard available() else {
+        if let available, !available() {
             error = "Dictation needs your server."
             return
         }

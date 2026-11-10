@@ -46,6 +46,8 @@ function resolvedLabel(p: DelegateProposalRecord): string {
       const skipped = p.result?.skipped?.length ?? 0;
       return `Renamed ${renamed} screenshot run${renamed === 1 ? '' : 's'}${skipped ? ` — ${skipped} skipped` : ''}`;
     }
+    case 'writing_chapter_update':
+      return `Changed “${str(p.data, 'title')}” — the earlier version is in its history`;
     default:
       return 'Resolved';
   }
@@ -64,6 +66,7 @@ const HEADLINE: Record<string, string> = {
   writing_note: 'Add to the notes?',
   writing_note_update: 'Update this note?',
   screenshot_titles: 'Rename these screenshots?',
+  writing_chapter_update: 'Change this chapter?',
 };
 
 const ACCEPT_LABEL: Record<string, string> = {
@@ -79,6 +82,7 @@ const ACCEPT_LABEL: Record<string, string> = {
   writing_note: 'Add Note',
   writing_note_update: 'Update Note',
   screenshot_titles: 'Rename',
+  writing_chapter_update: 'Update Chapter',
 };
 
 const ACCEPT_PENDING_LABEL: Record<string, string> = {
@@ -92,6 +96,7 @@ const ACCEPT_PENDING_LABEL: Record<string, string> = {
   writing_note: 'Saving...',
   writing_note_update: 'Saving...',
   screenshot_titles: 'Renaming...',
+  writing_chapter_update: 'Saving...',
 };
 
 // Matches TodoForm.tsx — the card is the same kind of small entry form, and a
@@ -602,6 +607,31 @@ function ProposalForm({
             />
             Replace the note instead of adding to it
           </label>
+        </div>
+      );
+    }
+
+    case 'writing_chapter_update': {
+      const replace = data.mode === 'replace_passage';
+      return (
+        <div className="space-y-1.5">
+          <div className="text-xs text-[var(--color-text-muted)]">
+            {replace ? 'Replaces a passage of' : 'Adds to the end of'} “
+            {str(data, 'title')}”
+            {str(data, 'reason') && ` — ${str(data, 'reason')}`}
+          </div>
+          {replace && (
+            <blockquote className="text-xs text-[var(--color-text-muted)] border-l-2 border-white/20 pl-2 whitespace-pre-wrap">
+              {str(data, 'find')}
+            </blockquote>
+          )}
+          <textarea
+            aria-label="Content"
+            value={str(data, 'content')}
+            onChange={e => set({ content: e.target.value })}
+            rows={Math.min(12, str(data, 'content').split('\n').length + 2)}
+            className={`${fieldClass} w-full resize-y`}
+          />
         </div>
       );
     }

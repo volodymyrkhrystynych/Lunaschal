@@ -306,7 +306,7 @@ and any remaining limits. Do not promote “source written” to “device verif
 | Chat              | Server-backed native tab (passed in simulator); voice messages queue offline. Local chat is optional and requires evaluation                                 |
 | Todo              | Native tab (passed in simulator offline): habits with streaks and to-dos, changes queued in an outbox, a due-today/overdue badge, and Habits/To-Do Home Screen widgets (build in simulator; device unverified) |
 | Jobs              | More → Jobs (passed in simulator offline): the triage feed, last copy kept offline, Queue/Dismiss queued in an outbox                                        |
-| Writing           | More → Writing / iPad tab (passed in simulator against a fixture): notes with pin and history, discussions with proposed-note cards; fetched, not replicated |
+| Writing           | More → Writing / iPad tab (passed in simulator against a fixture; decoding and sync passed against real route responses; not run over a network or on device): chapters and notes kept on the phone by WritingStore with drafts, conflict holds, history, dictation and word goals; discussions with proposed note and chapter cards; passage discussions from a selection; swipe rename/delete; online canon search |
 | Watch controls    | Transcribe and Record; both preserve the original audio and create journal entries                                                                           |
 
 “Transcribe” means record and retain audio, create a journal entry, and request

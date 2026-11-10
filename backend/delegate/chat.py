@@ -153,7 +153,11 @@ a decision about a character, a rule of the world, a change to the plan — use 
 propose_note to record it as a new note, or propose_note_update to add it to \
 the note that already covers it (check writing_list if unsure which exists). \
 The author confirms each card; nothing is saved until they do. Do not propose \
-for ideas still being floated, and do not propose the same thing twice."""
+for ideas still being floated, and do not propose the same thing twice.
+
+When the author asks you to add to a chapter or change a passage of it, use \
+propose_chapter_update. Read the chapter first and quote the passage exactly. \
+Do not offer prose nobody asked for: the chapters are the author's own writing."""
 
 WRITING_CANON_NOTE = """This story is set in an existing work. canon_search \
 and canon_read reach the original's wiki: use them when a detail of the source \

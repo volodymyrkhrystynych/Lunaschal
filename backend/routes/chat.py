@@ -21,6 +21,7 @@ from backend.delegate import chat as delegate_chat
 from backend.delegate import runs
 from backend.todo_recurrence import parse_due_date
 from backend.writing import discuss as writing_discuss
+from backend.writing import chapters as writing_chapters
 from backend.writing import notes as writing_notes
 
 bp = Blueprint('chat', __name__, url_prefix='/api/chat')
@@ -1189,14 +1190,30 @@ def _accept_writing_note_update(db, data: dict, ctx: dict) -> dict:
             mode=str(data.get('mode') or 'append'),
             content=data.get('content') or '',
             base_updated_at=data.get('baseUpdatedAt'),
+            base_revision=data.get('baseRevision'),
             message_id=ctx.get('messageId'))
     except writing_notes.NoteRejected as e:
+        raise _AcceptRejected(str(e)) from e
+
+
+def _accept_writing_chapter_update(db, data: dict, ctx: dict) -> dict:
+    project_id = writing_notes.project_for_message(db, ctx.get('messageId'))
+    if not project_id:
+        raise _AcceptRejected('this discussion is no longer attached to a project')
+    try:
+        return writing_chapters.apply_update(
+            db, project_id, chapter_id=str(data.get('chapterId') or ''),
+            mode=str(data.get('mode') or 'append'),
+            content=data.get('content') or '', find=data.get('find'),
+            message_id=ctx.get('messageId'))
+    except writing_chapters.ChapterRejected as e:
         raise _AcceptRejected(str(e)) from e
 
 
 _ACCEPT_HANDLERS = {
     'writing_note': _accept_writing_note,
     'writing_note_update': _accept_writing_note_update,
+    'writing_chapter_update': _accept_writing_chapter_update,
     'calendar': _accept_calendar,
     'screenshot_titles': _accept_screenshot_titles,
     'calorie': _accept_calorie,

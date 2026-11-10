@@ -105,6 +105,34 @@ class CanonTools:
     def available(self) -> bool:
         return bool(self._sources)
 
+    def hits(self, query: str, limit: int) -> list[dict]:
+        """Matches across the project's sources, best first per source, as
+        `{id, sourceId, sourceName, title, snippet}` — `id` is what `article`
+        and `canon_read` take. The model's search and the phone's both read it."""
+        query = (query or '').strip()
+        found = []
+        for source in self._sources.values():
+            try:
+                rows = docpacks.search_file(path_for(source), query, limit)
+            except Exception as e:
+                logger.warning('canon_search on %s failed: %s', source['id'], e)
+                continue
+            found += [{'id': f'{source["id"]}:{path}', 'sourceId': source['id'],
+                       'sourceName': source['name'], 'title': title, 'snippet': snippet}
+                      for path, title, snippet in rows]
+        return found[:limit] if query else []
+
+    def article(self, ref: str) -> dict:
+        """One section with its page around it, `{id, title, text, attribution}`.
+        Raises LookupError for an id outside this project's sources."""
+        source_id, _, chunk = (ref or '').strip().strip('[]').partition(':')
+        source = self._sources.get(source_id)
+        if source is None or not chunk:
+            raise LookupError(ref)
+        found = docpacks.read_file(path_for(source), chunk)
+        return {'id': f'{source_id}:{chunk}', 'title': found['title'],
+                'text': found['text'], 'attribution': attribution(source)}
+
     def search(self, query: str, limit: int) -> tuple[str, dict]:
         event = {'tool': 'canon_search', 'arg': query, 'ok': True, 'count': 0}
         query = (query or '').strip()
@@ -113,18 +141,9 @@ class CanonTools:
         if not self._sources:
             return 'No canon source is linked to this project.', {
                 **event, 'ok': False, 'error': 'no canon'}
-        blocks = []
-        for source in self._sources.values():
-            try:
-                hits = docpacks.search_file(path_for(source), query, limit)
-            except Exception as e:
-                logger.warning('canon_search on %s failed: %s', source['id'], e)
-                continue
-            label = source['name'] if len(self._sources) > 1 else ''
-            for path, title, snippet in hits:
-                prefix = f'{label}: ' if label else ''
-                blocks.append(f'[{source["id"]}:{path}] {prefix}{title}\n{clip(snippet)}')
-        blocks = blocks[:limit]
+        several = len(self._sources) > 1
+        blocks = [f'[{h["id"]}] {h["sourceName"] + ": " if several else ""}{h["title"]}\n{clip(h["snippet"])}'
+                  for h in self.hits(query, limit)]
         if not blocks:
             return f'Nothing in the canon wiki matches "{query}".', event
         return (f'Canon wiki, matching "{query}":\n\n' + join(blocks),
@@ -133,13 +152,12 @@ class CanonTools:
     def read(self, ref: str) -> tuple[str, dict]:
         event = {'tool': 'canon_read', 'arg': ref, 'ok': True, 'count': 0}
         source_id, _, chunk = (ref or '').strip().strip('[]').partition(':')
-        source = self._sources.get(source_id)
-        if source is None or not chunk:
+        if source_id not in self._sources or not chunk:
             return ('That is not an id canon_search returned. Search first, then '
                     'pass the id in brackets exactly.',
                     {**event, 'ok': False, 'error': 'unknown id'})
         try:
-            found = docpacks.read_file(path_for(source), chunk)
+            found = self.article(ref)
         except LookupError:
             return ('No such section in the canon wiki.',
                     {**event, 'ok': False, 'error': 'not found'})
@@ -147,7 +165,7 @@ class CanonTools:
             logger.warning('canon_read %s failed: %s', ref, e)
             return ('The canon wiki could not be read.',
                     {**event, 'ok': False, 'error': 'read failed'})
-        text = f'# {found["title"]}\n\n{found["text"]}\n\n{attribution(source)}'
+        text = f'# {found["title"]}\n\n{found["text"]}\n\n{found["attribution"]}'
         return text, {**event, 'count': 1, 'title': found['title']}
 
     def run_tool(self, name: str, args: dict) -> tuple[str, dict]:

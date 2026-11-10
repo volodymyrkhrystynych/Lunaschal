@@ -20,6 +20,7 @@ import time
 from ulid import ULID
 
 from backend.db.connection import get_db
+from backend.writing import revisioned
 
 DOC_TYPES = ('character', 'outline', 'worldbuilding', 'note')
 
@@ -108,61 +109,75 @@ def create(db, project_id: str, *, title: str, content: str, doc_type: str) -> s
 
 
 def apply_update(db, project_id: str, *, note_id: str, mode: str, content: str,
-                 base_updated_at=None, message_id: str | None = None) -> dict:
+                 base_updated_at=None, base_revision=None,
+                 message_id: str | None = None) -> dict:
     """Append to or replace a note's body, as an accepted proposal.
 
     Refuses when the note has been edited since the proposal was staged: the
     card was built against text that no longer exists, and appending to or
     replacing what the author has since written is exactly the silent
     overwrite the revision table is there to make recoverable — better not to
-    need it.
+    need it. `base_revision` is what a new card carries, since `updated_at` misses
+    an edit in the same second; `base_updated_at` stays for cards staged before it.
     """
     content = (content or '').strip()
     if not content:
         raise NoteRejected('nothing to add')
     if mode not in ('append', 'replace'):
         raise NoteRejected("mode must be 'append' or 'replace'")
-    row = db.execute(
-        'SELECT project_id, content, updated_at FROM writing_context_docs WHERE id=?',
-        (note_id,),
-    ).fetchone()
-    if row is None or row['project_id'] != project_id:
-        raise NoteRejected('that note no longer exists in this project')
-    if (isinstance(base_updated_at, int) and not isinstance(base_updated_at, bool)
-            and row['updated_at'] > base_updated_at):
-        raise NoteRejected('the note was edited after this was proposed; '
-                           'dismiss it and ask again')
+    with revisioned.LOCK:
+        row = db.execute(
+            'SELECT project_id, content, updated_at, revision FROM writing_context_docs WHERE id=?',
+            (note_id,),
+        ).fetchone()
+        if row is None or row['project_id'] != project_id:
+            raise NoteRejected('that note no longer exists in this project')
+        if isinstance(base_revision, int) and not isinstance(base_revision, bool):
+            stale = row['revision'] != base_revision
+        else:
+            stale = (isinstance(base_updated_at, int) and not isinstance(base_updated_at, bool)
+                     and row['updated_at'] > base_updated_at)
+        if stale:
+            raise NoteRejected('the note was edited after this was proposed; '
+                               'dismiss it and ask again')
 
-    current = row['content'] or ''
-    new = content if mode == 'replace' else (
-        f'{current.rstrip()}\n\n{content}' if current.strip() else content)
-    if len(new) > MAX_NOTE_CHARS:
-        raise NoteRejected(f'note would be longer than {MAX_NOTE_CHARS:,} characters')
+        current = row['content'] or ''
+        new = content if mode == 'replace' else (
+            f'{current.rstrip()}\n\n{content}' if current.strip() else content)
+        if len(new) > MAX_NOTE_CHARS:
+            raise NoteRejected(f'note would be longer than {MAX_NOTE_CHARS:,} characters')
 
-    now = int(time.time())
-    revision_id = snapshot(db, note_id, source='accept', message_id=message_id, now=now)
-    db.execute(
-        'UPDATE writing_context_docs SET content=?, updated_at=? WHERE id=?',
-        (new, now, note_id),
-    )
-    db.execute('UPDATE writing_projects SET updated_at=? WHERE id=?', (now, project_id))
+        now = int(time.time())
+        revision_id = snapshot(db, note_id, source='accept', message_id=message_id, now=now)
+        db.execute(
+            'UPDATE writing_context_docs SET content=?, revision=revision+1, updated_at=? WHERE id=?',
+            (new, now, note_id),
+        )
+        db.execute('UPDATE writing_projects SET updated_at=? WHERE id=?', (now, project_id))
     return {'id': note_id, 'revisionId': revision_id}
 
 
 def restore(db, note_id: str, revision_id: str) -> bool:
     """Put a revision back, recording the current state first so a restore is
     itself undoable. False when either does not exist."""
-    rev = db.execute(
-        'SELECT title, content FROM writing_context_doc_revisions WHERE id=? AND doc_id=?',
-        (revision_id, note_id),
-    ).fetchone()
-    if rev is None:
-        return False
-    now = int(time.time())
-    if snapshot(db, note_id, source='restore', now=now) is None:
-        return False
-    db.execute(
-        'UPDATE writing_context_docs SET title=?, content=?, updated_at=? WHERE id=?',
-        (rev['title'], rev['content'], now, note_id),
-    )
+    with revisioned.LOCK:
+        rev = db.execute(
+            'SELECT title, content FROM writing_context_doc_revisions WHERE id=? AND doc_id=?',
+            (revision_id, note_id),
+        ).fetchone()
+        if rev is None:
+            return False
+        now = int(time.time())
+        if snapshot(db, note_id, source='restore', now=now) is None:
+            return False
+        db.execute(
+            'UPDATE writing_context_docs SET title=?, content=?, revision=revision+1, updated_at=?'
+            ' WHERE id=?',
+            (rev['title'], rev['content'], now, note_id),
+        )
+        db.execute(
+            'UPDATE writing_projects SET updated_at=? WHERE id ='
+            ' (SELECT project_id FROM writing_context_docs WHERE id=?)',
+            (now, note_id),
+        )
     return True
