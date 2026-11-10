@@ -104,6 +104,29 @@ def test_clip_without_failures_keeps_the_end():
     assert testreport.clip_report('a' * 50 + 'END', 10) == 'a' * 7 + 'END'
 
 
-def test_the_failure_list_is_bounded():
-    text = '\n'.join(f'FAILED t.py::case_{i} - x' for i in range(1000))
-    assert len(testreport.failures(text)) == testreport.MAX_FAILURE_LINES
+def test_the_failure_list_is_bounded_and_says_it_was_cut():
+    text = '\n'.join([f'FAILED t.py::case_{i} - x' for i in range(1000)]
+                     + ['1/1 batch(es) had failures'])
+    found = testreport.failures(text)
+    assert len(found) == testreport.MAX_FAILURE_LINES
+    assert found[-2].startswith('… ') and 'not shown' in found[-2]
+    assert found[-1] == '1/1 batch(es) had failures'
+
+
+def test_identical_summaries_in_two_batches_are_both_kept():
+    bad = '==== 1 failed, 80 passed in 4.2s ===='
+    text = '\n'.join(_batch(3, 7, [bad]) + _batch(7, 7, [bad]))
+    found = testreport.failures(text)
+    assert found.count(bad) == 2
+    assert found.index('== backend test batch 7/7 (15 files) ==') < len(found) - 1
+
+
+def test_output_after_the_runner_closes_is_not_the_last_batch():
+    text = '\n'.join(_batch(1, 1, GREEN) + [
+        'All 1 batches passed',
+        ' FAIL  src/x.test.ts > case',
+        ' Test Files  1 failed | 9 passed (10)',
+    ])
+    found = testreport.failures(text)
+    assert not any('batch 1/1' in l for l in found)
+    assert ' FAIL  src/x.test.ts > case' in found

@@ -43,55 +43,64 @@ def _clip(line: str) -> str:
 
 
 def failures(text: str) -> list[str]:
-    """The lines of `text` that say what failed, in order, deduplicated.
+    """The lines of `text` that say what failed, in order.
 
     For a batched backend run each failing batch is introduced by its header,
     and a batch that ended without pytest's closing line — a crash, an abort,
     a kill — is reported with its last few lines, since it has no FAILED
-    lines of its own to show.
+    lines of its own to show. Duplicates are dropped within a section, not
+    across them: two batches that end on the same summary line both failed.
+    A list longer than MAX_FAILURE_LINES says that it was cut, and always
+    keeps the batch runner's closing line.
     """
     lines = text.splitlines()
-    out: list[str] = []
-    seen: set[str] = set()
 
-    def emit(line: str) -> None:
-        line = _clip(line.rstrip())
-        if line and line not in seen:
-            seen.add(line)
-            out.append(line)
-
-    # Split into sections at batch headers; a run with no batches is one section.
+    # Split into sections at batch headers; a run with no batches is one
+    # section. The runner's closing line ends the batches: whatever follows it
+    # (`test:all` runs Vitest next) is a section of its own, not the last batch.
     sections: list[tuple[str | None, list[str]]] = [(None, [])]
     closing: list[str] = []
     for line in lines:
         if BATCH.match(line):
             sections.append((line.strip(), []))
         elif RUNNER_CLOSING.search(line):
-            # The batch runner's own last word belongs to no batch.
-            closing.append(line)
+            if FAILURE_LINE.search(line):
+                closing.append(_clip(line.rstrip()))
+            sections.append((None, []))
         else:
             sections[-1][1].append(line)
-    sections.append((None, closing))
 
+    out: list[str] = []
     for header, body in sections:
         hits = [l for l in body if FAILURE_LINE.search(l)]
         summaries = [l for l in body if PYTEST_SUMMARY.match(l.strip())]
-        bad_summary = [l for l in summaries if PYTEST_BAD_SUMMARY.search(l)]
+        bad_summary = [l.strip() for l in summaries if PYTEST_BAD_SUMMARY.search(l)]
         crashed = header is not None and not summaries
         if header is not None and not (hits or bad_summary or crashed):
             continue
+        seen: set[str] = set()
+
+        def emit(line: str) -> None:
+            line = _clip(line.rstrip())
+            if line and line not in seen:
+                seen.add(line)
+                out.append(line)
+
         if header is not None:
             emit(header)
-        for line in hits:
+        for line in hits + bad_summary:
             emit(line)
-        for line in bad_summary:
-            emit(line.strip())
         if crashed:
             emit('(this batch ended without a pytest summary — it crashed or was killed; '
                  'its last lines:)')
             for line in [l for l in body if l.strip()][-CRASH_CONTEXT:]:
                 out.append(_clip('  ' + line.rstrip()))
-    return out[:MAX_FAILURE_LINES]
+
+    room = MAX_FAILURE_LINES - len(closing)
+    if len(out) > room:
+        dropped = len(out) - (room - 1)
+        out = out[:room - 1] + [f'… {dropped} more line(s) of failures not shown']
+    return out + closing
 
 
 def report(text: str, tail_lines: int = 200) -> str:

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type CodeTask } from '@/hooks/api';
+import { api, type CodeTask, type CodeTaskEvent } from '@/hooks/api';
 import { useRecorder } from '@/hooks/useRecorder';
 import { RecordingButton } from '../RecordingButton';
 import {
   activity,
   appendDictation,
+  appendEvents,
+  EVENT_PAGE,
   canContinue,
   canDiscard,
   canMessage,
@@ -198,7 +200,23 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
   const [diffOpen, setDiffOpen] = useState(false);
   const { data } = useQuery({
     queryKey: ['code', 'task', id],
-    queryFn: () => api.code.get(id),
+    queryFn: async () => {
+      // Fetch only what is new since the last poll, in pages, so a log
+      // longer than one page is still read to its end.
+      const held =
+        queryClient.getQueryData<{ task: CodeTask; events: CodeTaskEvent[] }>([
+          'code',
+          'task',
+          id,
+        ])?.events ?? [];
+      let events = held;
+      for (;;) {
+        const after = events.length ? events[events.length - 1].seq : 0;
+        const page = await api.code.get(id, after);
+        events = appendEvents(events, page.events);
+        if (page.events.length < EVENT_PAGE) return { task: page.task, events };
+      }
+    },
     refetchInterval: q =>
       q.state.data && isActive(q.state.data.task) ? 3000 : 20000,
   });

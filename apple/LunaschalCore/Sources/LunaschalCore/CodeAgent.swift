@@ -169,8 +169,13 @@ public struct CodeActivity: Equatable, Sendable {
         }
     }
 
-    private static func clip(_ s: String, _ n: Int) -> String {
-        s.count <= n ? s : String(s.prefix(n - 1)) + "…"
+    /// Cut at `n` Unicode scalars — what `Array.from` counts in codeTasks.ts.
+    static func clip(_ s: String, _ n: Int) -> String {
+        let scalars = s.unicodeScalars
+        guard scalars.count > n else { return s }
+        var out = String.UnicodeScalarView()
+        out.append(contentsOf: scalars.prefix(n - 1))
+        return String(out) + "…"
     }
 
     /// 45s, 3m 05s, 1h 02m.

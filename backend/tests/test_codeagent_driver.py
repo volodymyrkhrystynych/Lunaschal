@@ -274,10 +274,11 @@ def test_a_follow_up_after_a_failed_run_carries_what_failed(repo_id):
     output = ('What failed:\n== backend test batch 2/21 (15 files) ==\n'
               'FAILED backend/tests/test_b.py::test_two - boom\n\n'
               '── end of the output ──\n5/21 batch(es) had failures')
-    task = _build_task(repo_id, pending_input='Tests still failed though',
-                       test_exit=1, test_output=output)
+    task = _build_task(repo_id, pending_input='Tests still failed though')
+    tasks.append_event(task['id'], 'test', {'exit': 1, 'tail': output})
     text = d._prompt_for(task, fresh=False)
-    assert 'Lunaschal ran the test command itself and it FAILED (exit 1)' in text
+    assert 'Lunaschal ran the test command itself (at the end of an earlier turn), ' \
+        'it FAILED (exit 1)' in text
     assert 'FAILED backend/tests/test_b.py::test_two - boom' in text
     assert text.index('test_b.py::test_two') < text.index('Tests still failed though')
     assert 'echo tests ran; grep -c built a.py' in text
@@ -285,8 +286,9 @@ def test_a_follow_up_after_a_failed_run_carries_what_failed(repo_id):
 
 def test_a_follow_up_after_a_passing_run_says_so_and_one_with_no_run_says_nothing(repo_id):
     d, _ = make_driver()
-    passed = d._prompt_for(_build_task(repo_id, pending_input='Rename it', test_exit=0,
-                                       test_output='ok'), fresh=False)
+    task = _build_task(repo_id, pending_input='Rename it')
+    tasks.append_event(task['id'], 'test', {'exit': 0, 'tail': 'ok'})
+    passed = d._prompt_for(task, fresh=False)
     assert 'it passed (exit 0)' in passed
     none = d._prompt_for(_build_task(repo_id, pending_input='Rename it'), fresh=False)
     assert 'Lunaschal ran the test command' not in none
@@ -320,6 +322,62 @@ def test_a_turn_ending_in_a_question_drops_the_old_test_verdict(repo_id):
     d.run(t['id'])
     tasks.update(t['id'], phase='build', pending_input='Do it, and ASK if unsure',
                  test_exit=1, test_output='old failure')
+    tasks.append_event(t['id'], 'test', {'exit': 1, 'tail': 'FAILED t.py::old - boom'})
     out = d.run(t['id'])
     assert out['status'] == 'needs_input'
     assert out['testExit'] is None and out['testOutput'] is None
+    # The run is still on record, and the answer to the question carries it.
+    tasks.update(t['id'], pending_input='Fix the old failure')
+    text = d._prompt_for(tasks.get(t['id']), fresh=False)
+    assert 'FAILED t.py::old - boom' in text
+
+
+def test_a_cancelled_or_failed_follow_up_drops_the_old_verdict(repo_id):
+    t = tasks.create(repo_id, 'Change a.py')
+    d, _ = make_driver()
+    d.run(t['id'])
+    tasks.update(t['id'], phase='build', pending_input='Try again',
+                 test_exit=1, test_output='old failure')
+    d.runtime.spawn = lambda *a: (_ for _ in ()).throw(RuntimeError('agent gone'))
+    out = d.run(t['id'])
+    assert out['status'] == 'error'
+    assert out['testExit'] is None and out['testOutput'] is None
+
+
+def test_a_multi_line_test_command_is_indented_as_one_block(repo_id):
+    get_db().execute('UPDATE repos SET agent_test_command=? WHERE id=?',
+                     ('cd app\nnpm ci\nnpm test', repo_id))
+    get_db().commit()
+    d, _ = make_driver()
+    text = d._prompt_for(_build_task(repo_id), fresh=False)
+    assert '    cd app\n    npm ci\n    npm test' in text
+
+
+def test_the_test_command_is_read_once_per_turn(repo_id):
+    t = tasks.create(repo_id, 'Change a.py')
+    d, _ = make_driver()
+    d.run(t['id'])
+    tasks.update(t['id'], phase='build')
+    reads = []
+    real = d._test_script
+    d._test_script = lambda task: reads.append(1) or real(task)
+    d.run(t['id'])
+    assert len(reads) == 1
+
+
+def test_stderr_stays_in_the_batch_that_wrote_it(repo_id):
+    script = ("echo '== backend test batch 1/2 (1 files) =='; "
+              "echo 'Fatal Python error: Aborted' >&2; "
+              "echo '== backend test batch 2/2 (1 files) =='; "
+              "echo '==== 3 passed in 0.1s ===='; "
+              "echo '1/2 batch(es) had failures'; exit 1")
+    get_db().execute('UPDATE repos SET agent_test_command=? WHERE id=?', (script, repo_id))
+    get_db().commit()
+    t = tasks.create(repo_id, 'Change a.py')
+    d, _ = make_driver()
+    d.run(t['id'])
+    tasks.update(t['id'], phase='build')
+    out = d.run(t['id'])
+    head = out['testOutput'].partition('── end of the output ──')[0]
+    assert 'batch 1/2' in head and 'Fatal Python error' in head
+    assert 'batch 2/2' not in head

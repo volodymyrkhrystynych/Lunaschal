@@ -514,9 +514,29 @@ function stepLabel(e: CodeTaskEvent): string | null {
   }
 }
 
-function clip(s: string, n: number): string {
-  return s.length <= n ? s : s.slice(0, n - 1) + '…';
+/** Cut at `n` Unicode scalars — what Swift's `unicodeScalars` counts too. */
+export function clip(s: string, n: number): string {
+  const chars = Array.from(s);
+  return chars.length <= n ? s : chars.slice(0, n - 1).join('') + '…';
 }
+
+/**
+ * The events already held plus a page fetched after the last of them. The
+ * server returns at most 500 per request, oldest first, so a long task's log
+ * is read in pages and kept — reading it whole on every poll showed only its
+ * first 500 events, and `activity` then found the first turn's status.
+ */
+export function appendEvents(
+  held: CodeTaskEvent[],
+  page: CodeTaskEvent[]
+): CodeTaskEvent[] {
+  const last = held.length ? held[held.length - 1].seq : 0;
+  const fresh = page.filter(e => e.seq > last);
+  return fresh.length ? [...held, ...fresh] : held;
+}
+
+/** The page size `GET /api/code/tasks/<id>` returns at most. */
+export const EVENT_PAGE = 500;
 
 /** 45s, 3m 05s, 1h 02m. */
 export function elapsedLabel(ms: number): string {

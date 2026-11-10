@@ -188,6 +188,19 @@ def events(task_id: str, after: int = 0, limit: int = 500) -> list[dict]:
     return out
 
 
+def last_event(task_id: str, kind: str) -> dict | None:
+    """The newest event of one kind — however long the log has grown."""
+    r = get_db().execute(
+        'SELECT seq, kind, payload, created_at FROM agent_task_events '
+        'WHERE task_id=? AND kind=? ORDER BY seq DESC LIMIT 1', (task_id, kind),
+    ).fetchone()
+    if r is None:
+        return None
+    d = row_to_dict(r)
+    d['payload'] = json.loads(d['payload'] or '{}')
+    return d
+
+
 # --------------------------------------------------------------- approvals
 
 def open_approval(task_id: str, kind: str, request: dict) -> str:

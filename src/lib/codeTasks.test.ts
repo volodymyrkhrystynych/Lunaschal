@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { CodeTask, CodeTaskEvent } from '../hooks/api';
 import {
+  appendEvents,
+  clip,
   canPush,
   eventLabel,
   isDetail,
@@ -385,5 +387,31 @@ describe('a running task', () => {
     expect(elapsedLabel(185_000)).toBe('3m 05s');
     expect(elapsedLabel(3_720_000)).toBe('1h 02m');
     expect(elapsedLabel(-5)).toBe('0s');
+  });
+});
+
+describe('appendEvents', () => {
+  const ev = (seq: number) => ({
+    seq,
+    kind: 'status',
+    payload: {},
+    createdAt: null,
+  });
+  it('adds only events after the last one held', () => {
+    expect(
+      appendEvents([ev(1), ev(2)], [ev(2), ev(3)]).map(e => e.seq)
+    ).toEqual([1, 2, 3]);
+  });
+  it('keeps the same array when nothing is new', () => {
+    const held = [ev(1)];
+    expect(appendEvents(held, [])).toBe(held);
+  });
+});
+
+describe('clip', () => {
+  it('counts Unicode scalars, not UTF-16 units, like the Swift side', () => {
+    const emoji = '😀'.repeat(10);
+    expect(clip(emoji, 10)).toBe(emoji);
+    expect(clip(emoji, 5)).toBe('😀😀😀😀…');
   });
 });

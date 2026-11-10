@@ -140,15 +140,27 @@ So now, in both directions:
 
 - **Every build and follow-up prompt names the command** that decides pass/fail and asks the agent to
   run it, and not to edit test scripts or config to get there (`driver.CHECK_NOTE`).
-- **A follow-up starts with the previous run's result** — passed, or failed with what failed
-  (`driver.LAST_CHECK`). A turn that ends on a question clears the stored result: the code has moved
-  on since, and the old verdict would be shown and fed back as current.
+- **A follow-up starts with the most recent run's result** — passed, or failed with what failed
+  (`driver.LAST_CHECK`). It is read from the last `test` event, not the task row: **every build turn
+  clears the row's verdict when it starts**, since whatever the turn ends in — done, a question, a
+  Stop, an error — the code is no longer what was tested, and a verdict left behind would be shown and
+  fed back as current. The event survives that, so the answer to a question still carries the failure
+  it was probably about. The test command is read once per turn and passed to both the prompt and the
+  run, so the agent is judged by the command it was told to run.
+- **The test command's stderr is merged in the shell** (`{ cmd; } 2>&1`). Captured apart and appended,
+  every stderr line — a crash, npm's complaint — landed under whichever batch came last.
 - **What failed is found before the output is cut** (`testreport.py`). Only the last 200 lines are
   kept, and the end of a batched backend run is its greenest part. The report puts each failing
   batch's header, its `FAILED`/`ERROR` lines and its summary first — or, for a batch with no pytest
-  summary at all, that it crashed, with its last lines. Vitest's `FAIL`/`×` lines are found too.
+  summary at all, that it crashed, with its last lines. Vitest's `FAIL`/`×` lines are found too, and
+  anything after the batch runner's closing line (`test:all` runs Vitest next) is its own section
+  rather than part of the last batch. Duplicates are dropped within a batch, not across batches, and
+  a list cut at `MAX_FAILURE_LINES` says so and still ends on the runner's closing line.
 - **Neither client shows a verdict while the agent works** (`testVerdict`). Instead a banner says what
-  it is doing and for how long (`activity` / `CodeActivity`, shared wording on web and phone).
+  it is doing and for how long (`activity` / `CodeActivity`, shared wording on web and phone). The
+  web reads the event log incrementally (`appendEvents`), as the phone always has: one request returns
+  at most 500 events, oldest first, so reading it whole showed a long task's first turn as current.
+  The phone's Stop asks first — it sits directly above the reply box.
 
 The image links `node_modules/.vite-temp` and `.vite` into `/tmp`. Vite writes its bundled config
 there and copes with `EACCES` but not with `EROFS`, so on the read-only root every Vitest run failed

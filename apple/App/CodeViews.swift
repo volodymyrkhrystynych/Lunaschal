@@ -142,6 +142,7 @@ struct CodeTaskDetailView: View {
     @State private var reply = ""
     @State private var confirmPush = false
     @State private var confirmDiscard = false
+    @State private var confirmStop = false
     @StateObject private var dictation: Dictation
 
     init(code: CodeModel, taskID: String) {
@@ -162,7 +163,7 @@ struct CodeTaskDetailView: View {
             if let task {
                 actionBar(task)
                 if let activity = CodeActivity.of(task, events: events) {
-                    CodeActivityBar(activity: activity) { Task { await code.cancel(taskID) } }
+                    CodeActivityBar(activity: activity) { confirmStop = true }
                 }
                 if task.canMessage { composer(task) }
             }
@@ -183,6 +184,11 @@ struct CodeTaskDetailView: View {
         .confirmationDialog("Discard this task?", isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button("Discard", role: .destructive) { Task { await code.discard(taskID) } }
         } message: { Text("Its container and clone are deleted.") }
+        // The banner's Stop sits just above the composer, so a stray tap must
+        // not end a turn on its own.
+        .confirmationDialog("Stop the agent?", isPresented: $confirmStop, titleVisibility: .visible) {
+            Button("Stop", role: .destructive) { Task { await code.cancel(taskID) } }
+        } message: { Text("This turn ends now, and its work is not tested.") }
     }
 
     private var terminal: some View {

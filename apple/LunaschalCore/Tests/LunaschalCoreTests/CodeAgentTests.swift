@@ -322,4 +322,10 @@ final class CodeAgentTests: XCTestCase {
         XCTAssertEqual(CodeActivity.elapsed(3720), "1h 02m")
         XCTAssertEqual(CodeActivity.elapsed(-1), "0s")
     }
+
+    func testClipCountsUnicodeScalarsLikeTheWeb() {
+        let emoji = String(repeating: "😀", count: 10)
+        XCTAssertEqual(CodeActivity.clip(emoji, 10), emoji)
+        XCTAssertEqual(CodeActivity.clip(emoji, 5), "😀😀😀😀…")
+    }
 }
