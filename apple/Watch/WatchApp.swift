@@ -43,6 +43,9 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     @Published private(set) var recordingMode: CaptureMode?
     /// When the clip going now started, for its page's elapsed time.
     @Published private(set) var recordingSince: Date?
+    /// The warning over the pages after a stray clip was thrown away.
+    @Published private(set) var notice: String?
+    private var noticeExpiry: Task<Void, Never>?
 
     private init(store: CaptureStore) throws {
         self.store = store
@@ -56,6 +59,8 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         try store.recoverInterruptedRecordings()
         recorder.onChange = { [weak self] in self?.reload(); self?.sendPending(); self?.publishRecording() }
         recorder.onError = { [weak self] in self?.message = $0.localizedDescription }
+        recorder.minimumLength = ShortRecording.minimum
+        recorder.onDiscarded = { [weak self] in self?.warnDiscarded() }
         pomodoro.onChange = { [weak self] in self?.syncAlarm() }
         workout.onChange = { [weak self] in self?.syncAlarm() }
         alarm.onRing = { [weak self] in self?.pomodoro.refresh(); self?.workout.refresh() }
@@ -88,11 +93,13 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         alarm.update(WatchAlarm.Plan(nextEnd: ends.min(), ringing: ringing))
     }
 
-    /// Starts a clip in `mode`, or stops and saves the one going. One press
-    /// does both, from the list, the face or a Control.
+    /// Starts a clip in `mode`, or stops and saves the one going, unless it
+    /// is too short to have been meant. One press does both, from the list,
+    /// the face or a Control.
     func toggleRecording(_ mode: CaptureMode) async {
         if recorder.activeID != nil { recorder.stop(); return }
         guard !recorder.isStarting else { return }
+        PomodoroModel.requestAuthorization() // for the too-short warning
         recordingMode = mode
         await recorder.start(mode: mode)
     }
@@ -106,6 +113,26 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         if on, model.recorder.activeID == nil {
             throw model.message.map { RecorderError.message($0) } ?? RecordingIntentError.needsApp
         }
+    }
+
+    /// A haptic and a banner, and a notification when a Control stopped the
+    /// clip with the app out of sight. The Log page keeps the line.
+    private func warnDiscarded() {
+        let text = ShortRecording.warning(recordingMode ?? .record)
+        message = text
+        notice = text
+        WKInterfaceDevice.current().play(.failure)
+        noticeExpiry?.cancel()
+        noticeExpiry = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if !Task.isCancelled { self?.notice = nil }
+        }
+        guard WKApplication.shared().applicationState != .active else { return }
+        let content = UNMutableNotificationContent()
+        content.title = text
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "recording.discarded", content: content, trigger: nil))
     }
 
     /// Tells the complications and Controls whether a clip is going.
@@ -241,6 +268,18 @@ private struct WatchCaptureView: View {
             log.tag(WatchPage.log)
         }
         .tabViewStyle(.page)
+        .overlay(alignment: .top) {
+            if let notice = model.notice {
+                Text(notice)
+                    .font(.footnote.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(.orange, in: RoundedRectangle(cornerRadius: 12))
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("recording.discarded")
+            }
+        }
         .onAppear {
             // Open on whatever is already going.
             if model.workout.timer.state != .idle { page = .workout }

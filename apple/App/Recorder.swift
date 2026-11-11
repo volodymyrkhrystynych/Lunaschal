@@ -8,6 +8,12 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     @Published private(set) var isStarting = false
     var onChange: (() -> Void)?
     var onError: ((Error) -> Void)?
+    /// A standalone clip that ends sooner than this is thrown away, whatever
+    /// ended it. Only the Watch sets one: the phone's clips wait for Save, so
+    /// it can already drop a stray one there.
+    var minimumLength: TimeInterval?
+    /// A clip went that way. Called before `onChange`.
+    var onDiscarded: (() -> Void)?
     private let store: CaptureStore
     private var recorder: AVAudioRecorder?
     /// The phone's composer records into its draft; the Watch records whole entries.
@@ -102,10 +108,14 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     func stop() {
         guard let id = activeID else { return }
         activeID = nil
+        // Read first: a stopped recorder reports zero.
+        let length = recorder?.currentTime ?? 0
         recorder?.stop()
         recorder = nil
         do {
-            if intoDraft { try store.finishClip(id) } else { try store.finishRecording(id) }
+            if intoDraft { try store.finishClip(id) }
+            else if isStray(length) { try store.discardRecording(id); onDiscarded?() }
+            else { try store.finishRecording(id) }
         } catch { onError?(error) }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         onChange?()
@@ -133,11 +143,22 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         }
     }
 
+    private func isStray(_ length: TimeInterval) -> Bool {
+        !intoDraft && ShortRecording.shouldDiscard(duration: length, minimum: minimumLength)
+    }
+
     private func fail(_ message: String) {
         guard let id = activeID else { return }
         activeID = nil
+        let length = recorder?.currentTime ?? 0
         recorder?.stop()
         recorder = nil
+        if isStray(length) {
+            do { try store.discardRecording(id); onDiscarded?() } catch { onError?(error) }
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            onChange?()
+            return
+        }
         do {
             if intoDraft {
                 try store.interruptClip(id)
