@@ -33,6 +33,21 @@ def job(date='2026-09-06'):
     return dict(get_db().execute('SELECT * FROM newspaper_downloads WHERE date=?', (date,)).fetchone())
 
 
+def test_successful_download_triggers_front_page_sync(monkeypatch):
+    """After a successful PressReader download, front pages should be synced."""
+    calls = []
+    def download(date):
+        return issues.store_issue(date, BytesIO(pdf_bytes()))
+    monkeypatch.setattr(pressreader, 'download_issue', download)
+    monkeypatch.setattr(scheduler.sync, 'sync_today', lambda: calls.append('sync'))
+
+    scheduler.queue_issue('2026-09-06')
+    scheduler.tick()
+
+    assert job()['status'] == 'complete'
+    assert calls == ['sync']
+
+
 def test_manual_queue_idempotent_and_worker_archives(client, monkeypatch):
     calls = []
     def download(date):

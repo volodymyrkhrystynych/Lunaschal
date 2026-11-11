@@ -21,7 +21,7 @@ from ulid import ULID
 
 from backend.day_boundary import DAY_ROLLOVER_HOUR
 from backend.db.connection import get_db
-from backend.newspapers import issues, pressreader
+from backend.newspapers import issues, pressreader, sync
 
 logger = logging.getLogger(__name__)
 _lock = threading.Lock()
@@ -119,6 +119,7 @@ def tick(now=None):
         # Covers a crash after the PDF was stored but before the job completed.
         if not issues.get_issue(date):
             pressreader.download_issue(date)
+            sync.sync_today()
     except FileExistsError:
         pass  # Manual import won the race; its immutable issue is already ready.
     except pressreader.SignInRequired as exc:
