@@ -88,6 +88,10 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var chatRecordingQueue: [ChatRecording] = []
     let chatRecordings: ChatRecordingStore
     private let chatRecordingSyncer: ChatRecordingSync
+    /// To-dos said into the Todo tab's mic, until the server has the clip.
+    @Published private(set) var todoRecordingQueue: [TodoRecording] = []
+    let todoRecordings: TodoRecordingStore
+    private let todoRecordingSyncer: TodoRecordingSync
     /// Todo tab changes the server hasn't had yet, and what it last turned down.
     @Published private(set) var todoQueue: [TodoOp] = []
     @Published var todoRefusals: [String] = []
@@ -211,6 +215,8 @@ final class CaptureModel: ObservableObject {
         pomodoroSyncer = PomodoroSync(store: pomodoros)
         chatRecordings = try ChatRecordingStore(root: store.root.appendingPathComponent("chat-recordings", isDirectory: true))
         chatRecordingSyncer = ChatRecordingSync(store: chatRecordings)
+        todoRecordings = try TodoRecordingStore(root: store.root.appendingPathComponent("todo-recordings", isDirectory: true))
+        todoRecordingSyncer = TodoRecordingSync(store: todoRecordings)
         todoOutbox = try TodoOutbox(root: store.root.appendingPathComponent("todo-outbox", isDirectory: true))
         todoSyncer = TodoSync(outbox: todoOutbox)
         widgetTodoOutbox = SharedSignIn.container().flatMap { try? TodoWidgetFiles.outbox(in: $0) }
@@ -254,6 +260,7 @@ final class CaptureModel: ObservableObject {
         healthStatus = healthState.status()
         workoutLogs = try workouts.list()
         chatRecordingQueue = try chatRecordings.list()
+        todoRecordingQueue = try todoRecordings.list()
         todoQueue = try todoOutbox.list()
         jobQueue = try jobStore.pending()
         recentExercises = (try? JSONDecoder().decode([RecentExercise].self, from: Data(contentsOf: workoutCache("recent")))) ?? []
@@ -394,6 +401,7 @@ final class CaptureModel: ObservableObject {
             dailyLogs = try daily.list()
             workoutLogs = try workouts.list()
             chatRecordingQueue = try chatRecordings.list()
+            todoRecordingQueue = try todoRecordings.list()
             todoQueue = try todoOutbox.list()
             jobQueue = try jobStore.pending()
         } catch { message = error.localizedDescription }
@@ -1133,6 +1141,21 @@ final class CaptureModel: ObservableObject {
         reloadQueues()
     }
 
+    /// A to-do said into the Todo tab's mic: kept here and sent, and the
+    /// server makes the to-do from it. Nothing waits on the answer.
+    func queueTodoRecording(_ clip: URL) {
+        do {
+            try todoRecordings.add(clip: clip)
+            todoRecordingQueue = try todoRecordings.list()
+        } catch { message = error.localizedDescription; return }
+        requestSync()
+    }
+
+    func discard(_ item: TodoRecording) {
+        do { try todoRecordings.remove(item) } catch { message = error.localizedDescription }
+        reloadQueues()
+    }
+
     private func workoutCache(_ name: String) -> URL { workouts.root.appendingPathComponent("\(name).cache") }
 
     /// For the Workout page as it opens.
@@ -1388,6 +1411,7 @@ final class CaptureModel: ObservableObject {
                 || drawingPublications.all().contains { $0.state == "pending" }
                 || !ficActivity.list().isEmpty
                 || !todoOutbox.list().isEmpty
+                || todoRecordings.list().contains { $0.state == .pending }
                 || !(widgetTodoOutbox?.list().isEmpty ?? true)
                 || !jobStore.pending().isEmpty
                 || !screenshots.list().isEmpty
@@ -1438,7 +1462,7 @@ final class CaptureModel: ObservableObject {
         let hadCaptures = captures.contains { $0.state == .pending || ($0.kind == .food && $0.weather == nil) }
         let hadDaily = dailyLogs.contains { $0.state == .pending }
         let hadWorkouts = !workoutLogs.isEmpty
-        let hadQueues = hadDaily || hadWorkouts || !chatRecordingQueue.isEmpty || !todoQueue.isEmpty || !jobQueue.isEmpty
+        let hadQueues = hadDaily || hadWorkouts || !chatRecordingQueue.isEmpty || !todoRecordingQueue.isEmpty || !todoQueue.isEmpty || !jobQueue.isEmpty
         defer {
             syncing = false
             timed("refresh screens") {
@@ -1465,6 +1489,10 @@ final class CaptureModel: ObservableObject {
             if !chatRecordingQueue.isEmpty {
                 try await timed("chat voice") { try await chatRecordingSyncer.run(using: api) }
                 changed.insert(SyncChanges.chat)
+            }
+            if !todoRecordingQueue.isEmpty,
+               try await timed("to-do voice", { try await todoRecordingSyncer.run(using: api) }) {
+                changed.insert(SyncChanges.todos)
             }
             if try await timed("to-dos", { try await sendTodoChanges(using: api) }) { changed.insert(SyncChanges.todos) }
             try await timed("writing", { try await sendWriting(using: api) })

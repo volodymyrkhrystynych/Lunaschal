@@ -981,6 +981,24 @@ CREATE TABLE IF NOT EXISTS todos (
     updated_at INTEGER NOT NULL
 );
 
+-- A to-do that was spoken (POST /api/tasks/todos/recordings). `id` is the
+-- phone's, and it is also the id of the to-do the clip becomes, so a replayed
+-- upload and a replayed job both land on one row. The clip is held under
+-- TODOS_ROOT until the `todo.transcribe_recording` job has made the to-do, then
+-- deleted (`path` NULL). 'pending' needs no startup reset: the llm_jobs row
+-- that will finish it survives a restart. 'error' keeps the clip so nothing
+-- that was said is lost, and is shown on the phone until dismissed.
+CREATE TABLE IF NOT EXISTS todo_recordings (
+    id TEXT PRIMARY KEY,
+    path TEXT,
+    mime TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT,
+    transcript TEXT,
+    captured_at INTEGER,
+    created_at INTEGER NOT NULL
+);
+
 -- Append-only log of task lifecycle events (completions, deletions) surfaced as
 -- small notifications in the Journal feed. `title` is a snapshot so a deleted
 -- task's event survives; `ref_id` links back to the todo/daily-task so an

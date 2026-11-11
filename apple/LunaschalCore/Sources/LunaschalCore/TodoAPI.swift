@@ -5,7 +5,7 @@ import FoundationNetworking
 
 // MARK: Daily tasks and to-dos (the desktop's /api/tasks routes)
 
-extension JournalAPI: TodoTransport {
+extension JournalAPI: TodoTransport, TodoRecordingTransport {
     /// Ticks and removals are logged on the server, and that log is read as
     /// the user being awake, so those carry when they were made.
     public func send(_ change: TodoChange, capturedAt: Date) async throws {
@@ -85,13 +85,39 @@ extension JournalAPI: TodoTransport {
         try await todoCall("api/tasks/todos", method: "POST", draft)
     }
 
-    /// A spoken sentence made into one to-do by the server's model, with no
-    /// confirm step. `id` is minted by the phone: a replay returns the row
-    /// already made, and `TodoDictation.fallbackDraft` reuses it, so a reply
-    /// lost on the way back can never leave two to-dos.
-    public func createTodo(fromSpeech words: String, id: String) async throws {
-        try await todoCall("api/tasks/todos/transcribe", method: "POST",
-                           TodoDictation.Body(text: words, id: try Self.pathID(id)))
+    // MARK: Spoken to-dos (/api/tasks/todos/recordings)
+
+    /// Hands over the clip; the server transcribes it and makes the to-do under
+    /// `item.id`. A replay is a no-op there.
+    public func sendTodoRecording(_ item: TodoRecording, audioURL: URL) async throws {
+        guard (try audioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else { throw CaptureError.missingAudio }
+        let (body, boundary) = try writeMultipart(fields: [
+            ("id", try Self.pathID(item.id)),
+            // When it was said, not when it synced.
+            ("capturedAt", ISO8601DateFormatter().string(from: item.createdAt)),
+        ], files: [MultipartFile(field: "audio", filename: "recording.m4a", contentType: "audio/mp4", source: audioURL)])
+        defer { try? FileManager.default.removeItem(at: body) }
+        var req = request("api/tasks/todos/recordings", method: "POST")
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.upload(for: req, fromFile: body)
+        try check(data, response)
+        try Self.validateTodoRecordingAcknowledgement(data, for: item)
+    }
+
+    /// The reply must name this recording, or the clip is not known to be there.
+    public static func validateTodoRecordingAcknowledgement(_ data: Data, for item: TodoRecording) throws {
+        struct Reply: Decodable { let id: String }
+        guard (try JSONDecoder().decode(Reply.self, from: data)).id == item.id else { throw CaptureError.invalidResponse }
+    }
+
+    /// Those not on the list yet: being transcribed, or failed.
+    public func todoRecordings() async throws -> [ServerTodoRecording] {
+        try JSONDecoder().decode([ServerTodoRecording].self, from: await get("api/tasks/todos/recordings", [:]))
+    }
+
+    /// Drops a failed one, clip and all.
+    public func dismissTodoRecording(_ id: String) async throws {
+        try await todoCall("api/tasks/todos/recordings/\(try Self.pathID(id))", method: "DELETE")
     }
 
     /// Replaces every field the form sets; `id` is ignored.
