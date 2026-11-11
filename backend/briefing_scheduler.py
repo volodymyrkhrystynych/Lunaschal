@@ -64,8 +64,9 @@ def run_nightly() -> None:
 
     # The largest single consumer of the card in the app, and until now the only
     # scheduler that asked nobody's permission for it. P2 means a chat message
-    # takes the lane back mid-pass, and a paused GPU skips the night entirely —
-    # the sources it reads are still there tomorrow.
+    # takes the lane back mid-pass. A pause still on when the window opens is
+    # ended by `_tick` before this runs (see `_end_pause`); one switched on
+    # mid-pass is still honoured, leaving the rest of the night pending.
     with service.background():
         _run_nightly()
 
@@ -153,6 +154,24 @@ def compact_sync_history() -> None:
         print(f'Sync log compaction failed: {e}')
 
 
+def _end_pause() -> None:
+    """Switch the GPU back on if "pause for gaming" was left on overnight.
+
+    A pause is measured in hours, and by the briefing window the evening it was
+    for is over — a pause still on at 05:00 is one somebody forgot, and honouring
+    it would cost the briefing, the entry digests and the life-wiki pass for a
+    card nobody is using. Only called when the briefing is enabled: with nothing
+    to run, there is no reason to take the card back.
+    """
+    from backend.ai import service
+
+    if not service.is_paused():
+        return
+    from backend.ai.pause import resume_inference
+    resume_inference('overnight briefing')
+    print('Overnight briefing: inference was paused, resumed it')
+
+
 def _tick(now: datetime, last_run_date):
     """One poll: the briefing (when enabled), then compaction, once a day in
     the briefing window. Returns the date it last ran for."""
@@ -162,6 +181,7 @@ def _tick(now: datetime, last_run_date):
         return last_run_date
     try:
         if enabled:
+            _end_pause()
             run_nightly()
     except Exception as e:
         print(f'Overnight briefing failed: {e}')
