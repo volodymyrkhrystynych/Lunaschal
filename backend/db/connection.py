@@ -380,6 +380,7 @@ def init_db() -> None:
     _ensure_inference_pause_settings(db)
     _ensure_mobile_sync(db)
     _ensure_code_agent_settings(db)
+    _ensure_pr_journal_settings(db)
     # No _reset_stale_torrents() belongs below: the torrent client runs in its
     # own container and outlives this process, so Lunaschal never holds an
     # in-flight torrent state that a restart could orphan. See the comment on
@@ -1291,6 +1292,15 @@ def _reset_stale_message_runs(db: sqlite3.Connection) -> None:
         " WHERE status='streaming'"
     )
     db.commit()
+
+
+def _ensure_pr_journal_settings(db: sqlite3.Connection) -> None:
+    """The repository whose merged PRs are filed into the Journal
+    (backend/github_prs/). Empty turns the poll off."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'pr_journal_repo' not in cols:
+        db.execute("ALTER TABLE settings ADD COLUMN pr_journal_repo TEXT"
+                   " NOT NULL DEFAULT 'volodymyrkhrystynych/Lunaschal'")
 
 
 def _ensure_code_agent_settings(db: sqlite3.Connection) -> None:

@@ -164,3 +164,9 @@ def _ideas_enrich(target_id, payload):
 def _email_classify(target_id, payload):
     from backend.ai.email import classify_email
     classify_email(target_id)
+
+
+@jobs.handler('github_prs.summarize')
+def _github_prs_summarize(target_id, payload):
+    from backend.github_prs.sync import summarize
+    summarize(target_id, payload['repo'], payload['number'])

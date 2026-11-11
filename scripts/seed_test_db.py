@@ -2790,6 +2790,30 @@ def seed_goals(db):
     entry(goal_id, f"New goal for the {label('week', last_start).lower()}: Clear the inbox", ts(10))
 
 
+def seed_merged_prs(db):
+    """One merged PR and the journal entry it was filed as, already summarised
+    — written by the module's own renderer so the demo reads like the real thing."""
+    import json
+    from backend.github_prs.sync import TAGS, entry_text, entry_title
+
+    pr = {'number': 239, 'title': 'Merged PRs become journal entries',
+          'url': 'https://github.com/example/lunaschal/pull/239', 'merged_at': ts(1)}
+    days = [{'day': today_key(4), 'count': 3}, {'day': today_key(2), 'count': 7},
+            {'day': today_key(1), 'count': 1}]
+    summary = ('Merged pull requests on the app\'s repository are now filed into the Journal on '
+               'the day they merged, with a count of commits per day.')
+    entry_id = new_id()
+    db.execute('INSERT INTO journal_entries (id, content, title, tags, created_at, updated_at) '
+               'VALUES (?, ?, ?, ?, ?, ?)',
+               (entry_id, entry_text(pr, days, summary), entry_title(pr), json.dumps(TAGS),
+                pr['merged_at'], pr['merged_at']))
+    db.execute('INSERT INTO merged_prs (repo, number, title, url, body, merged_at, commit_days, '
+               'entry_id, summarized_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+               ('example/lunaschal', pr['number'], pr['title'], pr['url'],
+                '## Task\nFile merged PRs into the journal.', pr['merged_at'], json.dumps(days),
+                entry_id, pr['merged_at'], pr['merged_at']))
+
+
 def seed_coach(db):
     """Yesterday's final review and today's draft, a habit cue, and three
     excuses naming the same obstacle — so the review shows an excused item
@@ -2881,6 +2905,7 @@ def main() -> None:
     seed_practice(db)
     seed_notes(db)
     seed_goals(db)
+    seed_merged_prs(db)
     seed_coach(db)
     seed_notebook(db, journal_ids)
     # After seed_notebook: a study source is bound to a note under the same
