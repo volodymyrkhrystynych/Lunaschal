@@ -12,7 +12,7 @@ from backend.ai.service import InferencePaused, Preempted
 from backend.capture_time import optional_capture_time
 from backend.db.connection import get_db, mapping_to_dict, row_to_dict
 from backend.day_boundary import day_bounds, day_key_for
-from backend.ai.todo import TITLE_LIMIT, extract_todo_fields
+from backend.ai.todo import extract_todo_fields, split_title_notes, todo_title_and_notes
 from backend.habit_streaks import summary as streak_summary
 from backend.todo_recurrence import (
     next_due, normalize_list, parse_due_date,
@@ -607,10 +607,9 @@ def add_chat_todos():
     for item in items[:MAX_CHAT_TODO_ITEMS]:
         if not isinstance(item, dict):
             continue
-        title = (item.get('title') or '').strip()
+        title, notes = todo_title_and_notes(item.get('title') or '', item.get('notes'))
         if not title or title.lower() in taken:
             continue
-        notes = (item.get('notes') or '').strip() or None
         chat_todo_id = str(ULID())
         db.execute(
             'INSERT INTO chat_todos(id, day_key, title, notes, due, priority, done, created_at, updated_at)'
@@ -777,29 +776,83 @@ def _todo_from_speech(db, text: str, todo_id: str | None) -> tuple[str | None, s
     Shared by the synchronous route above and the recording job below, so a
     to-do said into the phone comes out the same whichever way it arrived.
     """
-    fields = extract_todo_fields(text, day_key_for())
+    today = day_key_for()
+    paused = False
+    try:
+        fields = extract_todo_fields(text, today)
+    except InferencePaused:
+        # Not waited out: a pause lasts hours and the to-do is wanted now. It is
+        # made from the words below and sorted properly once the GPU is back.
+        fields, paused = None, True
     if fields is None:
-        title = text[:TITLE_LIMIT].strip()
-        fields = {
-            'title': title,
-            'notes': text if title != text else None,
-            'priority': None,
-            'due': None,
-        }
+        title, notes = split_title_notes(text)
+        fields = {'title': title, 'notes': notes, 'priority': None, 'due': None}
 
-    due_ts = None
-    if fields.get('due'):
-        due_ts, err = parse_due_date(fields['due'])
-        if err:
-            due_ts = None  # an unparseable date from the model is dropped, not fatal
-
-    return _insert_todo_row(db, {
+    todo_id, err = _insert_todo_row(db, {
         'id': todo_id,
         'title': fields['title'],
         'notes': fields.get('notes'),
         'priority': fields.get('priority'),
-        'due': due_ts,
+        'due': _model_due(fields.get('due')),
     })
+    if paused and todo_id:
+        # The row as the fallback left it, defaults included: the refine pass
+        # changes only what is still exactly this.
+        made = db.execute('SELECT title, notes, priority, due FROM todos WHERE id=?',
+                          (todo_id,)).fetchone()
+        jobs.enqueue('todo.refine_spoken', todo_id, {
+            'text': text, 'day': today, 'title': made['title'], 'notes': made['notes'],
+            'priority': made['priority'], 'due': made['due'],
+        }, commit=False)
+    return todo_id, err
+
+
+def _model_due(value) -> int | None:
+    """A due date the model wrote, or None: an unparseable one is dropped, not fatal."""
+    if not value:
+        return None
+    due_ts, err = parse_due_date(value)
+    return None if err else due_ts
+
+
+def refine_spoken_todo(todo_id: str, payload: dict) -> None:
+    """The `todo.refine_spoken` job: a to-do made from the bare words while the
+    GPU was paused gets the model's title, notes, priority and due date.
+
+    Only while it is still exactly as the fallback left it: a title or notes the
+    user has since changed, or a to-do already done, is theirs and is left
+    alone, and so is a priority or due date changed since. `InferencePaused` is
+    not caught, so the job stays pending until the GPU is back.
+    """
+    text = (payload.get('text') or '').strip()
+    db = get_db()
+    row = db.execute('SELECT title, notes, priority, due, done FROM todos WHERE id=?',
+                     (todo_id,)).fetchone()
+    if not text or row is None or row['done']:
+        return
+    if row['title'] != payload.get('title') or (row['notes'] or None) != (payload.get('notes') or None):
+        return
+    fields = extract_todo_fields(text, payload.get('day') or day_key_for())
+    if fields is None:
+        return
+    # Read again after the model call, which can take a while: an edit made
+    # meanwhile still wins.
+    row = db.execute('SELECT title, notes, priority, due, done FROM todos WHERE id=?',
+                     (todo_id,)).fetchone()
+    if row is None or row['done'] or row['title'] != payload.get('title') \
+            or (row['notes'] or None) != (payload.get('notes') or None):
+        return
+    priority = row['priority']
+    if fields.get('priority') is not None and priority == payload.get('priority'):
+        priority = fields['priority']
+    due = row['due']
+    if due is None and payload.get('due') is None:
+        due = _model_due(fields.get('due'))
+    db.execute(
+        'UPDATE todos SET title=?, notes=?, priority=?, due=?, updated_at=? WHERE id=?',
+        (fields['title'], fields.get('notes'), priority, due, int(time.time()), todo_id),
+    )
+    db.commit()
 
 
 # --- Spoken to-dos ------------------------------------------------------------
@@ -923,9 +976,8 @@ def _transcribe_recording_bg(recording_id: str, *, now: bool = False) -> None:
     The transcript is saved before the model is asked to sort it into fields,
     so a run that is cancelled afterwards (`Preempted`, re-raised for the job
     row to bring back) does not transcribe the clip twice. A paused GPU is not
-    waited out: `extract_todo_fields` comes back empty and the words become the
-    to-do as they were said, exactly as the synchronous route does — a pause
-    lasts hours, and the to-do is wanted now.
+    waited out: the words become the to-do now, exactly as the synchronous route
+    does, and `todo.refine_spoken` sorts them once the GPU is back.
     """
     if not now:
         jobs.enqueue('todo.transcribe_recording', recording_id)
@@ -966,6 +1018,38 @@ def _transcribe_recording_bg(recording_id: str, *, now: bool = False) -> None:
         return
     db.commit()
     _finish_recording(db, recording_id, 'done')
+
+
+def todo_from_entry(entry_id: str) -> None:
+    """The `todo.from_entry` job: the Watch's To-do button, once its words are in.
+
+    That button records a journal entry like Transcribe does, carrying a
+    `todoId` (`journal_entries.todo_id`, see backend/routes/journal.py's
+    recording route), so one clip is uploaded and transcribed once and becomes
+    two rows: the entry, which keeps the audio and the words, and the to-do.
+    This is the second half, queued when the transcript lands in the entry.
+
+    A job of its own rather than a step of the transcription job: a call
+    preempted there is retried with the transcript already saved, and the retry
+    would never reach this. Making the to-do under the id the Watch minted is
+    what makes it idempotent.
+    """
+    db = get_db()
+    row = db.execute('SELECT todo_id, raw_content, content FROM journal_entries WHERE id=?',
+                     (entry_id,)).fetchone()
+    if row is None or not row['todo_id']:
+        return
+    if db.execute('SELECT 1 FROM todos WHERE id=?', (row['todo_id'],)).fetchone():
+        return
+    text = (row['raw_content'] or row['content'] or '').strip()
+    if not text:
+        return
+    _, err = _todo_from_speech(db, text, row['todo_id'])
+    if err:
+        db.rollback()
+        logger.warning('Making a to-do from journal entry %s failed: %s', entry_id, err)
+        return
+    db.commit()
 
 
 @bp.get('/events')

@@ -1677,6 +1677,21 @@ def seed_lifestyle(db):
         "VALUES (?, NULL, 'audio/mp4', 'done', ?, ?, ?)",
         (spoken_id, 'call the dentist about the cleaning', ts(2), ts(2)),
     )
+    # The Watch's To-do button: one journal entry holding the words, and the
+    # to-do made from them under the id the Watch minted.
+    watch_todo_id = new_id()
+    watch_said = 'pick up the dry cleaning on the way home, the ticket is in my wallet'
+    db.execute(
+        'INSERT INTO todos (id, title, notes, done, list, created_at, updated_at)'
+        ' VALUES (?, ?, ?, 0, ?, ?, ?)',
+        (watch_todo_id, 'Pick up the dry cleaning', 'On the way home; the ticket is in my wallet.',
+         'todo', ts(1), ts(1)),
+    )
+    db.execute(
+        'INSERT INTO journal_entries (id, content, raw_content, title, todo_id, created_at, updated_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (new_id(), watch_said, watch_said, 'Dry cleaning', watch_todo_id, ts(1), ts(1)),
+    )
 
     session_id = new_id()
     db.execute(

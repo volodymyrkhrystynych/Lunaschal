@@ -798,15 +798,19 @@ public struct RecordingMultipart {
         guard let attachmentID = capture.attachmentID else { throw CaptureError.invalidID }
         try self.init(entryID: capture.id, attachmentID: attachmentID, capturedAt: capture.createdAt,
                       transcribe: capture.mode == .transcribe, audioURL: audioURL,
-                      ficID: capture.ficID, chapterID: capture.chapterID)
+                      ficID: capture.ficID, chapterID: capture.chapterID,
+                      todoID: capture.asTodo ? capture.id : nil)
     }
 
     /// `ficId`/`chapterId` make the recording the reader's commentary: the
     /// server links the entry to that chapter, and re-links it on a replay.
+    /// `todoId` makes it the Watch's To-do as well: the server makes a to-do
+    /// from its words, under that id, once they are transcribed.
     public init(entryID: String, attachmentID: String, capturedAt: Date, transcribe: Bool, audioURL: URL,
-                ficID: String? = nil, chapterID: String? = nil) throws {
+                ficID: String? = nil, chapterID: String? = nil, todoID: String? = nil) throws {
         guard ULID.isValid(entryID), ULID.isValid(attachmentID),
-              ficID.map(ULID.isValid) ?? true, chapterID.map(ULID.isValid) ?? true else { throw CaptureError.invalidID }
+              ficID.map(ULID.isValid) ?? true, chapterID.map(ULID.isValid) ?? true,
+              todoID.map(ULID.isValid) ?? true else { throw CaptureError.invalidID }
         guard (try audioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
             throw CaptureError.missingAudio
         }
@@ -820,6 +824,7 @@ public struct RecordingMultipart {
             fields.append(("ficId", ficID))
             if let chapterID { fields.append(("chapterId", chapterID)) }
         }
+        if let todoID { fields.append(("todoId", todoID)) }
         (url, boundary) = try writeMultipart(fields: fields, filename: "recording.m4a",
                                              contentType: "audio/mp4", source: audioURL)
     }

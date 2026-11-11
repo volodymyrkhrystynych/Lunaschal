@@ -265,6 +265,7 @@ def init_db() -> None:
     _ensure_journal_raw_content(db)
     _ensure_journal_context_prompts(db)
     _ensure_journal_idea_id(db)
+    _ensure_journal_todo_id(db)
     _ensure_journal_auto_file(db)
     _ensure_journal_screenshot_event_threshold(db)
     _ensure_journal_attachment_youtube(db)
@@ -2570,6 +2571,18 @@ def _ensure_journal_idea_id(db: sqlite3.Connection) -> None:
         'CREATE INDEX IF NOT EXISTS idx_journal_entries_idea'
         ' ON journal_entries(idea_id)'
     )
+    db.commit()
+
+
+def _ensure_journal_todo_id(db: sqlite3.Connection) -> None:
+    """The to-do a journal entry was dictated for, if any: the Watch's To-do
+    button, whose one clip becomes both the entry and a to-do under this id
+    (`backend/routes/tasks.py`'s `todo_from_entry`). No foreign key: the to-do
+    is made only once the transcript lands, and deleting it later must leave
+    the entry and its recording alone."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
+    if 'todo_id' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN todo_id TEXT')
     db.commit()
 
 

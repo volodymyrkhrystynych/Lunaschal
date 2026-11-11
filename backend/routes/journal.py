@@ -1436,6 +1436,24 @@ def _link_recording_idea(entry_id: str, idea_id: str, repo_id=None) -> None:
     db.commit()
 
 
+def _link_recording_todo(entry_id: str, todo_id: str) -> None:
+    """Mark a recording's entry as the Watch's To-do: once its words land,
+    `todo.from_entry` makes the to-do under `todo_id`.
+
+    Set once and never moved, so a replay carrying the same id changes nothing.
+    A replay that arrives after the words already landed (the first call stored
+    the clip and died before this link) queues the to-do itself, since the
+    transcript will not land a second time to do it.
+    """
+    db = get_db()
+    db.execute('UPDATE journal_entries SET todo_id=? WHERE id=? AND todo_id IS NULL',
+               (todo_id, entry_id))
+    row = db.execute('SELECT raw_content FROM journal_entries WHERE id=?', (entry_id,)).fetchone()
+    if row and (row['raw_content'] or '').strip():
+        jobs.enqueue('todo.from_entry', entry_id, commit=False)
+    db.commit()
+
+
 def _link_recording_fic(entry_id: str, fic_id: str, chapter_id: str | None) -> None:
     """Point a recording's entry at the fic (and chapter) it was dictated over.
 
@@ -1518,6 +1536,7 @@ def create_recording_entry():
         idea_id = _client_id(request.form.get('ideaId'))
         fic_id = _client_id(request.form.get('ficId'))
         chapter_id = _client_id(request.form.get('chapterId'))
+        todo_id = _client_id(request.form.get('todoId'))
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -1538,6 +1557,8 @@ def create_recording_entry():
                 # clip and died before the link would otherwise leave the
                 # commentary permanently detached from its chapter.
                 _link_recording_fic(existing['entry_id'], fic_id, chapter_id)
+            if todo_id:
+                _link_recording_todo(existing['entry_id'], todo_id)
             if transcribe:
                 _queue_attachment_transcription(
                     existing, into_entry=True, skip_completed=True
@@ -1545,7 +1566,7 @@ def create_recording_entry():
             db = get_db()
             _close_screenshot_session(db, existing['entry_id'])
             db.commit()
-            if not idea_id and not fic_id:
+            if not idea_id and not fic_id and not todo_id:
                 _finish_recording_overlap(attachment_id, captured_at, duration)
             # Already stored. Answer as if we'd just saved it so the client
             # clears its local copy — the whole point of the retry loop.
@@ -1622,9 +1643,16 @@ def create_recording_entry():
         # would put a dead row in the reader's commentary history.
         _link_recording_fic(entry_id, fic_id, chapter_id)
 
+    if todo_id:
+        # After the file too: the to-do is made from this entry's words, and an
+        # entry rolled back has none.
+        _link_recording_todo(entry_id, todo_id)
+
     # Only an explicit capture start makes a duration a real time interval.
     # Old clients that send upload time implicitly must never match by accident.
-    if not idea_id and not fic_id:
+    # Nor a clip that is also an idea, a commentary or a to-do: merging it into
+    # a neighbouring entry would move the words its other half is made from.
+    if not idea_id and not fic_id and not todo_id:
         _finish_recording_overlap(attachment['id'], captured_at, duration)
         attachment = _attachment_dict(_load_attachment(attachment['id']))
 
@@ -1634,7 +1662,7 @@ def create_recording_entry():
     if created_entry:
         _queue_todays_newspaper()
     return jsonify({'id': entry_id, 'attachment': attachment, 'ideaId': idea_id,
-                    'ficId': fic_id}), 201
+                    'ficId': fic_id, 'todoId': todo_id}), 201
 
 
 @bp.patch('/attachments/<attachment_id>')
@@ -2307,6 +2335,15 @@ def _deliver_idea_transcript(entry_id: str, text: str) -> None:
     apply_recording_transcript(row['idea_id'], text)
 
 
+def _deliver_todo_transcript(entry_id: str) -> None:
+    """Queue the to-do this entry was dictated for, if it was one. The job
+    reads the entry's words itself, so a later clip is in them too."""
+    row = get_db().execute('SELECT todo_id FROM journal_entries WHERE id=?',
+                           (entry_id,)).fetchone()
+    if row and row['todo_id']:
+        jobs.enqueue('todo.from_entry', entry_id)
+
+
 def _append_entry_text(db, entry_id: str, text: str) -> None:
     """Add a clip's transcript to the end of an entry's body.
 
@@ -2425,6 +2462,7 @@ def _transcribe_attachment_bg(
                 # The idea first: it is the tab the recording was made in, so
                 # it is the one being watched.
                 _deliver_idea_transcript(entry_id, body)
+                _deliver_todo_transcript(entry_id)
                 _polish_bg(entry_id, body)
                 _generate_metadata_bg(entry_id, body)
 

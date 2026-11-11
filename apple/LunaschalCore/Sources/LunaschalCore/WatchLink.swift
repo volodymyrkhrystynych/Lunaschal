@@ -9,6 +9,8 @@ public enum WatchLink: Equatable {
     case start(PomodoroKind)
     case record
     case transcribe
+    /// A Transcribe clip that also becomes a to-do.
+    case todo
     /// The Workout page: starts the 90-second rest timer unless it is already going.
     case workout
 
@@ -20,6 +22,7 @@ public enum WatchLink: Equatable {
         case .start(let kind): return URL(string: "\(Self.scheme)://timer/\(kind.rawValue)")!
         case .record: return URL(string: "\(Self.scheme)://record")!
         case .transcribe: return URL(string: "\(Self.scheme)://transcribe")!
+        case .todo: return URL(string: "\(Self.scheme)://todo")!
         case .workout: return URL(string: "\(Self.scheme)://workout")!
         }
     }
@@ -35,6 +38,7 @@ public enum WatchLink: Equatable {
             self = .start(kind)
         case ("record", 0): self = .record
         case ("transcribe", 0): self = .transcribe
+        case ("todo", 0): self = .todo
         case ("workout", 0): self = .workout
         default: return nil
         }
@@ -52,6 +56,7 @@ public enum WatchComplication {
     public static let timeoutKind = "timeout"
     public static let recordKind = "record"
     public static let transcribeKind = "transcribe"
+    public static let todoKind = "todo"
     public static let launcherKind = "launcher"
     public static let workoutKind = "workout"
     /// Control kinds, for `ControlCenter.reloadControls(ofKind:)`.
@@ -59,6 +64,7 @@ public enum WatchComplication {
     public static let timeoutControl = "control.timeout"
     public static let recordControl = "control.record"
     public static let transcribeControl = "control.transcribe"
+    public static let todoControl = "control.todo"
 
     /// App Groups exist only on Apple platforms; on Linux (where the core's
     /// tests also run) there is no shared container.
@@ -83,9 +89,29 @@ public enum WatchComplication {
 /// A recording in progress, as the complications and Controls see it.
 public struct RecordingStatus: Codable, Equatable {
     public let mode: CaptureMode
+    /// A To-do clip: Transcribe's mode, but its own button, so the mode alone
+    /// cannot say which button is lit.
+    public let asTodo: Bool
     public let startedAt: Date
 
-    public init(mode: CaptureMode, startedAt: Date) { self.mode = mode; self.startedAt = startedAt }
+    public init(mode: CaptureMode, asTodo: Bool = false, startedAt: Date) {
+        self.mode = mode; self.asTodo = asTodo; self.startedAt = startedAt
+    }
+
+    /// Whether this is the clip that button (`mode`, `asTodo`) started.
+    public func matches(mode: CaptureMode, asTodo: Bool) -> Bool {
+        self.mode == mode && self.asTodo == asTodo
+    }
+
+    private enum CodingKeys: String, CodingKey { case mode, asTodo, startedAt }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try c.decode(CaptureMode.self, forKey: .mode)
+        // Written before the To-do button existed.
+        asTodo = try c.decodeIfPresent(Bool.self, forKey: .asTodo) ?? false
+        startedAt = try c.decode(Date.self, forKey: .startedAt)
+    }
 
     public static func load(from url: URL) -> RecordingStatus? {
         guard let data = try? Data(contentsOf: url) else { return nil }

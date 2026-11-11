@@ -38,12 +38,14 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     /// Records a standalone entry: stopping saves it and queues it for sync.
     /// A fic and chapter make it reading commentary on that chapter, fixed
     /// now rather than at upload, since the reader may move on mid-sentence.
-    func start(mode: CaptureMode, ficID: String? = nil, chapterID: String? = nil) async {
-        await begin(intoDraft: false, mode: mode, ficID: ficID, chapterID: chapterID)
+    /// `asTodo` is the Watch's To-do button: the entry also becomes a to-do.
+    func start(mode: CaptureMode, ficID: String? = nil, chapterID: String? = nil, asTodo: Bool = false) async {
+        await begin(intoDraft: false, mode: mode, ficID: ficID, chapterID: chapterID, asTodo: asTodo)
     }
 
     private func begin(intoDraft draft: Bool, mode: CaptureMode,
-                       ficID: String? = nil, chapterID: String? = nil, entryID: String? = nil) async {
+                       ficID: String? = nil, chapterID: String? = nil, entryID: String? = nil,
+                       asTodo: Bool = false) async {
         guard activeID == nil, !isStarting else { return }
         isStarting = true
         defer { isStarting = false }
@@ -73,7 +75,7 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
                 clip = item
                 url = try store.clipURL(item); id = item.attachmentID
             } else {
-                let item = Capture(mode: mode, ficID: ficID, chapterID: chapterID)
+                let item = Capture(mode: mode, ficID: ficID, chapterID: chapterID, asTodo: asTodo)
                 try store.save(item)
                 capture = item
                 url = try store.audioURL(item); id = item.id

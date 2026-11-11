@@ -38,11 +38,14 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     @Published var received: Set<String> = []
     @Published var uploaded: Set<String> = []
     @Published var message: String?
-    /// What the recorder is making, so the face, the Controls and the
-    /// Record/Transcribe pages can show it.
-    @Published private(set) var recordingMode: CaptureMode?
-    /// When the clip going now started, for its page's elapsed time.
+    /// Which button's clip the recorder is making, so the face, the Controls
+    /// and that button's tile can show it.
+    @Published private(set) var recordingChoice: RecordingChoice?
+    /// When the clip going now started, for its tile's elapsed time.
     @Published private(set) var recordingSince: Date?
+    /// Whether the phone can be reached right now, for the status screen.
+    /// Transfers queue regardless; this only says whether they can move.
+    @Published private(set) var phoneReachable = false
     /// The warning over the pages after a stray clip was thrown away.
     @Published private(set) var notice: String?
     private var noticeExpiry: Task<Void, Never>?
@@ -93,32 +96,32 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         alarm.update(WatchAlarm.Plan(nextEnd: ends.min(), ringing: ringing))
     }
 
-    /// Starts a clip in `mode`, or stops and saves the one going, unless it
-    /// is too short to have been meant. One press does both, from the list,
+    /// Starts a clip for `choice`, or stops and saves the one going, unless
+    /// it is too short to have been meant. One press does both, from a tile,
     /// the face or a Control.
-    func toggleRecording(_ mode: CaptureMode) async {
+    func toggleRecording(_ choice: RecordingChoice) async {
         if recorder.activeID != nil { recorder.stop(); return }
         guard !recorder.isStarting else { return }
         PomodoroModel.requestAuthorization() // for the too-short warning
-        recordingMode = mode
-        await recorder.start(mode: mode)
+        recordingChoice = choice
+        await recorder.start(mode: choice.mode, asTodo: choice.asTodo)
     }
 
-    /// A Record or Transcribe Control: `on` is the toggle's new value, so a
-    /// press that arrives after the clip already stopped does nothing.
-    static func toggleRecording(_ mode: CaptureMode, on: Bool) async throws {
+    /// A Record, Transcribe or To-do Control: `on` is the toggle's new value,
+    /// so a press that arrives after the clip already stopped does nothing.
+    static func toggleRecording(_ choice: RecordingChoice, on: Bool) async throws {
         guard case .success(let model) = startup else { throw RecordingIntentError.needsApp }
         if on == (model.recorder.activeID != nil) { return }
-        await model.toggleRecording(mode)
+        await model.toggleRecording(choice)
         if on, model.recorder.activeID == nil {
             throw model.message.map { RecorderError.message($0) } ?? RecordingIntentError.needsApp
         }
     }
 
     /// A haptic and a banner, and a notification when a Control stopped the
-    /// clip with the app out of sight. The Log page keeps the line.
+    /// clip with the app out of sight. The status screen keeps the line.
     private func warnDiscarded() {
-        let text = ShortRecording.warning(recordingMode ?? .record)
+        let text = ShortRecording.warning(recordingChoice?.mode ?? .record)
         message = text
         notice = text
         WKInterfaceDevice.current().play(.failure)
@@ -137,15 +140,18 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
 
     /// Tells the complications and Controls whether a clip is going.
     private func publishRecording() {
-        let status = recorder.activeID.map { _ in RecordingStatus(mode: recordingMode ?? .record, startedAt: Date()) }
+        let choice = recordingChoice ?? .record
+        let status = recorder.activeID.map { _ in
+            RecordingStatus(mode: choice.mode, asTodo: choice.asTodo, startedAt: Date())
+        }
         if let url = WatchComplication.recordingURL {
             // Keep the start time of the clip already going rather than restamping it.
             let current = RecordingStatus.load(from: url)
-            if (status == nil) != (current == nil) || status?.mode != current?.mode {
+            if (status == nil) != (current == nil) || (status != nil && !choice.matches(current)) {
                 try? RecordingStatus.save(status, to: url)
             }
         }
-        if recorder.activeID == nil { recordingMode = nil; recordingSince = nil }
+        if recorder.activeID == nil { recordingChoice = nil; recordingSince = nil }
         else if recordingSince == nil { recordingSince = Date() }
         PomodoroEngine.redraw()
     }
@@ -200,10 +206,17 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
+        let reachable = session.isReachable
         Task { @MainActor in
             if let error { self.message = error.localizedDescription }
+            self.phoneReachable = reachable
             if state == .activated { self.sendPending(); self.pomodoro.sendPending() }
         }
+    }
+
+    nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
+        let reachable = session.isReachable
+        Task { @MainActor in self.phoneReachable = reachable }
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
@@ -239,35 +252,50 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     }
 }
 
-/// The Watch's screens, side by side: swipe left and right between them, and
-/// each complication opens its own.
+/// The Watch's two screens, side by side: every action on one, and what the
+/// Watch is set to and holding on the other.
 enum WatchPage: Hashable {
-    case focus, timeout, workout, record, transcribe, log
+    case grid, status
+}
 
+/// What a busy timer tile opens: its own controls, which do not fit in a tile.
+enum WatchSheet: String, Identifiable {
+    case focus, timeout, workout
+
+    var id: String { rawValue }
     init(_ choice: TimerChoice) { self = choice == .focus ? .focus : .timeout }
-    init(_ choice: RecordingChoice) { self = choice == .record ? .record : .transcribe }
 }
 
 private struct WatchCaptureView: View {
     @ObservedObject var model: WatchModel
     @ObservedObject var recorder: Recorder
     @Environment(\.scenePhase) private var phase
-    @State private var removing: Capture?
-    @State private var page: WatchPage = .focus
+    @State private var page: WatchPage = .grid
+    @State private var sheet: WatchSheet?
 
     var body: some View {
         TabView(selection: $page) {
-            TimerPage(choice: .focus, model: model.pomodoro) { page = WatchPage($0) }
-                .tag(WatchPage.focus)
-            TimerPage(choice: .timeout, model: model.pomodoro) { page = WatchPage($0) }
-                .tag(WatchPage.timeout)
-            WorkoutPage(model: model.workout)
-                .tag(WatchPage.workout)
-            recordingPage(.record).tag(WatchPage.record)
-            recordingPage(.transcribe).tag(WatchPage.transcribe)
-            log.tag(WatchPage.log)
+            WatchGrid(model: model, pomodoro: model.pomodoro, workout: model.workout, recorder: recorder) {
+                sheet = $0
+            }
+            .tag(WatchPage.grid)
+            WatchStatus(model: model, recorder: recorder)
+                .tag(WatchPage.status)
         }
         .tabViewStyle(.page)
+        .sheet(item: $sheet) { which in
+            Group {
+                switch which {
+                case .focus, .timeout:
+                    TimerPage(choice: which == .focus ? .focus : .timeout, model: model.pomodoro) {
+                        sheet = WatchSheet($0)
+                    }
+                case .workout:
+                    WorkoutPage(model: model.workout)
+                }
+            }
+            .accessibilityIdentifier("sheet.\(which.rawValue)")
+        }
         .overlay(alignment: .top) {
             if let notice = model.notice {
                 Text(notice)
@@ -281,11 +309,13 @@ private struct WatchCaptureView: View {
             }
         }
         .onAppear {
-            // Open on whatever is already going.
-            if model.workout.timer.state != .idle { page = .workout }
-            if let owner = model.pomodoro.timer.owner { page = WatchPage(owner) }
+            // Open on whatever is waiting for a choice.
+            if model.workout.timer.isRinging { sheet = .workout }
+            if case .finished = model.pomodoro.timer.state, let owner = model.pomodoro.timer.owner {
+                sheet = WatchSheet(owner)
+            }
             if let kind = PomodoroModel.launchStart, model.pomodoro.timer.run == nil {
-                model.pomodoro.start(kind); page = WatchPage(kind == .timeout ? TimerChoice.timeout : .focus)
+                model.pomodoro.start(kind)
             }
             #if DEBUG
             // `-WatchLink lunaschal-watch://record,lunaschal-watch://record`:
@@ -304,11 +334,22 @@ private struct WatchCaptureView: View {
             if let link = PomodoroEngine.takePendingLink() { open(link) }
         }
         .onChange(of: model.workout.timer.isRinging) { _, ringing in
-            if ringing { page = .workout }
+            if ringing { page = .grid; sheet = .workout }
+        }
+        .onChange(of: model.workout.timer.state) { _, state in
+            // Stopped from its sheet: nothing left to show there.
+            if state == .idle, sheet == .workout { sheet = nil }
         }
         .onChange(of: model.pomodoro.timer.state) { _, state in
-            // The alarm brings the app forward; show the timer that is up.
-            if case .finished = state, let owner = model.pomodoro.timer.owner { page = WatchPage(owner) }
+            switch state {
+            case .finished:
+                // The alarm brings the app forward; show the timer's choices.
+                if let owner = model.pomodoro.timer.owner { page = .grid; sheet = WatchSheet(owner) }
+            case .idle:
+                if sheet == .focus || sheet == .timeout { sheet = nil }
+            case .running:
+                break
+            }
         }
         .onOpenURL { url in
             if let link = WatchLink(url: url) { open(link) }
@@ -327,79 +368,203 @@ private struct WatchCaptureView: View {
         }
     }
 
-    /// A tap on a complication, or a screen a Control asked for: turns to
-    /// that page and, since the face cannot act without opening the app, does
-    /// the thing at once. Focus, Timeout and Workout start unless already
-    /// going; Record and Transcribe start or stop a clip.
+    /// A tap on a complication, or a screen a Control asked for: shows the
+    /// grid and, since the face cannot act without opening the app, does the
+    /// thing at once. Focus, Timeout and Workout start unless already going
+    /// (and then open their controls); Record, Transcribe and To-do start or
+    /// stop a clip, whose tile shows it.
     private func open(_ link: WatchLink) {
+        page = .grid
         switch link {
         case .timer:
-            page = model.pomodoro.timer.owner.map(WatchPage.init) ?? .focus
+            sheet = model.pomodoro.timer.owner.map(WatchSheet.init)
         case .start(let kind):
-            model.pomodoro.press(kind)
-            page = model.pomodoro.timer.owner.map(WatchPage.init) ?? .focus
-        case .record, .transcribe:
-            let choice: RecordingChoice = link == .record ? .record : .transcribe
-            page = WatchPage(choice)
-            Task { await model.toggleRecording(choice.mode) }
+            if model.pomodoro.press(kind) == .alreadyGoing {
+                sheet = model.pomodoro.timer.owner.map(WatchSheet.init)
+            }
+        case .record, .transcribe, .todo:
+            let choice: RecordingChoice = link == .record ? .record : link == .todo ? .todo : .transcribe
+            sheet = nil
+            Task { await model.toggleRecording(choice) }
         case .workout:
-            page = .workout
-            if model.workout.isIdle { model.workout.start() }
+            if model.workout.isIdle { model.workout.start() } else { sheet = .workout }
         }
     }
+}
 
-    /// Record or Transcribe: one big button, or a big red Stop while that
-    /// kind of clip is going.
-    @ViewBuilder private func recordingPage(_ choice: RecordingChoice) -> some View {
-        Group {
-            if recorder.activeID != nil, model.recordingMode == choice.mode {
-                Button { recorder.stop() } label: {
-                    VStack(spacing: 8) {
-                        Image(systemName: "stop.fill").font(.system(size: 44, weight: .semibold))
-                        if let since = model.recordingSince {
-                            Text(since, style: .timer).font(.title3.weight(.semibold)).monospacedDigit()
-                        }
-                        Text("Stop and save").font(.footnote)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.roundedRectangle(radius: 24))
-                .tint(.red)
-            } else {
-                BigButton(title: choice.title, symbol: choice.symbol, tint: choice == .record ? .pink : .blue) {
-                    Task { await model.toggleRecording(choice.mode) }
-                }
-                // The other kind of clip is going; stop it from its own page.
-                .disabled(recorder.isStarting || recorder.activeID != nil)
+/// Every action on one screen: the three timers over the three kinds of clip.
+/// A tile shows its own state, so the grid is also the glance at what is going.
+private struct WatchGrid: View {
+    @ObservedObject var model: WatchModel
+    @ObservedObject var pomodoro: PomodoroModel
+    @ObservedObject var workout: WorkoutModel
+    @ObservedObject var recorder: Recorder
+    let show: (WatchSheet) -> Void
+
+    private let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
+
+    var body: some View {
+        GeometryReader { box in
+            let height = max(44, (box.size.height - 12) / 3)
+            LazyVGrid(columns: columns, spacing: 6) {
+                timer(.focus).frame(height: height)
+                timer(.timeout).frame(height: height)
+                workoutTile.frame(height: height)
+                recording(.record).frame(height: height)
+                recording(.transcribe).frame(height: height)
+                recording(.todo).frame(height: height)
             }
         }
-        .accessibilityIdentifier("page.\(choice.rawValue)")
+        .accessibilityIdentifier("page.grid")
     }
 
-    private var log: some View {
+    @ViewBuilder private func timer(_ choice: TimerChoice) -> some View {
+        let tint: Color = choice == .focus ? .indigo : .teal
+        switch pomodoro.timer.state {
+        case .running(let run) where choice.owns(run):
+            Tile(symbol: run.kind.symbol, tint: tint, active: true, id: choice.rawValue) {
+                show(WatchSheet(choice))
+            } caption: {
+                Text(timerInterval: run.startedAt...run.endsAt, countsDown: true)
+            }
+        case .finished(let kind) where choice.owns(kind):
+            Tile(symbol: "bell.fill", tint: tint, active: true, id: choice.rawValue) {
+                show(WatchSheet(choice))
+            } caption: { Text("Done") }
+        default:
+            Tile(symbol: choice.kind.symbol, tint: tint, id: choice.rawValue) {
+                if pomodoro.press(choice.kind) == .alreadyGoing, let other = pomodoro.timer.owner, other != choice {
+                    show(WatchSheet(other))
+                }
+            } caption: { Text("\(choice.title) \(choice.kind.minutes)") }
+        }
+    }
+
+    @ViewBuilder private var workoutTile: some View {
+        switch workout.timer.state {
+        case .idle:
+            Tile(symbol: "dumbbell", tint: .orange, id: "workout") { workout.start() } caption: {
+                Text("Workout \(Int(RestTimer.seconds))s")
+            }
+        case .running(let startedAt, let endsAt):
+            Tile(symbol: "dumbbell", tint: .orange, active: true, id: "workout") { show(.workout) } caption: {
+                Text(timerInterval: startedAt...endsAt, countsDown: true)
+            }
+        case .ringing:
+            Tile(symbol: "bell.fill", tint: .orange, active: true, id: "workout") { show(.workout) } caption: {
+                Text("Rest's over")
+            }
+        }
+    }
+
+    /// One tap starts the clip and the next stops and saves it. While one
+    /// kind of clip is going, the other two wait.
+    @ViewBuilder private func recording(_ choice: RecordingChoice) -> some View {
+        let going = recorder.activeID != nil && model.recordingChoice == choice
+        Tile(symbol: going ? "stop.fill" : choice.symbol, tint: going ? .red : choice.tint,
+             active: going, id: choice.rawValue) {
+            Task { await model.toggleRecording(choice) }
+        } caption: {
+            if going, let since = model.recordingSince { Text(since, style: .timer) } else { Text(choice.title) }
+        }
+        .disabled(!going && (recorder.isStarting || recorder.activeID != nil))
+    }
+}
+
+extension RecordingChoice {
+    /// Its tile's colour while idle; every clip going is red.
+    var tint: Color {
+        switch self {
+        case .record: return .pink
+        case .transcribe: return .blue
+        case .todo: return .green
+        }
+    }
+}
+
+/// One square of the grid: an icon over a one-line caption, filled solid
+/// while its thing is going so the state reads in a glance.
+private struct Tile<Caption: View>: View {
+    let symbol: String
+    let tint: Color
+    var active = false
+    let id: String
+    let action: () -> Void
+    @ViewBuilder let caption: () -> Caption
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Image(systemName: symbol).font(.system(size: 22, weight: .semibold))
+                caption()
+                    .font(.footnote.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+            }
+            .foregroundStyle(active ? Color.white : tint)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(tint.opacity(active ? 1 : 0.22), in: RoundedRectangle(cornerRadius: 14))
+            .opacity(enabled ? 1 : 0.4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("tile.\(id)")
+    }
+}
+
+/// What the Watch is set to and what it is holding: the phone link, the clips
+/// still on their way, the timers' lengths, and the recordings themselves.
+private struct WatchStatus: View {
+    @ObservedObject var model: WatchModel
+    @ObservedObject var recorder: Recorder
+    @State private var removing: Capture?
+
+    private var waiting: Int { model.captures.filter { !model.uploaded.contains($0.id) }.count }
+
+    var body: some View {
         List {
-            if let message = model.message { Text(message).font(.footnote) }
-            Button("Retry phone transfer") { model.sendPending() }
-            ForEach(model.captures) { capture in
-                VStack(alignment: .leading) {
-                    Text(capture.createdAt, style: .time)
-                    Text(model.uploaded.contains(capture.id) ? "Uploaded to server" :
-                         model.received.contains(capture.id) ? "Saved on phone" :
-                         capture.state == .interrupted ? "Interrupted · audio retained" :
-                         capture.state == .recording ? "Recording" : "Saved here · waiting for phone")
-                        .font(.caption)
-                    if capture.state == .interrupted {
-                        Button("Recover playable audio") { model.recover(capture) }
-                    }
-                    if model.uploaded.contains(capture.id) {
-                        Button("Remove Watch copy", role: .destructive) { removing = capture }
-                            .disabled(recorder.activeID != nil || recorder.isStarting)
+            Section("Phone") {
+                LabeledContent("Link", value: model.phoneReachable ? "Reachable" : "Not reachable")
+                LabeledContent("Waiting", value: waiting == 0 ? "None" : "\(waiting) clip\(waiting == 1 ? "" : "s")")
+                Button("Retry phone transfer") { model.sendPending() }
+            }
+            Section("Timers") {
+                LabeledContent("Focus", value: "\(PomodoroKind.work.minutes) min")
+                LabeledContent("Break", value: "\(PomodoroKind.break.minutes) min")
+                LabeledContent("Timeout", value: "\(PomodoroKind.timeout.minutes) min")
+                LabeledContent("Workout", value: "\(Int(RestTimer.seconds)) s")
+                LabeledContent("Shortest clip", value: "\(Int(ShortRecording.minimum)) s")
+            }
+            if let message = model.message {
+                Section("Last message") { Text(message).font(.footnote) }
+            }
+            Section {
+                ForEach(model.captures) { capture in
+                    VStack(alignment: .leading) {
+                        HStack {
+                            Text(capture.createdAt, style: .time)
+                            if capture.asTodo { Image(systemName: "checklist").foregroundStyle(.green) }
+                        }
+                        Text(model.uploaded.contains(capture.id) ? "Uploaded to server" :
+                             model.received.contains(capture.id) ? "Saved on phone" :
+                             capture.state == .interrupted ? "Interrupted · audio retained" :
+                             capture.state == .recording ? "Recording" : "Saved here · waiting for phone")
+                            .font(.caption)
+                        if capture.state == .interrupted {
+                            Button("Recover playable audio") { model.recover(capture) }
+                        }
+                        if model.uploaded.contains(capture.id) {
+                            Button("Remove Watch copy", role: .destructive) { removing = capture }
+                                .disabled(recorder.activeID != nil || recorder.isStarting)
+                        }
                     }
                 }
+            } header: {
+                Text("Recordings")
+            } footer: {
+                Text("Saved on phone does not mean uploaded. Watch copies stay until you remove them after server receipt; transcription may still be processing.")
             }
-            Text("Saved on phone does not mean uploaded. Watch copies stay until you remove them after server receipt; transcription may still be processing.")
-                .font(.footnote)
         }
         .confirmationDialog("Remove this Watch recording?", isPresented: Binding(
             get: { removing != nil }, set: { if !$0 { removing = nil } })) {
@@ -408,7 +573,7 @@ private struct WatchCaptureView: View {
                 removing = nil
             }
         } message: { Text("The phone and server copies are kept.") }
-        .accessibilityIdentifier("page.log")
+        .accessibilityIdentifier("page.status")
     }
 }
 
