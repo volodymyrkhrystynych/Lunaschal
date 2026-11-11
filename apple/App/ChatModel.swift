@@ -270,9 +270,7 @@ final class ChatModel: NSObject, ObservableObject, AVAudioRecorderDelegate {
             guard await AVAudioApplication.requestRecordPermission() else {
                 throw RecorderError.message("Allow microphone access in Settings to record.")
             }
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
-            try session.setActive(true)
+            try RecordingSession.activate()
             // Today's conversation if known; otherwise whichever is today's when it uploads.
             let begun = try capture.chatRecordings.begin(conversationID: conversation?.id, text: input,
                                                          attachmentIDs: staged.map(\.id))

@@ -52,13 +52,7 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
             guard permission else {
                 throw RecorderError.message("Allow microphone access in Settings to record.")
             }
-            let session = AVAudioSession.sharedInstance()
-            #if os(watchOS)
-            try session.setCategory(.record, mode: .default)
-            #else
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
-            #endif
-            try session.setActive(true)
+            try RecordingSession.activate()
             // Commit the identity before opening the audio file. After a crash,
             // there is still a manifest (or draft row) explaining whose recording this is.
             let url: URL, id: String
@@ -158,5 +152,33 @@ enum RecorderError: LocalizedError {
     case message(String)
     var errorDescription: String? {
         switch self { case let .message(value): return value }
+    }
+}
+
+/// The one audio-session setup every microphone in the app uses.
+///
+/// `.playAndRecord` without a Bluetooth option keeps the input on the built-in
+/// mic even with AirPods in, so a clip recorded with the phone in a pocket came
+/// out muffled. `.bluetoothHighQualityRecording` (iOS 26) opens the full-bandwidth
+/// AirPods link where the buds support it (H2 models); `.allowBluetoothHFP` is the
+/// documented fallback to the narrowband link everywhere else. The high-quality
+/// option only works with `mode: .default`.
+enum RecordingSession {
+    #if os(watchOS)
+    static let options: AVAudioSession.CategoryOptions = []
+    #else
+    static let options: AVAudioSession.CategoryOptions = [
+        .defaultToSpeaker, .allowBluetoothHFP, .bluetoothHighQualityRecording,
+    ]
+    #endif
+
+    static func activate() throws {
+        let session = AVAudioSession.sharedInstance()
+        #if os(watchOS)
+        try session.setCategory(.record, mode: .default)
+        #else
+        try session.setCategory(.playAndRecord, mode: .default, options: options)
+        #endif
+        try session.setActive(true)
     }
 }

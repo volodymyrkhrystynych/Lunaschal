@@ -59,9 +59,7 @@ final class Dictation: NSObject, ObservableObject, AVAudioRecorderDelegate {
             guard await AVAudioApplication.requestRecordPermission() else {
                 throw RecorderError.message("Allow microphone access in Settings to dictate.")
             }
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
-            try session.setActive(true)
+            try RecordingSession.activate()
             let audio = try AVAudioRecorder(url: url, settings: [
                 AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44100,
                 AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 64000,

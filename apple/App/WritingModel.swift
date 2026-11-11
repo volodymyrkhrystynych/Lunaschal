@@ -484,9 +484,7 @@ final class WritingDiscussionModel: NSObject, ObservableObject, ProposalResolver
                 throw RecorderError.message("Allow microphone access in Settings to record.")
             }
             if writing.capture.recorder.activeID != nil { writing.capture.recorder.stop() }
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
-            try session.setActive(true)
+            try RecordingSession.activate()
             let begun = try store.begin(conversationID: id, text: input, attachmentIDs: [])
             item = begun
             let audio = try AVAudioRecorder(url: store.audioURL(begun), settings: [
