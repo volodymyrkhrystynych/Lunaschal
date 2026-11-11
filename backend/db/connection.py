@@ -211,6 +211,12 @@ def _ensure_health_lifestyle(db):
     # Row-level latch: a normalized value must never pass the cutoff twice.
     db.execute("UPDATE body_weight_logs SET weight=CASE WHEN weight>=140 THEN weight*? ELSE weight END,"
                " weight_unit='kg' WHERE weight_unit IS NULL", (KG_PER_LB,))
+    # Health imports default to outside now. Nobody can pick 'unassigned' by
+    # hand, so this only reaches imports nobody has placed yet.
+    db.execute("UPDATE workout_sessions SET location_type='outside'"
+               " WHERE capture_kind='health' AND location_type='unassigned' AND id IN"
+               " (SELECT l.session_id FROM health_workout_links l JOIN health_workouts w ON w.id=l.health_id"
+               "  WHERE json_extract(w.metadata, '$.HKIndoorWorkout') IS NOT 1)")
     reconcile(db)
     db.commit()
 
