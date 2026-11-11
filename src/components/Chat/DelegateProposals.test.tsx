@@ -521,3 +521,51 @@ describe('the food card', () => {
     ).toBeTruthy();
   });
 });
+
+describe('unlock_gaming', () => {
+  it('shows the provisional rating and sends the GPU choice', async () => {
+    resolveProposal().mockResolvedValue({
+      proposal: {
+        id: 'g1',
+        kind: 'unlock_gaming',
+        status: 'accepted',
+        data: {},
+      },
+    });
+    renderProposals([
+      {
+        id: 'g1',
+        kind: 'unlock_gaming',
+        status: 'pending',
+        data: {
+          day: '2026-11-11',
+          rating: 3,
+          open: ['Stretch'],
+          pauseInference: true,
+        },
+      },
+    ]);
+    expect(screen.getByText('Today so far: ★★★☆☆')).toBeTruthy();
+    expect(screen.getByText('Still open: Stretch')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Also pause GPU inference'));
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock gaming' }));
+    await waitFor(() => expect(resolveProposal()).toHaveBeenCalled());
+    const [, , , data] = resolveProposal().mock.calls[0];
+    expect(data).toMatchObject({ pauseInference: false, rating: 3 });
+  });
+
+  it('collapses to what happened', () => {
+    renderProposals([
+      {
+        id: 'g1',
+        kind: 'unlock_gaming',
+        status: 'accepted',
+        data: { rating: 4 },
+        result: { rating: 4, pausedInference: true },
+      },
+    ]);
+    expect(
+      screen.getByText('Games unlocked · today ★★★★ · GPU freed')
+    ).toBeTruthy();
+  });
+});

@@ -397,7 +397,13 @@ def get_inference():
 
 @bp.post('/inference/pause')
 def pause_inference():
+    return jsonify(pause_inference_now())
+
+
+def pause_inference_now() -> dict:
     """Free the card: stop admitting GPU work, then unload the chat model.
+    Also called when the gaming lock is lifted (backend/routes/chat.py), so
+    unlocking and freeing the GPU are one tap.
 
     The flag goes down **first**, and the order is the whole trick. The router
     loads on demand, so between an unload and the gate taking effect any queued
@@ -420,7 +426,7 @@ def pause_inference():
     # the log reads as the app inexplicably declining to work.
     service.note('pause', f'{alias} unloaded' if ok
                  else f'{alias} not unloaded: {error}')
-    return jsonify({**_inference_state(), 'unloaded': ok, 'unloadError': error})
+    return {**_inference_state(), 'unloaded': ok, 'unloadError': error}
 
 
 @bp.post('/inference/resume')

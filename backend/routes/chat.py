@@ -867,6 +867,26 @@ def _accept_habit_plan(db, data: dict, ctx: dict) -> dict:
     return {'id': task_id}
 
 
+def _accept_unlock_gaming(db, data: dict, ctx: dict) -> dict:
+    """The end-of-work card: lift today's gaming lock, and free the GPU in the
+    same tap when the user left that ticked. Model-free, since the GPU is
+    about to be handed to a game. A card left over from yesterday cannot
+    unlock today."""
+    from backend.day_boundary import day_key_for
+    from backend.gaming import lock
+    if data.get('day') != day_key_for():
+        raise _AcceptRejected('this card was for another day — tell me again that you are done')
+    try:
+        state = lock.lift(db, 'review')
+    except ValueError as e:
+        raise _AcceptRejected(str(e)) from e
+    paused = False
+    if data.get('pauseInference') is True:
+        from backend.routes.settings import pause_inference_now
+        paused = bool(pause_inference_now().get('paused'))
+    return {'day': state['day'], 'rating': state['ratingAtUnlock'], 'pausedInference': paused}
+
+
 def _accept_habit(db, data: dict, ctx: dict) -> dict:
     """A habit the morning briefing suggested, with its if-then cue. Goes
     through the same cap as one typed in; a full list is a refusal the card
@@ -1224,6 +1244,7 @@ _ACCEPT_HANDLERS = {
     'todo': _accept_todo,
     'habit_plan': _accept_habit_plan,
     'habit': _accept_habit,
+    'unlock_gaming': _accept_unlock_gaming,
 }
 
 

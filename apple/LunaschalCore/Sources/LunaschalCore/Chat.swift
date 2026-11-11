@@ -269,6 +269,7 @@ public struct ChatProposal: Equatable, Identifiable {
                 "writing_note_update": "Update this note?", "writing_chapter_update": "Change this chapter?",
                 "screenshot_titles": "Rename these screenshots?",
                 "habit": "Start a new habit?",
+                "unlock_gaming": "Done with work — unlock games?",
                 "habit_plan": "Make this the plan for “\(data["habitTitle"]?.string ?? "this habit")”?"][kind] ?? "Save this?"
     }
 
@@ -278,7 +279,8 @@ public struct ChatProposal: Equatable, Identifiable {
                 "flashcards": "Queue Cards", "todo": "Add to today", "writing_note": "Add Note",
                 "writing_note_update": "Update Note", "writing_chapter_update": "Update Chapter",
                 "screenshot_titles": "Rename",
-                "habit_plan": "Use as cue", "habit": "Add habit"][kind] ?? "Save"
+                "habit_plan": "Use as cue", "habit": "Add habit",
+                "unlock_gaming": "Unlock gaming"][kind] ?? "Save"
     }
 
     public var resolvedLabel: String {
@@ -293,6 +295,10 @@ public struct ChatProposal: Equatable, Identifiable {
         case "todo": return "Added to today: \(data["title"]?.string ?? "")"
         case "habit": return "Added habit: \(data["title"]?.string ?? "")"
         case "habit_plan": return "Cue set for \(data["habitTitle"]?.string ?? "the habit"): \(data["cue"]?.string ?? "")"
+        case "unlock_gaming":
+            let rating = result["rating"]?.int ?? data["rating"]?.int
+            return "Games unlocked" + (rating.map { " · today \(String(repeating: "★", count: $0))" } ?? "")
+                + (result["pausedInference"]?.bool == true ? " · GPU freed" : "")
         case "flashcards":
             let count = result["count"]?.int ?? 0
             return "Queued \(count) card\(count == 1 ? "" : "s") for review in Learning"

@@ -43,6 +43,11 @@ TOOLS = [
           '("after coffee" for "weigh in"). An empty cue clears it.', {
         'habit': {'type': 'string'}, 'cue': {'type': 'string'},
     }, ['habit', 'cue']),
+    _tool('end_workday', 'Call when the user says they are done with work for the day ("done for the '
+          'day", "finished work", "logging off"). Drafts today\'s review and returns the rating today will '
+          'get if nothing else changes, with what is still open. When games are locked it also puts an '
+          'Unlock gaming card in front of them; nothing unlocks until they accept it. Tell them the rating '
+          'and the open items plainly, then point at the card.', {}),
 ]
 TOOL_NAMES = {t['function']['name'] for t in TOOLS}
 
@@ -50,7 +55,8 @@ DECISION_NOTE = (
     "\n\nWhen the user explains why something didn't happen — a busy day, being ill, forgetting — "
     'call record_excuse before answering, so the review and their streaks reflect it. Be kind about '
     'it: an excuse is context, not a confession. Use get_day_review for how a day went, '
-    'adjust_day_rating only with a reason they gave, and set_habit_cue when they agree to an if-then plan.')
+    'adjust_day_rating only with a reason they gave, and set_habit_cue when they agree to an if-then plan. '
+    'When they say they are done with work for the day, call end_workday before answering.')
 
 
 def _day(value: str) -> str:
@@ -87,6 +93,8 @@ def run_tool(name, args):
         if name == 'adjust_day_rating':
             return json.dumps(_compact(review.override(_day(args.get('day')), args.get('rating'),
                                                        args.get('reason')))), event
+        if name == 'end_workday':
+            return end_workday(event)
         if name == 'set_habit_cue':
             title = args.get('habit')
             task_id, title = review.resolve_target(get_db(), day_key_for(), 'habit', title)
@@ -97,6 +105,32 @@ def run_tool(name, args):
     except (ValueError, LookupError) as exc:
         event.update(ok=False, error=str(exc))
         return str(exc), event
+
+
+def end_workday(event: dict, now: int | None = None):
+    """Today's provisional review, and — on a locked day — the card that
+    lifts the gaming lock. The card carries the rating as it stands, so what
+    the user accepts is what they were told."""
+    from backend.gaming import lock
+    db = get_db()
+    day = day_key_for(now)
+    today = review.draft(day, now)
+    result = {'review': _compact(today),
+              'openItems': [i['title'] for i in today['items'] if i['done'] is False and not i['excused']]}
+    state = lock.status(db, now)
+    result['workEnd'] = state['workEnd']
+    if not state['applies']:
+        result['gaming'] = 'The gaming lock is not on today; nothing to unlock.'
+        return json.dumps(result), event
+    if not state['locked']:
+        result['gaming'] = 'Games are already unlocked today.'
+        return json.dumps(result), event
+    result['gaming'] = 'An Unlock gaming card is now in front of the user. Nothing is unlocked until they accept it.'
+    event['title'] = 'Unlock gaming'
+    event['proposal'] = {'kind': 'unlock_gaming', 'data': {
+        'day': day, 'rating': today['rating'], 'done': today['done'], 'missed': today['missed'],
+        'open': result['openItems'][:10], 'workEnd': state['workEnd'], 'pauseInference': True}}
+    return json.dumps(result), event
 
 
 def set_cue(task_id: str, cue: str | None) -> None:

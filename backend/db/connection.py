@@ -277,6 +277,7 @@ def init_db() -> None:
     # After it: the old briefing_goals text becomes the overarching goal.
     _ensure_goal_horizons(db)
     _ensure_coach_columns(db)
+    _ensure_gaming_lock_settings(db)
     _ensure_push_device_columns(db)
     _ensure_research_settings(db)
     _ensure_timeout_settings(db)
@@ -2200,6 +2201,22 @@ def _ensure_coach_columns(db: sqlite3.Connection) -> None:
         ('coach_quiet_end', 'INTEGER NOT NULL DEFAULT 8'),
         ('coach_daily_cap', 'INTEGER NOT NULL DEFAULT 3'),
         ('coach_no_send_rate', 'REAL NOT NULL DEFAULT 0.25'),
+    ):
+        if name not in cols:
+            db.execute(f'ALTER TABLE settings ADD COLUMN {name} {definition}')
+    db.commit()
+
+
+def _ensure_gaming_lock_settings(db: sqlite3.Connection) -> None:
+    """The gaming lock's switch, weekdays and process names
+    (backend/gaming/lock.py). Off until switched on; NULL lists read as the
+    shipped defaults, so a change to those defaults reaches a database that
+    never customised them."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    for name, definition in (
+        ('gaming_lock_enabled', 'INTEGER NOT NULL DEFAULT 0'),
+        ('gaming_lock_days', 'TEXT'),
+        ('gaming_lock_patterns', 'TEXT'),
     ):
         if name not in cols:
             db.execute(f'ALTER TABLE settings ADD COLUMN {name} {definition}')

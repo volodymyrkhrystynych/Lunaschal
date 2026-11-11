@@ -179,6 +179,10 @@ struct CoachReminderSettings: View {
                 Label("Check-ins and reminders", systemImage: "figure.mind.and.body")
             }
             .accessibilityIdentifier("settings-coach")
+            NavigationLink { GamingLockScreen() } label: {
+                Label("Gaming lock", systemImage: "gamecontroller")
+            }
+            .accessibilityIdentifier("settings-gaming-lock")
         } header: {
             Text("Coach")
         } footer: {

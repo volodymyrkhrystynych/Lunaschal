@@ -10,6 +10,7 @@ import { WeatherSection } from './WeatherSection';
 import { PlacesSection } from './PlacesSection';
 import { BriefingSection } from './BriefingSection';
 import { CoachSection } from './CoachSection';
+import { GamingLockSection } from './GamingLockSection';
 import { ReposSection } from './ReposSection';
 import { ResearchSection } from './ResearchSection';
 import { VRAMSection } from './VRAMSection';
@@ -156,6 +157,10 @@ export function Settings() {
 
           <CollapsibleSection title="Coach">
             <CoachSection />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Gaming lock">
+            <GamingLockSection />
           </CollapsibleSection>
 
           <CollapsibleSection title="Saved Places">

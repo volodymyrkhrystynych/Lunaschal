@@ -837,6 +837,8 @@ export interface DelegateProposalRecord {
     | 'screenshot_titles'
     | 'habit_plan'
     | 'habit'
+    // The end-of-work card that lifts the gaming lock (backend/gaming/).
+    | 'unlock_gaming'
     | 'writing_chapter_update';
   data: Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
@@ -852,6 +854,8 @@ export interface DelegateProposalRecord {
     revisionId?: string | null;
     renamed?: number;
     skipped?: { entryId: string; reason: string }[];
+    rating?: number | null;
+    pausedInference?: boolean;
   };
 }
 
@@ -3468,6 +3472,20 @@ export interface CoachSettings {
   behaviors: { weight: boolean; calories: boolean; habits: boolean };
 }
 
+/** `GET /api/gaming` (backend/gaming/lock.py). `days` are Python
+ *  weekdays: 0 is Monday. */
+export interface GamingStatus {
+  day: string;
+  applies: boolean;
+  locked: boolean;
+  unlockedAt: number | null;
+  method: 'review' | 'override' | null;
+  reason: string | null;
+  ratingAtUnlock: number | null;
+  workEnd: string | null;
+  settings: { enabled: boolean; days: number[]; patterns: string[] };
+}
+
 export interface CoachStat {
   behavior: string;
   label: string;
@@ -3502,6 +3520,13 @@ export const api = {
     pushStatus: () => get<PushStatus>('/api/push/status'),
     pushTest: () =>
       post<{ pushed: number; errors: string[] }>('/api/push/test', {}),
+  },
+  gaming: {
+    status: () => get<GamingStatus>('/api/gaming'),
+    updateSettings: (changes: Partial<GamingStatus['settings']>) =>
+      patch<GamingStatus>('/api/gaming/settings', changes),
+    override: (reason: string, pauseInference: boolean) =>
+      post<GamingStatus>('/api/gaming/override', { reason, pauseInference }),
   },
   goals: {
     list: () => get<Goal[]>('/api/goals'),
