@@ -47,12 +47,19 @@ def open_pull_request(token: str, owner: str, repo: str, *, head: str, base: str
     raise GitHubError(f'GitHub refused the pull request ({resp.status_code}): {message[:300]}')
 
 
-def pr_body(task: dict) -> str:
+def pr_body(task: dict, thread: dict | None = None) -> str:
+    """`thread` is tasks.question_thread: a task that began as a question keeps
+    the question as its prompt, so the change asked for is stated separately."""
     tests = task.get('testExit')
     verdict = ('passed' if tests == 0 else f'failed (exit {tests})') if tests is not None \
         else 'not run'
+    if thread and thread['planned']:
+        intro = ['## Task', thread['request'] or '_The change the answer to the question below pointed to._',
+                 '## Question', '\n\nThen:\n\n'.join(thread['questions']) or task.get('prompt') or '']
+    else:
+        intro = ['## Task', task.get('prompt') or '']
     parts = [
-        '## Task', task.get('prompt') or '',
+        *intro,
         '## Plan', task.get('plan') or '_none recorded_',
         '## Summary', task.get('summary') or '_none_',
         f'## Tests\nRun by Lunaschal after the agent finished: **{verdict}**.',

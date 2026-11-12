@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from ulid import ULID
 
-from backend.codeagent import acp, driver, mirror, tasks
+from backend.codeagent import acp, driver, mirror, tasks, worker
 from backend.db.connection import get_db
 from backend.repos import git as repo_git
 
@@ -272,6 +272,57 @@ def test_a_fresh_session_planning_from_an_answer_is_given_the_conversation(repo_
     assert 'Earlier, the user asked:\nWhat does a.py set?' in prompt
     assert 'a.py sets x = 1.' in prompt
     assert driver.PLAN_FROM_ANSWER_DEFAULT in prompt
+
+
+def test_a_plan_request_survives_a_run_that_died(repo_id):
+    # The run clears pending_input before the agent's turn; an interrupted run
+    # must not fall back to the generic request.
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver()
+    d.run(t['id'])
+    worker.plan_from_answer(t['id'], 'Make it 2')
+    tasks.update(t['id'], pending_input=None)
+    prompt = d._prompt_for(tasks.get(t['id']), fresh=True)
+    assert 'Now the user wants a change:\nMake it 2' in prompt
+    assert driver.PLAN_FROM_ANSWER_DEFAULT not in prompt
+
+
+def test_a_fresh_session_after_the_plan_is_told_the_change_not_only_the_question(repo_id):
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver()
+    d.run(t['id'])
+    worker.plan_from_answer(t['id'], 'Make it 2')
+    d.run(t['id'])
+    requeue(t['id'], pending_input='Also a test')
+    revise = d._prompt_for(tasks.get(t['id']), fresh=True)
+    assert 'Task:\nMake it 2\n\nThis grew out of a question about the code:\nWhat does a.py set?' in revise
+    requeue(t['id'], phase='build', pending_input=None)
+    build = d._prompt_for(tasks.get(t['id']), fresh=True)
+    assert 'The task:\nMake it 2' in build
+
+
+def test_planning_from_a_follow_up_names_every_question_and_the_latest_answer(repo_id):
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver()
+    d.run(t['id'])
+    worker.send_message(t['id'], 'And who reads it?')
+    tasks.update(t['id'], pending_input=None, summary='b.py reads it.')
+    get_db().execute("UPDATE agent_tasks SET status='answered' WHERE id=?", (t['id'],))
+    get_db().commit()
+    worker.plan_from_answer(t['id'])
+    prompt = d._prompt_for(tasks.get(t['id']), fresh=True)
+    assert 'Earlier, the user asked:\nWhat does a.py set?\n\nThen:\nAnd who reads it?' in prompt
+    assert 'the latest answer was:\nb.py reads it.' in prompt
+
+
+def test_a_fresh_follow_up_question_is_given_the_earlier_answer(repo_id):
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver()
+    d.run(t['id'])
+    worker.send_message(t['id'], 'And who reads it?')
+    prompt = d._prompt_for(tasks.get(t['id']), fresh=True)
+    assert 'You answered that already:\na.py sets x = 1.' in prompt
+    assert prompt.endswith('The user then asked:\nAnd who reads it?')
 
 
 def test_permission_choice():

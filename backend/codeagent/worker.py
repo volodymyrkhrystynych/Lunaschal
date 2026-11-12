@@ -200,7 +200,13 @@ def plan_from_answer(task_id: str, text: str = '') -> dict:
     if task['status'] != 'answered':
         raise ActionRefused('Only an answered question can become a plan')
     text = (text or '').strip()
-    tasks.append_event(task_id, 'user', {'text': text or 'Plan this.', 'action': 'plan'})
+    # The event, not pending_input, is the request's durable copy: the run
+    # clears pending_input before the agent's turn (tasks.question_thread).
+    tasks.append_event(task_id, 'user', {'text': text or tasks.PLAN_THIS, 'action': 'plan',
+                                         'request': text or None})
+    if text:
+        # The title becomes the PR's title, which should name the change.
+        tasks.update(task_id, title=tasks.title_from(text))
     return _requeue(task_id, phase='plan', pending_input=text or None)
 
 
@@ -279,7 +285,8 @@ def push_task(task_id: str) -> dict:
         raise ActionRefused(str(e))
     owner, name = mirror.github_repo(repo['remoteUrl'])
     url = github.open_pull_request(token, owner, name, head=branch, base=task['baseBranch'],
-                                   title=task['title'], body=github.pr_body(task))
+                                   title=task['title'],
+                                   body=github.pr_body(task, tasks.question_thread(task_id)))
     tasks.append_event(task_id, 'user', {'text': f'Pushed {branch}.', 'action': 'push',
                                          'prUrl': url})
     result = tasks.set_status(task_id, 'pushed', pr_url=url)

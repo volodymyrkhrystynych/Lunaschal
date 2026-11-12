@@ -274,8 +274,13 @@ struct CodeTaskDetailView: View {
                             // Whatever is typed in the reply line says what to change.
                             Button {
                                 let text = reply
-                                reply = ""
-                                Task { await code.planFromAnswer(taskID, text: text) }
+                                // Cleared only once it is accepted, so a refused
+                                // or failed request keeps the typed change.
+                                Task {
+                                    if await code.planFromAnswer(taskID, text: text), reply == text {
+                                        reply = ""
+                                    }
+                                }
                             } label: {
                                 Label(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                       ? "Plan this" : "Plan what I typed", systemImage: "hammer")

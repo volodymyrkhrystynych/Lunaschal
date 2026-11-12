@@ -1397,7 +1397,10 @@ def _ensure_agent_task_ask(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE agent_tasks_new RENAME TO agent_tasks')
         db.execute('CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status, created_at)')
         db.execute('CREATE INDEX IF NOT EXISTS idx_agent_tasks_updated ON agent_tasks(updated_at DESC)')
-        fk_problems = db.execute('PRAGMA foreign_key_check').fetchall()
+        # Only the two tables that point at this one: an unrelated orphan
+        # elsewhere in a long-lived database must not stop the app starting.
+        fk_problems = [p for child in ('agent_task_events', 'agent_approvals')
+                       for p in db.execute(f'PRAGMA foreign_key_check({child})').fetchall()]
         if fk_problems:
             raise RuntimeError(f'agent_tasks migration broke FK integrity: {fk_problems}')
         db.execute('COMMIT')

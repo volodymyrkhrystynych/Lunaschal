@@ -339,8 +339,11 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
               disabled={act.isPending}
               onClick={() => {
                 const text = reply.trim();
-                setReply('');
-                act.mutate(() => api.code.planFromAnswer(task.id, text));
+                // Cleared only once it is accepted: a refused or failed
+                // request leaves the typed change there to try again.
+                act.mutate(() => api.code.planFromAnswer(task.id, text), {
+                  onSuccess: () => setReply(r => (r.trim() === text ? '' : r)),
+                });
               }}
             >
               {reply.trim() ? 'Plan what I typed' : 'Plan this'}

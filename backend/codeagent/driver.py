@@ -105,9 +105,9 @@ PLAN_FROM_ANSWER_DEFAULT = 'Make the change our conversation points to.'
 # A fresh session has lost the conversation the plan grows out of.
 ANSWER_CONTEXT = """You are working in the git repository at /work, on the branch {branch}. \
 Earlier, the user asked:
-{prompt}
+{questions}
 
-and the answer was:
+and the latest answer was:
 {answer}
 
 """
@@ -275,6 +275,21 @@ def _from_answer(task: dict) -> bool:
     return bool(task.get('summary')) and not task.get('plan')
 
 
+def _asked(thread: dict | None, task: dict) -> str:
+    """Every question of an ask task, the first and each follow-up, in order."""
+    questions = (thread or {}).get('questions') or [task['prompt']]
+    return '\n\nThen:\n'.join(questions)
+
+
+def _task_text(task: dict, thread: dict | None) -> str:
+    """What the task is, for a fresh session. A task that grew out of a question
+    keeps the question as its prompt, so the change is put first."""
+    if not thread or not thread['planned']:
+        return task['prompt']
+    request = thread['request'] or 'The change the answer to this question pointed to.'
+    return f'{request}\n\nThis grew out of a question about the code:\n{_asked(thread, task)}'
+
+
 def question_in(text: str) -> str | None:
     found = QUESTION.findall(text or '')
     return found[-1] if found else None
@@ -386,23 +401,33 @@ class Driver:
 
     def _prompt_for(self, task: dict, fresh: bool, script: str | None = None) -> str:
         pending = task.get('pendingInput')
-        context = FRESH_CONTEXT.format(prompt=task['prompt']) if fresh else ''
+        thread = tasks.question_thread(task['id'])
+        context = FRESH_CONTEXT.format(prompt=_task_text(task, thread)) if fresh else ''
         if task['phase'] == 'ask':
             if pending and not fresh:
                 return ASK_FOLLOWUP_PROMPT.format(text=pending)
             base = ASK_PROMPT.format(prompt=task['prompt'])
-            return base + (f'\n\nYou answered that once already; the user then asked:\n{pending}'
-                           if pending else '')
+            if not pending:
+                return base
+            # A fresh session has lost the conversation, so it gets the
+            # follow-ups between and the answer it is being asked about.
+            earlier = [q for q in (thread or {}).get('questions', [])[1:] if q != pending]
+            between = ''.join(f'\n\nThe user then asked:\n{q}' for q in earlier)
+            answer = task.get('summary') or '(the answer was not recorded)'
+            return (base + between + f'\n\nYou answered that already:\n{answer}'
+                    f'\n\nThe user then asked:\n{pending}')
         if task['phase'] == 'plan' and _from_answer(task):
+            # pending is empty after an interrupted run; the thread keeps the request.
+            request = pending or (thread or {}).get('request') or PLAN_FROM_ANSWER_DEFAULT
             context = ANSWER_CONTEXT.format(
-                branch=mirror.branch_for(task['id']), prompt=task['prompt'],
-                answer=task['summary']) if fresh else ''
-            return PLAN_FROM_ANSWER_PROMPT.format(
-                context=context, request=pending or PLAN_FROM_ANSWER_DEFAULT)
+                branch=mirror.branch_for(task['id']),
+                questions=_asked(thread, task), answer=task['summary']) if fresh else ''
+            return PLAN_FROM_ANSWER_PROMPT.format(context=context, request=request)
         if task['phase'] == 'plan':
             if pending and not fresh:
                 return REVISE_PROMPT.format(text=pending)
-            base = PLAN_PROMPT.format(branch=mirror.branch_for(task['id']), prompt=task['prompt'])
+            base = PLAN_PROMPT.format(branch=mirror.branch_for(task['id']),
+                                      prompt=_task_text(task, thread))
             return base + (f'\n\nThe user has reviewed an earlier plan and said:\n{pending}'
                            if pending else '')
         script = script if script is not None else self._test_script(task)

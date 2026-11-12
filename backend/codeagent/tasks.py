@@ -69,7 +69,7 @@ def create(repo_id: str, prompt: str, *, title: str = '', harness: str = 'pi',
         raise ValueError(f'Unknown mode {mode!r}')
     task_id = str(ULID())
     now = _now()
-    title = (title or '').strip() or _title_from(prompt)
+    title = (title or '').strip() or title_from(prompt)
     db = get_db()
     db.execute(
         'INSERT INTO agent_tasks (id, repo_id, title, prompt, harness, status, phase, '
@@ -81,7 +81,7 @@ def create(repo_id: str, prompt: str, *, title: str = '', harness: str = 'pi',
     return get(task_id)
 
 
-def _title_from(prompt: str) -> str:
+def title_from(prompt: str) -> str:
     line = prompt.strip().splitlines()[0]
     return line if len(line) <= 80 else line[:77].rstrip() + '…'
 
@@ -192,6 +192,40 @@ def events(task_id: str, after: int = 0, limit: int = 500) -> list[dict]:
         d['payload'] = json.loads(d['payload'] or '{}')
         out.append(d)
     return out
+
+
+# What `worker.plan_from_answer` logs when the user typed nothing with it.
+PLAN_THIS = 'Plan this.'
+
+
+def question_thread(task_id: str) -> dict | None:
+    """What a question task said before it became a change: the question and
+    each follow-up, in order, and the change the user then asked for (None when
+    they only said "Plan this"). None for a task that started as a change.
+
+    Read from the event log rather than the row because the row keeps neither:
+    `summary` holds only the latest answer, and `pending_input` is cleared the
+    moment a run picks it up — so a run that dies takes the typed request with
+    it, and a fresh session would otherwise be told only the first question."""
+    rows = get_db().execute(
+        "SELECT payload FROM agent_task_events WHERE task_id=? AND kind='user' ORDER BY seq",
+        (task_id,),
+    ).fetchall()
+    questions: list[str] = []
+    for r in rows:
+        payload = json.loads(r['payload'] or '{}')
+        action = payload.get('action')
+        if action == 'plan':
+            request = payload.get('request')
+            if request is None:  # logged before 'request' was
+                request = payload.get('text') if payload.get('text') != PLAN_THIS else None
+            return {'questions': questions, 'planned': True, 'request': request or None}
+        if action in (None, 'message') and payload.get('text'):
+            questions.append(payload['text'])
+    task = get_db().execute('SELECT phase FROM agent_tasks WHERE id=?', (task_id,)).fetchone()
+    if not task or task['phase'] != 'ask':
+        return None
+    return {'questions': questions, 'planned': False, 'request': None}
 
 
 def last_event(task_id: str, kind: str) -> dict | None:

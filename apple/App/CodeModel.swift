@@ -131,7 +131,8 @@ final class CodeModel: ObservableObject {
     }
 
     /// An answered question becomes a change; `text` says which, if anything was typed.
-    func planFromAnswer(_ id: String, text: String) async {
+    @discardableResult
+    func planFromAnswer(_ id: String, text: String) async -> Bool {
         await act(id, "make-plan") { try await $0.planFromCodeAnswer(id, text: text) }
     }
 
