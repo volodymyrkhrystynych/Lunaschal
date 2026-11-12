@@ -158,3 +158,37 @@ describe('send to permanent', () => {
     );
   });
 });
+
+describe('rows linked to a to-do or habit', () => {
+  it('says where a row came from and why, and offers no → Permanent', async () => {
+    vi.mocked(api.chatTodos.list).mockResolvedValue([
+      todo({
+        sourceType: 'todo',
+        sourceId: 'abc',
+        reason: 'Expires next month',
+      }),
+      todo({ id: 't2', title: 'Book the ferry' }),
+    ]);
+    renderBar();
+    fireEvent.click(await screen.findByText('2 to-dos today'));
+
+    expect((await screen.findByTestId('chat-todo-why')).textContent).toBe(
+      'From your to-dos · Expires next month'
+    );
+    // Only the unlinked row can be sent to the permanent list.
+    expect(screen.getAllByText('→ Permanent')).toHaveLength(1);
+  });
+
+  it('labels a suggestion heard in the journal', async () => {
+    vi.mocked(api.chatTodos.list).mockResolvedValue([
+      todo({ sourceType: 'journal', sourceId: 'j1', reason: null }),
+    ]);
+    renderBar();
+    fireEvent.click(await screen.findByText('1 to-do today'));
+    expect((await screen.findByTestId('chat-todo-why')).textContent).toBe(
+      'From your journal'
+    );
+    // Provenance only: it can still be sent to the permanent list.
+    expect(screen.getByText('→ Permanent')).toBeTruthy();
+  });
+});
