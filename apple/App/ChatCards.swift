@@ -66,7 +66,7 @@ private struct PendingCard: View {
             ProposalForm(kind: proposal.kind, data: $data, reconstructed: proposal.reconstructionDay != nil)
             HStack {
                 Spacer()
-                Button("Dismiss") { resolve(accept: false) }.disabled(busy)
+                Button(proposal.dismissLabel) { resolve(accept: false) }.disabled(busy)
                 Button(busy ? "Saving…" : proposal.acceptLabel) { resolve(accept: true) }
                     .buttonStyle(.borderedProminent).disabled(busy)
                     .accessibilityIdentifier("chat-card-accept")
@@ -144,10 +144,27 @@ private struct ProposalForm: View {
                                                              set: { data["pauseInference"] = .bool($0) }))
                 .font(.caption)
         case "todo":
-            // Yesterday's unfinished bar item, carried over by the morning briefing.
+            // Yesterday's unfinished bar item, carried over by the morning
+            // briefing, or something heard in a journal entry.
             field("Title", "title")
             if let notes = data["notes"]?.string, !notes.isEmpty {
                 Text(notes).font(.caption).foregroundStyle(.secondary)
+            }
+            if let reason = data["reason"]?.string, !reason.isEmpty {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
+        case "todo_review":
+            // Skipped day after day in the bar: keep it (the quiet button), or one of these.
+            Text(data["title"]?.string ?? "").font(.subheadline)
+            Text("Left undone \(data["streak"]?.int ?? 0) days running.").font(.caption).foregroundStyle(.secondary)
+            ForEach(ChatProposal.todoReviewChoices, id: \.value) { choice in
+                let chosen = (data["choice"]?.string ?? "drop") == choice.value
+                Button { data["choice"] = .string(choice.value) } label: {
+                    Label(choice.label, systemImage: chosen ? "largecircle.fill.circle" : "circle")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityAddTraits(chosen ? .isSelected : [])
             }
         case "flashcards":
             field("Topic", "topic")
@@ -420,8 +437,16 @@ private struct TodoRow: View {
                 if let notes = todo.notes, !notes.isEmpty {
                     Text(notes).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
+                if !todo.why.isEmpty {
+                    Text(todo.why).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .accessibilityIdentifier("chat-todo-why")
+                }
             }
-            Button("→ Permanent", action: promote).font(.caption2).buttonStyle(.bordered)
+            // A row tied to a to-do or habit already is one; sending it would
+            // make a second copy.
+            if !todo.isLinked {
+                Button("→ Permanent", action: promote).font(.caption2).buttonStyle(.bordered)
+            }
             Button { Task { await chat.dismiss(todo) } } label: { Image(systemName: "xmark") }
                 .buttonStyle(.borderless).foregroundStyle(.secondary).accessibilityLabel("Dismiss")
         }

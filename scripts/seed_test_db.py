@@ -1347,11 +1347,13 @@ def seed_chat(db):
     # The day-scoped todo list the chat delegate writes to, separate from the
     # Lifestyle todos.
     day_key = today_key()
-    for title, done in [('Book the ferry', 0), ('Pack a cooler', 1)]:
+    for title, done, reason in [('Book the ferry', 0, 'You wrote yesterday that you need to'),
+                                ('Pack a cooler', 1, None)]:
         db.execute(
             'INSERT INTO chat_todos (id, day_key, title, notes, priority, done, completed_at, '
-            'created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (new_id(), day_key, title, None, 3, done, ts(0) if done else None, ts(0), ts(0)),
+            'created_at, updated_at, source_type, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (new_id(), day_key, title, None, 3, done, ts(0) if done else None, ts(0), ts(0),
+             'journal' if reason else None, reason),
         )
 
     # The assistant's own note queue — deliberately a separate store from the
@@ -1654,15 +1656,17 @@ def seed_lifestyle(db):
                 (new_id(), task_id, today_key(n), ts(n)),
             )
 
+    todo_ids = {}
     for title, done, lst in [
         ('Renew passport', 0, 'todo'),
         ('Book flight', 0, 'todo'),
         ('Return library books', 1, 'archive'),
     ]:
+        todo_ids[title] = new_id()
         db.execute(
             'INSERT INTO todos (id, title, done, completed_at, list, created_at, updated_at) '
             'VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (new_id(), title, done, ts(1) if done else None, lst, ts(5), ts(1)),
+            (todo_ids[title], title, done, ts(1) if done else None, lst, ts(5), ts(1)),
         )
     # A spoken to-do that has already become one (only 'done' and 'error' are
     # settled states; a 'pending' row would wait on an llm_jobs row that isn't
@@ -1676,6 +1680,36 @@ def seed_lifestyle(db):
         "INSERT INTO todo_recordings (id, path, mime, status, transcript, captured_at, created_at) "
         "VALUES (?, NULL, 'audio/mp4', 'done', ?, ?, ?)",
         (spoken_id, 'call the dentist about the cleaning', ts(2), ts(2)),
+    )
+    # The Watch's To-do button: one journal entry holding the words, and the
+    # to-do made from them under the id the Watch minted.
+    watch_todo_id = new_id()
+    watch_said = 'pick up the dry cleaning on the way home, the ticket is in my wallet'
+    db.execute(
+        'INSERT INTO todos (id, title, notes, done, list, created_at, updated_at)'
+        ' VALUES (?, ?, ?, 0, ?, ?, ?)',
+        (watch_todo_id, 'Pick up the dry cleaning', 'On the way home; the ticket is in my wallet.',
+         'todo', ts(1), ts(1)),
+    )
+    db.execute(
+        'INSERT INTO journal_entries (id, content, raw_content, title, todo_id, created_at, updated_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (new_id(), watch_said, watch_said, 'Dry cleaning', watch_todo_id, ts(1), ts(1)),
+    )
+
+    # Today's chat bar restates one of those to-dos, linked to it so ticking
+    # either ticks both (backend/day_plan.py) — and "Book flight" has been
+    # skipped three mornings running, so it sits out of the plan.
+    db.execute(
+        'INSERT INTO chat_todos (id, day_key, title, priority, done, created_at, updated_at, '
+        'source_type, source_id, reason) VALUES (?, ?, ?, 3, 0, ?, ?, ?, ?, ?)',
+        (new_id(), today_key(), 'Renew passport', ts(0), ts(0), 'todo', todo_ids['Renew passport'],
+         'Expires next month'),
+    )
+    db.execute(
+        'INSERT INTO chat_todo_suggestions (item_key, title, last_judged_day, ignored_streak, '
+        'total_ignored, snoozed_until, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (f"todo:{todo_ids['Book flight']}", 'Book flight', today_key(1), 3, 4, today_key(-3), ts(0)),
     )
 
     session_id = new_id()
@@ -2790,6 +2824,30 @@ def seed_goals(db):
     entry(goal_id, f"New goal for the {label('week', last_start).lower()}: Clear the inbox", ts(10))
 
 
+def seed_merged_prs(db):
+    """One merged PR and the journal entry it was filed as, already summarised
+    — written by the module's own renderer so the demo reads like the real thing."""
+    import json
+    from backend.github_prs.sync import TAGS, entry_text, entry_title
+
+    pr = {'number': 239, 'title': 'Merged PRs become journal entries',
+          'url': 'https://github.com/example/lunaschal/pull/239', 'merged_at': ts(1)}
+    days = [{'day': today_key(4), 'count': 3}, {'day': today_key(2), 'count': 7},
+            {'day': today_key(1), 'count': 1}]
+    summary = ('Merged pull requests on the app\'s repository are now filed into the Journal on '
+               'the day they merged, with a count of commits per day.')
+    entry_id = new_id()
+    db.execute('INSERT INTO journal_entries (id, content, title, tags, created_at, updated_at) '
+               'VALUES (?, ?, ?, ?, ?, ?)',
+               (entry_id, entry_text(pr, days, summary), entry_title(pr), json.dumps(TAGS),
+                pr['merged_at'], pr['merged_at']))
+    db.execute('INSERT INTO merged_prs (repo, number, title, url, body, merged_at, commit_days, '
+               'entry_id, summarized_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+               ('example/lunaschal', pr['number'], pr['title'], pr['url'],
+                '## Task\nFile merged PRs into the journal.', pr['merged_at'], json.dumps(days),
+                entry_id, pr['merged_at'], pr['merged_at']))
+
+
 def seed_coach(db):
     """Yesterday's final review and today's draft, a habit cue, and three
     excuses naming the same obstacle — so the review shows an excused item
@@ -2887,6 +2945,7 @@ def main() -> None:
     seed_practice(db)
     seed_notes(db)
     seed_goals(db)
+    seed_merged_prs(db)
     seed_coach(db)
     seed_notebook(db, journal_ids)
     # After seed_notebook: a study source is bound to a note under the same

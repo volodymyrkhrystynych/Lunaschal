@@ -198,6 +198,10 @@ def create_app():
         start_entry_weather_scheduler()
         from backend.goals.scheduler import start_scheduler as start_goal_scheduler
         start_goal_scheduler()
+        # Merged PRs into the Journal: one GitHub poll every 15 minutes, no
+        # model (the summary is an llm_jobs row) — backend/github_prs/.
+        from backend.github_prs.scheduler import start_pr_journal_scheduler
+        start_pr_journal_scheduler()
         # The Code tab's agent runs one task phase at a time in a container.
         # Idle (one indexed SELECT every 30s) until a task is queued, so it
         # costs nothing on a machine without Docker until someone uses it.

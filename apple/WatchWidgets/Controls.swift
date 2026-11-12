@@ -47,11 +47,11 @@ struct RecordingValue: ControlValueProvider {
     var previewValue: Bool { false }
 
     func currentValue() async throws -> Bool {
-        WatchComplication.recordingURL.flatMap(RecordingStatus.load(from:))?.mode == choice.mode
+        choice.matches(WatchComplication.recordingURL.flatMap(RecordingStatus.load(from:)))
     }
 }
 
-/// Record or Transcribe: on starts a clip, off stops and saves it.
+/// Record, Transcribe or To-do: on starts a clip, off stops and saves it.
 struct RecordingControl {
     let choice: RecordingChoice
 
@@ -65,7 +65,7 @@ struct RecordingControl {
             .tint(.red)
         }
         .displayName(LocalizedStringResource(stringLiteral: choice.title))
-        .description(choice == .record ? "Starts and stops a journal clip." : "Starts and stops a clip that becomes text.")
+        .description(LocalizedStringResource(stringLiteral: choice.summary))
     }
 }
 
@@ -74,3 +74,4 @@ struct FocusControl: ControlWidget { var body: some ControlWidgetConfiguration {
 struct TimeoutControl: ControlWidget { var body: some ControlWidgetConfiguration { TimerControl(choice: .timeout).body } }
 struct RecordControl: ControlWidget { var body: some ControlWidgetConfiguration { RecordingControl(choice: .record).body } }
 struct TranscribeControl: ControlWidget { var body: some ControlWidgetConfiguration { RecordingControl(choice: .transcribe).body } }
+struct TodoControl: ControlWidget { var body: some ControlWidgetConfiguration { RecordingControl(choice: .todo).body } }

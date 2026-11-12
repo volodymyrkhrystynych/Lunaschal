@@ -439,10 +439,13 @@ def test_fallback_plan_is_pure_and_ordered(client):
         'Low, overdue', 'Low, due today', 'Low, undated',
     ]
     # Shaped like the model's own output, so it validates the same way.
+    # The ids ride along, so each item links to its row without a title match.
     assert plan[0] == {'title': 'Meditate', 'priority': 4, 'list': 'todo',
-                       'due': None, 'linkedTitle': 'Meditate'}
+                       'due': None, 'linkedTitle': 'Meditate', 'basis': 'list',
+                       'sourceType': 'daily', 'sourceId': 'd1'}
     assert plan[4] == {'title': 'Low, due today', 'priority': 1, 'list': 'todo',
-                       'due': NOW, 'linkedTitle': 'Low, due today'}
+                       'due': NOW, 'linkedTitle': 'Low, due today', 'basis': 'list',
+                       'sourceType': 'todo', 'sourceId': None}
 
 
 # --- an unusable completion ---
