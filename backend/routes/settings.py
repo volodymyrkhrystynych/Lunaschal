@@ -425,21 +425,10 @@ def pause_inference():
 
 @bp.post('/inference/resume')
 def resume_inference():
-    """Switch the lane back on and wake the queue.
+    """Switch the lane back on and wake the queue (backend/ai/pause.py)."""
+    from backend.ai.pause import resume_inference as resume
 
-    Deliberately no `/models/load`: the next real request reloads the model
-    lazily, and spending tens of seconds pulling 22 GB onto the card because
-    somebody pressed a button is a surprise, not a service.
-    """
-    from backend.ai import jobs, service
-
-    db = get_db()
-    db.execute('UPDATE settings SET inference_paused=0, inference_paused_at=NULL,'
-               ' updated_at=? WHERE id=1', (int(time.time()),))
-    db.commit()
-    service.invalidate_pause_cache()
-    service.note('resume', f'{jobs.pending_count()} job(s) queued')
-    jobs.wake()
+    resume()
     return jsonify(_inference_state())
 
 

@@ -28,6 +28,7 @@ import threading
 import time
 from datetime import datetime
 
+from backend.day_boundary import day_bounds, day_key_for
 from backend.db.connection import get_db
 from backend.briefing_job import run_briefing
 
@@ -64,8 +65,9 @@ def run_nightly() -> None:
 
     # The largest single consumer of the card in the app, and until now the only
     # scheduler that asked nobody's permission for it. P2 means a chat message
-    # takes the lane back mid-pass, and a paused GPU skips the night entirely —
-    # the sources it reads are still there tomorrow.
+    # takes the lane back mid-pass. A pause still on when the window opens is
+    # ended by `_tick` before this runs (see `_end_pause`); one switched on
+    # mid-pass is still honoured, leaving the rest of the night pending.
     with service.background():
         _run_nightly()
 
@@ -153,6 +155,35 @@ def compact_sync_history() -> None:
         print(f'Sync log compaction failed: {e}')
 
 
+def _end_pause(now: datetime) -> None:
+    """Switch the GPU back on if "pause for gaming" was left on overnight.
+
+    A pause is measured in hours, and one switched on before today's 4am
+    boundary belongs to an evening that is over — still on at 05:00, somebody
+    forgot it, and honouring it would cost the briefing, the entry digests and
+    the life-wiki pass for a card nobody is using. A pause switched on *since*
+    4am is honoured: it is the user's current decision, whatever the clock says
+    — set at 04:50 just before the window, at 05:40 after the night ran (and
+    `last_run_date` died with a restart), or at 20:30 before a briefing hour of
+    21. The time of day alone cannot tell those from a forgotten one; when the
+    pause began can. Only called when the briefing is enabled: with nothing to
+    run, there is no reason to take the card back.
+    """
+    row = get_db().execute(
+        'SELECT inference_paused, inference_paused_at FROM settings LIMIT 1'
+    ).fetchone()
+    if not row or not row['inference_paused']:
+        return
+    paused_at = row['inference_paused_at']
+    day_start, _ = day_bounds(day_key_for(int(now.timestamp())))
+    if paused_at is not None and paused_at >= day_start:
+        print('Overnight briefing: inference paused since 4am, leaving it paused')
+        return
+    from backend.ai.pause import resume_inference
+    resume_inference('overnight briefing')
+    print('Overnight briefing: inference was paused, resumed it')
+
+
 def _tick(now: datetime, last_run_date):
     """One poll: the briefing (when enabled), then compaction, once a day in
     the briefing window. Returns the date it last ran for."""
@@ -162,6 +193,7 @@ def _tick(now: datetime, last_run_date):
         return last_run_date
     try:
         if enabled:
+            _end_pause(now)
             run_nightly()
     except Exception as e:
         print(f'Overnight briefing failed: {e}')
