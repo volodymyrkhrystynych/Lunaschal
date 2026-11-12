@@ -32,6 +32,20 @@ def test_add_skips_a_blank_title_but_keeps_the_rest(client):
     assert [t['title'] for t in resp.get_json()] == ['Buy milk']
 
 
+def test_add_splits_a_sentence_long_title_into_a_label_and_notes(client):
+    """add_to_bar holds every writer to todo_title_and_notes, so the linked
+    insert path keeps the sentence rather than storing it as the title."""
+    sentence = ('Email the landlord about the leaking radiator in the bedroom, '
+                'and ask whether someone can come round before the weekend')
+    resp = client.post('/api/tasks/chat-todos', json={
+        'items': [{'title': sentence, 'notes': 'Mention the photos.'}],
+    })
+    row = resp.get_json()[0]
+    assert len(row['title']) <= 80
+    assert row['notes'].startswith(sentence)
+    assert row['notes'].endswith('Mention the photos.')
+
+
 def test_add_is_capped_at_ten_items(client):
     items = [{'title': f't{i}'} for i in range(15)]
     resp = client.post('/api/tasks/chat-todos', json={'items': items})

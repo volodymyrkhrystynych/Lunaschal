@@ -7,9 +7,16 @@ message. The to-dos it suggests are *today's plan*, not backlog: they land
 straight in `chat_todos` — the same day-scoped table the chat delegate's
 `add_todos` tool writes to — with no confirm step, since the Chat tab's bar
 above the input is where the user edits, completes, dismisses or promotes them
-afterward. `_seed_chat_todos` skips anything already tracked (an open todo, a
-pending daily task, or something already added to today's bar) so the same
-item never shows up twice.
+afterward. Most of the plan restates the user's open to-dos and pending daily
+tasks on purpose, and each such row is *linked* to the one it restates
+(backend/day_plan.py), so ticking it in the bar ticks the real one and the
+other way round. `_seed_chat_todos` only skips a title or a linked row already
+in today's bar, so a forced re-run can't duplicate it.
+
+Before planning, the previous days' bars are tallied (`day_plan.tally_day`):
+an item left undone day after day sits out of the plan for longer each time
+(backend/day_plan_backoff.py), and once it has been skipped often enough a
+`todo_review` card asks whether to keep it, let it go or break it down.
 
 Yesterday's *unfinished* bar items are the one thing that does not go straight
 in. They come back as `todo` suggestion cards on the briefing message, in the
@@ -36,12 +43,14 @@ from ulid import ULID
 from backend.db.connection import get_db
 from backend.day_boundary import day_key_for
 from backend.ai.provider import is_ai_configured
+from backend import day_plan
 from backend.ai.briefing import (
     fallback_plan,
     gather_briefing_context,
     generate_briefing,
     FALLBACK_BRIEFING,
     MAX_BRIEFING_TODOS,
+    MAX_NEW_TODOS,
 )
 from backend.ai.llm import EmptyCompletion
 from backend.briefing_events import stage_events
@@ -49,17 +58,18 @@ from backend.coach import review as day_review
 from backend.goals import rollover as goal_rollover
 from backend.oddities_job import briefing_report, render_markdown as render_oddities
 from backend.routes.tasks import (
-    _parse_priority, _parse_due, _today_chat_todo_titles,
+    _parse_priority, _parse_due, _today_bar_sources, _today_chat_todo_titles,
 )
+
+# How many past days' bars a briefing tallies, so a server that was off for a
+# few nights still counts the skips it missed (each day is judged once).
+TALLY_DAYS = 7
 
 
 def find_or_create_day_conversation(db, day_key: str, now: int) -> str:
-    row = db.execute(
-        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL',
-        (day_key,),
-    ).fetchone()
-    if row:
-        return row['id']
+    existing = day_plan.find_day_conversation(db, day_key)
+    if existing:
+        return existing
     conv_id = str(ULID())
     db.execute(
         'INSERT INTO conversations(id, title, day_key, created_at, updated_at) VALUES (?,?,?,?,?)',
@@ -84,23 +94,53 @@ def _has_briefing(db, conv_id: str) -> bool:
     return False
 
 
-def _seed_chat_todos(db, proposed: list, today: str, now: int) -> int:
+def _seed_chat_todos(db, proposed: list, today: str, now: int, *,
+                     held: set[str] | frozenset = frozenset(),
+                     goal_ids: dict[str, str] | None = None) -> int:
     """Validate/clamp each briefing-suggested item and insert it straight into
     chat_todos — no confirm step. The plan is deliberately allowed to restate
-    an open todo or a pending daily task (that's most of what it is); it only
-    skips a title already sitting in today's bar, so a forced re-run or a
-    same-batch repeat can't duplicate it. Caps at MAX_BRIEFING_TODOS. Returns
-    the count actually inserted."""
+    an open todo or a pending daily task (that's most of what it is), and such
+    an item is linked to the row it restates. It skips a title or a linked row
+    already in today's bar, so a forced re-run or a same-batch repeat can't
+    duplicate it, and anything the user has been skipping (`held`) — the
+    prompt already left those out, this holds even if the model didn't.
+    Caps at MAX_BRIEFING_TODOS, of which at most MAX_NEW_TODOS may be new
+    (from a goal or the journal rather than their lists). Returns the count
+    actually inserted."""
     taken = _today_chat_todo_titles(db, today)
+    linked = _today_bar_sources(db, today)
+    sources = day_plan.list_sources(db, today)
+    goal_ids = goal_ids or {}
     seen: set[str] = set()
-    inserted = 0
+    inserted = new = 0
     for item in proposed:
         if inserted >= MAX_BRIEFING_TODOS:
             break
         if not isinstance(item, dict):
             continue
         title = (item.get('title') or '').strip()
-        if not title or title.lower() in seen or title.lower() in taken:
+        norm = day_plan.normalize_title(title)
+        if not title or norm in seen or norm in taken:
+            continue
+
+        source = None
+        if item.get('sourceType') in day_plan.LIST_SOURCES and item.get('sourceId'):
+            source = (item['sourceType'], item['sourceId'])
+        else:
+            source = day_plan.resolve_list_source(db, today, title, item.get('linkedTitle'), sources)
+        if source and source in linked:
+            continue
+        basis = item.get('basis')
+        is_new = source is None and basis in ('goal', 'journal')
+        if is_new and new >= MAX_NEW_TODOS:
+            continue
+        if source is None:
+            if basis == 'goal':
+                goal_id = goal_ids.get(day_plan.normalize_title(item.get('basisRef')))
+                source = ('goal', goal_id) if goal_id else None
+            elif basis == 'journal':
+                source = ('journal', None)
+        if day_plan.is_held_back(held, *(source or (None, None)), title):
             continue
 
         priority, err = _parse_priority(item.get('priority'))
@@ -109,15 +149,49 @@ def _seed_chat_todos(db, proposed: list, today: str, now: int) -> int:
         due, err = _parse_due(item.get('due'))
         if err:
             due = None
-
-        db.execute(
-            'INSERT INTO chat_todos(id, day_key, title, notes, due, priority, done, created_at, updated_at)'
-            ' VALUES (?,?,?,NULL,?,?,0,?,?)',
-            (str(ULID()), today, title, due, priority, now, now),
-        )
-        seen.add(title.lower())
+        reason = item.get('reason') if isinstance(item.get('reason'), str) else None
+        day_plan.insert_bar_row(db, today, title, now, due=due, priority=priority,
+                                source=source, reason=reason)
+        seen.add(norm)
+        if source and source[0] in day_plan.LIST_SOURCES:
+            linked.add(source)
+        # An unmatched "list" item is a wording the matcher missed, not a new
+        # idea; only goal and journal items count against the cap.
+        new += is_new
         inserted += 1
     return inserted
+
+
+def tally_previous_days(db, today: str, now: int) -> None:
+    """Judge the bars of the days before `today` that haven't been yet."""
+    start = date.fromisoformat(today)
+    for back in range(TALLY_DAYS, 0, -1):
+        day_plan.tally_day(db, (start - timedelta(days=back)).isoformat(), now)
+
+
+def stage_todo_reviews(db, now: int) -> list[dict]:
+    """A "keep it or let it go?" card for each item skipped often enough. The
+    card defaults to letting it go — the honest reading of a week of skips —
+    and dismissing it keeps suggesting the item, spaced out."""
+    proposals = []
+    for s in day_plan.review_candidates(db):
+        source_type, source_id = day_plan.parse_key(s['item_key'])
+        if source_type in day_plan.LIST_SOURCES and not day_plan.source_exists(db, source_type, source_id):
+            # Deleted since; nothing to ask about.
+            day_plan.drop(db, s['item_key'], now)
+            continue
+        if source_type in day_plan.LIST_SOURCES and not day_plan.source_open(db, source_type, source_id):
+            # Finished (or set aside) since: it got done, so the skips are over.
+            day_plan.reset_streak(db, s['item_key'], now)
+            continue
+        proposals.append({
+            'id': str(ULID()), 'kind': 'todo_review', 'status': 'pending',
+            'data': {'itemKey': s['item_key'], 'title': s['title'],
+                     'streak': s['ignored_streak'], 'sourceType': source_type,
+                     'choice': 'drop'},
+        })
+        day_plan.mark_asked(db, s['item_key'], now)
+    return proposals
 
 
 def _carried_titles(db, conv_id: str, day: str) -> set[str]:
@@ -149,23 +223,41 @@ def stage_carryover_todos(db, conv_id: str, today: str) -> list[dict]:
     in today's bar — the plan may have restated it — and anything offered
     earlier today."""
     yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
-    taken = _today_chat_todo_titles(db, today) | _carried_titles(db, conv_id, yesterday)
+    taken = _today_chat_todo_titles(db, today) | {
+        day_plan.normalize_title(t) for t in _carried_titles(db, conv_id, yesterday)}
+    linked = _today_bar_sources(db, today)
+    # Sitting out per the backoff, or about to be asked about on a review card:
+    # neither should also come back as "keep this for today?".
+    held = day_plan.held_back_keys(db, today) | {
+        s['item_key'] for s in db.execute(
+            'SELECT item_key FROM chat_todo_suggestions WHERE asked_at IS NOT NULL')}
     rows = db.execute(
-        'SELECT id, title, notes, due, priority FROM chat_todos'
+        'SELECT id, title, notes, due, priority, source_type, source_id, reason FROM chat_todos'
         ' WHERE day_key=? AND done=0 ORDER BY created_at, id',
         (yesterday,),
     ).fetchall()
     proposals = []
     for r in rows:
         title = (r['title'] or '').strip()
-        if not title or title.lower() in taken:
+        norm = day_plan.normalize_title(title)
+        if not title or norm in taken:
             continue
-        taken.add(title.lower())
+        source = (r['source_type'], r['source_id']) if r['source_id'] else None
+        if source and source in linked:
+            continue
+        # Finished since yesterday (in Tasks, after the 4am boundary moved its
+        # ticks onto today's bar), deleted, or set aside: nothing to keep.
+        if source and source[0] in day_plan.LIST_SOURCES and not day_plan.source_open(db, *source):
+            continue
+        if day_plan.is_held_back(held, r['source_type'], r['source_id'], title):
+            continue
+        taken.add(norm)
         proposals.append({
             'id': str(ULID()), 'kind': 'todo', 'status': 'pending',
             'carriedFrom': yesterday,
             'data': {'title': title, 'notes': r['notes'], 'due': r['due'],
-                     'priority': r['priority'] or 3},
+                     'priority': r['priority'] or 3, 'reason': r['reason'],
+                     'sourceType': r['source_type'], 'sourceId': r['source_id']},
         })
     return proposals
 
@@ -266,6 +358,9 @@ def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         review = None
     shown_review = review if review and review['items'] else None
 
+    # Before gathering, so what the user kept skipping is already held back
+    # from the lists the model reads.
+    tally_previous_days(db, day_key, now)
     context = gather_briefing_context(now)
     context['review'] = shown_review
     context['habits'] = [dict(r) for r in db.execute('SELECT title FROM daily_tasks ORDER BY position')]
@@ -290,17 +385,21 @@ def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         db.commit()
         return None
 
-    inserted = _seed_chat_todos(db, result.get('todos', []), context['today'], now)
+    seed = {'held': context.get('held', frozenset()), 'goal_ids': context.get('goal_ids')}
+    inserted = _seed_chat_todos(db, result.get('todos', []), context['today'], now, **seed)
     if not inserted:
         # The model dropped the plan — it sometimes writes one into the check-in
         # prose and then returns an empty array, which renders as nothing at all.
         # Their own lists are a better answer than silence.
-        inserted = _seed_chat_todos(db, fallback_plan(context), context['today'], now)
-    # After the seed, so a title the plan already put back in the bar isn't
-    # also offered as a card.
+        inserted = _seed_chat_todos(db, fallback_plan(context), context['today'], now, **seed)
+    # Review cards first, so an item about to be asked about isn't also
+    # carried over; carry-overs after the seed, so a title the plan already
+    # put back in the bar isn't also offered as a card.
+    reviews = stage_todo_reviews(db, now)
     carried = stage_carryover_todos(db, conv_id, context['today'])
     oddities = _oddities_report(now)
-    if degraded and not inserted and not carried and not oddities['items'] and not shown_review:
+    if (degraded and not inserted and not carried and not reviews and not oddities['items']
+            and not shown_review):
         # No prose, nothing added, nothing carried over and nothing wrong with
         # the server: there's no briefing to leave. A server problem alone is
         # still worth waking to.
@@ -318,7 +417,7 @@ def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         metadata['oddities'] = [i['fingerprint'] for i in oddities['items']]
     events = stage_events(db, result.get('events', []), context.get('yesterday'))
     suggestion = _habit_suggestion(result.get('habitSuggestion')) if context['suggest_habit'] else None
-    proposals = events + carried + replans + ([suggestion] if suggestion else [])
+    proposals = events + carried + reviews + replans + ([suggestion] if suggestion else [])
     if proposals:
         metadata['proposals'] = proposals
     if degraded:
