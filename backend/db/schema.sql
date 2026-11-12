@@ -1032,10 +1032,42 @@ CREATE TABLE IF NOT EXISTS chat_todos (
     done INTEGER NOT NULL DEFAULT 0,
     completed_at INTEGER,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    -- What this bar row stands for, so ticking one ticks the other
+    -- (backend/day_plan.py): 'todo' / 'daily' name the row it restates,
+    -- 'goal' the goal it moves forward, 'journal' the entry it was heard in.
+    -- NULL for an item that exists only in the bar.
+    source_type TEXT,
+    source_id TEXT,
+    -- One line on why it was suggested, shown under the title.
+    reason TEXT,
+    -- A linked repeating to-do's due date before this row's tick moved it on,
+    -- so unticking can put that occurrence back.
+    source_prev_due INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_todos_day_key ON chat_todos(day_key);
+
+-- What became of each thing the day plan suggested, keyed by what it is
+-- rather than by bar row (backend/day_plan.py's suggestion_key), so an item the
+-- user keeps leaving undone cools off instead of returning every morning.
+-- `last_judged_day` makes the nightly tally idempotent.
+CREATE TABLE IF NOT EXISTS chat_todo_suggestions (
+    item_key TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    last_judged_day TEXT,
+    ignored_streak INTEGER NOT NULL DEFAULT 0,
+    total_ignored INTEGER NOT NULL DEFAULT 0,
+    -- Day key before which it is not suggested again.
+    snoozed_until TEXT,
+    dismissed_at INTEGER,
+    -- When the "keep it or let it go" card was last staged for it; cleared
+    -- when the streak resets, so a later run of skips can ask again.
+    asked_at INTEGER,
+    -- Set when the user let it go: never suggested again.
+    dropped_at INTEGER,
+    updated_at INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS curated_tags (
     id TEXT PRIMARY KEY,

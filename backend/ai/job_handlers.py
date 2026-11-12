@@ -29,7 +29,19 @@ def _journal_polish(target_id, payload):
 @jobs.handler('journal.metadata')
 def _journal_metadata(target_id, payload):
     from backend.routes.journal import _generate_metadata_bg
+    from backend.ai import service
     _generate_metadata_bg(target_id, payload['content'], now=True)
+    # The entry has settled — titled, and still a journal entry after
+    # autofile — so it can be read for things the user said they need to do.
+    # Not when this run was deferred: it will be back, and queue it then.
+    if service.deferred_reason() is None:
+        jobs.enqueue('journal.extract_todos', target_id)
+
+
+@jobs.handler('journal.extract_todos')
+def _journal_extract_todos(target_id, payload):
+    from backend.journal.todos import offer_todos_from_entry
+    offer_todos_from_entry(target_id)
 
 
 @jobs.handler('journal.autofile')

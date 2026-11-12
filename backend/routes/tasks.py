@@ -10,6 +10,7 @@ from backend import todo_storage
 from backend.ai import jobs
 from backend.ai.service import InferencePaused, Preempted
 from backend.capture_time import optional_capture_time
+from backend import day_plan
 from backend.db.connection import get_db, mapping_to_dict, row_to_dict
 from backend.day_boundary import day_bounds, day_key_for
 from backend.ai.todo import TITLE_LIMIT, extract_todo_fields
@@ -239,12 +240,14 @@ def delete_task(task_id):
 def complete_daily_task(db, task_id: str, today: str, now: int) -> bool:
     """Record today's completion of a daily task. Returns True if this call was
     the one that recorded it (a repeat is a no-op). Does not commit — the caller
-    owns the transaction. Shared with the chat's daily-plan cards."""
+    owns the transaction. Shared with the chat's day-plan bar, which ticks a
+    linked habit through here — and is ticked back from here."""
     cur = db.execute(
         'INSERT OR IGNORE INTO daily_task_completions(id, task_id, date, created_at)'
         ' VALUES (?,?,?,?)',
         (str(ULID()), task_id, today, now),
     )
+    day_plan.mark_bar_for_source(db, 'daily', task_id, today, True, now)
     # Only log when this call actually recorded a completion (not a repeat POST).
     if not cur.rowcount:
         return False
@@ -282,6 +285,13 @@ def uncomplete_task(task_id):
     if err:
         return jsonify({'error': err}), 400
     db = get_db()
+    uncomplete_daily_task(db, task_id, day, int(time.time()))
+    db.commit()
+    return jsonify({'success': True})
+
+
+def uncomplete_daily_task(db, task_id: str, day: str, now: int) -> None:
+    """Undo `day`'s completion of a habit. Does not commit."""
     db.execute(
         'DELETE FROM daily_task_completions WHERE task_id=? AND date=?',
         (task_id, day),
@@ -295,8 +305,7 @@ def uncomplete_task(task_id):
         " AND created_at >= ? AND created_at < ?",
         (task_id, start, end),
     )
-    db.commit()
-    return jsonify({'success': True})
+    day_plan.mark_bar_for_source(db, 'daily', task_id, day, False, now)
 
 
 # --- Todos (one-off items, unlike daily tasks they don't reset each day) ---
@@ -385,8 +394,9 @@ def complete_todo_row(db, todo_id: str, now: int) -> bool:
 
     Returns True if this call recorded a completion; re-completing an already-done
     one-off is a no-op so it can't log a second event. Does not commit — the
-    caller owns the transaction. Shared with the chat's daily-plan cards, which
-    must complete a linked todo exactly the way the Tasks view does."""
+    caller owns the transaction. Shared with the chat's day-plan bar, which
+    must complete a linked todo exactly the way the Tasks view does — and is
+    ticked back from here."""
     row = db.execute(
         'SELECT title, done, list, notes, due, repeat_interval, repeat_unit'
         ' FROM todos WHERE id=?',
@@ -394,10 +404,15 @@ def complete_todo_row(db, todo_id: str, now: int) -> bool:
     ).fetchone()
     if row is None:
         return False
+    # A repeating to-do is reopened for its next occurrence below, but today's
+    # bar row for it is still done.
+    day = day_key_for(now)
+    day_plan.mark_bar_for_source(db, 'todo', todo_id, day, True, now)
 
     if row['repeat_interval'] and row['repeat_unit']:
         # Repeating todo: completing it schedules the next occurrence instead of
         # marking it done. Each occurrence is a real completion, so always log it.
+        day_plan.record_occurrence_due(db, todo_id, day, row['due'])
         db.execute(
             'UPDATE todos SET done=0, completed_at=NULL, due=?, updated_at=? WHERE id=?',
             (
@@ -431,6 +446,7 @@ def _uncomplete_todo_row(db, todo_id: str, now: int) -> None:
         "DELETE FROM task_events WHERE kind='todo_completed' AND ref_id=?",
         (todo_id,),
     )
+    day_plan.mark_bar_for_source(db, 'todo', todo_id, day_key_for(now), False, now)
 
 
 @bp.patch('/todos/<todo_id>')
@@ -533,46 +549,71 @@ def delete_todo(todo_id):
 # --- Chat to-dos (ephemeral, day-scoped items in the Chat tab's bar) ---
 
 _CHAT_TODO_COLS = (
-    'id, day_key, title, notes, due, priority, done, completed_at, created_at, updated_at'
+    'id, day_key, title, notes, due, priority, done, completed_at, created_at, updated_at,'
+    ' source_type, source_id, reason'
 )
 
 MAX_CHAT_TODO_ITEMS = 10
 
 
 def _today_chat_todo_titles(db, today: str) -> set[str]:
-    """Lowercased titles already sitting in today's bar. The briefing seed uses
-    only this — not _today_taken_titles below — because its whole job is to
-    mirror the user's open todos and pending daily tasks into the bar; skipping
-    a title just because it's already an open todo would silently drop most of
-    the plan. This still prevents a forced re-run (or a same-batch repeat) from
-    inserting the same title twice."""
+    """Normalized titles already sitting in today's bar. Every writer checks
+    this so a forced re-run or a same-batch repeat can't insert a title twice.
+    Restating an open to-do or a pending habit is *not* a duplicate any more:
+    the row is linked to it (backend/day_plan.py), and ticking either ticks
+    both."""
     return {
-        r['title'].strip().lower()
+        day_plan.normalize_title(r['title'])
         for r in db.execute(
             'SELECT title FROM chat_todos WHERE day_key=?', (today,)
         ).fetchall()
     }
 
 
-def _today_taken_titles(db, today: str) -> set[str]:
-    """Lowercased titles already spoken for today: open todos, pending daily
-    tasks, and today's existing chat_todos rows. Used by the live-chat add
-    paths (the bulk-add route and the add_todos tool) so a to-do added mid-
-    conversation doesn't duplicate something already tracked elsewhere."""
-    from backend.ai.briefing import pending_daily_tasks
-
-    taken = {
-        r['title'].strip().lower()
-        for r in db.execute('SELECT title FROM todos WHERE done=0').fetchall()
-    }
-    taken |= {r['title'].strip().lower() for r in pending_daily_tasks(db, today)}
-    taken |= {
-        r['title'].strip().lower()
+def _today_bar_sources(db, today: str) -> set[tuple[str, str]]:
+    """(type, id) of every list item already in today's bar under any title,
+    so "call the dentist" can't go in twice as two wordings of one to-do."""
+    return {
+        (r['source_type'], r['source_id'])
         for r in db.execute(
-            'SELECT title FROM chat_todos WHERE day_key=?', (today,)
-        ).fetchall()
+            'SELECT source_type, source_id FROM chat_todos WHERE day_key=? AND source_id IS NOT NULL',
+            (today,),
+        )
     }
-    return taken
+
+
+def add_to_bar(db, today: str, items: list, now: int) -> list[dict]:
+    """Insert live-chat items into today's bar, linked to the open to-do or
+    habit each restates. Skips what is already in the bar (by title or by the
+    row it links to). Returns the created rows. Does not commit."""
+    taken = _today_chat_todo_titles(db, today)
+    linked = _today_bar_sources(db, today)
+    sources = day_plan.list_sources(db, today)
+    created = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = (item.get('title') or '').strip()
+        if not title or day_plan.normalize_title(title) in taken:
+            continue
+        source = day_plan.resolve_list_source(db, today, title, sources=sources)
+        if source and source in linked:
+            continue
+        notes = (item.get('notes') or '').strip() or None
+        row_id = day_plan.insert_bar_row(db, today, title, now, notes=notes, source=source)
+        taken.add(day_plan.normalize_title(title))
+        if source:
+            linked.add(source)
+        row = mapping_to_dict({
+            'id': row_id, 'day_key': today, 'title': title, 'notes': notes,
+            'due': None, 'priority': 3, 'done': 0, 'completed_at': None,
+            'created_at': now, 'updated_at': now,
+            'source_type': source[0] if source else None,
+            'source_id': source[1] if source else None, 'reason': None,
+        })
+        row['done'] = False
+        created.append(row)
+    return created
 
 
 @bp.get('/chat-todos')
@@ -600,31 +641,7 @@ def add_chat_todos():
         return jsonify({'error': 'items required'}), 400
 
     db = get_db()
-    today = _today()
-    taken = _today_taken_titles(db, today)
-    now = int(time.time())
-    created = []
-    for item in items[:MAX_CHAT_TODO_ITEMS]:
-        if not isinstance(item, dict):
-            continue
-        title = (item.get('title') or '').strip()
-        if not title or title.lower() in taken:
-            continue
-        notes = (item.get('notes') or '').strip() or None
-        chat_todo_id = str(ULID())
-        db.execute(
-            'INSERT INTO chat_todos(id, day_key, title, notes, due, priority, done, created_at, updated_at)'
-            ' VALUES (?,?,?,?,NULL,3,0,?,?)',
-            (chat_todo_id, today, title, notes, now, now),
-        )
-        taken.add(title.lower())
-        row = mapping_to_dict({
-            'id': chat_todo_id, 'day_key': today, 'title': title, 'notes': notes,
-            'due': None, 'priority': 3, 'done': 0, 'completed_at': None,
-            'created_at': now, 'updated_at': now,
-        })
-        row['done'] = False
-        created.append(row)
+    created = add_to_bar(db, _today(), items[:MAX_CHAT_TODO_ITEMS], int(time.time()))
     db.commit()
     return jsonify(created), 201
 
@@ -663,7 +680,8 @@ def update_chat_todo(chat_todo_id):
     body = request.json or {}
     db = get_db()
     row = db.execute(
-        'SELECT title, done, notes FROM chat_todos WHERE id=?', (chat_todo_id,)
+        'SELECT title, done, notes, day_key, source_type, source_id FROM chat_todos WHERE id=?',
+        (chat_todo_id,),
     ).fetchone()
     if row is None:
         return jsonify({'error': 'not found'}), 404
@@ -703,8 +721,32 @@ def update_chat_todo(chat_todo_id):
         fields.append('updated_at=?')
         values.extend([now, chat_todo_id])
         db.execute(f'UPDATE chat_todos SET {", ".join(fields)} WHERE id=?', values)
-    if completion_change == 'complete':
+    linked = (row['source_type'] in day_plan.LIST_SOURCES
+              and day_plan.source_exists(db, row['source_type'], row['source_id']))
+    if linked and completion_change and bool(row['done']) == (completion_change == 'complete'):
+        # Already in that state: a double tap or a replayed request. Going
+        # through the source again would advance a repeating to-do a second
+        # time and log a second completion.
+        pass
+    elif linked and completion_change:
+        # Through the real row, which logs the one notification and sets this
+        # bar row (and any other linked to it) on its way.
+        if completion_change == 'complete':
+            day_plan.complete_source(db, row['source_type'], row['source_id'], row['day_key'], now)
+        else:
+            day_plan.uncomplete_source(db, row['source_type'], row['source_id'], row['day_key'], now,
+                                       bar_row_id=chat_todo_id)
+        # The source may already have been in that state (done in Tasks before
+        # the link existed), so the bar row is set directly as well.
+        db.execute(
+            'UPDATE chat_todos SET done=?, completed_at=?, updated_at=? WHERE id=?',
+            (1 if completion_change == 'complete' else 0,
+             now if completion_change == 'complete' else None, now, chat_todo_id),
+        )
+    elif completion_change == 'complete':
         _complete_chat_todo_row(db, chat_todo_id, now)
+        day_plan.reset_streak(db, day_plan.suggestion_key(
+            row['source_type'], row['source_id'], row['title']), now)
     elif completion_change == 'uncomplete':
         _uncomplete_chat_todo_row(db, chat_todo_id, now)
     db.commit()
@@ -714,8 +756,14 @@ def update_chat_todo(chat_todo_id):
 @bp.delete('/chat-todos/<chat_todo_id>')
 def delete_chat_todo(chat_todo_id):
     # No task_events log — dismissing an ephemeral item was never a notable
-    # event, same as the accept/reject cards this bar replaced.
+    # event. It is remembered as a suggestion that was turned down, though, so
+    # the plan stops offering it for a few days (backend/day_plan.py).
     db = get_db()
+    row = db.execute(
+        'SELECT title, done, source_type, source_id FROM chat_todos WHERE id=?', (chat_todo_id,),
+    ).fetchone()
+    if row and not row['done']:
+        day_plan.record_dismissal(db, row, _today(), int(time.time()))
     db.execute('DELETE FROM chat_todos WHERE id=?', (chat_todo_id,))
     db.commit()
     return jsonify({'success': True})
@@ -727,8 +775,14 @@ def promote_chat_todo(chat_todo_id):
     path create_todo uses, then remove the ephemeral row — one transaction, so
     a rejected payload leaves the source row untouched."""
     db = get_db()
-    if not db.execute('SELECT 1 FROM chat_todos WHERE id=?', (chat_todo_id,)).fetchone():
+    row = db.execute('SELECT source_type, source_id FROM chat_todos WHERE id=?',
+                     (chat_todo_id,)).fetchone()
+    if not row:
         return jsonify({'error': 'not found'}), 404
+    # Already a real to-do or habit: promoting it would make a second copy.
+    if row['source_type'] in day_plan.LIST_SOURCES and day_plan.source_exists(
+            db, row['source_type'], row['source_id']):
+        return jsonify({'error': 'already on your list'}), 409
     todo_id, err = _insert_todo_row(db, request.json or {})
     if err:
         return jsonify({'error': err}), 400

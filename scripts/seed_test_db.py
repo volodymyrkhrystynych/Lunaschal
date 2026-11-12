@@ -1347,11 +1347,13 @@ def seed_chat(db):
     # The day-scoped todo list the chat delegate writes to, separate from the
     # Lifestyle todos.
     day_key = today_key()
-    for title, done in [('Book the ferry', 0), ('Pack a cooler', 1)]:
+    for title, done, reason in [('Book the ferry', 0, 'You wrote yesterday that you need to'),
+                                ('Pack a cooler', 1, None)]:
         db.execute(
             'INSERT INTO chat_todos (id, day_key, title, notes, priority, done, completed_at, '
-            'created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (new_id(), day_key, title, None, 3, done, ts(0) if done else None, ts(0), ts(0)),
+            'created_at, updated_at, source_type, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (new_id(), day_key, title, None, 3, done, ts(0) if done else None, ts(0), ts(0),
+             'journal' if reason else None, reason),
         )
 
     # The assistant's own note queue — deliberately a separate store from the
@@ -1654,15 +1656,17 @@ def seed_lifestyle(db):
                 (new_id(), task_id, today_key(n), ts(n)),
             )
 
+    todo_ids = {}
     for title, done, lst in [
         ('Renew passport', 0, 'todo'),
         ('Book flight', 0, 'todo'),
         ('Return library books', 1, 'archive'),
     ]:
+        todo_ids[title] = new_id()
         db.execute(
             'INSERT INTO todos (id, title, done, completed_at, list, created_at, updated_at) '
             'VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (new_id(), title, done, ts(1) if done else None, lst, ts(5), ts(1)),
+            (todo_ids[title], title, done, ts(1) if done else None, lst, ts(5), ts(1)),
         )
     # A spoken to-do that has already become one (only 'done' and 'error' are
     # settled states; a 'pending' row would wait on an llm_jobs row that isn't
@@ -1676,6 +1680,21 @@ def seed_lifestyle(db):
         "INSERT INTO todo_recordings (id, path, mime, status, transcript, captured_at, created_at) "
         "VALUES (?, NULL, 'audio/mp4', 'done', ?, ?, ?)",
         (spoken_id, 'call the dentist about the cleaning', ts(2), ts(2)),
+    )
+
+    # Today's chat bar restates one of those to-dos, linked to it so ticking
+    # either ticks both (backend/day_plan.py) — and "Book flight" has been
+    # skipped three mornings running, so it sits out of the plan.
+    db.execute(
+        'INSERT INTO chat_todos (id, day_key, title, priority, done, created_at, updated_at, '
+        'source_type, source_id, reason) VALUES (?, ?, ?, 3, 0, ?, ?, ?, ?, ?)',
+        (new_id(), today_key(), 'Renew passport', ts(0), ts(0), 'todo', todo_ids['Renew passport'],
+         'Expires next month'),
+    )
+    db.execute(
+        'INSERT INTO chat_todo_suggestions (item_key, title, last_judged_day, ignored_streak, '
+        'total_ignored, snoozed_until, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (f"todo:{todo_ids['Book flight']}", 'Book flight', today_key(1), 3, 4, today_key(-3), ts(0)),
     )
 
     session_id = new_id()

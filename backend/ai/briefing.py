@@ -17,6 +17,16 @@ from backend.briefing_events import gather_day, EVENT_SCHEMA, RECONSTRUCTION_PRO
 CALENDAR_LOOKAHEAD_DAYS = 3
 # Hard cap on how many todos a single briefing may create.
 MAX_BRIEFING_TODOS = 5
+# Of those, how many may be new — not already on their lists, but drawn from a
+# goal or from something the journal says they need to do. The rest of the
+# plan is their own lists, and that is what the plan is mostly for.
+MAX_NEW_TODOS = 2
+# The journal the *plan* reads reaches back further than the check-in's 24
+# hours: "I need to call the landlord" said on Monday is still a to-do on
+# Wednesday. Older entries go in as their nightly description or a short clip.
+PLAN_JOURNAL_DAYS = 3
+PLAN_JOURNAL_MAX_ENTRIES = 12
+PLAN_JOURNAL_ENTRY_CHARS = 400
 # The briefing runs overnight (or on a manual trigger), so latency is a
 # non-issue — give the model plenty of room to finish the JSON rather than risk
 # truncating a longer check-in. This is a ceiling, not a target.
@@ -49,10 +59,37 @@ def open_todos(db) -> list[dict]:
     # Exclude the 'archive' list — that's the "set aside" stash, deliberately
     # off the active plan, so it shouldn't resurface in the morning briefing.
     rows = db.execute(
-        '''SELECT title, list, due, priority FROM todos
+        '''SELECT id, title, list, due, priority FROM todos
            WHERE done=0 AND list != 'archive' ORDER BY priority DESC, created_at''',
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def earlier_journal(db, now: int) -> list[dict]:
+    """Journal entries from before the check-in's 24 hours, back to
+    PLAN_JOURNAL_DAYS — only for finding things the user said they need to do."""
+    from backend.ai.chat import JOURNAL_WINDOW_SECONDS
+    rows = db.execute(
+        '''SELECT id, title, content, digest, created_at FROM journal_entries
+           WHERE created_at >= ? AND created_at < ?
+             AND idea_id IS NULL
+             AND id NOT IN (SELECT journal_entry_id FROM journal_entry_fic_refs)
+           ORDER BY created_at DESC LIMIT ?''',
+        (now - PLAN_JOURNAL_DAYS * 86400, now - JOURNAL_WINDOW_SECONDS, PLAN_JOURNAL_MAX_ENTRIES),
+    ).fetchall()
+    return [dict(r) for r in reversed(rows)]
+
+
+def goal_titles(today: str) -> dict[str, str]:
+    """`{normalized title: id}` of the goals the prompt shows, so a plan item
+    that names one as its basis can be tied to it."""
+    from backend import day_plan
+    from backend.goals import service as goal_service
+    data = goal_service.current(today)
+    goals = [g for h in data['horizons'] for g in h['goals']]
+    if data.get('overarching'):
+        goals.append(data['overarching'])
+    return {day_plan.normalize_title(g['title']): g['id'] for g in goals if g.get('id') and g.get('title')}
 
 
 def _upcoming_calendar(db, today: str, horizon: str) -> list[dict]:
@@ -95,18 +132,28 @@ def gather_briefing_context(now: int | None = None) -> dict:
     from backend.db.connection import get_db
     from backend.coach import engine as coach_engine
     from backend.goals import service as goal_service
+    from backend import day_plan
     now = now if now is not None else int(time.time())
     db = get_db()
     today = day_key_for(now)
     horizon = (date.fromisoformat(today) + timedelta(days=CALENDAR_LOOKAHEAD_DAYS)).isoformat()
+    # What the user keeps skipping is left out *here*, before the model sees
+    # the lists, so the backoff holds whatever the model would have written.
+    held = day_plan.held_back_keys(db, today)
     return {
         'now': now,
         'today': today,
         'goals': goal_service.context_text(today),
+        'goal_ids': goal_titles(today),
         'coach': coach_engine.context_text(today),
         'journal': get_recent_journal_entries(now),
-        'daily_tasks': pending_daily_tasks(db, today),
-        'todos': open_todos(db),
+        'earlier_journal': earlier_journal(db, now),
+        'daily_tasks': [t for t in pending_daily_tasks(db, today)
+                        if not day_plan.is_held_back(held, 'daily', t['id'], t['title'])],
+        'todos': [t for t in open_todos(db)
+                  if not day_plan.is_held_back(held, 'todo', t['id'], t['title'])],
+        'held': held,
+        'skipped': day_plan.skipped_lately(db, today),
         'calendar': _upcoming_calendar(db, today, horizon),
         'learning_due': learning_due_count(db, now),
         'life_wiki': life_wiki_index(),
@@ -152,6 +199,18 @@ def build_briefing_prompt(context: dict) -> str:
     if journal:
         lines += [journal, '']
 
+    earlier = context.get('earlier_journal') or []
+    if earlier:
+        lines.append('Earlier journal entries (the days before), only for spotting things they '
+                     'said they need or want to do:')
+        for e in earlier:
+            text = (e.get('digest') or e.get('content') or '').strip().replace('\n', ' ')
+            if len(text) > PLAN_JOURNAL_ENTRY_CHARS:
+                text = text[:PLAN_JOURNAL_ENTRY_CHARS] + '…'
+            day = date.fromtimestamp(e['created_at']).isoformat()
+            lines.append(f"- [{day}] {e.get('title') or ''}: {text}".replace(' : ', ': '))
+        lines.append('')
+
     if context['daily_tasks']:
         lines.append('Daily tasks still pending today:')
         lines += [f'- {t["title"]}' for t in context['daily_tasks']]
@@ -160,6 +219,13 @@ def build_briefing_prompt(context: dict) -> str:
     if context['todos']:
         lines.append('Open to-dos:')
         lines += [f'- {_format_todo(t)}' for t in context['todos']]
+        lines.append('')
+
+    skipped = context.get('skipped') or []
+    if skipped:
+        lines.append('Left undone in the plan day after day — deliberately left out of the lists '
+                     "above for now. Don't put these in the plan and don't nag about them:")
+        lines += [f"- {s['title']} (skipped {s['ignored_streak']} days running)" for s in skipped]
         lines.append('')
 
     if context['calendar']:
@@ -191,7 +257,7 @@ def build_briefing_prompt(context: dict) -> str:
             lines.append(f'- {article["title"]}' + (f': {summary}' if summary else ''))
         lines.append('')
 
-    if not any((context['journal'], context['daily_tasks'], context['todos'],
+    if not any((context['journal'], context.get('earlier_journal'), context['daily_tasks'], context['todos'],
                 context['calendar'], context['learning_due'], articles)):
         lines.append('(No recent journal, tasks, to-dos, calendar events, or reviews.)')
 
@@ -239,6 +305,18 @@ SYSTEM_PROMPT = (
     "daily tasks — include those rather than skipping them as redundant. Return an "
     "empty array only when they have nothing pending at all; whenever the lists "
     "above have anything on them, the plan must not be empty.\n\n"
+    f"Up to {MAX_NEW_TODOS} items may be NEW — not on their lists, but a concrete "
+    "next step toward one of their goals, or something their journal says they "
+    "need, want or plan to do (\"need to call the landlord\", \"should book the "
+    "dentist\"). Only what they actually said or what clearly moves a stated goal "
+    "forward; never invent busywork. Leave the slots unused rather than pad.\n\n"
+    "Every item has a \"reason\": one short line, in second person, on why it is "
+    "on today's plan (\"due Friday\", \"you wrote Tuesday that you need to\", "
+    "\"moves your 10k goal\"). And a \"basis\": \"list\" for an item from their "
+    "to-dos or daily tasks, \"goal\" for a step toward a goal (put that goal's "
+    "title, verbatim, in \"basisRef\"), \"journal\" for something from the "
+    "journal (put the entry's date in \"basisRef\"). basisRef is null for a list "
+    "item.\n\n"
     "Whenever an item restates something already on those lists, copy that "
     "existing item's title into \"linkedTitle\" **verbatim** — that is what ties "
     "your item to theirs, so crossing it off here also crosses it off their list. "
@@ -252,7 +330,8 @@ SYSTEM_PROMPT = (
     '{"briefing": "<markdown check-in>", '
     '"todos": [{"title": "string", "priority": 1-5, "list": "todo", '
     '"due": <unix seconds or null>, '
-    '"linkedTitle": <existing item title or null>}]}\n'
+    '"linkedTitle": <existing item title or null>, "reason": "string", '
+    '"basis": "list" | "goal" | "journal", "basisRef": <goal title, entry date, or null>}]}\n'
     "priority is 1 (low) to 5 (high); use 3 when unsure. list is usually \"todo\". "
     "Omit due (or use null) unless a date is clearly implied."
 ) + RECONSTRUCTION_PROMPT
@@ -278,8 +357,12 @@ BRIEFING_SCHEMA = {
                     'list': {'type': 'string'},
                     'due': {'type': ['integer', 'null']},
                     'linkedTitle': {'type': ['string', 'null']},
+                    'reason': {'type': 'string'},
+                    'basis': {'enum': ['list', 'goal', 'journal']},
+                    'basisRef': {'type': ['string', 'null']},
                 },
-                'required': ['title', 'priority', 'list', 'due', 'linkedTitle'],
+                'required': ['title', 'priority', 'list', 'due', 'linkedTitle',
+                             'reason', 'basis', 'basisRef'],
                 'additionalProperties': False,
             },
         },
@@ -323,7 +406,8 @@ def fallback_plan(context: dict) -> list[dict]:
     """
     items = [
         {'title': t['title'], 'priority': 4, 'list': 'todo', 'due': None,
-         'linkedTitle': t['title']}
+         'linkedTitle': t['title'], 'basis': 'list',
+         'sourceType': 'daily', 'sourceId': t.get('id')}
         for t in context['daily_tasks']
     ]
 
@@ -340,7 +424,8 @@ def fallback_plan(context: dict) -> list[dict]:
     items += [
         {'title': t['title'], 'priority': t.get('priority') or 3,
          'list': t.get('list') or 'todo', 'due': t.get('due'),
-         'linkedTitle': t['title']}
+         'linkedTitle': t['title'], 'basis': 'list',
+         'sourceType': 'todo', 'sourceId': t.get('id')}
         for t in todos
     ]
     return items
