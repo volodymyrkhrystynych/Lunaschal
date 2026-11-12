@@ -42,4 +42,11 @@ final class GamingLockTests: XCTestCase {
         let done = ChatProposal(JSONValue.parse(#"{"id": "1", "kind": "unlock_gaming", "data": {"rating": 4}, "status": "accepted", "result": {"rating": 3, "pausedInference": true}}"#)!)!
         XCTAssertEqual(done.resolvedLabel, "Games unlocked · today ★★★ · GPU freed")
     }
+
+    func testRefusalCarriesTheServersMessage() {
+        XCTAssertEqual(GamingLockRefusal.message(from: Data(#"{"error": "Games are not locked today"}"#.utf8)),
+                       "Games are not locked today")
+        XCTAssertNil(GamingLockRefusal.message(from: Data("<html>Bad Gateway</html>".utf8)))
+        XCTAssertNil(GamingLockRefusal.message(from: Data(#"{"error": ""}"#.utf8)))
+    }
 }

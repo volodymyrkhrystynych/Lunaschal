@@ -59,6 +59,20 @@ public struct GamingStatus: Codable, Equatable {
     }
 }
 
+/// The server's own words for why it refused ("Say why, in at least 10
+/// characters", "Games are not locked today"), so the screen can show them.
+public struct GamingLockRefusal: LocalizedError, Equatable {
+    public let message: String
+    public var errorDescription: String? { message }
+
+    /// The `error` field of a refusal body, if it has one.
+    public static func message(from data: Data) -> String? {
+        guard let reply = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let message = reply["error"] as? String, !message.isEmpty else { return nil }
+        return message
+    }
+}
+
 extension JournalAPI {
     public func gamingStatus() async throws -> GamingStatus {
         try JSONDecoder().decode(GamingStatus.self, from: await get("api/gaming", [:]))
@@ -81,7 +95,11 @@ extension JournalAPI {
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw HTTPFailure(status: (response as? HTTPURLResponse)?.statusCode ?? 0)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if (400..<500).contains(status), let message = GamingLockRefusal.message(from: data) {
+                throw GamingLockRefusal(message: message)
+            }
+            throw HTTPFailure(status: status)
         }
         return try JSONDecoder().decode(GamingStatus.self, from: data)
     }

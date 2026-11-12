@@ -13,6 +13,8 @@ struct GamingLockScreen: View {
     @State private var reason = ""
     @State private var pauseInference = true
     @State private var busy = false
+    /// Why the last change or override didn't go through; cleared on the next try.
+    @State private var failure: String?
 
     var body: some View {
         Form {
@@ -38,6 +40,9 @@ struct GamingLockScreen: View {
                 }
                 Section("Today") {
                     Text(status.summary()).accessibilityIdentifier("gaming-lock-status")
+                    if let failure, !overriding {
+                        Text(failure).foregroundStyle(.red).accessibilityIdentifier("gaming-lock-failure")
+                    }
                     if status.locked {
                         Button("Unlock without the review…") { overriding = true }
                             .foregroundStyle(.red)
@@ -61,6 +66,9 @@ struct GamingLockScreen: View {
                     TextField("Why now, without closing out work?", text: $reason, axis: .vertical)
                         .lineLimit(2...5)
                     Toggle("Also pause GPU inference", isOn: $pauseInference)
+                    if let failure {
+                        Text(failure).foregroundStyle(.red).accessibilityIdentifier("gaming-override-failure")
+                    }
                 } footer: {
                     Text("This counts as a missed item in today's review, and the reason is shown with it.")
                 }
@@ -68,7 +76,9 @@ struct GamingLockScreen: View {
             .navigationTitle("Unlock anyway")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { overriding = false } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { overriding = false; failure = nil }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Unlock") { submitOverride() }
                         .disabled(busy || !GamingStatus.acceptableReason(reason))
@@ -93,22 +103,37 @@ struct GamingLockScreen: View {
     }
 
     private func save(_ changes: [String: Any]) {
+        failure = nil
         Task {
-            guard let api = reminders.api else { return }
-            if let updated = try? await api.updateGamingSettings(changes) { status = updated }
+            guard let api = reminders.api else { failure = "Sign in to change the gaming lock."; return }
+            do {
+                status = try await api.updateGamingSettings(changes)
+            } catch {
+                failure = Self.describe(error)
+            }
         }
     }
 
     private func submitOverride() {
         busy = true
+        failure = nil
         Task {
             defer { busy = false }
-            guard let api = reminders.api else { return }
-            if let updated = try? await api.overrideGamingLock(reason: reason, pauseInference: pauseInference) {
-                status = updated
+            guard let api = reminders.api else { failure = "Sign in to change the gaming lock."; return }
+            do {
+                status = try await api.overrideGamingLock(reason: reason, pauseInference: pauseInference)
                 overriding = false
                 reason = ""
+            } catch {
+                failure = Self.describe(error)
             }
         }
+    }
+
+    /// The server's refusal in its own words; anything else is the network.
+    private static func describe(_ error: Error) -> String {
+        if let refusal = error as? GamingLockRefusal { return refusal.message }
+        if error is HTTPFailure { return error.localizedDescription }
+        return "Couldn't reach your server."
     }
 }

@@ -134,10 +134,10 @@ def unlock(db, day: str, method: str, *, reason: str | None = None, rating: int 
         raise ValueError(f'Say why, in at least {MIN_REASON} characters')
     if reason and len(reason) > 500:
         raise ValueError('reason must be at most 500 characters')
-    existing = unlock_row(db, day)
-    if existing:
-        return existing
-    db.execute('INSERT INTO gaming_unlocks (id, day, method, reason, rating_at_unlock, work_end, unlocked_at)'
+    # OR IGNORE rather than check-then-insert: the card and the override can
+    # land together (phone and web), and UNIQUE(day) keeps whichever came first.
+    db.execute('INSERT OR IGNORE INTO gaming_unlocks'
+               ' (id, day, method, reason, rating_at_unlock, work_end, unlocked_at)'
                ' VALUES (?,?,?,?,?,?,?)',
                (str(ULID()), day, method, reason, rating, work_end(db, day), _now(now)))
     db.commit()
