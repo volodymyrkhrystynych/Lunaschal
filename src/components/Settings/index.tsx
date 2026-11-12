@@ -11,6 +11,7 @@ import { PlacesSection } from './PlacesSection';
 import { BriefingSection } from './BriefingSection';
 import { CoachSection } from './CoachSection';
 import { ReposSection } from './ReposSection';
+import { PrJournalSection } from './PrJournalSection';
 import { ResearchSection } from './ResearchSection';
 import { VRAMSection } from './VRAMSection';
 import { NetworkSection } from './NetworkSection';
@@ -164,6 +165,10 @@ export function Settings() {
 
           <CollapsibleSection title="Repositories">
             <ReposSection />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Merged PRs in the Journal">
+            <PrJournalSection />
           </CollapsibleSection>
 
           <CollapsibleSection title="Research Agent">

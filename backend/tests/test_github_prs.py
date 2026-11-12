@@ -28,15 +28,23 @@ def _commit(iso):
 class FakeGitHub:
     """Stands in for fetch.closed_pulls / fetch.pull_commits."""
 
-    def __init__(self, pulls, commits=None, per_page=100, limit_after=None):
+    def __init__(self, pulls, commits=None, per_page=100, limit_after=None,
+                 commit_errors=None, repo_errors=None, other_pulls=None):
         self.pulls = pulls
         self.commits = commits or {}
         self.per_page = per_page
         self.limit_after = limit_after
+        self.commit_errors = commit_errors or {}
+        self.repo_errors = repo_errors or {}
+        self.other_pulls = other_pulls or {}
         self.pages_read = []
         self.commit_calls = []
 
     def closed_pulls(self, token, owner, repo, page):
+        if f'{owner}/{repo}' in self.repo_errors:
+            raise self.repo_errors[f'{owner}/{repo}']
+        if f'{owner}/{repo}' in self.other_pulls:
+            return self.other_pulls[f'{owner}/{repo}'] if page == 1 else []
         self.pages_read.append(page)
         ordered = sorted(self.pulls, key=lambda p: p['updated_at'], reverse=True)
         return ordered[(page - 1) * self.per_page: page * self.per_page]
@@ -45,6 +53,8 @@ class FakeGitHub:
         if self.limit_after is not None and len(self.commit_calls) >= self.limit_after:
             raise fetch.RateLimited('limit')
         self.commit_calls.append(number)
+        if number in self.commit_errors:
+            raise self.commit_errors[number]
         return self.commits.get(number, [_commit(_iso(2026, 1, 5))])
 
 
@@ -59,8 +69,13 @@ def github(monkeypatch):
 
 
 def _set_repo(repo='o/r', token=''):
+    _set_repos([repo] if repo else [], token)
+
+
+def _set_repos(repos, token=''):
     db = get_db()
-    db.execute('UPDATE settings SET pr_journal_repo=?, github_agent_token=?', (repo, token))
+    db.execute('UPDATE settings SET pr_journal_repos=?, github_agent_token=?',
+               (json.dumps(repos), token))
     db.commit()
 
 
@@ -239,3 +254,119 @@ def test_without_a_model_the_entry_keeps_commits_and_link(github, run_jobs_sync,
     github(FakeGitHub([_pull(1, merged=_iso(2026, 1, 2))]))
     sync.sync()
     assert _entries()[0]['content'] == 'Commits:\nJan 5 — 1 commit\n\nhttps://github.com/o/r/pull/1'
+
+
+# ------------------------------------------------------------------ repositories
+
+@pytest.mark.parametrize('text,expected', [
+    ('o/r', 'o/r'),
+    ('  volodymyrkhrystynych/Lunaschal ', 'volodymyrkhrystynych/Lunaschal'),
+    ('https://github.com/o/my.repo', 'o/my.repo'),
+    ('https://github.com/o/r.git', 'o/r'),
+    ('github.com/o/r/', 'o/r'),
+    ('o', None),
+    ('o/r/pull/3', None),
+    ('https://gitlab.com/o/r', None),
+    ('-o/r', None),
+    ('o/..', None),
+    ('', None),
+])
+def test_parse_repo(text, expected):
+    assert sync.parse_repo(text) == expected
+
+
+def test_parse_repos_dedupes_ignoring_case_and_names_the_bad_entry():
+    assert sync.parse_repos(['o/r', 'https://github.com/O/R', 'a/b']) == ['o/r', 'a/b']
+    with pytest.raises(ValueError, match="'nope'"):
+        sync.parse_repos(['o/r', 'nope'])
+
+
+def test_new_database_polls_nothing():
+    assert sync.settings(get_db())[0] == []
+
+
+def test_old_single_repo_column_carries_over():
+    import sqlite3
+    from backend.db.connection import _ensure_pr_journal_settings
+    db = sqlite3.connect(':memory:')
+    db.execute("CREATE TABLE settings (id INTEGER, pr_journal_repo TEXT NOT NULL DEFAULT '')")
+    db.execute("INSERT INTO settings VALUES (1, 'o/r')")
+    _ensure_pr_journal_settings(db)
+    _ensure_pr_journal_settings(db)
+    assert json.loads(db.execute('SELECT pr_journal_repos FROM settings').fetchone()[0]) == ['o/r']
+
+
+def test_every_repository_is_synced_on_its_own_cursor(github, queued_jobs):
+    _set_repos(['o/r', 'a/b'])
+    github(FakeGitHub([_pull(1, merged=_iso(2026, 1, 2))],
+                      other_pulls={'a/b': [_pull(7, merged=_iso(2026, 1, 3))]}))
+    assert sync.sync() == 2
+    rows = get_db().execute('SELECT repo, number FROM merged_prs ORDER BY repo').fetchall()
+    assert [(r['repo'], r['number']) for r in rows] == [('a/b', 7), ('o/r', 1)]
+
+
+def test_an_unreadable_repository_does_not_stop_the_others(github, queued_jobs):
+    _set_repos(['private/thing', 'o/r'])
+    github(FakeGitHub([_pull(1, merged=_iso(2026, 1, 2))],
+                      repo_errors={'private/thing': fetch.NotFound('no such repo')}))
+    assert sync.sync() == 1
+    assert [r['title'] for r in _entries()] == ['Merged #1: PR 1']
+
+
+def test_a_refused_pr_is_filed_without_commits_and_does_not_block_later_ones(github, queued_jobs):
+    _set_repo()
+    pulls = [_pull(n, merged=_iso(2026, 1, n)) for n in range(1, 4)]
+    github(FakeGitHub(pulls, commit_errors={2: fetch.NotFound('gone')}))
+    assert sync.sync() == 3
+    rows = _entries()
+    assert [r['title'] for r in rows] == ['Merged #1: PR 1', 'Merged #2: PR 2', 'Merged #3: PR 3']
+    assert rows[1]['content'] == 'https://github.com/o/r/pull/2'
+    assert 'Commits:' in rows[2]['content']
+
+
+def test_github_down_stops_at_that_pr_and_the_next_tick_finishes(github, queued_jobs):
+    _set_repo()
+    pulls = [_pull(n, merged=_iso(2026, 1, n)) for n in range(1, 4)]
+    github(FakeGitHub(pulls, commit_errors={2: fetch.GitHubError('GitHub answered 502')}))
+    assert sync.sync() == 1
+
+    github(FakeGitHub(pulls))
+    assert sync.sync() == 2
+    assert 'Commits:' in _entries()[1]['content']
+
+
+@pytest.mark.parametrize('status,headers,error', [
+    (404, {}, fetch.NotFound),
+    (410, {}, fetch.Refused),
+    (422, {}, fetch.Refused),
+    (403, {'Retry-After': '60'}, fetch.RateLimited),
+    (429, {}, fetch.RateLimited),
+])
+def test_github_answers_map_to_errors(monkeypatch, status, headers, error):
+    monkeypatch.setattr(fetch.requests, 'get', lambda *a, **k: _Resp(status, headers=headers))
+    with pytest.raises(error):
+        fetch.pull_commits(None, 'o', 'r', 1)
+
+
+@pytest.mark.parametrize('status', [401, 403, 500, 502])
+def test_token_and_server_problems_are_not_refusals(monkeypatch, status):
+    monkeypatch.setattr(fetch.requests, 'get', lambda *a, **k: _Resp(status))
+    with pytest.raises(fetch.GitHubError) as info:
+        fetch.pull_commits(None, 'o', 'r', 1)
+    assert not isinstance(info.value, (fetch.Refused, fetch.RateLimited))
+
+
+# ------------------------------------------------------------------ settings route
+
+def test_settings_route_normalises_and_validates_repositories(client):
+    resp = client.patch('/api/settings/ai', json={
+        'prJournalRepos': ['https://github.com/o/r.git', 'O/R', 'a/b']})
+    assert resp.status_code == 200
+    data = client.get('/api/settings').get_json()
+    assert data['prJournalRepos'] == ['o/r', 'a/b']
+    assert data['hasGithubToken'] is False
+
+    resp = client.patch('/api/settings/ai', json={'prJournalRepos': ['o/r', 'not a repo']})
+    assert resp.status_code == 400
+    assert 'not a repo' in resp.get_json()['error']
+    assert client.get('/api/settings').get_json()['prJournalRepos'] == ['o/r', 'a/b']

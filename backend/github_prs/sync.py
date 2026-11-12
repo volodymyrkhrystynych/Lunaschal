@@ -9,7 +9,12 @@ already recorded. New PRs are then journaled **oldest first**: if the rate
 limit ends a tick halfway through a backfill, every PR still unrecorded is
 newer than everything recorded, so that same cursor still finds them.
 
-    python -m backend.github_prs.sync --dry-run [--repo owner/name]
+Each repository in `settings.pr_journal_repos` syncs on its own cursor, and a
+failure in one (a typo, a private repository the token cannot read, GitHub
+down) is logged and leaves the others to run. A rate limit is the token's, not
+the repository's, so it ends the whole tick.
+
+    python -m backend.github_prs.sync --dry-run --repo owner/name
 
 lists what would be journaled without touching the database.
 """
@@ -19,6 +24,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import time
 from datetime import date, datetime
 
@@ -29,12 +35,13 @@ from backend.github_prs import fetch
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_REPO = 'volodymyrkhrystynych/Lunaschal'
 SUMMARY_JOB = 'github_prs.summarize'
 TAGS = ['coding']
 # A merge bumps `updated_at` to the merge moment or later; the slack only
 # covers clock disagreement between our row and GitHub's.
 CURSOR_SLACK = 86400
+
+_REPO = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+')
 
 
 def parse_ts(iso: str) -> int:
@@ -95,11 +102,43 @@ def entry_text(pr: dict, days: list[dict], summary: str | None = None) -> str:
     return '\n\n'.join(parts) or entry_title(pr)
 
 
-def settings(db) -> tuple[str, str]:
-    row = db.execute('SELECT pr_journal_repo, github_agent_token FROM settings LIMIT 1').fetchone()
+def parse_repo(text) -> str | None:
+    """`owner/name` from what a person pastes — the bare name, or the page or
+    clone URL — or None when it is neither."""
+    value = str(text or '').strip()
+    value = re.sub(r'^(?:https?://)?(?:www\.)?github\.com/', '', value, flags=re.I)
+    value = value.rstrip('/')
+    value = value[:-4] if value.lower().endswith('.git') else value
+    return value if _REPO.fullmatch(value) and not value.endswith(('/.', '/..')) else None
+
+
+def parse_repos(values) -> list[str]:
+    """Normalised and deduplicated (GitHub names ignore case); raises
+    ValueError naming the first entry that is not a repository."""
+    if not isinstance(values, list):
+        raise ValueError('expected a list of repositories')
+    out: list[str] = []
+    for v in values:
+        repo = parse_repo(v)
+        if repo is None:
+            raise ValueError(f'Not a GitHub repository: {v!r} (expected owner/name)')
+        if repo.lower() not in {r.lower() for r in out}:
+            out.append(repo)
+    return out
+
+
+def stored_repos(raw) -> list[str]:
+    try:
+        return parse_repos(json.loads(raw or '[]'))
+    except ValueError:  # JSONDecodeError included
+        return []
+
+
+def settings(db) -> tuple[list[str], str]:
+    row = db.execute('SELECT pr_journal_repos, github_agent_token FROM settings LIMIT 1').fetchone()
     if not row:
-        return '', ''
-    return (row['pr_journal_repo'] or '').strip(), (row['github_agent_token'] or '').strip()
+        return [], ''
+    return stored_repos(row['pr_journal_repos']), (row['github_agent_token'] or '').strip()
 
 
 def _new_merges(token: str | None, owner: str, name: str, cursor: int | None) -> list[dict]:
@@ -119,15 +158,33 @@ def _new_merges(token: str | None, owner: str, name: str, cursor: int | None) ->
 
 
 def sync(db=None) -> int:
-    """Journal every merged PR not yet recorded. Returns how many were added."""
-    from backend.ai import jobs
+    """Journal every merged PR not yet recorded, in every configured
+    repository. Returns how many were added."""
     from backend.db.connection import get_db
-    from backend.routes.journal import create_journal_entry
 
     db = db or get_db()
-    repo, token = settings(db)
-    if not repo or '/' not in repo:
-        return 0
+    repos, token = settings(db)
+    added = 0
+    for repo in repos:
+        try:
+            count, limited = _sync_repo(db, repo, token)
+        except fetch.RateLimited:
+            count, limited = 0, True
+        except fetch.GitHubError as e:
+            logger.warning('PR journal: %s skipped this tick: %s', repo, e)
+            continue
+        added += count
+        if limited:
+            logger.info('PR journal: rate limited at %s; resuming next tick', repo)
+            break
+    return added
+
+
+def _sync_repo(db, repo: str, token: str) -> tuple[int, bool]:
+    """(PRs filed, whether the rate limit ended it)."""
+    from backend.ai import jobs
+    from backend.routes.journal import create_journal_entry
+
     owner, name = repo.split('/', 1)
     cursor = db.execute('SELECT MAX(merged_at) FROM merged_prs WHERE repo=?', (repo,)).fetchone()[0]
     added = 0
@@ -137,8 +194,16 @@ def sync(db=None) -> int:
             continue
         try:
             days = commit_days(fetch.pull_commits(token, owner, name, pr['number']))
+        except fetch.Refused as e:
+            # Asking again gets the same answer, and PRs are filed oldest
+            # first: waiting for this one would hold back every later merge.
+            logger.warning('PR journal: %s#%s filed without its commits: %s', repo, pr['number'], e)
+            days = []
         except fetch.RateLimited:
-            logger.info('PR journal: rate limited after %d new PRs; resuming next tick', added)
+            return added, True
+        except fetch.GitHubError as e:
+            # Down or unreachable: retry from this PR next tick.
+            logger.warning('PR journal: %s#%s commits unavailable: %s', repo, pr['number'], e)
             break
         entry_id = str(ULID())
         # The ledger row and the entry commit together: create_journal_entry
@@ -154,7 +219,7 @@ def sync(db=None) -> int:
         if pr['body'].strip():
             jobs.enqueue(SUMMARY_JOB, entry_id, {'repo': repo, 'number': pr['number']})
         added += 1
-    return added
+    return added, False
 
 
 def summarize(entry_id: str, repo: str, number: int) -> None:
@@ -191,7 +256,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--dry-run', action='store_true', required=True,
                         help='list from GitHub only; never writes the database')
-    parser.add_argument('--repo', default=DEFAULT_REPO)
+    parser.add_argument('--repo', required=True, type=parse_repo, help='owner/name')
     parser.add_argument('--sample', type=int, default=5,
                         help='how many of the newest PRs to fetch commits for')
     args = parser.parse_args()

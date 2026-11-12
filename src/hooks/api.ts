@@ -1038,6 +1038,10 @@ export interface AppSettings {
   torrentDefaultRatioLimit: number | null;
   torrentDefaultSeedingMinutes: number | null;
   knowledgeRoot: string;
+  /** `owner/name` repositories whose merged PRs are filed into the Journal. */
+  prJournalRepos: string[];
+  /** Whether the Code tab's GitHub token is set — a private repo needs it. */
+  hasGithubToken: boolean;
 }
 
 /** What sort of source an archive is. Quotas are applied per kind. */

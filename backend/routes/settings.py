@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
 from backend.db.connection import build_update, get_db
 from backend.geo import parse_coord
+from backend.github_prs.sync import parse_repos, stored_repos
 from backend.research.web import SEARCH_PROVIDERS
 
 _sleep_inhibitor: subprocess.Popen | None = None
@@ -163,6 +164,10 @@ def get_settings():
         'torrentDefaultRatioLimit': s.get('torrent_default_ratio_limit'),
         'torrentDefaultSeedingMinutes': s.get('torrent_default_seeding_minutes'),
         'knowledgeRoot': s.get('knowledge_root') or '',
+        # Merged PRs filed into the Journal (backend/github_prs/). Read
+        # through github_agent_token, so a private one needs that token.
+        'prJournalRepos': stored_repos(s.get('pr_journal_repos')),
+        'hasGithubToken': bool((s.get('github_agent_token') or '').strip()),
     })
 
 
@@ -238,6 +243,7 @@ def update_ai():
         'torrentDefaultRetentionDays': 'torrent_default_retention_days',
         'torrentDefaultRatioLimit': 'torrent_default_ratio_limit',
         'torrentDefaultSeedingMinutes': 'torrent_default_seeding_minutes',
+        'prJournalRepos': 'pr_journal_repos',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():
@@ -286,6 +292,11 @@ def update_ai():
                 value = '' if value is None else str(value).strip().lower()
                 if value not in SEARCH_PROVIDERS:
                     return jsonify({'error': f'Unknown search provider: {value!r}'}), 400
+            elif camel == 'prJournalRepos':
+                try:
+                    value = json.dumps(parse_repos(value))
+                except ValueError as e:
+                    return jsonify({'error': str(e)}), 400
             elif camel in ('weatherDefaultLat', 'weatherDefaultLon'):
                 value = parse_coord(value)
                 if value is None:
