@@ -2,7 +2,8 @@
 
 A paused GPU used to skip the whole night — briefing, entry digests, life wiki —
 because everything in the thread runs under `service.background()` and P2 work
-waits out a pause. A pause still on at 05:00 is one somebody forgot.
+waits out a pause. A pause switched on before today's 4am boundary is one
+somebody forgot; one switched on since then is honoured.
 """
 from datetime import datetime
 
@@ -41,8 +42,10 @@ def _set(**cols):
     service.invalidate_pause_cache()
 
 
-def _pause():
-    _set(inference_paused=1, inference_paused_at=1_700_000_000)
+def _pause(at: datetime | None = datetime(2026, 11, 10, 22, 0)):
+    """Paused at `at` — by default the evening before IN_WINDOW."""
+    _set(inference_paused=1,
+         inference_paused_at=int(at.timestamp()) if at else None)
 
 
 def _row():
@@ -104,3 +107,42 @@ def test_an_unpaused_night_notes_no_resume(nightly):
 
     assert nightly == [False]
     assert _resume_events() == []
+
+
+def test_a_pause_with_no_timestamp_counts_as_forgotten(nightly):
+    _set(briefing_enabled=1, briefing_hour=5)
+    _pause(at=None)
+
+    briefing_scheduler._tick(IN_WINDOW, None)
+
+    assert nightly == [False]
+    assert _row()['inference_paused'] == 0
+
+
+@pytest.mark.parametrize('hour, paused_at, now', [
+    # Switched on just before the window opened: today's decision, not last night's.
+    (5, datetime(2026, 11, 11, 4, 50), datetime(2026, 11, 11, 5, 0)),
+    # Switched on after the night ran, then a restart lost `last_run_date`.
+    (5, datetime(2026, 11, 11, 5, 40), datetime(2026, 11, 11, 6, 0)),
+    # An evening briefing hour: the pause is for tonight, not a leftover.
+    (21, datetime(2026, 11, 11, 20, 30), datetime(2026, 11, 11, 21, 0)),
+])
+def test_a_pause_switched_on_since_4am_is_honoured(nightly, hour, paused_at, now):
+    _set(briefing_enabled=1, briefing_hour=hour)
+    _pause(at=paused_at)
+
+    assert briefing_scheduler._tick(now, None) == now.date()
+
+    assert nightly == [True]  # ran into the pause, leaving its work pending
+    assert _row()['inference_paused'] == 1
+    assert _resume_events() == []
+
+
+def test_an_evening_briefing_ends_yesterdays_pause(nightly):
+    _set(briefing_enabled=1, briefing_hour=21)
+    _pause(at=datetime(2026, 11, 10, 20, 0))
+
+    briefing_scheduler._tick(datetime(2026, 11, 11, 21, 0), None)
+
+    assert nightly == [False]
+    assert _row()['inference_paused'] == 0
