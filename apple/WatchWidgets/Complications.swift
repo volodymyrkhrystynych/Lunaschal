@@ -12,10 +12,12 @@ struct LunaschalComplications: WidgetBundle {
         WorkoutComplication()
         RecordComplication()
         TranscribeComplication()
+        TodoComplication()
         FocusControl()
         TimeoutControl()
         RecordControl()
         TranscribeControl()
+        TodoControl()
     }
 }
 
@@ -84,9 +86,27 @@ extension PomodoroKind {
 }
 
 extension RecordingChoice {
-    var widgetKind: String { self == .record ? WatchComplication.recordKind : WatchComplication.transcribeKind }
-    var controlKind: String { self == .record ? WatchComplication.recordControl : WatchComplication.transcribeControl }
-    var link: WatchLink { self == .record ? .record : .transcribe }
+    var widgetKind: String {
+        switch self {
+        case .record: return WatchComplication.recordKind
+        case .transcribe: return WatchComplication.transcribeKind
+        case .todo: return WatchComplication.todoKind
+        }
+    }
+    var controlKind: String {
+        switch self {
+        case .record: return WatchComplication.recordControl
+        case .transcribe: return WatchComplication.transcribeControl
+        case .todo: return WatchComplication.todoControl
+        }
+    }
+    var link: WatchLink {
+        switch self {
+        case .record: return .record
+        case .transcribe: return .transcribe
+        case .todo: return .todo
+        }
+    }
 }
 
 /// A run counting down, the way the system Timer draws one: a ring round the
@@ -308,7 +328,7 @@ struct LauncherView: View {
     }
 
     @ViewBuilder private func recording(_ choice: RecordingChoice) -> some View {
-        if let status = entry.recording, status.mode == choice.mode {
+        if let status = entry.recording, choice.matches(status) {
             button(choice.link, symbol: choice.symbol, tint: .red) {
                 Text(status.startedAt, style: .timer).monospacedDigit()
             }
@@ -383,12 +403,12 @@ struct RecordingComplication {
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: choice.widgetKind, provider: WatchProvider()) { entry in
-            RecordingGlyph(choice: choice, status: entry.recording?.mode == choice.mode ? entry.recording : nil)
+            RecordingGlyph(choice: choice, status: choice.matches(entry.recording) ? entry.recording : nil)
                 .widgetURL(choice.link.url)
                 .containerBackground(.clear, for: .widget)
         }
         .configurationDisplayName(choice.title)
-        .description(choice == .record ? "Starts and stops a journal clip." : "Starts and stops a clip that becomes text.")
+        .description(Text(choice.summary))
         .supportedFamilies([.accessoryCircular, .accessoryCorner, .accessoryInline])
     }
 }
@@ -417,7 +437,7 @@ struct RecordingGlyph: View {
     /// most faces draw complications tinted or accented, which drops the
     /// colour, and a red mic then looked exactly like an idle one.
     @ViewBuilder private func recording(since start: Date) -> some View {
-        let going = choice == .record ? "Recording" : "Transcribing"
+        let going = choice.going
         switch family {
         case .accessoryCorner:
             Text(start, style: .timer)
@@ -456,3 +476,4 @@ struct FocusComplication: Widget { var body: some WidgetConfiguration { TimerBut
 struct TimeoutComplication: Widget { var body: some WidgetConfiguration { TimerButtonComplication(choice: .timeout).body } }
 struct RecordComplication: Widget { var body: some WidgetConfiguration { RecordingComplication(choice: .record).body } }
 struct TranscribeComplication: Widget { var body: some WidgetConfiguration { RecordingComplication(choice: .transcribe).body } }
+struct TodoComplication: Widget { var body: some WidgetConfiguration { RecordingComplication(choice: .todo).body } }

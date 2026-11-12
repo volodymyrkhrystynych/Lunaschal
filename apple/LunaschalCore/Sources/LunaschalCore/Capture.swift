@@ -191,6 +191,10 @@ public struct Capture: Codable, Identifiable, Equatable {
     /// a meal or a purchase: the server reads it once its photos and clips are
     /// in, and may file it in the food log or the ledger under the same id.
     public internal(set) var autoFile = false
+    /// Recorded with the Watch's To-do button: the server keeps it as a
+    /// journal entry like any Transcribe clip, and also makes a to-do from its
+    /// words under this capture's id.
+    public let asTodo: Bool
 
     /// The entry everything here is filed under.
     public var targetID: String { entryID ?? id }
@@ -226,8 +230,11 @@ public struct Capture: Codable, Identifiable, Equatable {
 
     public init(text: String = "", mode: CaptureMode = .text, kind: CaptureKind = .journal, now: Date = Date(),
                 linkURLs: [String] = [], files: [CaptureFile] = [], clips: [CaptureClip] = [],
-                ficID: String? = nil, chapterID: String? = nil, entryID: String? = nil) {
+                ficID: String? = nil, chapterID: String? = nil, entryID: String? = nil,
+                asTodo: Bool = false) {
         id = ULID.make(now: now)
+        // Only a clip that becomes text can become a to-do.
+        self.asTodo = asTodo && mode == .transcribe
         self.entryID = entryID
         self.ficID = ficID
         self.chapterID = ficID == nil ? nil : chapterID
@@ -246,7 +253,7 @@ public struct Capture: Codable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, attachmentID, createdAt, mode, kind, text, links, files, clips, state, lastError, snapshot
         case latitude, longitude, weather, ficID, chapterID, entryID, mayBeOnServer, replaces, forReview
-        case autoFile
+        case autoFile, asTodo
     }
 
     // Manifests written before an entry could hold several links stored one
@@ -275,6 +282,7 @@ public struct Capture: Codable, Identifiable, Equatable {
         replaces = try c.decodeIfPresent([String].self, forKey: .replaces) ?? []
         forReview = try c.decodeIfPresent(Bool.self, forKey: .forReview) ?? false
         autoFile = try c.decodeIfPresent(Bool.self, forKey: .autoFile) ?? false
+        asTodo = try c.decodeIfPresent(Bool.self, forKey: .asTodo) ?? false
         files = try c.decodeIfPresent([CaptureFile].self, forKey: .files) ?? []
         clips = try c.decodeIfPresent([CaptureClip].self, forKey: .clips) ?? []
         if let links = try c.decodeIfPresent([CaptureLink].self, forKey: .links) {

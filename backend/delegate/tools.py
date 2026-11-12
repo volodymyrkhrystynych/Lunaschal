@@ -52,6 +52,7 @@ import logging
 from datetime import date as _date, timedelta
 
 from backend.calendar_voice import MINUTES_PER_DAY, _hhmm, _minutes
+from backend.ai.todo import todo_title_and_notes
 from backend.todo_recurrence import parse_due_date
 
 logger = logging.getLogger(__name__)
@@ -95,11 +96,18 @@ TOOLS = [
                             'properties': {
                                 'title': {
                                     'type': 'string',
-                                    'description': 'What needs doing, phrased as an action.',
+                                    'description': (
+                                        'The action as a short checklist label: '
+                                        '2 to 8 words starting with a verb. Never '
+                                        'the whole sentence the user said.'
+                                    ),
                                 },
                                 'notes': {
                                     'type': 'string',
-                                    'description': 'Extra detail that does not belong in the title.',
+                                    'description': (
+                                        'Every other detail they gave about it: '
+                                        'who, where, why, which one, steps.'
+                                    ),
                                 },
                             },
                             'required': ['title'],
@@ -500,8 +508,8 @@ def _add_todos(args: dict) -> tuple[str, dict]:
     for raw in raw_items:
         if not isinstance(raw, dict):
             continue
-        items.append({'title': _text(raw.get('title'))[:MAX_TITLE_CHARS],
-                      'notes': _text(raw.get('notes'))[:MAX_NOTE_CHARS] or None})
+        title, notes = todo_title_and_notes(_text(raw.get('title')), _text(raw.get('notes')))
+        items.append({'title': title, 'notes': notes[:MAX_NOTE_CHARS] if notes else None})
     db = get_db()
     # An item that restates an open to-do or habit goes in linked to it, so
     # ticking it here ticks the real one (backend/day_plan.py).

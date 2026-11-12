@@ -74,19 +74,21 @@ def test_transcribe_todo_partial_fields(client):
     assert todo['due'] is None
 
 
-def test_transcribe_todo_title_truncation(client):
-    """A very long transcript gets its title truncated to 100 chars."""
-    long_text = 'x' * 200
+def test_fallback_title_is_split_at_a_boundary_not_cut(client):
+    """With no model, a run-on transcript is split where a person would split it,
+    never cut mid-word, and the whole of it is kept as the notes."""
+    said = ('call the dentist about moving my cleaning to next week because '
+            'I have the trip and also ask about the bill from March')
     with patch('backend.routes.tasks.extract_todo_fields', return_value=None):
-        r = client.post('/api/tasks/todos/transcribe', json={'text': long_text})
+        r = client.post('/api/tasks/todos/transcribe', json={'text': said, 'id': 'long-1'})
         assert r.status_code == 201
 
-    r = client.get('/api/tasks/todos')
-    todos = r.get_json()
-    todo = next(t for t in todos if t['title'] == 'x' * 100)
-    assert len(todo['title']) == 100
-    # The cut title loses nothing: the whole transcript is kept as the notes.
-    assert todo['notes'] == long_text
+    todo = next(t for t in client.get('/api/tasks/todos').get_json() if t['id'] == 'long-1')
+    assert len(todo['title']) <= todo_ai.TITLE_TARGET + 1
+    assert todo['title'].endswith('…')
+    assert said.startswith(todo['title'].rstrip('…'))
+    assert said[len(todo['title'].rstrip('…'))] == ' '  # a word boundary
+    assert todo['notes'] == said
 
 
 def test_transcribe_todo_short_fallback_has_no_notes(client):

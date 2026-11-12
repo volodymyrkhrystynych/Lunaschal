@@ -1,30 +1,65 @@
 """LLM extraction of to-do fields from a spoken transcript.
 
-Called by ``POST /api/tasks/todos/transcribe`` (backend/routes/tasks.py) after
-the client has already transcribed audio via ``/api/transcribe``.  The model
-parses the transcript into ``title`` (required), ``notes``, ``priority`` (1-5),
-and ``due`` (``YYYY-MM-DD``).  A failed or empty response returns ``None`` and
-the route falls back to the transcript itself.
+Called for every to-do that was said rather than typed: ``POST
+/api/tasks/todos/transcribe``, the phone's recorded to-dos, and the Watch's
+To-do button (a journal recording that also becomes a to-do). The model parses
+the transcript into ``title`` (required), ``notes``, ``priority`` (1-5) and
+``due`` (``YYYY-MM-DD``).
+
+**Nothing that was said may be lost, and the title is never the sentence cut
+off.** Both used to happen. The prompt asked only for a "concise" title, so a
+local model often copied the whole run-on sentence into it, and the code then
+cut it at 100 characters mid-word, dropping the rest when the model had left
+``notes`` empty. The fallback did the same thing to the raw transcript. Now an
+overlong title is split at a sentence, clause or word boundary rather than cut
+(`split_title_notes`), and the transcript itself is kept as the notes whenever
+the model's fields do not obviously cover it.
+
+There is deliberately no ``maxLength`` in the schema: llama-server compiles it
+to a grammar, and a grammar that runs out of characters closes the string
+wherever it is, which is a mid-word cut again.
 """
 
+import re
 from datetime import date
 
 from backend.ai.llm import chat_json
-from backend.ai.service import Preempted
+from backend.ai.service import InferencePaused, Preempted
 
-TITLE_LIMIT = 100
+# Past this a title is no longer a label on a list, whatever the model thought.
+TITLE_LIMIT = 80
+# What a split aims for: a checklist line that reads at a glance.
+TITLE_TARGET = 60
 
 _TODO_SYSTEM = (
-    "You extract a to-do item from a spoken sentence.  Return only valid JSON "
-    "with these fields:\n"
-    f'- "title": the to-do title (max {TITLE_LIMIT} chars, required).\n'
-    '- "notes": additional details or context, or null if nothing extra.\n'
-    '- "priority": an integer 1 (highest) to 5 (lowest), or null if not '
-    "mentioned.\n"
-    '- "due": a due date as "YYYY-MM-DD", or null if no date is mentioned.\n'
-    "The message starts with today's date.  Resolve 'tomorrow', 'Friday' or "
-    "'next Monday' against it.  If no priority is mentioned, return null (not "
-    "3).  Keep the title concise; it will be the one-line label on the list."
+    "You turn one spoken to-do into a checklist item. The words come from "
+    "speech-to-text, so expect filler (\"um\", \"I need to\", \"remind me to\"), "
+    "run-on sentences and no punctuation.\n"
+    "Return only valid JSON with these fields:\n"
+    '- "title": the action itself, as a short imperative phrase of 2 to 8 '
+    f"words (at most {TITLE_TARGET} characters) that starts with a verb, like a "
+    "label on a checklist. Leave out filler, reasons, background and dates. "
+    "Never copy the whole sentence into the title.\n"
+    '- "notes": every other detail that was said: who, where, why, which one, '
+    "steps, numbers, names. Use the speaker's own words, tidied into sentences "
+    "but not summarised away. null only when the title already says everything.\n"
+    '- "priority": an integer 1 (highest) to 5 (lowest), only when urgency or '
+    "importance was said; otherwise null (not 3).\n"
+    '- "due": a date as "YYYY-MM-DD" when one was said; otherwise null. The '
+    "message starts with today's date: resolve 'tomorrow', 'Friday' or 'next "
+    "Monday' against it.\n"
+    "\n"
+    "Examples, where today is Monday, 2026-03-02:\n"
+    "Spoken: um remind me to call the dentist tomorrow about moving my cleaning "
+    "to next week because I have the trip\n"
+    '{"title": "Call the dentist", "notes": "Move my cleaning to next week, '
+    'because of the trip.", "priority": null, "due": "2026-03-03"}\n'
+    "Spoken: buy milk\n"
+    '{"title": "Buy milk", "notes": null, "priority": null, "due": null}\n'
+    "Spoken: I need to sort out the VPN port forwarding thing the port changed "
+    "again and all the downloads are stuck it's pretty urgent\n"
+    '{"title": "Fix the VPN port forwarding", "notes": "The port changed again '
+    'and all the downloads are stuck.", "priority": 2, "due": null}'
 )
 
 _TODO_SCHEMA = {
@@ -32,11 +67,11 @@ _TODO_SCHEMA = {
     'properties': {
         'title': {
             'type': 'string',
-            'description': f'Concise to-do title (max {TITLE_LIMIT} chars)',
+            'description': 'Short imperative action, 2 to 8 words',
         },
         'notes': {
             'type': ['string', 'null'],
-            'description': 'Additional details, or null',
+            'description': 'Every other detail that was said, or null',
         },
         'priority': {
             # Bounded in the grammar too: an out-of-range number would make
@@ -51,8 +86,78 @@ _TODO_SCHEMA = {
             'description': 'Due date as YYYY-MM-DD, or null if not mentioned',
         },
     },
-    'required': ['title'],
+    'required': ['title', 'notes', 'priority', 'due'],
 }
+
+_SENTENCE_END = re.compile(r'(?<=[.!?])\s+|\n+')
+# A full stop after one of these does not end a sentence: "Call Dr. Smith".
+_ABBREVIATIONS = frozenset({
+    'dr', 'mr', 'mrs', 'ms', 'st', 'mt', 'jr', 'sr', 'prof', 'vs', 'etc', 'approx',
+    'no', 'ave', 'rd', 'apt', 'dept', 'e.g', 'i.e',
+})
+_CLAUSE_BREAK = re.compile(r'\s*(?:[,;:]|\s[—–-]\s)\s*')
+_TRAILING = ' \t.,;:!?-—–'
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r'\w+', text.lower())
+
+
+def _sentences(text: str) -> list[str]:
+    """*text* cut at sentence ends, except after an abbreviation or an initial."""
+    out, start = [], 0
+    for m in _SENTENCE_END.finditer(text):
+        before = text[start:m.start()]
+        if before.endswith('.') and '\n' not in m.group():
+            word = before.rsplit(None, 1)[-1].rstrip('.').lower() if before.split() else ''
+            if word in _ABBREVIATIONS or (len(word) == 1 and word.isalpha()):
+                continue
+        out.append(text[start:m.start()])
+        start = m.end()
+    out.append(text[start:])
+    return [s for s in out if s.strip()]
+
+
+def split_title_notes(text: str, limit: int = TITLE_TARGET) -> tuple[str, str | None]:
+    """A title for *text* and the notes that keep the rest of it, without a model.
+
+    The title is the first sentence of two words or more ("ok." and "so." are
+    not a to-do), else its first clause, else as many whole words as fit, marked with an ellipsis so it reads as cut rather than as the
+    whole thought. Whenever the title is not all of *text*, the notes are all
+    of it, so nothing that was said is lost to the split.
+    """
+    whole = ' '.join((text or '').split())
+    if not whole:
+        return '', None
+    sentences = _sentences((text or '').strip())
+    first = next((s for s in sentences if len(s.split()) >= 2), sentences[0])
+    first = ' '.join(first.split()).rstrip(_TRAILING)
+    if len(first) > limit:
+        clause = _CLAUSE_BREAK.split(first, maxsplit=1)[0].rstrip(_TRAILING)
+        if len(clause) <= limit and len(clause.split()) >= 2:
+            first = clause
+    if len(first) > limit:
+        cut = first[:limit + 1]
+        space = cut.rfind(' ')
+        first = (cut[:space] if space > 0 else first[:limit]).rstrip(_TRAILING) + '…'
+    title = first or whole[:limit]
+    if title.rstrip('…').rstrip(_TRAILING) == whole.rstrip(_TRAILING):
+        return title, None
+    return title, whole
+
+
+def todo_title_and_notes(title: str, notes: str | None) -> tuple[str, str | None]:
+    """A title and notes some other model wrote (the chat's `add_todos`, the
+    briefing), held to the same rule: a title too long to be a label is split,
+    and the sentence it came from goes ahead of the notes rather than away."""
+    title = ' '.join((title or '').split())
+    notes = (notes or '').strip() or None
+    if len(title) <= TITLE_LIMIT:
+        return title, notes
+    short, whole = split_title_notes(title)
+    if whole and whole not in (notes or ''):
+        notes = f'{whole}\n\n{notes}' if notes else whole
+    return short, notes
 
 
 def _prompt(transcript: str, today: str) -> str:
@@ -74,31 +179,87 @@ def _priority(value) -> int | None:
     return min(5, max(1, value))
 
 
+# Words a good title and notes are expected to drop: filler, the "remind me
+# to" framing, and the dates and urgency the model moves into `due`/`priority`.
+_DROPPABLE = frozenset("""
+    a an the and or but so to of in on at by for with about from as into than then
+    i me my im i'm it its it's is are was be been do does did done this that these those
+    um uh er erm hmm like ok okay yeah well just really actually basically pretty
+    remind remember need needs gotta got have has want should must can could would will
+    thing things stuff some because also again still
+    today tomorrow tonight morning afternoon evening next week weekend later soon
+    monday tuesday wednesday thursday friday saturday sunday
+    urgent urgently important asap quickly please
+""".split())
+
+
+def _stem(word: str) -> str:
+    """Crude enough to match "moving" with "move" and "trips" with "trip"."""
+    for suffix in ('ing', 'ed', 'es', 's', 'e'):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[:-len(suffix)]
+    return word
+
+
+def _covers(transcript: str, title: str, notes: str | None) -> bool:
+    """Whether the title and notes plausibly hold what was said: a floor against
+    an empty `notes` beside a long transcript, not a diff. Only content words
+    count, compared by stem, so a model that tidied "moving my cleaning" into
+    "move my cleaning" and dropped the filler still covers it; up to a third of
+    them may go (a reworded phrase, a word the model judged noise)."""
+    said = [_stem(w) for w in _words(transcript) if w not in _DROPPABLE]
+    kept = {_stem(w) for w in _words(title) + _words(notes or '')}
+    missing = [w for w in said if w not in kept]
+    return len(missing) <= max(2, len(said) // 3)
+
+
+def _tidy_notes(notes: str) -> str | None:
+    """Spaces collapsed within each line, the lines themselves kept: notes the
+    model wrote as steps stay steps."""
+    lines = [' '.join(line.split()) for line in notes.splitlines()]
+    return re.sub(r'\n{3,}', '\n\n', '\n'.join(lines)).strip() or None
+
+
 def extract_todo_fields(transcript: str, today: str) -> dict | None:
     """Run *transcript* through the LLM and return extracted fields, or ``None``
     if the call fails or returns an empty title. *today* is the 4am day key
     (``YYYY-MM-DD``) that relative dates are resolved against.
+
+    ``InferencePaused`` is raised rather than swallowed, so a caller can make
+    the to-do from the words now and sort it properly once the GPU is back
+    (see `_todo_from_speech`). ``Preempted`` is raised for a background job to
+    be retried.
     """
     try:
         data = chat_json(_prompt(transcript, today), system=_TODO_SYSTEM, schema=_TODO_SCHEMA)
-    except Preempted:
-        # Only background work is preempted (a spoken to-do's job), and that
-        # wants the model's fields once the lane is free, not the fallback now.
+    except (InferencePaused, Preempted):
         raise
-    except Exception:  # noqa: BLE001 — LLM down or paused; the caller falls back
+    except Exception:  # noqa: BLE001 — LLM down or malformed; the caller falls back
         return None
     if not isinstance(data, dict):
         return None
 
     title = data.get('title')
-    if not isinstance(title, str) or not title.strip():
+    if not isinstance(title, str) or not ' '.join(title.split()):
         return None
-
+    title = ' '.join(title.split()).rstrip(' .')
     notes = data.get('notes')
+    notes = _tidy_notes(notes) if isinstance(notes, str) else None
+
+    if len(title) > TITLE_LIMIT:
+        # The model wrote a sentence. Split it rather than cut it, and keep
+        # what the split moved out of the title.
+        title, overflow = split_title_notes(title)
+        if overflow and overflow not in (notes or ''):
+            notes = f'{overflow}\n\n{notes}' if notes else overflow
+    if not _covers(transcript, title, notes):
+        spoken = ' '.join(transcript.split())
+        notes = f'{notes}\n\nAs said: {spoken}' if notes else spoken
+
     due = data.get('due')
     return {
-        'title': title.strip()[:TITLE_LIMIT].strip(),
-        'notes': notes.strip() or None if isinstance(notes, str) else None,
+        'title': title,
+        'notes': notes,
         'priority': _priority(data.get('priority')),
         'due': due if isinstance(due, str) else None,
     }
