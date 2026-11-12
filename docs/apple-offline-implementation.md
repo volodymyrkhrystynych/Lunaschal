@@ -1,5 +1,13 @@
 # Apple apps and offline experience — implementation tracker
 
+Gaming lock (`feat/gaming-lock`): Settings → Coach → Gaming lock holds the
+server's switch and weekdays, today's state and the override (a typed reason,
+optionally pausing GPU inference), and Chat renders the end-of-work
+`unlock_gaming` card. Server-backed only — nothing is queued offline, since an
+unlock decided without the server cannot close anything. Core tests cover
+decoding, the status line, the reason length, the card's labels and reading a
+refusal's message; the screen builds in simulator and is unverified on device.
+
 Habits and Home Screen widgets (`feat/ios-habits-widget`): daily tasks became
 habits — up to ten, each with its streak and last seven days, on the phone and
 the web — and the new `LunaschalWidgets` extension adds interactive Habits and

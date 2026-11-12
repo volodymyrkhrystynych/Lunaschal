@@ -29,7 +29,19 @@ def _journal_polish(target_id, payload):
 @jobs.handler('journal.metadata')
 def _journal_metadata(target_id, payload):
     from backend.routes.journal import _generate_metadata_bg
+    from backend.ai import service
     _generate_metadata_bg(target_id, payload['content'], now=True)
+    # The entry has settled — titled, and still a journal entry after
+    # autofile — so it can be read for things the user said they need to do.
+    # Not when this run was deferred: it will be back, and queue it then.
+    if service.deferred_reason() is None:
+        jobs.enqueue('journal.extract_todos', target_id)
+
+
+@jobs.handler('journal.extract_todos')
+def _journal_extract_todos(target_id, payload):
+    from backend.journal.todos import offer_todos_from_entry
+    offer_todos_from_entry(target_id)
 
 
 @jobs.handler('journal.autofile')
@@ -79,6 +91,18 @@ def _chat_transcribe_recording(target_id, payload):
 def _todo_transcribe_recording(target_id, payload):
     from backend.routes.tasks import _transcribe_recording_bg
     _transcribe_recording_bg(target_id, now=True)
+
+
+@jobs.handler('todo.refine_spoken')
+def _todo_refine_spoken(target_id, payload):
+    from backend.routes.tasks import refine_spoken_todo
+    refine_spoken_todo(target_id, payload)
+
+
+@jobs.handler('todo.from_entry')
+def _todo_from_entry(target_id, payload):
+    from backend.routes.tasks import todo_from_entry
+    todo_from_entry(target_id)
 
 
 @jobs.handler('chat.compaction')
@@ -164,3 +188,9 @@ def _ideas_enrich(target_id, payload):
 def _email_classify(target_id, payload):
     from backend.ai.email import classify_email
     classify_email(target_id)
+
+
+@jobs.handler('github_prs.summarize')
+def _github_prs_summarize(target_id, payload):
+    from backend.github_prs.sync import summarize
+    summarize(target_id, payload['repo'], payload['number'])

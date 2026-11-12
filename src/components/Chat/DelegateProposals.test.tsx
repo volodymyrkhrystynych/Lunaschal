@@ -521,3 +521,136 @@ describe('the food card', () => {
     ).toBeTruthy();
   });
 });
+
+describe('unlock_gaming', () => {
+  it('shows the provisional rating and sends the GPU choice', async () => {
+    resolveProposal().mockResolvedValue({
+      proposal: {
+        id: 'g1',
+        kind: 'unlock_gaming',
+        status: 'accepted',
+        data: {},
+      },
+    });
+    renderProposals([
+      {
+        id: 'g1',
+        kind: 'unlock_gaming',
+        status: 'pending',
+        data: {
+          day: '2026-11-11',
+          rating: 3,
+          open: ['Stretch'],
+          pauseInference: true,
+        },
+      },
+    ]);
+    expect(screen.getByText('Today so far: ★★★☆☆')).toBeTruthy();
+    expect(screen.getByText('Still open: Stretch')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Also pause GPU inference'));
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock gaming' }));
+    await waitFor(() => expect(resolveProposal()).toHaveBeenCalled());
+    const [, , , data] = resolveProposal().mock.calls[0];
+    expect(data).toMatchObject({ pauseInference: false, rating: 3 });
+  });
+
+  it('collapses to what happened', () => {
+    renderProposals([
+      {
+        id: 'g1',
+        kind: 'unlock_gaming',
+        status: 'accepted',
+        data: { rating: 4 },
+        result: { rating: 4, pausedInference: true },
+      },
+    ]);
+    expect(
+      screen.getByText('Games unlocked · today ★★★★ · GPU freed')
+    ).toBeTruthy();
+  });
+});
+
+describe('keep it or let it go', () => {
+  const review: DelegateProposalRecord = {
+    id: 'r1',
+    kind: 'todo_review',
+    status: 'pending',
+    data: {
+      itemKey: 'todo:t1',
+      title: 'Clean the garage',
+      streak: 3,
+      choice: 'drop',
+    },
+  };
+
+  it('defaults to letting it go and sends the chosen action', async () => {
+    resolveProposal().mockResolvedValue({
+      proposal: { ...review, status: 'accepted' },
+    });
+    renderProposals([review]);
+    expect(screen.getByText('You keep skipping this')).toBeTruthy();
+    expect(screen.getByText('Left undone 3 days running.')).toBeTruthy();
+    expect(
+      (screen.getByLabelText('Let it go') as HTMLInputElement).checked
+    ).toBe(true);
+
+    fireEvent.click(screen.getByLabelText('Break it into small steps'));
+    fireEvent.click(screen.getByText('Apply'));
+    await waitFor(() =>
+      expect(resolveProposal()).toHaveBeenCalledWith(
+        'm1',
+        'r1',
+        'accept',
+        expect.objectContaining({ itemKey: 'todo:t1', choice: 'breakdown' })
+      )
+    );
+  });
+
+  it('keeps it when dismissed', async () => {
+    resolveProposal().mockResolvedValue({
+      proposal: { ...review, status: 'dismissed' },
+    });
+    renderProposals([review]);
+    fireEvent.click(screen.getByText('Keep it'));
+    await waitFor(() =>
+      expect(resolveProposal().mock.calls[0].slice(0, 3)).toEqual([
+        'm1',
+        'r1',
+        'dismiss',
+      ])
+    );
+  });
+
+  it('collapses to what was done', () => {
+    renderProposals([
+      {
+        ...review,
+        status: 'accepted',
+        result: { choice: 'breakdown', steps: ['Clear one shelf'] },
+      },
+      { ...review, id: 'r2', status: 'dismissed' },
+    ]);
+    expect(
+      screen.getByText('Broke “Clean the garage” down: Clear one shelf')
+    ).toBeTruthy();
+    expect(
+      screen.getByText('Keeping “Clean the garage” — suggested less often')
+    ).toBeTruthy();
+  });
+
+  it('shows why a journal to-do card was offered', () => {
+    renderProposals([
+      {
+        id: 'j1',
+        kind: 'todo',
+        status: 'pending',
+        fromJournal: 'entry1',
+        data: {
+          title: 'Call the landlord',
+          reason: 'need to call the landlord',
+        },
+      },
+    ]);
+    expect(screen.getByText('need to call the landlord')).toBeTruthy();
+  });
+});

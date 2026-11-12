@@ -268,7 +268,8 @@ public struct ChatProposal: Equatable, Identifiable {
                 "flashcards": "Generate flashcards?", "todo": "Keep this for today?", "writing_note": "Add to the notes?",
                 "writing_note_update": "Update this note?", "writing_chapter_update": "Change this chapter?",
                 "screenshot_titles": "Rename these screenshots?",
-                "habit": "Start a new habit?",
+                "habit": "Start a new habit?", "todo_review": "You keep skipping this",
+                "unlock_gaming": "Done with work — unlock games?",
                 "habit_plan": "Make this the plan for “\(data["habitTitle"]?.string ?? "this habit")”?"][kind] ?? "Save this?"
     }
 
@@ -278,11 +279,25 @@ public struct ChatProposal: Equatable, Identifiable {
                 "flashcards": "Queue Cards", "todo": "Add to today", "writing_note": "Add Note",
                 "writing_note_update": "Update Note", "writing_chapter_update": "Update Chapter",
                 "screenshot_titles": "Rename",
-                "habit_plan": "Use as cue", "habit": "Add habit"][kind] ?? "Save"
+                "habit_plan": "Use as cue", "habit": "Add habit", "todo_review": "Apply",
+                "unlock_gaming": "Unlock gaming"][kind] ?? "Save"
     }
 
+    /// The quiet button. Dismissing a "keep it or let it go?" card keeps the
+    /// item, suggested less often.
+    public var dismissLabel: String { kind == "todo_review" ? "Keep it" : "Dismiss" }
+
+    /// What a `todo_review` card can do, in the order offered.
+    /// `TODO_REVIEW_CHOICES` in DelegateProposals.tsx, word for word.
+    public static let todoReviewChoices: [(value: String, label: String)] = [
+        ("drop", "Let it go"), ("snooze", "Snooze a week"), ("breakdown", "Break it into small steps"),
+    ]
+
     public var resolvedLabel: String {
-        if status == "dismissed" { return "Dismissed" }
+        if status == "dismissed" {
+            return kind == "todo_review"
+                ? "Keeping “\(data["title"]?.string ?? "")” — suggested less often" : "Dismissed"
+        }
         switch kind {
         case "calendar": return "Saved to calendar"
         case "calorie": return "Logged calories"
@@ -291,8 +306,21 @@ public struct ChatProposal: Equatable, Identifiable {
         case "recipe": return "Saved to your recipes"
         case "recipe_link": return "Linked to your recipe"
         case "todo": return "Added to today: \(data["title"]?.string ?? "")"
+        case "todo_review":
+            let title = data["title"]?.string ?? ""
+            switch result["choice"]?.string {
+            case "snooze": return "Snoozed “\(title)” for a week"
+            case "breakdown":
+                let steps = (result["steps"]?.array ?? []).compactMap(\.string)
+                return steps.isEmpty ? "Broke “\(title)” down" : "Broke “\(title)” down: \(steps.joined(separator: "; "))"
+            default: return "Let go of “\(title)”"
+            }
         case "habit": return "Added habit: \(data["title"]?.string ?? "")"
         case "habit_plan": return "Cue set for \(data["habitTitle"]?.string ?? "the habit"): \(data["cue"]?.string ?? "")"
+        case "unlock_gaming":
+            let rating = result["rating"]?.int ?? data["rating"]?.int
+            return "Games unlocked" + (rating.map { " · today \(String(repeating: "★", count: $0))" } ?? "")
+                + (result["pausedInference"]?.bool == true ? " · GPU freed" : "")
         case "flashcards":
             let count = result["count"]?.int ?? 0
             return "Queued \(count) card\(count == 1 ? "" : "s") for review in Learning"
@@ -435,9 +463,41 @@ public struct ChatTodo: Codable, Equatable, Identifiable {
     public let due: String?
     public let priority: Int
     public let done: Bool
+    /// What the row stands for (backend/day_plan.py): "todo" and "daily" are
+    /// live links — ticking either side ticks both — while "goal" and
+    /// "journal" only say where the suggestion came from.
+    public let sourceType: String?
+    public let sourceId: String?
+    /// One line on why it is on today's plan.
+    public let reason: String?
 
-    public init(id: String, title: String, notes: String?, due: String?, priority: Int, done: Bool) {
+    public init(id: String, title: String, notes: String?, due: String?, priority: Int, done: Bool,
+                sourceType: String? = nil, sourceId: String? = nil, reason: String? = nil) {
         self.id = id; self.title = title; self.notes = notes; self.due = due; self.priority = priority; self.done = done
+        self.sourceType = sourceType; self.sourceId = sourceId; self.reason = reason
+    }
+
+    /// Tied to a to-do or habit: there is nothing to send to the permanent
+    /// list. `isLinkedChatTodo` in src/lib/chatTodos.ts.
+    public var isLinked: Bool {
+        (sourceType == "todo" || sourceType == "daily") && !(sourceId ?? "").isEmpty
+    }
+
+    /// Where it came from, in a word or two; "" for one typed into the bar.
+    /// `chatTodoSourceLabel` in src/lib/chatTodos.ts, word for word.
+    public var sourceLabel: String {
+        switch sourceType {
+        case "todo": return isLinked ? "From your to-dos" : ""
+        case "daily": return isLinked ? "Daily habit" : ""
+        case "goal": return "For a goal"
+        case "journal": return "From your journal"
+        default: return ""
+        }
+    }
+
+    /// The line under the title: where it came from and why.
+    public var why: String {
+        [sourceLabel, reason ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     public static let priorities = [1: "Very unimportant", 2: "Unimportant", 3: "Normal", 4: "Important", 5: "Very important"]

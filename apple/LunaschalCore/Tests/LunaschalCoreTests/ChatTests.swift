@@ -181,6 +181,42 @@ final class ChatTests: XCTestCase {
                        "2 to-dos today")
     }
 
+    func testChatTodosCarryTheirSource() throws {
+        let json = #"""
+        [{"id": "1", "title": "Renew passport", "notes": null, "due": null, "priority": 3, "done": false,
+          "sourceType": "todo", "sourceId": "T1", "reason": "Expires next month"},
+         {"id": "2", "title": "Call landlord", "notes": null, "due": null, "priority": 3, "done": false,
+          "sourceType": "journal", "sourceId": "J1", "reason": null},
+         {"id": "3", "title": "Old row", "notes": null, "due": null, "priority": 3, "done": false}]
+        """#
+        let todos = try JSONDecoder().decode([ChatTodo].self, from: Data(json.utf8))
+        XCTAssertTrue(todos[0].isLinked)
+        XCTAssertEqual(todos[0].why, "From your to-dos · Expires next month")
+        XCTAssertFalse(todos[1].isLinked)
+        XCTAssertEqual(todos[1].why, "From your journal")
+        // A row from a server before links decodes with none.
+        XCTAssertFalse(todos[2].isLinked)
+        XCTAssertEqual(todos[2].why, "")
+        XCTAssertEqual(ChatTodo(id: "4", title: "x", notes: nil, due: nil, priority: 3, done: false,
+                                sourceType: "daily", sourceId: "D1").sourceLabel, "Daily habit")
+    }
+
+    func testTodoReviewCards() {
+        func card(_ json: String) -> ChatProposal { ChatMeta(#"{"proposals": [\#(json)]}"#).proposals[0] }
+        let pending = card(#"{"id": "1", "kind": "todo_review", "status": "pending", "data": {"itemKey": "todo:T1", "title": "Clean the garage", "streak": 3, "choice": "drop"}}"#)
+        XCTAssertEqual(pending.headline, "You keep skipping this")
+        XCTAssertEqual(pending.acceptLabel, "Apply")
+        XCTAssertEqual(pending.dismissLabel, "Keep it")
+        XCTAssertEqual(ChatProposal.todoReviewChoices.map(\.value), ["drop", "snooze", "breakdown"])
+        XCTAssertEqual(card(#"{"id": "1", "kind": "todo_review", "status": "accepted", "data": {"title": "Clean the garage"}, "result": {"choice": "breakdown", "steps": ["Clear one shelf"]}}"#).resolvedLabel,
+                       "Broke “Clean the garage” down: Clear one shelf")
+        XCTAssertEqual(card(#"{"id": "1", "kind": "todo_review", "status": "accepted", "data": {"title": "Clean the garage"}, "result": {"choice": "drop"}}"#).resolvedLabel,
+                       "Let go of “Clean the garage”")
+        XCTAssertEqual(card(#"{"id": "1", "kind": "todo_review", "status": "dismissed", "data": {"title": "Clean the garage"}}"#).resolvedLabel,
+                       "Keeping “Clean the garage” — suggested less often")
+        XCTAssertEqual(card(#"{"id": "1", "kind": "todo", "status": "dismissed", "data": {}}"#).dismissLabel, "Dismiss")
+    }
+
     func testDueDatesGoOutAtLocalNoon() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/Toronto")!

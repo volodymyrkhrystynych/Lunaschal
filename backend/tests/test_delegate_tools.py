@@ -57,9 +57,9 @@ def test_add_todos_adds_several_in_one_call(client):
     ]
 
 
-def test_add_todos_skips_a_title_already_tracked_elsewhere(client):
-    """A to-do added mid-conversation shouldn't duplicate something already on
-    the permanent list or already sitting in today's bar."""
+def test_add_todos_links_a_title_already_on_the_permanent_list(client):
+    """Putting an open to-do on today's plan is not a duplicate any more: the
+    bar row is linked to it, so ticking either ticks both."""
     db = connection.get_db()
     db.execute(
         "INSERT INTO todos(id, title, done, list, priority, created_at, updated_at)"
@@ -72,21 +72,29 @@ def test_add_todos_skips_a_title_already_tracked_elsewhere(client):
     ]})
 
     assert event['ok'] is True
-    assert [r['title'] for r in _chat_todos()] == ['Call the dentist']
+    rows = db.execute(
+        'SELECT title, source_type, source_id FROM chat_todos ORDER BY created_at, title'
+    ).fetchall()
+    assert [tuple(r) for r in rows] == [
+        ('Call the dentist', None, None), ('buy MILK', 'todo', 't1'),
+    ]
 
 
 def test_add_todos_with_only_duplicates_is_refused(client):
+    """Already in today's bar — by title, or as a link to the same to-do under
+    another wording."""
     db = connection.get_db()
     db.execute(
         "INSERT INTO todos(id, title, done, list, priority, created_at, updated_at)"
         " VALUES ('t1', 'Buy milk', 0, 'todo', 3, 0, 0)"
     )
     db.commit()
+    assert _proposal('add_todos', {'items': [{'title': 'Buy milk'}]})[1]['ok'] is True
 
-    text, event, _ = _proposal('add_todos', {'items': [{'title': 'Buy milk'}]})
+    text, event, _ = _proposal('add_todos', {'items': [{'title': 'buy  milk'}]})
     assert event['ok'] is False
     assert 'already on the list' in text
-    assert _chat_todos() == []
+    assert len(_chat_todos()) == 1
 
 
 def test_add_todos_with_no_items_is_refused(client):

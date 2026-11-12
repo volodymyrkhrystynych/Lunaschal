@@ -10,6 +10,8 @@ it can't be said (a goal the judge was unsure of). Sources:
   — a photographed meal is a calorie log in all but name
 - goals: a daily-rule goal's `goal_days` verdict for the day
 - to-dos: the day's bar (`chat_todos`), the plan the briefing made
+- gaming: present, and missed, only when the gaming lock was overridden that
+  day without the end-of-work review (`gaming_unlocks`)
 
 Which of the first three count is the user's (`coach_behaviors`). Weight and
 calories also count only once the user has logged one at all: a review that
@@ -46,6 +48,14 @@ def gather(db, day: str) -> list[dict]:
         items.append({'kind': 'goal', 'id': r['id'], 'title': r['title'], 'done': done})
     for r in db.execute('SELECT id, title, done FROM chat_todos WHERE day_key=? ORDER BY created_at, id', (day,)):
         items.append({'kind': 'todo', 'id': r['id'], 'title': r['title'], 'done': bool(r['done'])})
+    # Skipping the end-of-work review to unlock games is the one way the
+    # gaming lock shows up in a day's score. Unlocking through the review
+    # adds nothing — a free "done" would make the rating the agent quoted at
+    # unlock differ from the one the user then gets.
+    unlocked = db.execute("SELECT reason FROM gaming_unlocks WHERE day=? AND method='override'", (day,)).fetchone()
+    if unlocked:
+        items.append({'kind': 'gaming', 'id': None, 'title': 'Closed out work before gaming', 'done': False,
+                      'note': unlocked['reason']})
     return items
 
 

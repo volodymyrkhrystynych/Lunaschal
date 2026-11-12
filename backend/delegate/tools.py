@@ -52,6 +52,7 @@ import logging
 from datetime import date as _date, timedelta
 
 from backend.calendar_voice import MINUTES_PER_DAY, _hhmm, _minutes
+from backend.ai.todo import todo_title_and_notes
 from backend.todo_recurrence import parse_due_date
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,10 @@ TOOLS = [
                 "This bar resets at the next day boundary — for anything that "
                 "needs to persist beyond today (a real deadline, a repeating "
                 "chore), tell the user to add it from the Tasks tab instead, "
-                "where it can carry a due date and priority."
+                "where it can carry a due date and priority. Putting one of "
+                "their existing open to-dos or habits on today's list is fine: "
+                "use its title and it is linked, so ticking it in the bar ticks "
+                "the real one."
             ),
             'parameters': {
                 'type': 'object',
@@ -92,11 +96,18 @@ TOOLS = [
                             'properties': {
                                 'title': {
                                     'type': 'string',
-                                    'description': 'What needs doing, phrased as an action.',
+                                    'description': (
+                                        'The action as a short checklist label: '
+                                        '2 to 8 words starting with a verb. Never '
+                                        'the whole sentence the user said.'
+                                    ),
                                 },
                                 'notes': {
                                     'type': 'string',
-                                    'description': 'Extra detail that does not belong in the title.',
+                                    'description': (
+                                        'Every other detail they gave about it: '
+                                        'who, where, why, which one, steps.'
+                                    ),
                                 },
                             },
                             'required': ['title'],
@@ -485,36 +496,26 @@ def _add_todos(args: dict) -> tuple[str, dict]:
     point."""
     import time
 
-    from ulid import ULID
-
     from backend.db.connection import get_db
     from backend.day_boundary import day_key_for
-    from backend.routes.tasks import _today_taken_titles
+    from backend.routes.tasks import add_to_bar
 
     raw_items = args.get('items')
     if not isinstance(raw_items, list) or not raw_items:
         return _refused('add_todos', 'no items given')
 
-    db = get_db()
-    today = day_key_for()
-    taken = _today_taken_titles(db, today)
-    now = int(time.time())
-    added = []
+    items = []
     for raw in raw_items:
         if not isinstance(raw, dict):
             continue
-        title = _text(raw.get('title'))[:MAX_TITLE_CHARS]
-        if not title or title.lower() in taken:
-            continue
-        notes = _text(raw.get('notes'))[:MAX_NOTE_CHARS] or None
-        db.execute(
-            'INSERT INTO chat_todos(id, day_key, title, notes, due, priority, done, created_at, updated_at)'
-            ' VALUES (?,?,?,?,NULL,3,0,?,?)',
-            (str(ULID()), today, title, notes, now, now),
-        )
-        taken.add(title.lower())
-        added.append(title)
+        title, notes = todo_title_and_notes(_text(raw.get('title')), _text(raw.get('notes')))
+        items.append({'title': title, 'notes': notes[:MAX_NOTE_CHARS] if notes else None})
+    db = get_db()
+    # An item that restates an open to-do or habit goes in linked to it, so
+    # ticking it here ticks the real one (backend/day_plan.py).
+    created = add_to_bar(db, day_key_for(), items, int(time.time()))
     db.commit()
+    added = [r['title'] for r in created]
 
     if not added:
         return _refused('add_todos', 'nothing new to add — already on the list')

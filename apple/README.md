@@ -386,6 +386,14 @@ what each device can currently do and which work remains device-only.
   APNs cannot reach a simulator, so delivery is unverified until a TestFlight
   build after the signing steps in SIGNING.md. Payloads for `xcrun simctl
 push` are in `tools/push-fixtures/`.
+- Gaming lock (Settings → Coach → Gaming lock): the switch, the weekdays it
+  covers, where today stands, and "Unlock without the review…", which takes a
+  typed reason (ten characters at least) and can also pause GPU inference. A
+  refusal is shown in the server's own words. The normal unlock is the
+  `unlock_gaming` card in Chat, which shows the day's provisional rating and
+  what is still open. Parsing and card labels are unit tested
+  (`GamingLockTests`); the screen builds in the simulator, not verified on
+  device.
 - Todo opens with Goals: the overarching goal (a block of text) and
   collapsible This week / month / quarter / year sections, each listing its
   open goals (a goal with a daily rule shows its streak and prize) or "Not

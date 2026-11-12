@@ -816,9 +816,12 @@ def _accept_screenshot_titles(db, data: dict, ctx: dict) -> dict:
 
 
 def _accept_todo(db, data: dict, ctx: dict) -> dict:
-    """A carried-over to-do card from the morning briefing: yesterday's
-    unfinished bar item, kept into *today's* bar. Idempotent on title, since the
-    plan or a chat turn may have added the same thing in the meantime."""
+    """A to-do card for *today's* bar: yesterday's unfinished item carried
+    over by the briefing, or something the journal pass heard the user say
+    they need to do. Idempotent on title, since the plan or a chat turn may
+    have added the same thing in the meantime. An item that restates an open
+    to-do or habit goes in linked to it (backend/day_plan.py)."""
+    from backend import day_plan
     from backend.routes.tasks import _parse_due
     from backend.todo_recurrence import parse_priority
     title = (data.get('title') or '').strip()
@@ -834,19 +837,84 @@ def _accept_todo(db, data: dict, ctx: dict) -> dict:
         raise _AcceptRejected(err)
     notes = data.get('notes')
     notes = (notes.strip() or None) if isinstance(notes, str) else None
+    reason = data.get('reason') if isinstance(data.get('reason'), str) else None
 
     today = day_key_for()
     for row in db.execute('SELECT id, title FROM chat_todos WHERE day_key=?', (today,)):
-        if (row['title'] or '').strip().lower() == title.lower():
+        if day_plan.normalize_title(row['title']) == day_plan.normalize_title(title):
             return {'id': row['id']}
+    # The card names its source; only a source that still exists is kept. A
+    # journal entry is provenance, a to-do or habit is a live link.
+    source = None
+    source_type, source_id = data.get('sourceType'), data.get('sourceId')
+    if source_type in day_plan.LIST_SOURCES and day_plan.source_open(db, source_type, source_id):
+        source = (source_type, source_id)
+    if source is None:
+        source = day_plan.resolve_list_source(db, today, title)
+    if source is not None:
+        # Already in the bar under another wording: that row is this card.
+        same = db.execute('SELECT id FROM chat_todos WHERE day_key=? AND source_type=? AND source_id=?',
+                          (today, *source)).fetchone()
+        if same:
+            return {'id': same['id']}
+    if source is None and source_type == 'journal' and isinstance(source_id, str) and db.execute(
+            'SELECT 1 FROM journal_entries WHERE id=?', (source_id,)).fetchone():
+        source = ('journal', source_id)
     now = int(time.time())
-    id = str(ULID())
-    db.execute(
-        'INSERT INTO chat_todos(id, day_key, title, notes, due, priority, done, created_at, updated_at)'
-        ' VALUES (?,?,?,?,?,?,0,?,?)',
-        (id, today, title, notes, due, priority, now, now),
-    )
-    return {'id': id}
+    return {'id': day_plan.insert_bar_row(db, today, title, now, notes=notes, due=due,
+                                          priority=priority, source=source, reason=reason)}
+
+
+def _accept_todo_review(db, data: dict, ctx: dict) -> dict:
+    """The briefing's "you keep skipping this" card. Accepting applies the
+    choice on it; dismissing it (no handler) keeps suggesting the item, at the
+    backoff's spacing.
+
+    - `drop`: stop suggesting it. A to-do moves to the archive list (still
+      there, off the active plan); a habit or goal only stops being nudged.
+    - `snooze`: out of the plan for a week.
+    - `breakdown`: split into small first steps, added to today's bar; the
+      original sits out a week while those get done.
+    """
+    from datetime import date, timedelta
+    from backend import day_plan
+    from backend.ai.todo import break_down_todo
+    key = data.get('itemKey')
+    choice = data.get('choice')
+    if not isinstance(key, str) or not key:
+        raise _AcceptRejected('itemKey required')
+    if choice not in ('drop', 'snooze', 'breakdown'):
+        raise _AcceptRejected("choice must be 'drop', 'snooze' or 'breakdown'")
+    row = db.execute('SELECT title FROM chat_todo_suggestions WHERE item_key=?', (key,)).fetchone()
+    if not row:
+        raise _AcceptRejected('that suggestion no longer exists')
+    now = int(time.time())
+    today = day_key_for()
+    week = (date.fromisoformat(today) + timedelta(days=8)).isoformat()
+    source_type, source_id = day_plan.parse_key(key)
+    if choice == 'drop':
+        day_plan.drop(db, key, now)
+        if source_type == 'todo':
+            db.execute("UPDATE todos SET list='archive', updated_at=? WHERE id=? AND done=0",
+                       (now, source_id))
+        return {'choice': 'drop'}
+    if choice == 'snooze':
+        day_plan.snooze(db, key, week, now)
+        return {'choice': 'snooze', 'until': week}
+    title = day_plan.source_title(db, source_type, source_id) or row['title']
+    try:
+        steps = break_down_todo(title)
+    except (InferencePaused, Preempted):
+        raise
+    except Exception as e:  # noqa: BLE001 — the model is down; the card stays open
+        raise _GenerationFailed('Could not break that down right now') from e
+    if not steps:
+        raise _GenerationFailed('Could not break that down right now')
+    from backend.routes.tasks import add_to_bar
+    created = add_to_bar(db, today, [{'title': s, 'notes': f'A first step of: {title}'} for s in steps],
+                         now)
+    day_plan.snooze(db, key, week, now)
+    return {'choice': 'breakdown', 'steps': [r['title'] for r in created]}
 
 
 def _accept_habit_plan(db, data: dict, ctx: dict) -> dict:
@@ -865,6 +933,26 @@ def _accept_habit_plan(db, data: dict, ctx: dict) -> dict:
                       (cue.strip(), int(time.time()), task_id)).rowcount:
         raise _AcceptRejected('that habit no longer exists')
     return {'id': task_id}
+
+
+def _accept_unlock_gaming(db, data: dict, ctx: dict) -> dict:
+    """The end-of-work card: lift today's gaming lock, and free the GPU in the
+    same tap when the user left that ticked. Model-free, since the GPU is
+    about to be handed to a game. A card left over from yesterday cannot
+    unlock today."""
+    from backend.day_boundary import day_key_for
+    from backend.gaming import lock
+    if data.get('day') != day_key_for():
+        raise _AcceptRejected('this card was for another day — tell me again that you are done')
+    try:
+        state = lock.lift(db, 'review')
+    except ValueError as e:
+        raise _AcceptRejected(str(e)) from e
+    paused = False
+    if data.get('pauseInference') is True:
+        from backend.routes.settings import pause_inference_now
+        paused = bool(pause_inference_now().get('paused'))
+    return {'day': state['day'], 'rating': state['ratingAtUnlock'], 'pausedInference': paused}
 
 
 def _accept_habit(db, data: dict, ctx: dict) -> dict:
@@ -1222,8 +1310,10 @@ _ACCEPT_HANDLERS = {
     'recipe_link': _accept_recipe_link,
     'flashcards': _accept_flashcards,
     'todo': _accept_todo,
+    'todo_review': _accept_todo_review,
     'habit_plan': _accept_habit_plan,
     'habit': _accept_habit,
+    'unlock_gaming': _accept_unlock_gaming,
 }
 
 
@@ -1269,6 +1359,11 @@ def _resolve_proposal(message_id, proposal_id):
 
     if action == 'dismiss':
         proposal['status'] = 'dismissed'
+        if proposal.get('kind') == 'todo':
+            # Turned down: neither the journal pass nor the briefing offers it
+            # again for a few days (backend/day_plan.py).
+            from backend import day_plan
+            day_plan.record_card_dismissal(db, proposal.get('data') or {}, day_key_for(), int(time.time()))
     else:
         handler = _ACCEPT_HANDLERS.get(proposal.get('kind'))
         if handler is None:

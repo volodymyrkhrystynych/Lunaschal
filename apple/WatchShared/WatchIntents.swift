@@ -46,16 +46,54 @@ struct StartTimerIntent: AppIntent {
 
 /// What a recording button makes.
 enum RecordingChoice: String, AppEnum {
-    case record, transcribe
+    case record, transcribe, todo
 
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "Recording"
     static let caseDisplayRepresentations: [RecordingChoice: DisplayRepresentation] = [
-        .record: "Record", .transcribe: "Transcribe",
+        .record: "Record", .transcribe: "Transcribe", .todo: "To-do",
     ]
 
+    /// A To-do clip is a Transcribe clip that the server also makes a to-do from.
     var mode: CaptureMode { self == .record ? .record : .transcribe }
-    var symbol: String { self == .record ? "mic.fill" : "waveform" }
-    var title: String { self == .record ? "Record" : "Transcribe" }
+    var asTodo: Bool { self == .todo }
+    var symbol: String {
+        switch self {
+        case .record: return "mic.fill"
+        case .transcribe: return "waveform"
+        case .todo: return "checklist"
+        }
+    }
+    var title: String {
+        switch self {
+        case .record: return "Record"
+        case .transcribe: return "Transcribe"
+        case .todo: return "To-do"
+        }
+    }
+    /// What it is doing while its clip is going.
+    var going: String {
+        switch self {
+        case .record: return "Recording"
+        case .transcribe: return "Transcribing"
+        case .todo: return "To-do"
+        }
+    }
+    var summary: String {
+        switch self {
+        case .record: return "Starts and stops a journal clip."
+        case .transcribe: return "Starts and stops a clip that becomes text."
+        case .todo: return "Starts and stops a clip that becomes a to-do."
+        }
+    }
+
+    init(_ status: RecordingStatus) {
+        self = status.asTodo ? .todo : status.mode == .record ? .record : .transcribe
+    }
+
+    /// Whether `status` is the clip this button started.
+    func matches(_ status: RecordingStatus?) -> Bool {
+        status?.matches(mode: mode, asTodo: asTodo) == true
+    }
 }
 
 /// Record or Transcribe as a toggle: on starts a clip, off stops and saves
@@ -73,7 +111,7 @@ struct ToggleRecordingIntent: SetValueIntent, AudioRecordingIntent {
 
     func perform() async throws -> IntentResultContainer<Never, Never, Never, Never> {
         #if WATCH_APP
-        try await WatchModel.toggleRecording(recording.mode, on: value)
+        try await WatchModel.toggleRecording(recording, on: value)
         return .result()
         #else
         // Reached only if the system ever runs this in the extension, which

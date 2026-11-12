@@ -13,6 +13,7 @@ import {
   dueInputToUnix,
   dueIsoToInput,
 } from '../../lib/todos';
+import { chatTodoSourceLabel, isLinkedChatTodo } from '../../lib/chatTodos';
 
 const fieldClass =
   'bg-[var(--color-surface)] border border-white/20 rounded px-2 py-1 text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]';
@@ -39,6 +40,7 @@ function ChatTodoRow({
   onDismiss,
   onPromote,
 }: RowProps) {
+  const linked = isLinkedChatTodo(todo);
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [sendMode, setSendMode] = useState(false);
@@ -211,7 +213,7 @@ function ChatTodoRow({
           />
         ) : (
           <span
-            onClick={() => (sendMode ? openPromote() : startEdit())}
+            onClick={() => (sendMode && !linked ? openPromote() : startEdit())}
             className={`text-sm cursor-text select-none ${
               todo.done
                 ? 'line-through text-[var(--color-text-muted)]'
@@ -226,23 +228,37 @@ function ChatTodoRow({
             {todo.notes}
           </div>
         )}
+        {(todo.reason || chatTodoSourceLabel(todo)) && !editing && (
+          <div
+            data-testid="chat-todo-why"
+            className="text-xs text-[var(--color-text-muted)] mt-0.5 truncate"
+          >
+            {[chatTodoSourceLabel(todo), todo.reason]
+              .filter(Boolean)
+              .join(' · ')}
+          </div>
+        )}
       </div>
 
-      <button
-        onClick={() => setSendMode(s => !s)}
-        title={
-          sendMode
-            ? 'Click the to-do to send it to your permanent list'
-            : 'Switch to send-to-permanent mode'
-        }
-        className={`shrink-0 text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 border transition-colors ${
-          sendMode
-            ? 'border-[var(--color-primary)] text-[var(--color-primary)]'
-            : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-        }`}
-      >
-        → Permanent
-      </button>
+      {/* A row linked to a to-do or habit already is one: there is nothing
+          to send, and sending it would make a second copy. */}
+      {!linked && (
+        <button
+          onClick={() => setSendMode(s => !s)}
+          title={
+            sendMode
+              ? 'Click the to-do to send it to your permanent list'
+              : 'Switch to send-to-permanent mode'
+          }
+          className={`shrink-0 text-[10px] uppercase tracking-wide rounded px-1.5 py-0.5 border transition-colors ${
+            sendMode
+              ? 'border-[var(--color-primary)] text-[var(--color-primary)]'
+              : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+          }`}
+        >
+          → Permanent
+        </button>
+      )}
 
       <button
         onClick={onDismiss}
@@ -283,6 +299,9 @@ export function ChatTodoBar() {
       // A completion logs a task_events row (backend/routes/tasks.py's
       // _complete_chat_todo_row) the Journal feed reads from that key.
       queryClient.invalidateQueries({ queryKey: ['taskEvents'] });
+      // A linked row ticks its to-do or habit too (backend/day_plan.py).
+      queryClient.invalidateQueries({ queryKey: ['todos'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
 

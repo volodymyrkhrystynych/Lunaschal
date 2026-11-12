@@ -15,7 +15,10 @@ interface Props {
 // Once a card is resolved it collapses to one quiet line rather than
 // disappearing, so the transcript keeps a record of what actually happened.
 function resolvedLabel(p: DelegateProposalRecord): string {
-  if (p.status === 'dismissed') return 'Dismissed';
+  if (p.status === 'dismissed')
+    return p.kind === 'todo_review'
+      ? `Keeping “${str(p.data, 'title')}” — suggested less often`
+      : 'Dismissed';
   switch (p.kind) {
     case 'calendar':
       return 'Saved to calendar';
@@ -31,10 +34,16 @@ function resolvedLabel(p: DelegateProposalRecord): string {
       return 'Linked to your recipe';
     case 'todo':
       return `Added to today: ${str(p.data, 'title')}`;
+    case 'todo_review':
+      return todoReviewResolvedLabel(p);
     case 'habit':
       return `Added habit: ${str(p.data, 'title')}`;
     case 'habit_plan':
       return `Cue set for ${str(p.data, 'habitTitle')}: ${str(p.data, 'cue')}`;
+    case 'unlock_gaming': {
+      const rating = p.result?.rating ?? (p.data.rating as number | undefined);
+      return `Games unlocked${rating ? ` · today ${'★'.repeat(rating)}` : ''}${p.result?.pausedInference ? ' · GPU freed' : ''}`;
+    }
     case 'flashcards':
       return `Queued ${p.result?.count ?? 0} card${p.result?.count === 1 ? '' : 's'} for review in Learning`;
     case 'writing_note':
@@ -53,6 +62,31 @@ function resolvedLabel(p: DelegateProposalRecord): string {
   }
 }
 
+/** What a resolved "keep it or let it go?" card says it did. */
+function todoReviewResolvedLabel(p: DelegateProposalRecord): string {
+  const title = str(p.data, 'title');
+  switch (p.result?.choice) {
+    case 'snooze':
+      return `Snoozed “${title}” for a week`;
+    case 'breakdown': {
+      const steps: string[] = Array.isArray(p.result?.steps)
+        ? p.result.steps
+        : [];
+      return steps.length
+        ? `Broke “${title}” down: ${steps.join('; ')}`
+        : `Broke “${title}” down`;
+    }
+    default:
+      return `Let go of “${title}”`;
+  }
+}
+
+export const TODO_REVIEW_CHOICES: { value: string; label: string }[] = [
+  { value: 'drop', label: 'Let it go' },
+  { value: 'snooze', label: 'Snooze a week' },
+  { value: 'breakdown', label: 'Break it into small steps' },
+];
+
 const HEADLINE: Record<string, string> = {
   calendar: 'Save as calendar event?',
   calorie: 'Log calories?',
@@ -61,8 +95,10 @@ const HEADLINE: Record<string, string> = {
   recipe_link: 'Link this meal to that recipe?',
   flashcards: 'Generate flashcards?',
   todo: 'Keep this for today?',
+  todo_review: 'You keep skipping this',
   habit_plan: 'Make this the plan for that habit?',
   habit: 'Start a new habit?',
+  unlock_gaming: 'Done with work — unlock games?',
   writing_note: 'Add to the notes?',
   writing_note_update: 'Update this note?',
   screenshot_titles: 'Rename these screenshots?',
@@ -77,12 +113,18 @@ const ACCEPT_LABEL: Record<string, string> = {
   recipe_link: 'Link',
   flashcards: 'Queue Cards',
   todo: 'Add to today',
+  todo_review: 'Apply',
   habit_plan: 'Use as cue',
   habit: 'Add habit',
+  unlock_gaming: 'Unlock gaming',
   writing_note: 'Add Note',
   writing_note_update: 'Update Note',
   screenshot_titles: 'Rename',
   writing_chapter_update: 'Update Chapter',
+};
+
+const DISMISS_LABEL: Record<string, string> = {
+  todo_review: 'Keep it',
 };
 
 const ACCEPT_PENDING_LABEL: Record<string, string> = {
@@ -93,6 +135,7 @@ const ACCEPT_PENDING_LABEL: Record<string, string> = {
   recipe_link: 'Linking...',
   flashcards: 'Generating...',
   todo: 'Adding...',
+  todo_review: 'Working...',
   writing_note: 'Saving...',
   writing_note_update: 'Saving...',
   screenshot_titles: 'Renaming...',
@@ -330,6 +373,39 @@ function ProposalForm({
         </div>
       );
 
+    // The end of the workday: today's provisional review, then games.
+    case 'unlock_gaming': {
+      const rating = Math.max(0, Math.min(5, Number(data.rating) || 0));
+      const open = Array.isArray(data.open) ? (data.open as string[]) : [];
+      return (
+        <div className="space-y-1.5">
+          <p className="text-sm font-medium">
+            {rating
+              ? `Today so far: ${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}`
+              : 'Nothing tracked today'}
+          </p>
+          {open.length > 0 && (
+            <p className="text-xs text-[var(--color-text-muted)]">
+              Still open: {open.join(', ')}
+            </p>
+          )}
+          {str(data, 'workEnd') && (
+            <p className="text-xs text-[var(--color-text-muted)]">
+              Work was down to end at {str(data, 'workEnd')}.
+            </p>
+          )}
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={data.pauseInference !== false}
+              onChange={e => set({ pauseInference: e.target.checked })}
+            />
+            Also pause GPU inference
+          </label>
+        </div>
+      );
+    }
+
     // Yesterday's unfinished bar item, carried over by the morning briefing.
     case 'todo':
       return (
@@ -345,6 +421,42 @@ function ProposalForm({
               {str(data, 'notes')}
             </p>
           )}
+          {str(data, 'reason') && (
+            <p className="text-xs text-[var(--color-text-muted)]">
+              {str(data, 'reason')}
+            </p>
+          )}
+        </div>
+      );
+
+    // Skipped day after day in the bar: keep it (Dismiss), or one of these.
+    case 'todo_review':
+      return (
+        <div className="space-y-1.5">
+          <p className="text-sm text-[var(--color-text)]">
+            {str(data, 'title')}
+          </p>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Left undone {str(data, 'streak')} days running.
+          </p>
+          <div role="radiogroup" className="flex flex-wrap gap-x-4 gap-y-1">
+            {TODO_REVIEW_CHOICES.map(c => (
+              <label
+                key={c.value}
+                className="flex items-center gap-1.5 text-sm text-[var(--color-text)]"
+              >
+                <input
+                  type="radio"
+                  name="todo-review-choice"
+                  value={c.value}
+                  checked={(str(data, 'choice') || 'drop') === c.value}
+                  onChange={() => set({ choice: c.value })}
+                  className="accent-[var(--color-primary)]"
+                />
+                {c.label}
+              </label>
+            ))}
+          </div>
         </div>
       );
 
@@ -697,7 +809,7 @@ function PendingCard({
           disabled={busy}
           className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
         >
-          Dismiss
+          {DISMISS_LABEL[proposal.kind] ?? 'Dismiss'}
         </button>
         <button
           onClick={() => onResolve('accept', data)}

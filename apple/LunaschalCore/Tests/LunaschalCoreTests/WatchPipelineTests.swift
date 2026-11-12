@@ -27,16 +27,23 @@ final class WatchPipelineTests: XCTestCase {
         }
     }
 
+    /// The To-do button: a Transcribe clip whose upload also names the to-do,
+    /// under the capture's own id, so the server makes both from one clip.
     @MainActor
-    private func runPipeline(_ mode: CaptureMode) async throws {
-        let base = root.appendingPathComponent(mode.rawValue)
+    func testATodoClipTravelsTheSameWayAndNamesItsTodo() async throws {
+        try await runPipeline(.transcribe, asTodo: true)
+    }
+
+    @MainActor
+    private func runPipeline(_ mode: CaptureMode, asTodo: Bool = false) async throws {
+        let base = root.appendingPathComponent(mode.rawValue + (asTodo ? "-todo" : ""))
         let watch = try CaptureStore(root: base.appendingPathComponent("watch"))
         let phone = try CaptureStore(root: base.appendingPathComponent("phone"))
         let inbox = try WatchInbox(root: phone.root.appendingPathComponent("watch-inbox"))
         let audio = Data("watch audio \(mode.rawValue)".utf8)
 
         // Watch, Recorder.start(mode:): the manifest is written before any audio.
-        var capture = Capture(mode: mode, now: Date(timeIntervalSince1970: 1_790_000_000))
+        var capture = Capture(mode: mode, now: Date(timeIntervalSince1970: 1_790_000_000), asTodo: asTodo)
         try watch.save(capture)
         try audio.write(to: watch.audioURL(capture))
         // Recorder.stop(): saved locally and ready to hand off.
@@ -69,6 +76,7 @@ final class WatchPipelineTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: phone.audioURL(capture)), audio)
         XCTAssertEqual(try phone.load(capture.id).state, .pending)
         XCTAssertEqual(try phone.load(capture.id).mode, mode)
+        XCTAssertEqual(try phone.load(capture.id).asTodo, asTodo)
         XCTAssertTrue(try WatchReceipts(store: phone).pendingServerReceipts().isEmpty,
                       "Saved on phone is not a server receipt")
 
@@ -80,6 +88,7 @@ final class WatchPipelineTests: XCTestCase {
         XCTAssertEqual(upload.fields["id"], capture.id)
         XCTAssertEqual(upload.fields["attachmentId"], capture.attachmentID)
         XCTAssertEqual(upload.fields["transcribe"], mode == .transcribe ? "true" : "false")
+        XCTAssertEqual(upload.fields["todoId"], asTodo ? capture.id : nil)
         XCTAssertEqual(upload.fields["capturedAt"], ISO8601DateFormatter().string(from: capture.createdAt))
         XCTAssertNotNil(upload.body.range(of: audio))
         XCTAssertEqual(try phone.load(capture.id).state, .synced)
