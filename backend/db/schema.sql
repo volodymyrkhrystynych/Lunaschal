@@ -3136,3 +3136,22 @@ CREATE TABLE IF NOT EXISTS push_devices (
     last_seen_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL DEFAULT 0
 );
+
+-- Merged pull requests filed into the Journal (backend/github_prs/). The
+-- ledger, not a mirror: a PR with a row is never journaled again, so an entry
+-- the user deletes stays deleted -- which is also why entry_id has no foreign
+-- key. commit_days is JSON [{day, count}] over 4am days, kept so the summary
+-- job can rebuild the entry text without asking GitHub again.
+CREATE TABLE IF NOT EXISTS merged_prs (
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    merged_at INTEGER NOT NULL,
+    commit_days TEXT NOT NULL DEFAULT '[]',
+    entry_id TEXT,
+    summarized_at INTEGER,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (repo, number)
+);
