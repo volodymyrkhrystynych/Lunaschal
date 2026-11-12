@@ -134,6 +134,11 @@ struct BookListView: View {
                 LoadMoreRow(shown: books.count, total: count) { limit += 50; await refresh() }
             }
         }
+        // On the list itself, before the pills' safeAreaInset. Applied after
+        // it, the pills' scroll view got a refresh control too, and on a second
+        // visit it bounced vertically: UIKit then inset it by the navigation
+        // bar's height and drew the pills that far below their row, clipped away.
+        .refreshable { await refresh() }
         .overlay {
             if books.isEmpty {
                 ContentUnavailableView(folder == nil ? "No matching books" : "No books in this folder",
@@ -150,23 +155,7 @@ struct BookListView: View {
         .searchable(text: $filter.query, placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "Search titles and tags")
         .safeAreaInset(edge: .top, spacing: 0) {
-            if isWholeLibrary {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(Self.sorts, id: \.0) { value, label in
-                            Button(label) { filter.sort = value }
-                                .buttonStyle(.bordered)
-                                .buttonBorderShape(.capsule)
-                                .controlSize(.small)
-                                .tint(filter.sort == value ? .accentColor : .secondary)
-                                .accessibilityAddTraits(filter.sort == value ? .isSelected : [])
-                        }
-                    }
-                    .padding(.horizontal).padding(.vertical, 6)
-                }
-                .background(.bar)
-                .accessibilityIdentifier("library-sorts")
-            }
+            if isWholeLibrary { sortPills }
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -250,7 +239,6 @@ struct BookListView: View {
                 }
             }
         }
-        .refreshable { await refresh() }
         .task(id: model.downloadingLibrary) { await refresh() }
         // Only when a pass changed books, folders, bookmarks or chapters. The
         // list's rows keep their ids, so it stays where it was scrolled to.
@@ -267,6 +255,24 @@ struct BookListView: View {
         }
         // When the fic downloading changes, the one before it has finished.
         .onChange(of: model.ficDownload?.id) { _, _ in onDevice = model.ficsOnDevice(books) }
+    }
+
+    private var sortPills: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Self.sorts, id: \.0) { value, label in
+                    Button(label) { filter.sort = value }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.small)
+                        .tint(filter.sort == value ? .accentColor : .secondary)
+                        .accessibilityAddTraits(filter.sort == value ? .isSelected : [])
+                }
+            }
+            .padding(.horizontal).padding(.vertical, 6)
+        }
+        .background(.bar)
+        .accessibilityIdentifier("library-sorts")
     }
 
     /// What Reset returns to, and what the menu's icon compares with. The
