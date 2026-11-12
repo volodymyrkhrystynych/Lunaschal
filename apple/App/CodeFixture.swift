@@ -2,8 +2,9 @@ import Foundation
 import LunaschalCore
 
 /// Demo data for the Code screens, since UI tests run with no server:
-/// launched with `-codeFixture`, the Code page shows a task with a plan to
-/// approve, one with a question, a finished one with a diff and a pushed one.
+/// launched with `-codeFixture`, the Code page shows an answered question, a
+/// task with a plan to approve, one with a question, a finished one with a
+/// diff and a pushed one.
 /// Actions change the canned tasks in memory; nothing is fetched or saved.
 struct CodeFixture {
     static let argument = "-codeFixture"
@@ -20,11 +21,14 @@ struct CodeFixture {
     static let asking = "01K9CODEFIXTURETASK0000002"
     static let finished = "01K9CODEFIXTURETASK0000003"
     static let pushed = "01K9CODEFIXTURETASK0000004"
+    static let answered = "01K9CODEFIXTURETASK0000005"
 
     let repos = [CodeRepo(id: "01K9CODEFIXTUREREPO0000001", slug: "lunaschal", name: "Lunaschal",
                           cloneState: "ready", isDefault: 1)]
 
     var tasks: [CodeTask] = [
+        task(answered, "Where do Code-tab notifications come from?", status: "answered", phase: "ask",
+             summary: "From `backend/push/notify.py`: `task_changed` listens to `tasks.set_status`."),
         task(planned, "Parse \"1h30m\" durations", status: "awaiting_plan", phase: "plan",
              plan: """
              ## Plan
@@ -80,7 +84,7 @@ struct CodeFixture {
             event(5, "tool_result", ["status": .string("completed")]),
             event(6, "proxy", ["action": .string("call"), "waited": .number(4.2), "ran": .number(38.0)]),
             event(7, "proxy", ["action": .string("promoted"), "reason": .string("1 call recovered")]),
-            event(8, "message", ["text": .string(task?.plan ?? "Done.")]),
+            event(8, "message", ["text": .string(task?.plan ?? task?.summary ?? "Done.")]),
         ]
         if let exit = task?.testExit {
             events.append(event(9, "test", ["exit": .number(Double(exit)), "tail": .string(task?.testOutput ?? "")]))
@@ -117,6 +121,7 @@ struct CodeFixture {
         var phase = t.phase
         switch action {
         case "approve": status = "queued"; phase = "build"
+        case "make-plan": status = "queued"; phase = "plan"
         case "revise", "message", "continue": status = "queued"
         case "cancel": status = "cancelled"
         case "discard": status = "discarded"
@@ -132,9 +137,9 @@ struct CodeFixture {
         return updated
     }
 
-    mutating func add(prompt: String) -> CodeTask {
+    mutating func add(prompt: String, mode: CodeTaskMode = .plan) -> CodeTask {
         let t = Self.task("01K9CODEFIXTURETASK00000\(String(format: "%02d", tasks.count + 1))", prompt,
-                          status: "queued", phase: "plan")
+                          status: "queued", phase: mode.rawValue)
         tasks.insert(t, at: 0)
         return t
     }

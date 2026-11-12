@@ -26,10 +26,11 @@ SWEEP_SECONDS = 3600
 IDLE_WAIT = 30.0
 
 # States from which the user may say something to the agent.
-MESSAGEABLE = frozenset({'needs_input', 'done', 'error', 'interrupted', 'awaiting_plan'})
+MESSAGEABLE = frozenset({'answered', 'needs_input', 'done', 'error', 'interrupted',
+                         'awaiting_plan'})
 # States a task can be thrown away from (anything not running).
-DISCARDABLE = frozenset({'awaiting_plan', 'needs_input', 'done', 'error', 'interrupted',
-                         'cancelled', 'queued'})
+DISCARDABLE = frozenset({'answered', 'awaiting_plan', 'needs_input', 'done', 'error',
+                         'interrupted', 'cancelled', 'queued'})
 
 _wake = threading.Event()
 _lock = threading.Lock()
@@ -85,7 +86,7 @@ def sweep(now: float | None = None) -> int:
     cutoff = int((now or time.time()) - RETENTION_SECONDS)
     stale = get_db().execute(
         "SELECT id FROM agent_tasks WHERE updated_at < ? AND status IN "
-        "('awaiting_plan','needs_input','done','error','interrupted')", (cutoff,),
+        "('answered','awaiting_plan','needs_input','done','error','interrupted')", (cutoff,),
     ).fetchall()
     for row in stale:
         cleanup(row['id'])
@@ -144,7 +145,7 @@ def _settings() -> dict:
 
 
 def create_task(repo_id: str, prompt: str, *, harness: str | None = None,
-                title: str = '') -> dict:
+                title: str = '', mode: str = 'plan') -> dict:
     from backend.repos import registry
     repo = registry.get_repo(repo_id) if repo_id else registry.default_repo()
     if not repo:
@@ -153,7 +154,7 @@ def create_task(repo_id: str, prompt: str, *, harness: str | None = None,
         raise ActionRefused('Less than 10 GB of disk is free; discard some tasks first')
     harness = harness or _settings().get('code_agent_harness') or 'pi'
     task = tasks.create(repo['id'], prompt, title=title, harness=harness,
-                        base_branch=repo.get('branch') or '')
+                        base_branch=repo.get('branch') or '', mode=mode)
     wake()
     return task
 
@@ -190,8 +191,22 @@ def revise_plan(task_id: str, text: str) -> dict:
     return _requeue(task_id, phase='plan', pending_input=text)
 
 
+def plan_from_answer(task_id: str, text: str = '') -> dict:
+    """Turn an answered question into a change: the task moves to the plan
+    phase in the same session, so the agent plans from what it just read.
+    `text` says what to change; empty means the change the conversation points
+    to. From here it is an ordinary task — plan, approve, build."""
+    task = tasks.get(task_id)
+    if task['status'] != 'answered':
+        raise ActionRefused('Only an answered question can become a plan')
+    text = (text or '').strip()
+    tasks.append_event(task_id, 'user', {'text': text or 'Plan this.', 'action': 'plan'})
+    return _requeue(task_id, phase='plan', pending_input=text or None)
+
+
 def send_message(task_id: str, text: str) -> dict:
-    """An answer to the agent's question, or a follow-up once it has finished."""
+    """An answer to the agent's question, a follow-up question, or a follow-up
+    change once it has finished."""
     text = (text or '').strip()
     if not text:
         raise ActionRefused('The message is empty')

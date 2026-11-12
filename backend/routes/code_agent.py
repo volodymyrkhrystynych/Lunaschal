@@ -39,7 +39,8 @@ def create_task():
     try:
         task = worker.create_task(data.get('repoId') or '', data.get('prompt') or '',
                                   harness=data.get('harness') or None,
-                                  title=data.get('title') or '')
+                                  title=data.get('title') or '',
+                                  mode=data.get('mode') or 'plan')
     except (worker.ActionRefused, ValueError) as e:
         return _refused(e, 400)
     return jsonify(_task_payload(task)), 201
@@ -87,6 +88,13 @@ def answer_plan(task_id):
     if data.get('approve'):
         return _action(worker.approve_plan, task_id)
     return _action(worker.revise_plan, task_id, data.get('text') or '')
+
+
+@bp.post('/tasks/<task_id>/make-plan')
+def make_plan(task_id):
+    """An answered question becomes a change, starting with its plan."""
+    data = request.get_json(silent=True) or {}
+    return _action(worker.plan_from_answer, task_id, data.get('text') or '')
 
 
 @bp.post('/tasks/<task_id>/messages')

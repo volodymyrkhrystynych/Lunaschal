@@ -3,12 +3,13 @@ import SwiftUI
 
 // MARK: Task list
 
-/// The Code page: start a task, then everything that needs you, what the
-/// agent is working on, and what is finished.
+/// The Code page: ask a question or start a change, then everything that
+/// needs you, what the agent is working on, and what is finished.
 struct CodeTasksView: View {
     @ObservedObject var code: CodeModel
     @State private var draft = ""
     @State private var repoID: String?
+    @State private var mode: CodeTaskMode = .plan
     @StateObject private var dictation: Dictation
 
     init(code: CodeModel) {
@@ -21,8 +22,13 @@ struct CodeTasksView: View {
     var body: some View {
         List {
             Section {
+                Picker("Kind of task", selection: $mode) {
+                    ForEach(CodeTaskMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("code-new-mode")
                 HStack(alignment: .top) {
-                    TextField("Describe a change for the agent…", text: $draft, axis: .vertical)
+                    TextField(mode.placeholder, text: $draft, axis: .vertical)
                         .lineLimit(3...8)
                         .accessibilityIdentifier("code-new-prompt")
                     CodeMicButton(dictation: dictation, code: code, text: $draft)
@@ -38,14 +44,14 @@ struct CodeTasksView: View {
                     }
                 }
                 Button {
-                    Task { if await code.create(prompt: draft, repoID: repoID) { draft = "" } }
+                    Task { if await code.create(prompt: draft, repoID: repoID, mode: mode) { draft = "" } }
                 } label: {
-                    Label("Start planning", systemImage: "hammer")
+                    Label(mode.startLabel, systemImage: mode == .ask ? "questionmark.bubble" : "hammer")
                 }
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || code.busy)
                 .accessibilityIdentifier("code-new-start")
             } footer: {
-                Text("The agent explores the code and writes a plan first. Nothing changes until you approve it.")
+                Text(mode.explanation)
             }
             if let problem = code.loadProblem {
                 Label(problem, systemImage: "wifi.slash").font(.footnote).foregroundStyle(.secondary)
@@ -122,7 +128,7 @@ struct CodeStatusBadge: View {
     private var color: Color {
         switch task.status {
         case "awaiting_plan", "needs_input": return .orange
-        case "done", "pushed": return .green
+        case "answered", "done", "pushed": return .green
         case "error", "interrupted": return .red
         case "cancelled", "discarded": return .secondary
         default: return .blue
@@ -247,7 +253,7 @@ struct CodeTaskDetailView: View {
     /// terminal is for reading, this is for the next step.
     @ViewBuilder private func actionBar(_ task: CodeTask) -> some View {
         let files = task.diffStat ?? []
-        let hasActions = task.awaitsPlanApproval || task.testVerdict != nil || !files.isEmpty || task.canPush
+        let hasActions = task.awaitsPlanApproval || task.canPlanFromAnswer || task.testVerdict != nil || !files.isEmpty || task.canPush
             || task.canContinue || task.prUrl != nil || code.notice != nil || dictation.error != nil
         if hasActions {
             VStack(alignment: .leading, spacing: 6) {
@@ -263,6 +269,20 @@ struct CodeTaskDetailView: View {
                             .buttonStyle(.borderedProminent)
                             .disabled(code.busy)
                             .accessibilityIdentifier("code-approve")
+                        }
+                        if task.canPlanFromAnswer {
+                            // Whatever is typed in the reply line says what to change.
+                            Button {
+                                let text = reply
+                                reply = ""
+                                Task { await code.planFromAnswer(taskID, text: text) }
+                            } label: {
+                                Label(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                      ? "Plan this" : "Plan what I typed", systemImage: "hammer")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(code.busy)
+                            .accessibilityIdentifier("code-plan-from-answer")
                         }
                         if let passed = task.testVerdict {
                             Label(passed ? "Tests passed" : "Tests failed",
@@ -308,7 +328,9 @@ struct CodeTaskDetailView: View {
         HStack(alignment: .bottom, spacing: 8) {
             Text("❯").font(Terminal.font).foregroundStyle(Terminal.prompt).padding(.bottom, 9)
             TextField(task.awaitsPlanApproval ? "What should change in the plan?"
-                      : task.pending?.question != nil ? "Your answer" : "Ask for a follow-up change",
+                      : task.pending?.question != nil ? "Your answer"
+                      : task.canPlanFromAnswer ? "Ask a follow-up, or say what to change"
+                      : "Ask for a follow-up change",
                       text: $reply, axis: .vertical)
                 .font(Terminal.font)
                 .lineLimit(1...5)

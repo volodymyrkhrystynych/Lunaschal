@@ -102,3 +102,68 @@ def test_settings_and_repo_columns_exist():
     assert row['code_agent_harness'] == 'pi'
     cols = {r[1] for r in get_db().execute('PRAGMA table_info(repos)')}
     assert 'agent_test_command' in cols
+
+
+def test_a_question_starts_in_the_ask_phase():
+    t = tasks.create('r', 'Where are pushes sent from?', mode='ask')
+    assert t['phase'] == 'ask' and t['status'] == 'queued'
+    assert tasks.create('r', 'Change it')['phase'] == 'plan'
+    with pytest.raises(ValueError):
+        tasks.create('r', 'x', mode='build')
+
+
+def test_answering_is_in_flight_and_answered_waits(monkeypatch):
+    seen = []
+    tasks.add_listener(lambda t, s: seen.append(s))
+    t = tasks.create('r', 'Why?', mode='ask')
+    assert tasks.set_status(t['id'], 'answering')['startedAt'] is not None
+    tasks.set_status(t['id'], 'answered', summary='Because.')
+    assert seen == ['answered']
+
+    get_db().execute("UPDATE agent_tasks SET status='answering' WHERE id=?", (t['id'],))
+    get_db().commit()
+    connection._reset_stale_agent_tasks(get_db())
+    assert tasks.get(t['id'])['status'] == 'interrupted'
+
+
+OLD_AGENT_TASKS = """
+CREATE TABLE agent_tasks (
+    id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+    prompt TEXT NOT NULL, harness TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued'
+        CHECK(status IN ('queued','planning','awaiting_plan','running',
+                         'needs_input','testing','done','interrupted','error',
+                         'cancelled','pushed','discarded')),
+    phase TEXT NOT NULL DEFAULT 'plan' CHECK(phase IN ('plan','build')),
+    plan TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE agent_task_events (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES agent_tasks(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL
+);
+INSERT INTO agent_tasks (id, repo_id, prompt, harness, status, phase, plan, created_at, updated_at)
+    VALUES ('t1', 'r', 'Fix it', 'pi', 'done', 'build', '1. fix', 1, 2);
+INSERT INTO agent_task_events (id, task_id, seq, kind, created_at) VALUES ('e1', 't1', 1, 'user', 1);
+"""
+
+
+def test_an_older_table_is_rebuilt_to_accept_questions(tmp_path):
+    import sqlite3
+    db = sqlite3.connect(tmp_path / 'old.db', isolation_level=None)
+    db.execute('PRAGMA foreign_keys=ON')
+    db.executescript(OLD_AGENT_TASKS)
+
+    connection._ensure_agent_task_ask(db)
+    connection._ensure_agent_task_ask(db)  # idempotent
+
+    # The rows survived, and the cascade did not take the event log with the DROP.
+    assert db.execute("SELECT status, phase, plan FROM agent_tasks").fetchall() == [
+        ('done', 'build', '1. fix')]
+    assert db.execute('SELECT COUNT(*) FROM agent_task_events').fetchone()[0] == 1
+    db.execute("UPDATE agent_tasks SET status='answered', phase='ask'")
+    cols = {r[1] for r in db.execute('PRAGMA table_info(agent_tasks)')}
+    assert {'summary', 'session_id', 'pending_input'} <= cols
+    indexes = {r[1] for r in db.execute("PRAGMA index_list('agent_tasks')")}
+    assert {'idx_agent_tasks_status', 'idx_agent_tasks_updated'} <= indexes

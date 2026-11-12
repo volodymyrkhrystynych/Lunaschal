@@ -99,6 +99,50 @@ def test_messages(client, repo_id):
     assert (row['status'], row['response']) == ('answered', 'The first')
 
 
+def test_asking_a_question(client, repo_id):
+    body = client.post('/api/code/tasks', json={'prompt': 'Where is X?', 'mode': 'ask'}).get_json()
+    assert body['phase'] == 'ask' and body['status'] == 'queued'
+    resp = client.post('/api/code/tasks', json={'prompt': 'x', 'mode': 'build'})
+    assert resp.status_code == 400
+
+
+def test_a_follow_up_to_an_answer_is_another_question(client, repo_id):
+    t = tasks.create(repo_id, 'Where is X?', mode='ask')
+    at(t['id'], 'answered', summary='In y.py.')
+    body = client.post(f"/api/code/tasks/{t['id']}/messages", json={'text': 'And Z?'}).get_json()
+    assert body['status'] == 'queued' and body['phase'] == 'ask'
+    assert body['pendingInput'] == 'And Z?'
+
+
+def test_planning_from_an_answer(client, repo_id):
+    t = tasks.create(repo_id, 'Where is X?', mode='ask')
+    at(t['id'], 'answering')
+    assert client.post(f"/api/code/tasks/{t['id']}/make-plan", json={}).status_code == 409
+    at(t['id'], 'answered', summary='In y.py.')
+    body = client.post(f"/api/code/tasks/{t['id']}/make-plan",
+                       json={'text': 'Move it to z.py'}).get_json()
+    assert body['status'] == 'queued' and body['phase'] == 'plan'
+    assert body['pendingInput'] == 'Move it to z.py'
+    last = tasks.events(t['id'])[-2]['payload']
+    assert last == {'text': 'Move it to z.py', 'action': 'plan'}
+    # Twice is refused: it is a plan now.
+    assert client.post(f"/api/code/tasks/{t['id']}/make-plan", json={}).status_code == 409
+
+
+def test_planning_from_an_answer_with_nothing_said(client, repo_id):
+    t = tasks.create(repo_id, 'Where is X?', mode='ask')
+    at(t['id'], 'answered', summary='In y.py.')
+    body = client.post(f"/api/code/tasks/{t['id']}/make-plan", json={}).get_json()
+    assert body['phase'] == 'plan' and body['pendingInput'] is None
+
+
+def test_an_answered_question_can_be_discarded_not_pushed(client, repo_id):
+    t = tasks.create(repo_id, 'Where is X?', mode='ask')
+    at(t['id'], 'answered', summary='In y.py.')
+    assert client.post(f"/api/code/tasks/{t['id']}/push").status_code == 409
+    assert client.post(f"/api/code/tasks/{t['id']}/discard").get_json()['status'] == 'discarded'
+
+
 def test_continue_an_interrupted_build(client, repo_id):
     t = tasks.create(repo_id, 'Fix it')
     at(t['id'], 'interrupted', phase='build', plan='p', error='Interrupted by an app restart.')

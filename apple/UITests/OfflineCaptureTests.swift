@@ -1428,6 +1428,40 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Source: saltroads.fandom.com (Fandom wiki), CC BY-SA 3.0."].exists)
     }
 
+    // A question rather than a change: asked from the composer, and an
+    // answered one turned into a plan without starting over.
+    func testCodeQuestionIsAskedAndBecomesAPlan() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-codeFixture")
+        app.launch()
+        selectTab(app, "Chat")
+        let code = app.segmentedControls.buttons.element(boundBy: 1)
+        XCTAssertTrue(code.waitForExistence(timeout: 5))
+        code.tap()
+
+        let ask = app.segmentedControls["code-new-mode"].buttons["Ask"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Start planning"].exists, "a change is still the default")
+        ask.tap()
+        let prompt = app.textFields["code-new-prompt"]
+        prompt.tap()
+        prompt.typeText("Who reads the backup path?")
+        let start = app.buttons["code-new-start"]
+        XCTAssertEqual(start.label, "Ask")
+        start.tap()
+        XCTAssertTrue(app.staticTexts["Who reads the backup path?"].waitForExistence(timeout: 5))
+
+        let answered = app.staticTexts["Where do Code-tab notifications come from?"]
+        XCTAssertTrue(answered.waitForExistence(timeout: 5))
+        answered.tap()
+        let plan = app.buttons["code-plan-from-answer"]
+        XCTAssertTrue(plan.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["code-approve"].exists, "an answer has nothing to approve")
+        plan.tap()
+        XCTAssertTrue(app.staticTexts["Queued"].waitForExistence(timeout: 5))
+        XCTAssertFalse(plan.exists)
+    }
+
     func testWritingStartsANewBookAndOpensIt() {
         let app = XCUIApplication()
         app.launchArguments.append("-writingFixture")

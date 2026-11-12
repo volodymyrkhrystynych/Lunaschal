@@ -2590,6 +2590,20 @@ def seed_code_agent(db):
                (new_id(), done, json.dumps({'plan': '1. Use day_key_for in streak().'}),
                 ts(2, 2), ts(2, 2)))
 
+    answer = ('Notifications go out from `backend/push/notify.py`: `task_changed` is registered '
+              'as a listener in `backend/codeagent/tasks.py`, and `set_status` calls it whenever a '
+              'task enters one of `NOTIFY_STATES`.')
+    answered = task('answered', 'Where do Code-tab notifications come from?',
+                    'Where do Code-tab notifications come from?', days=0, phase='ask',
+                    base_sha='8' * 40, session_id='demo-question', started_at=ts(0, 1),
+                    summary=answer)
+    events(answered, ('user', {'text': 'Where do Code-tab notifications come from?'}),
+           ('status', {'status': 'answering'}),
+           ('tool_call', {'id': 't1', 'title': 'rg "def task_changed" backend', 'kind': 'search',
+                          'status': 'completed'}),
+           ('message', {'text': answer}),
+           ('status', {'status': 'answered'}))
+
     task('pushed', 'Add a docstring to the backup status classifier',
          'Document the four backup states.', days=5, phase='build', base_sha='6' * 40,
          head_sha='7' * 40, finished_at=ts(5), test_exit=0,

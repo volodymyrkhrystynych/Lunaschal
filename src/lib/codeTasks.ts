@@ -9,12 +9,14 @@ import type { CodeTask, CodeTaskEvent } from '../hooks/api';
 
 export const ACTIVE_STATES = new Set([
   'queued',
+  'answering',
   'planning',
   'running',
   'testing',
 ]);
 export const CLOSED_STATES = new Set(['cancelled', 'pushed', 'discarded']);
 const NEEDS_YOU = new Set([
+  'answered',
   'awaiting_plan',
   'needs_input',
   'done',
@@ -24,6 +26,8 @@ const NEEDS_YOU = new Set([
 
 const LABELS: Record<string, string> = {
   queued: 'Queued',
+  answering: 'Looking into it',
+  answered: 'Answered',
   planning: 'Planning',
   awaiting_plan: 'Plan ready',
   running: 'Working',
@@ -44,9 +48,38 @@ export function statusLabel(status: string): string {
 export const isActive = (t: CodeTask) => ACTIVE_STATES.has(t.status);
 export const needsYou = (t: CodeTask) => NEEDS_YOU.has(t.status);
 export const canMessage = (t: CodeTask) =>
-  ['needs_input', 'done', 'error', 'interrupted', 'awaiting_plan'].includes(
-    t.status
-  );
+  [
+    'answered',
+    'needs_input',
+    'done',
+    'error',
+    'interrupted',
+    'awaiting_plan',
+  ].includes(t.status);
+/** An answered question can become a change, planned in the same session. */
+export const canPlanFromAnswer = (t: CodeTask) => t.status === 'answered';
+
+/** What a new task is: a question to answer, or a change to plan and build. */
+export type CodeTaskMode = 'ask' | 'plan';
+export const MODES: Record<
+  CodeTaskMode,
+  { title: string; placeholder: string; start: string; explanation: string }
+> = {
+  ask: {
+    title: 'Ask',
+    placeholder: 'Ask a question about the code…',
+    start: 'Ask',
+    explanation:
+      'The agent reads the code and answers. It changes nothing, and you can turn the answer into a plan.',
+  },
+  plan: {
+    title: 'Change',
+    placeholder: 'Describe a change for the agent…',
+    start: 'Start planning',
+    explanation:
+      'The agent explores the code and writes a plan first. Nothing changes until you approve it.',
+  },
+};
 export const canPush = (t: CodeTask) =>
   (t.status === 'done' || t.status === 'needs_input') && !!t.headSha;
 export const canContinue = (t: CodeTask) =>
@@ -451,6 +484,7 @@ export function testVerdict(t: CodeTask): 'passed' | 'failed' | null {
 
 const HEADLINES: Record<string, string> = {
   queued: 'Queued — starts when the agent is free',
+  answering: 'The agent is looking into it',
   planning: 'The agent is planning',
   running: 'The agent is working',
   testing: 'Running the test suite',

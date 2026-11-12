@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 TOKEN = re.compile(r'[0-9a-fA-F]{32,200}')
 
 _MESSAGES = {
+    'answered': ('Answer ready', 'The agent answered “{title}”.'),
     'awaiting_plan': ('Plan ready', 'The agent has a plan for “{title}”. Approve it to start.'),
     'needs_input': ('Agent has a question', '“{title}”: {question}'),
     'done': ('Task finished', '“{title}” is ready to review{tests}.'),

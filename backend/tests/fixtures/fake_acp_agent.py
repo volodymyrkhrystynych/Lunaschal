@@ -2,6 +2,8 @@
 
 Behaviour comes from the prompt text and a few env vars:
 
+- a prompt containing ASK_MARKER is a question: it asks permission to edit
+  (expecting a reject) and answers. FAKE_STRAY_EDIT=1 writes a file here too.
 - a prompt containing PLAN_MARKER is the plan phase: it asks permission to
   edit (expecting a reject) and replies with a plan. FAKE_STRAY_EDIT=1 makes
   it write a file anyway, the way pi (no permission system) could.
@@ -16,6 +18,7 @@ import os
 import sys
 
 PLAN_MARKER = 'Do not modify any files'
+ASK_MARKER = 'a question, not a change'
 _next = [1000]
 _log = []
 
@@ -82,7 +85,15 @@ def main():
                 sys.stderr.write('fatal: model went away\n')
                 sys.exit(3)
             say(session, 'Thinking it over.', 'agent_thought_chunk')
-            if PLAN_MARKER in text:
+            if ASK_MARKER in text:
+                decision = ask_permission(session, 'edit')
+                if os.environ.get('FAKE_STRAY_EDIT') == '1':
+                    with open('stray.txt', 'w') as f:
+                        f.write('oops\n')
+                update(session, {'sessionUpdate': 'tool_call', 'toolCallId': 'r1',
+                                 'title': 'Read a.py', 'kind': 'read', 'status': 'completed'})
+                say(session, f'a.py sets x = 1.\n(edit was {decision})')
+            elif PLAN_MARKER in text:
                 decision = ask_permission(session, 'edit')
                 if os.environ.get('FAKE_STRAY_EDIT') == '1':
                     with open('stray.txt', 'w') as f:

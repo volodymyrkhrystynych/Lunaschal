@@ -202,6 +202,78 @@ def test_no_changes_means_done_without_a_diff(repo_id, monkeypatch):
     assert out['status'] == 'done' and out['diffStat'] is None
 
 
+def requeue(task_id, **fields):
+    tasks.update(task_id, **fields)
+    get_db().execute("UPDATE agent_tasks SET status='queued' WHERE id=?", (task_id,))
+    get_db().commit()
+
+
+def test_a_question_is_answered_read_only(repo_id):
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver()
+    out = d.run(t['id'])
+    assert out['status'] == 'answered'
+    assert out['summary'] == 'a.py sets x = 1.\n(edit was reject)'
+    assert out['plan'] is None and out['headSha'] is None
+    # Nothing to approve: an answer is read, not signed off.
+    assert tasks.pending_approval(t['id']) is None
+    statuses = [e['payload'].get('status') for e in tasks.events(t['id']) if e['kind'] == 'status']
+    assert statuses == ['answering', 'answered']
+    perm = [e['payload'] for e in tasks.events(t['id']) if e['kind'] == 'permission']
+    assert perm == [{'title': 'edit something', 'kind': 'edit', 'decision': 'refused'}]
+
+
+def test_a_stray_edit_while_answering_is_reverted(repo_id):
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver(FAKE_STRAY_EDIT='1')
+    assert d.run(t['id'])['status'] == 'answered'
+    assert not (mirror.work_dir(t['id']) / 'stray.txt').exists()
+    notes = [e['payload'].get('note') for e in tasks.events(t['id']) if e['kind'] == 'status']
+    assert 'the question step changed files; they were reverted' in notes
+
+
+def test_a_follow_up_question_stays_a_question(repo_id):
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver(FAKE_LOAD_SESSION='1')
+    d.run(t['id'])
+    requeue(t['id'], pending_input='And who reads it?')
+    task = tasks.get(t['id'])
+    assert d._prompt_for(task, fresh=False).startswith('And who reads it?')
+    assert 'not a change' in d._prompt_for(task, fresh=False)
+    out = d.run(t['id'])
+    assert out['status'] == 'answered' and out['pendingInput'] is None
+
+
+def test_an_answer_becomes_a_plan_in_the_same_session(repo_id):
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver(FAKE_LOAD_SESSION='1')
+    d.run(t['id'])
+    requeue(t['id'], phase='plan', pending_input='Make it 2')
+    task = tasks.get(t['id'])
+    prompt = d._prompt_for(task, fresh=False)
+    assert prompt.startswith('Now the user wants a change:\nMake it 2')
+    # A resumed session already holds the conversation; it is not repeated.
+    assert 'Earlier, the user asked' not in prompt
+
+    out = d.run(t['id'])
+    assert out['status'] == 'awaiting_plan' and out['plan'].startswith('## Plan')
+    assert tasks.pending_approval(t['id'])['kind'] == 'plan'
+    # From here it is an ordinary plan: a revision is a revision.
+    requeue(t['id'], pending_input='Also a test')
+    assert d._prompt_for(tasks.get(t['id']), fresh=False).startswith('The user reviewed your plan')
+
+
+def test_a_fresh_session_planning_from_an_answer_is_given_the_conversation(repo_id):
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver()
+    d.run(t['id'])
+    requeue(t['id'], phase='plan')
+    prompt = d._prompt_for(tasks.get(t['id']), fresh=True)
+    assert 'Earlier, the user asked:\nWhat does a.py set?' in prompt
+    assert 'a.py sets x = 1.' in prompt
+    assert driver.PLAN_FROM_ANSWER_DEFAULT in prompt
+
+
 def test_permission_choice():
     opts = [{'optionId': 'a', 'kind': 'allow_once'}, {'optionId': 'r', 'kind': 'reject_once'}]
     assert driver._choose(opts, True) == 'a'

@@ -100,6 +100,37 @@ final class CodeAgentTests: XCTestCase {
         XCTAssertFalse(task.isActive)
     }
 
+    func testAnAnsweredQuestionCanBeFollowedUpOrPlanned() throws {
+        func task(_ status: String, _ phase: String) throws -> CodeTask {
+            try JSONDecoder().decode(CodeTask.self, from: Data("""
+            {"id": "T", "repoId": "R", "title": "t", "prompt": "p", "harness": "pi", "status": "\(status)",
+             "phase": "\(phase)", "summary": "In y.py."}
+            """.utf8))
+        }
+        let answered = try task("answered", "ask")
+        XCTAssertTrue(answered.isQuestion)
+        XCTAssertTrue(answered.canPlanFromAnswer)
+        XCTAssertTrue(answered.canMessage)
+        XCTAssertTrue(answered.canDiscard)
+        XCTAssertFalse(answered.canPush)
+        XCTAssertTrue(CodeTaskStatus.needsYou.contains(answered.status))
+
+        let answering = try task("answering", "ask")
+        XCTAssertTrue(answering.isActive)
+        XCTAssertFalse(answering.canPlanFromAnswer)
+        XCTAssertEqual(CodeTaskStatus.pollInterval([answering]), 3)
+
+        XCTAssertFalse(try task("awaiting_plan", "plan").canPlanFromAnswer)
+        XCTAssertFalse(try task("awaiting_plan", "plan").isQuestion)
+    }
+
+    func testModesSayWhatHappensNext() {
+        XCTAssertEqual(CodeTaskMode.allCases.map(\.rawValue), ["ask", "plan"], "the server's tasks.MODES")
+        XCTAssertEqual(CodeTaskMode.ask.startLabel, "Ask")
+        XCTAssertEqual(CodeTaskMode.plan.startLabel, "Start planning")
+        XCTAssertTrue(CodeTaskMode.ask.explanation.contains("changes nothing"))
+    }
+
     func testPollingIsFastOnlyWhileTheAgentWorks() throws {
         func task(_ status: String) throws -> CodeTask {
             try JSONDecoder().decode(CodeTask.self, from: Data("""
@@ -113,7 +144,8 @@ final class CodeAgentTests: XCTestCase {
 
     // src/lib/codeTasks.test.ts pins the same words for the web.
     func testStatusLabelsMatchTheWeb() {
-        let expected = ["queued": "Queued", "planning": "Planning", "awaiting_plan": "Plan ready",
+        let expected = ["queued": "Queued", "answering": "Looking into it", "answered": "Answered",
+                        "planning": "Planning", "awaiting_plan": "Plan ready",
                         "running": "Working", "needs_input": "Has a question", "testing": "Running tests",
                         "done": "Ready to review", "interrupted": "Interrupted", "error": "Failed",
                         "cancelled": "Cancelled", "pushed": "Pushed", "discarded": "Discarded"]

@@ -17,10 +17,14 @@ from ulid import ULID
 from backend.db.connection import get_db, row_to_dict
 
 HARNESSES = ('pi', 'omp', 'qwen')
+# What a new task is: a question to answer (phase 'ask') or a change, which
+# starts by planning (phase 'plan').
+MODES = ('ask', 'plan')
 
 # States a person is waiting to hear about; set_status notifies on entry.
-NOTIFY_STATES = frozenset({'awaiting_plan', 'needs_input', 'done', 'error', 'interrupted'})
-ACTIVE_STATES = frozenset({'queued', 'planning', 'running', 'testing'})
+NOTIFY_STATES = frozenset({'answered', 'awaiting_plan', 'needs_input', 'done', 'error',
+                           'interrupted'})
+ACTIVE_STATES = frozenset({'queued', 'answering', 'planning', 'running', 'testing'})
 # A task in one of these is finished with its container and workspace.
 CLOSED_STATES = frozenset({'cancelled', 'pushed', 'discarded'})
 
@@ -55,20 +59,22 @@ def _decode(task: dict) -> dict:
 
 
 def create(repo_id: str, prompt: str, *, title: str = '', harness: str = 'pi',
-           base_branch: str = '') -> dict:
+           base_branch: str = '', mode: str = 'plan') -> dict:
     prompt = (prompt or '').strip()
     if not prompt:
         raise ValueError('A task needs a description')
     if harness not in HARNESSES:
         raise ValueError(f'Unknown agent {harness!r}')
+    if mode not in MODES:
+        raise ValueError(f'Unknown mode {mode!r}')
     task_id = str(ULID())
     now = _now()
     title = (title or '').strip() or _title_from(prompt)
     db = get_db()
     db.execute(
-        'INSERT INTO agent_tasks (id, repo_id, title, prompt, harness, status, '
-        "base_branch, created_at, updated_at) VALUES (?,?,?,?,?,'queued',?,?,?)",
-        (task_id, repo_id, title, prompt, harness, base_branch, now, now),
+        'INSERT INTO agent_tasks (id, repo_id, title, prompt, harness, status, phase, '
+        "base_branch, created_at, updated_at) VALUES (?,?,?,?,?,'queued',?,?,?,?)",
+        (task_id, repo_id, title, prompt, harness, mode, base_branch, now, now),
     )
     db.commit()
     append_event(task_id, 'user', {'text': prompt})
@@ -126,7 +132,7 @@ def set_status(task_id: str, status: str, **fields) -> dict:
     db = get_db()
     now = _now()
     extra = dict(fields)
-    if status in ('planning',) and 'started_at' not in extra:
+    if status in ('answering', 'planning') and 'started_at' not in extra:
         row = db.execute('SELECT started_at FROM agent_tasks WHERE id=?', (task_id,)).fetchone()
         if row and row['started_at'] is None:
             extra['started_at'] = now

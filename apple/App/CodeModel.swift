@@ -45,7 +45,7 @@ final class CodeModel: ObservableObject {
     }
 
     var needsYou: [CodeTask] {
-        tasks.filter { ["awaiting_plan", "needs_input", "done", "error", "interrupted"].contains($0.status) }
+        tasks.filter { CodeTaskStatus.needsYou.contains($0.status) }
     }
     var working: [CodeTask] { tasks.filter(\.isActive) }
     var finished: [CodeTask] { tasks.filter(\.isClosed) }
@@ -118,16 +118,21 @@ final class CodeModel: ObservableObject {
 
     // MARK: Actions
 
-    func create(prompt: String, repoID: String?) async -> Bool {
+    func create(prompt: String, repoID: String?, mode: CodeTaskMode = .plan) async -> Bool {
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return false }
         if var fixture {
-            _ = fixture.add(prompt: text)
+            _ = fixture.add(prompt: text, mode: mode)
             self.fixture = fixture
             tasks = fixture.tasks
             return true
         }
-        return await act { api in try await api.createCodeTask(repoID: repoID, prompt: text) }
+        return await act { api in try await api.createCodeTask(repoID: repoID, prompt: text, mode: mode) }
+    }
+
+    /// An answered question becomes a change; `text` says which, if anything was typed.
+    func planFromAnswer(_ id: String, text: String) async {
+        await act(id, "make-plan") { try await $0.planFromCodeAnswer(id, text: text) }
     }
 
     func approve(_ id: String) async { await act(id, "approve") { try await $0.approveCodePlan(id) } }

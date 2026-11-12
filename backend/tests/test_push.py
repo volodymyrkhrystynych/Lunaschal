@@ -242,6 +242,7 @@ def test_a_device_table_from_the_code_tab_gains_the_coach_columns():
 
 @pytest.mark.parametrize('status, fields, expected', [
     ('awaiting_plan', {}, 'Plan ready'),
+    ('answered', {}, 'answered “Fix it”'),
     ('done', {'testExit': 0}, 'tests passed'),
     ('done', {'testExit': 2}, 'tests failed'),
     ('needs_input', {'pending': {'request': {'question': 'Which file?'}}}, 'Which file?'),

@@ -1539,7 +1539,7 @@ export interface CodeTask {
   prompt: string;
   harness: 'pi' | 'omp' | 'qwen';
   status: string;
-  phase: 'plan' | 'build';
+  phase: 'ask' | 'plan' | 'build';
   plan: string | null;
   summary: string | null;
   diffStat: CodeFileStat[] | null;
@@ -5098,8 +5098,16 @@ export const api = {
         `/api/code/tasks/${id}${after ? `?after=${after}` : ''}`
       ),
     diff: (id: string) => get<CodeDiff>(`/api/code/tasks/${id}/diff`),
-    create: (data: { repoId?: string; prompt: string; harness?: string }) =>
-      post<CodeTask>('/api/code/tasks', data),
+    create: (data: {
+      repoId?: string;
+      prompt: string;
+      mode?: 'ask' | 'plan';
+      harness?: string;
+    }) => post<CodeTask>('/api/code/tasks', data),
+    // An answered question becomes a change; empty text = the change the
+    // conversation points to.
+    planFromAnswer: (id: string, text = '') =>
+      post<CodeTask>(`/api/code/tasks/${id}/make-plan`, { text }),
     approve: (id: string) =>
       post<CodeTask>(`/api/code/tasks/${id}/plan`, { approve: true }),
     revise: (id: string, text: string) =>
