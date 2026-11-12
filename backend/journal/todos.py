@@ -74,11 +74,8 @@ def offer_todos_from_entry(entry_id: str, now: int | None = None) -> list[dict]:
     if not text:
         return []
 
-    conv_row = db.execute(
-        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL',
-        (today,),
-    ).fetchone()
-    if conv_row and _already_offered(db, conv_row['id'], entry_id):
+    existing_conv = day_plan.find_day_conversation(db, today)
+    if existing_conv and _already_offered(db, existing_conv, entry_id):
         return []
 
     existing = _existing_titles(db, today)
@@ -109,7 +106,10 @@ def offer_todos_from_entry(entry_id: str, now: int | None = None) -> list[dict]:
         source_type, source_id = source if source else ('journal', entry_id)
         if source:
             title = day_plan.source_title(db, *source) or title
+            # Two wordings of one to-do in the same entry make one card.
+            linked.add(source)
         taken.add(norm)
+        taken.add(day_plan.normalize_title(title))
         proposals.append({
             'id': str(ULID()), 'kind': 'todo', 'status': 'pending',
             'fromJournal': entry_id,

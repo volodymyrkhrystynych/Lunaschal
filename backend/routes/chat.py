@@ -847,10 +847,16 @@ def _accept_todo(db, data: dict, ctx: dict) -> dict:
     # journal entry is provenance, a to-do or habit is a live link.
     source = None
     source_type, source_id = data.get('sourceType'), data.get('sourceId')
-    if source_type in day_plan.LIST_SOURCES and day_plan.source_exists(db, source_type, source_id):
+    if source_type in day_plan.LIST_SOURCES and day_plan.source_open(db, source_type, source_id):
         source = (source_type, source_id)
     if source is None:
         source = day_plan.resolve_list_source(db, today, title)
+    if source is not None:
+        # Already in the bar under another wording: that row is this card.
+        same = db.execute('SELECT id FROM chat_todos WHERE day_key=? AND source_type=? AND source_id=?',
+                          (today, *source)).fetchone()
+        if same:
+            return {'id': same['id']}
     if source is None and source_type == 'journal' and isinstance(source_id, str) and db.execute(
             'SELECT 1 FROM journal_entries WHERE id=?', (source_id,)).fetchone():
         source = ('journal', source_id)
@@ -1332,6 +1338,11 @@ def _resolve_proposal(message_id, proposal_id):
 
     if action == 'dismiss':
         proposal['status'] = 'dismissed'
+        if proposal.get('kind') == 'todo':
+            # Turned down: neither the journal pass nor the briefing offers it
+            # again for a few days (backend/day_plan.py).
+            from backend import day_plan
+            day_plan.record_card_dismissal(db, proposal.get('data') or {}, day_key_for(), int(time.time()))
     else:
         handler = _ACCEPT_HANDLERS.get(proposal.get('kind'))
         if handler is None:

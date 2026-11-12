@@ -401,11 +401,13 @@ def complete_todo_row(db, todo_id: str, now: int) -> bool:
         return False
     # A repeating to-do is reopened for its next occurrence below, but today's
     # bar row for it is still done.
-    day_plan.mark_bar_for_source(db, 'todo', todo_id, day_key_for(now), True, now)
+    day = day_key_for(now)
+    day_plan.mark_bar_for_source(db, 'todo', todo_id, day, True, now)
 
     if row['repeat_interval'] and row['repeat_unit']:
         # Repeating todo: completing it schedules the next occurrence instead of
         # marking it done. Each occurrence is a real completion, so always log it.
+        day_plan.record_occurrence_due(db, todo_id, day, row['due'])
         db.execute(
             'UPDATE todos SET done=0, completed_at=NULL, due=?, updated_at=? WHERE id=?',
             (
@@ -716,13 +718,19 @@ def update_chat_todo(chat_todo_id):
         db.execute(f'UPDATE chat_todos SET {", ".join(fields)} WHERE id=?', values)
     linked = (row['source_type'] in day_plan.LIST_SOURCES
               and day_plan.source_exists(db, row['source_type'], row['source_id']))
-    if linked and completion_change:
+    if linked and completion_change and bool(row['done']) == (completion_change == 'complete'):
+        # Already in that state: a double tap or a replayed request. Going
+        # through the source again would advance a repeating to-do a second
+        # time and log a second completion.
+        pass
+    elif linked and completion_change:
         # Through the real row, which logs the one notification and sets this
         # bar row (and any other linked to it) on its way.
         if completion_change == 'complete':
             day_plan.complete_source(db, row['source_type'], row['source_id'], row['day_key'], now)
         else:
-            day_plan.uncomplete_source(db, row['source_type'], row['source_id'], row['day_key'], now)
+            day_plan.uncomplete_source(db, row['source_type'], row['source_id'], row['day_key'], now,
+                                       bar_row_id=chat_todo_id)
         # The source may already have been in that state (done in Tasks before
         # the link existed), so the bar row is set directly as well.
         db.execute(

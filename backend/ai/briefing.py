@@ -72,6 +72,7 @@ def earlier_journal(db, now: int) -> list[dict]:
     rows = db.execute(
         '''SELECT id, title, content, digest, created_at FROM journal_entries
            WHERE created_at >= ? AND created_at < ?
+             AND idea_id IS NULL
              AND id NOT IN (SELECT journal_entry_id FROM journal_entry_fic_refs)
            ORDER BY created_at DESC LIMIT ?''',
         (now - PLAN_JOURNAL_DAYS * 86400, now - JOURNAL_WINDOW_SECONDS, PLAN_JOURNAL_MAX_ENTRIES),

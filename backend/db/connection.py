@@ -204,13 +204,41 @@ def _ensure_workout_quick_entry(db):
 
 def _ensure_chat_todo_source(db):
     cols = {r[1] for r in db.execute('PRAGMA table_info(chat_todos)')}
+    upgrading = 'source_type' not in cols
     for name in ('source_type', 'source_id', 'reason'):
         if name not in cols:
             db.execute(f'ALTER TABLE chat_todos ADD COLUMN {name} TEXT')
+    if 'source_prev_due' not in cols:
+        db.execute('ALTER TABLE chat_todos ADD COLUMN source_prev_due INTEGER')
+    if upgrading:
+        _mark_legacy_bar_judged(db)
     # Here rather than in schema.sql, which runs before the columns exist on an
     # older database.
     db.execute('CREATE INDEX IF NOT EXISTS idx_chat_todos_source ON chat_todos(source_type, source_id)')
     db.commit()
+
+
+def _mark_legacy_bar_judged(db):
+    """Bar rows from before links existed must not be tallied as skips. Ticking
+    a to-do or habit in Tasks never ticked its bar row then, so a habit done
+    every day but restated in the bar would read as a week of skips on the
+    first briefing — and, being unlinked, get a to-do's long hold instead of a
+    habit's. Each such row's suggestion is recorded as already judged through
+    its last day, with no streak."""
+    from backend import day_plan
+    now = int(time.time())
+    rows = db.execute('SELECT title, MAX(day_key) AS last_day FROM chat_todos GROUP BY title').fetchall()
+    latest: dict[str, tuple[str, str]] = {}
+    for r in rows:
+        key = day_plan.suggestion_key(None, None, r['title'])
+        if key not in latest or r['last_day'] > latest[key][1]:
+            latest[key] = (r['title'], r['last_day'])
+    for key, (title, last_day) in latest.items():
+        db.execute(
+            'INSERT OR IGNORE INTO chat_todo_suggestions(item_key, title, last_judged_day, updated_at)'
+            ' VALUES (?,?,?,?)',
+            (key, title, last_day, now),
+        )
 
 
 def _ensure_health_lifestyle(db):

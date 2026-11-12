@@ -40,7 +40,3 @@ def eligible_from(last_skipped_day: str, streak: int, *, daily: bool = False) ->
 def dismissed_until(today: str, *, daily: bool = False) -> str:
     gap = min(DISMISS_GAP, DAILY_MAX_GAP) if daily else DISMISS_GAP
     return (date.fromisoformat(today) + timedelta(days=gap + 1)).isoformat()
-
-
-def should_ask(streak: int, asked: bool) -> bool:
-    return streak >= ASK_AT_STREAK and not asked

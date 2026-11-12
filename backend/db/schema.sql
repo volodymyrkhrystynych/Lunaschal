@@ -1022,7 +1022,10 @@ CREATE TABLE IF NOT EXISTS chat_todos (
     source_type TEXT,
     source_id TEXT,
     -- One line on why it was suggested, shown under the title.
-    reason TEXT
+    reason TEXT,
+    -- A linked repeating to-do's due date before this row's tick moved it on,
+    -- so unticking can put that occurrence back.
+    source_prev_due INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_todos_day_key ON chat_todos(day_key);

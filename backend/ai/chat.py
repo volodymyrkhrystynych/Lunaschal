@@ -233,11 +233,7 @@ def format_plate_context(now: int | None = None) -> str:
         lines.append('')
 
     from backend import day_plan
-    conv = db.execute(
-        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL',
-        (today,),
-    ).fetchone()
-    offered = day_plan.pending_cards(db, conv['id'] if conv else None)
+    offered = day_plan.pending_cards(db, day_plan.find_day_conversation(db, today))
     if offered:
         # Already offered as cards (from their journal, or carried over); they
         # only have to answer the card, so don't add these again.

@@ -157,3 +157,29 @@ def test_the_chat_agent_sees_cards_waiting_for_an_answer(client, monkeypatch):
     _model(monkeypatch, [{'title': 'Renew passport', 'reason': 'need to renew', 'linkedTitle': None}])
     offer_todos_from_entry('j1')
     assert '- Renew passport' in format_plate_context().split('waiting for their answer:')[1]
+
+
+def test_two_wordings_of_one_todo_in_an_entry_make_one_card(client, monkeypatch):
+    _db().execute("INSERT INTO todos(id, title, done, list, priority, created_at, updated_at)"
+                  " VALUES ('t1', 'Call dentist', 0, 'todo', 3, 0, 0)")
+    _entry('j1', 'Need to call the dentist. Must ring the dentist office.')
+    _model(monkeypatch, [
+        {'title': 'Call the dentist', 'reason': 'need to call the dentist', 'linkedTitle': 'Call dentist'},
+        {'title': 'Ring the dentist office', 'reason': 'ring the dentist', 'linkedTitle': 'Call dentist'},
+    ])
+    staged = offer_todos_from_entry('j1')
+    assert [c['data']['title'] for c in staged] == ['Call dentist']
+
+
+def test_a_dismissed_card_is_not_offered_again(client, monkeypatch):
+    _entry('j1', 'I need to call the landlord.')
+    _entry('j2', 'Really must call the landlord.')
+    _model(monkeypatch, [{'title': 'Call the landlord', 'reason': 'call the landlord',
+                          'linkedTitle': None}])
+    offer_todos_from_entry('j1')
+    message = _db().execute("SELECT id, metadata FROM messages WHERE role='assistant'").fetchone()
+    card = json.loads(message['metadata'])['proposals'][0]
+    resp = client.post(f'/api/chat/proposals/{message["id"]}/{card["id"]}', json={'action': 'dismiss'})
+    assert resp.status_code == 200
+
+    assert offer_todos_from_entry('j2') == []

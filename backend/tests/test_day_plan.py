@@ -84,12 +84,6 @@ def test_eligible_from_counts_from_the_day_after_the_skip():
     assert backoff.eligible_from('2026-07-10', 3) == '2026-07-14'
 
 
-def test_asks_once_the_streak_reaches_three():
-    assert not backoff.should_ask(2, False)
-    assert backoff.should_ask(3, False)
-    assert not backoff.should_ask(5, True)
-
-
 def test_linked_title_annotations_are_stripped():
     assert day_plan.clean_linked_title('Buy milk (due 2026-07-30) [priority 4/5] [shopping]') == 'Buy milk'
 
@@ -354,3 +348,102 @@ def test_carry_over_keeps_the_link(client, monkeypatch):
     row = _db().execute("SELECT source_type, source_id FROM chat_todos WHERE title='Renew passport'"
                         ' AND day_key=?', (_today(),)).fetchone()
     assert tuple(row) == ('todo', 't1')
+
+
+# --- review fixes ---
+
+def _repeating_todo(id, title, due):
+    _db().execute(
+        'INSERT INTO todos(id, title, done, list, priority, due, repeat_interval, repeat_unit,'
+        " created_at, updated_at) VALUES (?,?,0,'todo',3,?,1,'week',0,0)", (id, title, due))
+    _db().commit()
+
+
+def _due(id):
+    return _db().execute('SELECT due FROM todos WHERE id=?', (id,)).fetchone()['due']
+
+
+def test_bar_rows_from_before_links_are_not_tallied_as_skips(client):
+    # Ticked in Tasks every day, never in the bar — which used to stay unticked.
+    for n in range(7, 0, -1):
+        _bar_row(f'old-{n}', 'Stretch', day=_days_ago(n))
+    connection._mark_legacy_bar_judged(_db())
+    briefing_job.tally_previous_days(_db(), _today(), int(time.time()))
+
+    s = _suggestion('title:stretch')
+    assert s['ignored_streak'] == 0 and s['snoozed_until'] is None
+    assert not day_plan.is_held_back(day_plan.held_back_keys(_db(), _today()), None, None, 'Stretch')
+
+
+def test_a_repeated_tick_advances_a_repeating_todo_once(client):
+    due = int(time.time()) + 86400
+    _repeating_todo('t1', 'Water plants', due)
+    _bar_row('c1', 'Water plants', source=('todo', 't1'))
+
+    client.patch('/api/tasks/chat-todos/c1', json={'done': True})
+    advanced = _due('t1')
+    client.patch('/api/tasks/chat-todos/c1', json={'done': True})
+
+    assert advanced > due and _due('t1') == advanced
+    assert _events('todo_completed') == 1
+
+
+def test_unticking_a_repeating_todo_puts_back_only_that_occurrence(client):
+    due = int(time.time()) + 86400
+    _repeating_todo('t1', 'Water plants', due)
+    # A completion from an earlier week, already in the Journal.
+    _db().execute("INSERT INTO task_events(id, kind, title, ref_id, created_at)"
+                  " VALUES ('e0', 'todo_completed', 'Water plants', 't1', 1000)")
+    _db().commit()
+    _bar_row('c1', 'Water plants', source=('todo', 't1'))
+
+    client.patch('/api/tasks/chat-todos/c1', json={'done': True})
+    assert _events('todo_completed') == 2
+    client.patch('/api/tasks/chat-todos/c1', json={'done': False})
+
+    assert _due('t1') == due
+    assert _bar_done('c1') == 0
+    ids = [r['id'] for r in _db().execute("SELECT id FROM task_events WHERE kind='todo_completed'")]
+    assert ids == ['e0']
+
+
+def test_a_todo_finished_since_yesterday_is_not_carried_over(client, monkeypatch):
+    _todo('t1', 'Renew passport', done=1)
+    _bar_row('y1', 'Renew passport', day=_days_ago(1), source=('todo', 't1'))
+    _fake_briefing(monkeypatch, [])
+    result = briefing_job.run_briefing()
+    meta = json.loads(_db().execute('SELECT metadata FROM messages WHERE id=?',
+                                    (result['messageId'],)).fetchone()['metadata'])
+    assert not [p for p in meta.get('proposals', []) if p['kind'] == 'todo']
+
+
+def test_a_review_for_a_finished_todo_resets_instead_of_asking(client, monkeypatch):
+    _todo('t1', 'Clean the garage')
+    _skip('Clean the garage', 3, source=('todo', 't1'))
+    briefing_job.tally_previous_days(_db(), _today(), int(time.time()))
+    _db().execute("UPDATE todos SET done=1 WHERE id='t1'")
+    assert briefing_job.stage_todo_reviews(_db(), int(time.time())) == []
+    s = _suggestion('todo:t1')
+    assert s['ignored_streak'] == 0 and s['dropped_at'] is None
+
+
+def test_accepting_a_card_for_a_todo_already_in_the_bar_adds_nothing(client):
+    from backend.routes.chat import _accept_todo
+    _todo('t1', 'Renew passport')
+    _bar_row('c1', 'Renew passport', source=('todo', 't1'))
+
+    result = _accept_todo(_db(), {'title': 'renew the passport form', 'sourceType': 'todo',
+                                  'sourceId': 't1'}, {})
+    assert result == {'id': 'c1'}
+    assert _db().execute('SELECT COUNT(*) FROM chat_todos').fetchone()[0] == 1
+
+
+def test_the_plan_leaves_out_idea_recordings(client):
+    now = int(time.time())
+    _db().execute("INSERT INTO ideas(id, content, created_at, updated_at) VALUES ('i1', 'x', 0, 0)")
+    for id, idea in (('j1', None), ('j2', 'i1')):
+        _db().execute('INSERT INTO journal_entries(id, content, created_at, updated_at, idea_id)'
+                      ' VALUES (?,?,?,?,?)', (id, 'I need to build the export.', now - 2 * 86400,
+                                              now - 2 * 86400, idea))
+    _db().commit()
+    assert [e['id'] for e in briefing_mod.earlier_journal(_db(), now)] == ['j1']

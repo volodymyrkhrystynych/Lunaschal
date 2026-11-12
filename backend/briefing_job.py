@@ -67,12 +67,9 @@ TALLY_DAYS = 7
 
 
 def find_or_create_day_conversation(db, day_key: str, now: int) -> str:
-    row = db.execute(
-        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL',
-        (day_key,),
-    ).fetchone()
-    if row:
-        return row['id']
+    existing = day_plan.find_day_conversation(db, day_key)
+    if existing:
+        return existing
     conv_id = str(ULID())
     db.execute(
         'INSERT INTO conversations(id, title, day_key, created_at, updated_at) VALUES (?,?,?,?,?)',
@@ -180,8 +177,12 @@ def stage_todo_reviews(db, now: int) -> list[dict]:
     for s in day_plan.review_candidates(db):
         source_type, source_id = day_plan.parse_key(s['item_key'])
         if source_type in day_plan.LIST_SOURCES and not day_plan.source_exists(db, source_type, source_id):
-            # Finished or deleted since; nothing to ask about.
+            # Deleted since; nothing to ask about.
             day_plan.drop(db, s['item_key'], now)
+            continue
+        if source_type in day_plan.LIST_SOURCES and not day_plan.source_open(db, source_type, source_id):
+            # Finished (or set aside) since: it got done, so the skips are over.
+            day_plan.reset_streak(db, s['item_key'], now)
             continue
         proposals.append({
             'id': str(ULID()), 'kind': 'todo_review', 'status': 'pending',
@@ -244,7 +245,9 @@ def stage_carryover_todos(db, conv_id: str, today: str) -> list[dict]:
         source = (r['source_type'], r['source_id']) if r['source_id'] else None
         if source and source in linked:
             continue
-        if source and source[0] in day_plan.LIST_SOURCES and not day_plan.source_exists(db, *source):
+        # Finished since yesterday (in Tasks, after the 4am boundary moved its
+        # ticks onto today's bar), deleted, or set aside: nothing to keep.
+        if source and source[0] in day_plan.LIST_SOURCES and not day_plan.source_open(db, *source):
             continue
         if day_plan.is_held_back(held, r['source_type'], r['source_id'], title):
             continue

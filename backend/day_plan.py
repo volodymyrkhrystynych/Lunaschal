@@ -97,6 +97,17 @@ def source_exists(db, source_type: str | None, source_id: str | None) -> bool:
     return False
 
 
+def source_open(db, source_type: str | None, source_id: str | None) -> bool:
+    """Still something to do: a to-do that exists, isn't done and isn't set
+    aside in the archive, or a habit that exists. `source_exists` is the
+    weaker check — a finished to-do still exists."""
+    if source_type == 'todo' and source_id:
+        return db.execute(
+            "SELECT 1 FROM todos WHERE id=? AND done=0 AND list != 'archive'", (source_id,),
+        ).fetchone() is not None
+    return source_exists(db, source_type, source_id)
+
+
 def source_title(db, source_type: str | None, source_id: str | None) -> str | None:
     table = {'todo': 'todos', 'daily': 'daily_tasks'}.get(source_type or '')
     if not table or not source_id:
@@ -135,12 +146,50 @@ def complete_source(db, source_type: str, source_id: str, day: str, now: int) ->
         complete_daily_task(db, source_id, day, now)
 
 
-def uncomplete_source(db, source_type: str, source_id: str, day: str, now: int) -> None:
+def uncomplete_source(db, source_type: str, source_id: str, day: str, now: int,
+                      bar_row_id: str | None = None) -> None:
     from backend.routes.tasks import uncomplete_daily_task, _uncomplete_todo_row
     if source_type == 'todo':
-        _uncomplete_todo_row(db, source_id, now)
+        todo = db.execute('SELECT repeat_interval, repeat_unit FROM todos WHERE id=?',
+                          (source_id,)).fetchone()
+        if todo and todo['repeat_interval'] and todo['repeat_unit']:
+            _reopen_occurrence(db, source_id, bar_row_id, now)
+        else:
+            _uncomplete_todo_row(db, source_id, now)
     elif source_type == 'daily':
         uncomplete_daily_task(db, source_id, day, now)
+
+
+def record_occurrence_due(db, todo_id: str, day: str, due) -> None:
+    """Completing a repeating to-do moves its due date on, and nothing else
+    remembers where it was. The bar rows ticked with it keep the old one, so
+    unticking one can put this occurrence back rather than guess."""
+    db.execute(
+        "UPDATE chat_todos SET source_prev_due=? WHERE source_type='todo' AND source_id=?"
+        ' AND day_key=?',
+        (due, todo_id, day),
+    )
+
+
+def _reopen_occurrence(db, todo_id: str, bar_row_id: str | None, now: int) -> None:
+    """Untick a bar row whose repeating to-do it completed: restore that
+    occurrence's due date and retract that one completion. A repeating to-do
+    is never done, so `_uncomplete_todo_row` (which retracts every completion
+    it ever logged) is the wrong tool. Without a remembered due date — a row
+    ticked before it was recorded — only the bar row is unticked."""
+    row = db.execute('SELECT completed_at, source_prev_due FROM chat_todos WHERE id=?',
+                     (bar_row_id,)).fetchone() if bar_row_id else None
+    if row and row['source_prev_due'] is not None:
+        db.execute('UPDATE todos SET due=?, updated_at=? WHERE id=?',
+                   (row['source_prev_due'], now, todo_id))
+        db.execute(
+            "DELETE FROM task_events WHERE id = (SELECT id FROM task_events"
+            " WHERE kind='todo_completed' AND ref_id=? AND created_at >= ?"
+            ' ORDER BY created_at DESC LIMIT 1)',
+            (todo_id, row['completed_at'] or 0),
+        )
+    if bar_row_id:
+        db.execute('UPDATE chat_todos SET source_prev_due=NULL WHERE id=?', (bar_row_id,))
 
 
 # --- What became of each suggestion -------------------------------------
@@ -217,6 +266,26 @@ def tally_day(db, day: str, now: int | None = None) -> None:
             ' total_ignored=total_ignored+1, snoozed_until=?, updated_at=? WHERE item_key=?',
             (row['title'], day, streak, until, now, key),
         )
+
+
+def record_card_dismissal(db, data: dict, today: str, now: int) -> None:
+    """A `todo` card (a carry-over, or something heard in the journal) turned
+    down: it sits out like a ✕ in the bar, so neither the journal pass nor the
+    briefing offers it again tomorrow. Not counted as a skip — a carry-over's
+    day was already tallied, and a journal card was never in the plan."""
+    title = (data.get('title') or '').strip()
+    if not title:
+        return
+    source_type, source_id = data.get('sourceType'), data.get('sourceId')
+    key = suggestion_key(source_type, source_id, title)
+    s = _upsert(db, key, title, now)
+    until = backoff.dismissed_until(today, daily=source_type == 'daily')
+    if s['snoozed_until'] and s['snoozed_until'] > until:
+        until = s['snoozed_until']
+    db.execute(
+        'UPDATE chat_todo_suggestions SET snoozed_until=?, dismissed_at=?, updated_at=? WHERE item_key=?',
+        (until, now, now, key),
+    )
 
 
 def record_dismissal(db, row, today: str, now: int) -> None:
@@ -296,6 +365,15 @@ def drop(db, key: str, now: int) -> None:
 def snooze(db, key: str, until: str, now: int) -> None:
     db.execute('UPDATE chat_todo_suggestions SET snoozed_until=?, updated_at=? WHERE item_key=?',
                (until, now, key))
+
+
+def find_day_conversation(db, day_key: str) -> str | None:
+    """The day's chat — the one with no Writing project or idea behind it."""
+    row = db.execute(
+        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL',
+        (day_key,),
+    ).fetchone()
+    return row['id'] if row else None
 
 
 def pending_cards(db, conv_id: str | None) -> list[str]:
