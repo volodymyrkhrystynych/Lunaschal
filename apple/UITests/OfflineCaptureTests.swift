@@ -1556,6 +1556,35 @@ final class OfflineCaptureTests: XCTestCase {
         app.segmentedControls["library-mode"].buttons["Library"].tap()
     }
 
+    /// Leaving the Library for More and coming back keeps the sort pills drawn.
+    /// They used to vanish on the second visit while still taking up their row
+    /// and still being in the accessibility tree, so only a picture tells.
+    func testLibrarySortPillsSurviveLeavingAndReopening() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        var firstLook: Data?
+        for visit in 1...2 {
+            openMore(app, "Library")
+            XCTAssertTrue(app.staticTexts["The Long Way Round"].waitForExistence(timeout: 10))
+            for label in ["Latest", "Recent", "Title"] {
+                let pill = app.buttons[label]
+                XCTAssertTrue(pill.waitForExistence(timeout: 5), "\(label) missing on visit \(visit)")
+                XCTAssertTrue(pill.isHittable, "\(label) not hittable on visit \(visit)")
+            }
+            let latest = app.buttons["Latest"].screenshot()
+            let shot = XCTAttachment(screenshot: latest)
+            shot.name = "latest-pill-visit-\(visit)"
+            add(shot)
+            if let firstLook {
+                XCTAssertEqual(latest.pngRepresentation, firstLook, "the pill is not drawn as it was on the first visit")
+            } else {
+                firstLook = latest.pngRepresentation
+            }
+            app.navigationBars["Library"].buttons["More"].tap()
+        }
+    }
+
     /// A fast flick towards the top offers the jump there, and using it lands
     /// on the top of the chapter. Scrolling down never offers it.
     func testAFastFlickUpOffersTheTopOfTheChapter() {
