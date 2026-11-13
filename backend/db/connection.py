@@ -1409,7 +1409,11 @@ def _ensure_agent_task_ask(db: sqlite3.Connection) -> None:
         db.execute('CREATE INDEX IF NOT EXISTS idx_agent_tasks_updated ON agent_tasks(updated_at DESC)')
         # Only the two tables that point at this one: an unrelated orphan
         # elsewhere in a long-lived database must not stop the app starting.
-        fk_problems = [p for child in ('agent_task_events', 'agent_approvals')
+        # A database from before approvals existed has no agent_approvals yet.
+        children = [r[0] for r in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name IN ('agent_task_events', 'agent_approvals')")]
+        fk_problems = [p for child in children
                        for p in db.execute(f'PRAGMA foreign_key_check({child})').fetchall()]
         if fk_problems:
             raise RuntimeError(f'agent_tasks migration broke FK integrity: {fk_problems}')
