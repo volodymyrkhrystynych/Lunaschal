@@ -99,6 +99,53 @@ def test_messages(client, repo_id):
     assert (row['status'], row['response']) == ('answered', 'The first')
 
 
+def test_asking_a_question(client, repo_id):
+    body = client.post('/api/code/tasks', json={'prompt': 'Where is X?', 'mode': 'ask'}).get_json()
+    assert body['phase'] == 'ask' and body['status'] == 'queued'
+    resp = client.post('/api/code/tasks', json={'prompt': 'x', 'mode': 'build'})
+    assert resp.status_code == 400
+
+
+def test_a_follow_up_to_an_answer_is_another_question(client, repo_id):
+    t = tasks.create(repo_id, 'Where is X?', mode='ask')
+    at(t['id'], 'answered', summary='In y.py.')
+    body = client.post(f"/api/code/tasks/{t['id']}/messages", json={'text': 'And Z?'}).get_json()
+    assert body['status'] == 'queued' and body['phase'] == 'ask'
+    assert body['pendingInput'] == 'And Z?'
+
+
+def test_planning_from_an_answer(client, repo_id):
+    t = tasks.create(repo_id, 'Where is X?', mode='ask')
+    at(t['id'], 'answering')
+    assert client.post(f"/api/code/tasks/{t['id']}/make-plan", json={}).status_code == 409
+    at(t['id'], 'answered', summary='In y.py.')
+    body = client.post(f"/api/code/tasks/{t['id']}/make-plan",
+                       json={'text': 'Move it to z.py'}).get_json()
+    assert body['status'] == 'queued' and body['phase'] == 'plan'
+    assert body['pendingInput'] == 'Move it to z.py'
+    last = tasks.events(t['id'])[-2]['payload']
+    assert last == {'text': 'Move it to z.py', 'action': 'plan', 'request': 'Move it to z.py'}
+    # The title becomes the PR's, so it names the change, not the question.
+    assert body['title'] == 'Move it to z.py'
+    # Twice is refused: it is a plan now.
+    assert client.post(f"/api/code/tasks/{t['id']}/make-plan", json={}).status_code == 409
+
+
+def test_planning_from_an_answer_with_nothing_said(client, repo_id):
+    t = tasks.create(repo_id, 'Where is X?', mode='ask')
+    at(t['id'], 'answered', summary='In y.py.')
+    body = client.post(f"/api/code/tasks/{t['id']}/make-plan", json={}).get_json()
+    assert body['phase'] == 'plan' and body['pendingInput'] is None
+    assert body['title'] == 'Where is X?'
+
+
+def test_an_answered_question_can_be_discarded_not_pushed(client, repo_id):
+    t = tasks.create(repo_id, 'Where is X?', mode='ask')
+    at(t['id'], 'answered', summary='In y.py.')
+    assert client.post(f"/api/code/tasks/{t['id']}/push").status_code == 409
+    assert client.post(f"/api/code/tasks/{t['id']}/discard").get_json()['status'] == 'discarded'
+
+
 def test_continue_an_interrupted_build(client, repo_id):
     t = tasks.create(repo_id, 'Fix it')
     at(t['id'], 'interrupted', phase='build', plan='p', error='Interrupted by an app restart.')
@@ -203,3 +250,17 @@ def test_pr_body_reports_the_measured_tests():
     body = github.pr_body({'prompt': 'p', 'plan': 'plan', 'summary': 's', 'testExit': 1,
                            'harness': 'omp'})
     assert 'failed (exit 1)' in body and '`omp`' in body
+
+
+def test_a_pr_from_a_question_states_the_change_and_the_question(repo_id):
+    t = tasks.create(repo_id, 'Where is X?', mode='ask')
+    at(t['id'], 'answered', summary='In y.py.')
+    worker.send_message(t['id'], 'And Z?')
+    at(t['id'], 'answered', summary='In z.py.')
+    worker.plan_from_answer(t['id'], 'Move X next to Z')
+    body = github.pr_body(tasks.get(t['id']), tasks.question_thread(t['id']))
+    assert body.startswith('## Task\n\nMove X next to Z\n\n## Question\n\nWhere is X?\n\nThen:\n\nAnd Z?')
+    # A task that began as a change is unchanged.
+    plain = tasks.create(repo_id, 'Add a test')
+    assert tasks.question_thread(plain['id']) is None
+    assert github.pr_body(tasks.get(plain['id'])).startswith('## Task\n\nAdd a test')

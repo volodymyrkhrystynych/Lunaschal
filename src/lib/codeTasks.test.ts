@@ -3,7 +3,12 @@ import type { CodeTask, CodeTaskEvent } from '../hooks/api';
 import {
   appendEvents,
   clip,
+  canMessage,
+  canPlanFromAnswer,
   canPush,
+  isActive,
+  MODES,
+  needsYou,
   eventLabel,
   isDetail,
   lineTotals,
@@ -53,6 +58,8 @@ describe('codeTasks', () => {
     expect(
       [
         'queued',
+        'answering',
+        'answered',
         'planning',
         'awaiting_plan',
         'running',
@@ -67,6 +74,8 @@ describe('codeTasks', () => {
       ].map(statusLabel)
     ).toEqual([
       'Queued',
+      'Looking into it',
+      'Answered',
       'Planning',
       'Plan ready',
       'Working',
@@ -79,6 +88,37 @@ describe('codeTasks', () => {
       'Pushed',
       'Discarded',
     ]);
+  });
+
+  it('treats an answered question as waiting on you, and plannable', () => {
+    const answered = task('answered', { phase: 'ask', summary: 'In y.py.' });
+    expect(needsYou(answered)).toBe(true);
+    expect(canMessage(answered)).toBe(true);
+    expect(canPlanFromAnswer(answered)).toBe(true);
+    expect(canPush(answered)).toBe(false);
+    expect(isActive(task('answering', { phase: 'ask' }))).toBe(true);
+    expect(canPlanFromAnswer(task('awaiting_plan', { phase: 'plan' }))).toBe(
+      false
+    );
+    // A failed follow-up still leaves the earlier answer to plan from.
+    expect(
+      canPlanFromAnswer(task('error', { phase: 'ask', summary: 'In y.py.' }))
+    ).toBe(true);
+    expect(
+      canPlanFromAnswer(
+        task('interrupted', { phase: 'ask', summary: 'In y.py.' })
+      )
+    ).toBe(true);
+    expect(
+      canPlanFromAnswer(task('error', { phase: 'ask', summary: null }))
+    ).toBe(false);
+    expect(
+      canPlanFromAnswer(task('error', { phase: 'plan', summary: 'Done.' }))
+    ).toBe(false);
+    // The same words as CodeAgentTests.testModesSayWhatHappensNext.
+    expect(MODES.ask.start).toBe('Ask');
+    expect(MODES.plan.start).toBe('Start planning');
+    expect(MODES.ask.explanation).toContain('changes nothing');
   });
 
   it('labels model calls with what was prefilled and what was cached', () => {

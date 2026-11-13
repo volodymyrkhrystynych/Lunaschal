@@ -1,8 +1,8 @@
-"""Run one phase of one coding task: plan, or build.
+"""Run one phase of one coding task: ask, plan, or build.
 
 A task alternates between the worker and the user. The worker runs a phase —
-the agent plans, or the agent builds — and the task then waits on a person:
-`awaiting_plan`, `needs_input`, `done`. Each phase is its own run with its own
+the agent answers a question, plans, or builds — and the task then waits on a
+person: `answered`, `awaiting_plan`, `needs_input`, `done`. Each phase is its own run with its own
 agent process, so a plan that sits unapproved for an evening holds neither the
 worker nor a process. The ACP session resumes across runs with `session/load`
 when the agent supports it; otherwise a fresh session is given what it needs
@@ -11,9 +11,9 @@ phases, so the clone and anything the agent built in it are still there.
 
 Three rules this module keeps:
 
-- **The plan phase cannot leave changes behind.** Writes are refused at the
-  permission prompt, and because pi has no permission system at all, the
-  working tree is reset afterwards anyway if it is dirty.
+- **The ask and plan phases cannot leave changes behind.** Writes are refused
+  at the permission prompt, and because pi has no permission system at all,
+  the working tree is reset afterwards anyway if it is dirty.
 - **The result is measured, not reported.** The diff comes from the
   host-owned out.git (mirror.py), and the tests are run by this module, in the
   container, after the agent has finished — whatever the agent said about them.
@@ -71,6 +71,46 @@ that writes to disk. Explore the code as much as you need, then reply with a con
 implementation plan in Markdown: which files you will change and how, and which tests you \
 will add or run. If the plan depends on something only the user can decide, end your reply \
 with one line that starts with QUESTION: and asks it."""
+
+ASK_PROMPT = """You are working in the git repository at /work. \
+Read the repository's own instructions first (CLAUDE.md or AGENTS.md at the root, if present). \
+For how a library or API works, use library_search first if you have it, and web_research only \
+when the library does not answer.
+
+The user has a question about this code:
+{prompt}
+
+This is a question, not a change. Do not modify any files, do not commit, and do not run \
+anything that writes to disk. Explore the code as much as you need, then reply in Markdown: \
+the answer first, then the files and functions it rests on (path and name) so the user can \
+check it. Say plainly what you could not confirm."""
+
+ASK_FOLLOWUP_PROMPT = """{text}
+
+This is still a question, not a change. Do not modify any files. Answer in Markdown, citing \
+the files and functions the answer rests on."""
+
+PLAN_FROM_ANSWER_PROMPT = """{context}Now the user wants a change:
+{request}
+
+This is the planning step. Do not modify any files, do not commit, and do not run anything \
+that writes to disk. Explore the code as much as you need, then reply with a concise \
+implementation plan in Markdown: which files you will change and how, and which tests you \
+will add or run. If the plan depends on something only the user can decide, end your reply \
+with one line that starts with QUESTION: and asks it."""
+
+# What "Plan this" means when the user typed nothing with it.
+PLAN_FROM_ANSWER_DEFAULT = 'Make the change our conversation points to.'
+
+# A fresh session has lost the conversation the plan grows out of.
+ANSWER_CONTEXT = """You are working in the git repository at /work, on the branch {branch}. \
+Earlier, the user asked:
+{questions}
+
+and the latest answer was:
+{answer}
+
+"""
 
 REVISE_PROMPT = """The user reviewed your plan and wants changes:
 
@@ -225,6 +265,30 @@ def _choose(options: list[dict], allow: bool) -> str | None:
 
 WRITE_KINDS = frozenset({'edit', 'delete', 'move'})
 
+# The status a task shows while each phase runs.
+IN_FLIGHT = {'ask': 'answering', 'plan': 'planning', 'build': 'running'}
+
+
+def _from_answer(task: dict) -> bool:
+    """A plan that grows out of an answered question, not yet written. Only an
+    ask leaves a summary before there is a plan — a build writes it after."""
+    return bool(task.get('summary')) and not task.get('plan')
+
+
+def _asked(thread: dict | None, task: dict) -> str:
+    """Every question of an ask task, the first and each follow-up, in order."""
+    questions = (thread or {}).get('questions') or [task['prompt']]
+    return '\n\nThen:\n'.join(questions)
+
+
+def _task_text(task: dict, thread: dict | None) -> str:
+    """What the task is, for a fresh session. A task that grew out of a question
+    keeps the question as its prompt, so the change is put first."""
+    if not thread or not thread['planned']:
+        return task['prompt']
+    request = thread['request'] or 'The change the answer to this question pointed to.'
+    return f'{request}\n\nThis grew out of a question about the code:\n{_asked(thread, task)}'
+
 
 def question_in(text: str) -> str | None:
     found = QUESTION.findall(text or '')
@@ -247,11 +311,11 @@ class Driver:
         cancel = cancel or threading.Event()
         task = tasks.get(task_id)
         phase = task['phase']
-        # A new turn makes any earlier verdict stale: whatever it ends in —
+        # A new build turn makes any earlier verdict stale: whatever it ends in —
         # done, a question, a cancel, an error — the code is no longer what was
         # tested. The run itself stays readable in its `test` event.
-        tasks.set_status(task_id, 'planning' if phase == 'plan' else 'running',
-                         **({} if phase == 'plan' else {'test_exit': None, 'test_output': None}))
+        tasks.set_status(task_id, IN_FLIGHT[phase],
+                         **({'test_exit': None, 'test_output': None} if phase == 'build' else {}))
         proxy = client = None
         try:
             task = self._ensure_workspace(task)
@@ -274,6 +338,8 @@ class Driver:
                 return tasks.set_status(task_id, 'cancelled')
             if stop not in ('end_turn', None):
                 tasks.append_event(task_id, 'status', {'note': f'agent stopped: {stop}'})
+            if phase == 'ask':
+                return self._finish_answer(task, turn.reply)
             if phase == 'plan':
                 return self._finish_plan(task, turn.reply)
             return self._finish_build(task, turn.reply, script)
@@ -335,11 +401,43 @@ class Driver:
 
     def _prompt_for(self, task: dict, fresh: bool, script: str | None = None) -> str:
         pending = task.get('pendingInput')
-        context = FRESH_CONTEXT.format(prompt=task['prompt']) if fresh else ''
+        thread = tasks.question_thread(task['id'])
+        context = FRESH_CONTEXT.format(prompt=_task_text(task, thread)) if fresh else ''
+        if task['phase'] == 'ask':
+            if pending and not fresh:
+                return ASK_FOLLOWUP_PROMPT.format(text=pending)
+            base = ASK_PROMPT.format(prompt=task['prompt'])
+            if not pending:
+                return base
+            # A fresh session has lost the conversation, so it gets the
+            # follow-ups between and the answer it is being asked about.
+            earlier = [q for q in (thread or {}).get('questions', [])[1:] if q != pending]
+            between = ''.join(f'\n\nThe user then asked:\n{q}' for q in earlier)
+            answer = task.get('summary') or '(the answer was not recorded)'
+            return (base + between + f'\n\nYou answered that already:\n{answer}'
+                    f'\n\nThe user then asked:\n{pending}')
+        if task['phase'] == 'plan' and _from_answer(task):
+            # The thread keeps the request: pending is empty after an interrupted
+            # run, and is something said since (a retry, an answer to the agent's
+            # question) once the plan has begun — added to the request, never
+            # taking its place.
+            if not (thread or {}).get('planned'):
+                # No logged request to keep: whatever is pending is the request.
+                request = pending or PLAN_FROM_ANSWER_DEFAULT
+            else:
+                asked = thread['request']
+                request = asked or PLAN_FROM_ANSWER_DEFAULT
+                if pending and pending != asked:
+                    request += f'\n\nThe user has since said:\n{pending}'
+            context = ANSWER_CONTEXT.format(
+                branch=mirror.branch_for(task['id']),
+                questions=_asked(thread, task), answer=task['summary']) if fresh else ''
+            return PLAN_FROM_ANSWER_PROMPT.format(context=context, request=request)
         if task['phase'] == 'plan':
             if pending and not fresh:
                 return REVISE_PROMPT.format(text=pending)
-            base = PLAN_PROMPT.format(branch=mirror.branch_for(task['id']), prompt=task['prompt'])
+            base = PLAN_PROMPT.format(branch=mirror.branch_for(task['id']),
+                                      prompt=_task_text(task, thread))
             return base + (f'\n\nThe user has reviewed an earlier plan and said:\n{pending}'
                            if pending else '')
         script = script if script is not None else self._test_script(task)
@@ -394,14 +492,23 @@ class Driver:
         proc = self.runtime.run(task_id, ['git', '-C', '/work', 'status', '--porcelain'])
         return bool((proc.stdout or b'').strip())
 
-    def _finish_plan(self, task: dict, reply: str) -> dict:
-        task_id = task['id']
+    def _revert(self, task_id: str, step: str) -> None:
+        """Undo whatever a read-only step wrote. pi has no permission prompt to
+        refuse; this is what holds the line."""
         if self._dirty(task_id):
-            # pi has no permission prompt to refuse; this is what holds the line.
             self.runtime.run(task_id, ['git', '-C', '/work', 'reset', '--hard', '--quiet'])
             self.runtime.run(task_id, ['git', '-C', '/work', 'clean', '-fdq'])
             tasks.append_event(task_id, 'status',
-                               {'note': 'the plan step changed files; they were reverted'})
+                               {'note': f'the {step} step changed files; they were reverted'})
+
+    def _finish_answer(self, task: dict, reply: str) -> dict:
+        self._revert(task['id'], 'question')
+        return tasks.set_status(task['id'], 'answered',
+                                summary=reply or '(the agent did not write an answer)')
+
+    def _finish_plan(self, task: dict, reply: str) -> dict:
+        task_id = task['id']
+        self._revert(task_id, 'plan')
         plan = reply or '(the agent did not write a plan)'
         tasks.open_approval(task_id, 'plan', {'plan': plan, 'question': question_in(plan)})
         return tasks.set_status(task_id, 'awaiting_plan', plan=plan)

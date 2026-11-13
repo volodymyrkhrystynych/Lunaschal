@@ -421,6 +421,7 @@ def init_db() -> None:
     _ensure_inference_pause_settings(db)
     _ensure_mobile_sync(db)
     _ensure_code_agent_settings(db)
+    _ensure_agent_task_ask(db)
     _ensure_pr_journal_settings(db)
     _ensure_chat_todo_source(db)
     # No _reset_stale_torrents() belongs below: the torrent client runs in its
@@ -1382,6 +1383,51 @@ def _ensure_code_agent_settings(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_agent_task_ask(db: sqlite3.Connection) -> None:
+    """Code tasks grew a question mode: phase 'ask' and the statuses
+    'answering' / 'answered'. SQLite cannot widen a CHECK in place, so an older
+    `agent_tasks` is rebuilt from schema.sql's own statement, as goals are.
+    foreign_keys is off for the swap, outside the transaction, because the
+    events and approvals cascade from this table: with it on, the DROP would
+    take every task's log with it."""
+    row = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_tasks'").fetchone()
+    if not row or "'answered'" in row[0]:
+        return
+    schema = (Path(__file__).parent / 'schema.sql').read_text()
+    ddl = re.search(r'CREATE TABLE IF NOT EXISTS agent_tasks \(.*?\n\);', schema, re.S).group(0)
+    cols = ', '.join(r[1] for r in db.execute('PRAGMA table_info(agent_tasks)'))
+    db.commit()
+    db.execute('PRAGMA foreign_keys=OFF')
+    try:
+        db.execute('BEGIN')
+        db.execute(ddl.replace('IF NOT EXISTS agent_tasks (', 'agent_tasks_new (', 1))
+        db.execute(f'INSERT INTO agent_tasks_new ({cols}) SELECT {cols} FROM agent_tasks')
+        db.execute('DROP TABLE agent_tasks')
+        db.execute('ALTER TABLE agent_tasks_new RENAME TO agent_tasks')
+        db.execute('CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status, created_at)')
+        db.execute('CREATE INDEX IF NOT EXISTS idx_agent_tasks_updated ON agent_tasks(updated_at DESC)')
+        # Only the two tables that point at this one: an unrelated orphan
+        # elsewhere in a long-lived database must not stop the app starting.
+        # A database from before approvals existed has no agent_approvals yet.
+        children = [r[0] for r in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name IN ('agent_task_events', 'agent_approvals')")]
+        fk_problems = [p for child in children
+                       for p in db.execute(f'PRAGMA foreign_key_check({child})').fetchall()]
+        if fk_problems:
+            raise RuntimeError(f'agent_tasks migration broke FK integrity: {fk_problems}')
+        db.execute('COMMIT')
+    except Exception:
+        # BEGIN itself may have failed, or SQLite may have rolled back already;
+        # a ROLLBACK then would raise and bury the error that matters.
+        if db.in_transaction:
+            db.execute('ROLLBACK')
+        raise
+    finally:
+        db.execute('PRAGMA foreign_keys=ON')
+
+
 def _reset_stale_agent_tasks(db: sqlite3.Connection) -> None:
     """A coding task in flight when the process died lost its ACP connection
     with it — the agent ran as a child of `docker exec`. It is parked as
@@ -1390,7 +1436,7 @@ def _reset_stale_agent_tasks(db: sqlite3.Connection) -> None:
     db.execute(
         "UPDATE agent_tasks SET status='interrupted', "
         "error='Interrupted by an app restart.', updated_at=? "
-        "WHERE status IN ('planning','running','testing')",
+        "WHERE status IN ('answering','planning','running','testing')",
         (int(time.time()),),
     )
     db.commit()

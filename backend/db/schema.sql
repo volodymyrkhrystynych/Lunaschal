@@ -3063,17 +3063,21 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     -- Which agent ran it: 'pi' | 'omp' | 'qwen'. Recorded per task so the
     -- head-to-head numbers stay attributable after the default changes.
     harness TEXT NOT NULL,
-    -- planning/running/testing are in flight and become 'interrupted' at
-    -- startup (_reset_stale_agent_tasks). awaiting_plan and needs_input are
-    -- waiting on the user, which survives a restart as-is.
+    -- answering/planning/running/testing are in flight and become
+    -- 'interrupted' at startup (_reset_stale_agent_tasks). answered,
+    -- awaiting_plan and needs_input are waiting on the user, which survives a
+    -- restart as-is. Widening this list means a table rebuild — see
+    -- _ensure_agent_task_ask.
     status TEXT NOT NULL DEFAULT 'queued'
-        CHECK(status IN ('queued','planning','awaiting_plan','running',
-                         'needs_input','testing','done','interrupted','error',
-                         'cancelled','pushed','discarded')),
+        CHECK(status IN ('queued','answering','answered','planning','awaiting_plan',
+                         'running','needs_input','testing','done','interrupted',
+                         'error','cancelled','pushed','discarded')),
     -- Which half runs next when the worker picks the task up. Each phase is
     -- its own worker run, so a plan waiting hours for approval holds neither
-    -- the worker nor an agent process.
-    phase TEXT NOT NULL DEFAULT 'plan' CHECK(phase IN ('plan','build')),
+    -- the worker nor an agent process. 'ask' is a question rather than a
+    -- change: read-only like 'plan', answered rather than approved, and it can
+    -- become a 'plan' once the answer shows what to change.
+    phase TEXT NOT NULL DEFAULT 'plan' CHECK(phase IN ('ask','plan','build')),
     -- The agent's ACP session, resumed with session/load when it supports it.
     session_id TEXT,
     -- A revision, answer or follow-up waiting for the next run.

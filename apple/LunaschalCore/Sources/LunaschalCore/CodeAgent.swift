@@ -68,9 +68,19 @@ public struct CodeTask: Codable, Equatable, Identifiable, Sendable {
 
     /// The agent (or the queue) is working; nothing for the user to do yet.
     public var isActive: Bool { CodeTaskStatus.active.contains(status) }
+    /// A question about the code rather than a change to it.
+    public var isQuestion: Bool { phase == "ask" }
+    /// A question with an answer on record can become a change, planned in the
+    /// same session — also after a later follow-up failed or was interrupted,
+    /// since the earlier answer is still there. Mirrors worker.can_plan_from_answer.
+    public var canPlanFromAnswer: Bool {
+        isQuestion && !(summary ?? "").isEmpty && ["answered", "error", "interrupted"].contains(status)
+    }
     public var isClosed: Bool { CodeTaskStatus.closed.contains(status) }
     public var awaitsPlanApproval: Bool { status == "awaiting_plan" }
-    public var canMessage: Bool { ["needs_input", "done", "error", "interrupted", "awaiting_plan"].contains(status) }
+    public var canMessage: Bool {
+        ["answered", "needs_input", "done", "error", "interrupted", "awaiting_plan"].contains(status)
+    }
     public var canContinue: Bool { status == "interrupted" || status == "error" }
     public var canPush: Bool { (status == "done" || status == "needs_input") && headSha != nil }
     public var canCancel: Bool { isActive }
@@ -87,13 +97,18 @@ public struct CodeTask: Codable, Equatable, Identifiable, Sendable {
 }
 
 public enum CodeTaskStatus {
-    public static let active: Set<String> = ["queued", "planning", "running", "testing"]
+    public static let active: Set<String> = ["queued", "answering", "planning", "running", "testing"]
+    /// States that wait on the user: the "Needs you" section.
+    public static let needsYou: Set<String> = ["answered", "awaiting_plan", "needs_input", "done", "error",
+                                               "interrupted"]
     public static let closed: Set<String> = ["cancelled", "pushed", "discarded"]
 
     /// The same words as src/lib/codeTasks.ts — CodeAgentTests pins them.
     public static func label(_ status: String) -> String {
         switch status {
         case "queued": return "Queued"
+        case "answering": return "Looking into it"
+        case "answered": return "Answered"
         case "planning": return "Planning"
         case "awaiting_plan": return "Plan ready"
         case "running": return "Working"
@@ -147,6 +162,7 @@ public struct CodeActivity: Equatable, Sendable {
     static func headline(_ status: String) -> String {
         switch status {
         case "queued": return "Queued — starts when the agent is free"
+        case "answering": return "The agent is looking into it"
         case "planning": return "The agent is planning"
         case "running": return "The agent is working"
         case "testing": return "Running the test suite"
@@ -185,6 +201,21 @@ public struct CodeActivity: Equatable, Sendable {
         let m = s / 60
         if m < 60 { return "\(m)m " + String(format: "%02d", s % 60) + "s" }
         return "\(m / 60)h " + String(format: "%02d", m % 60) + "m"
+    }
+}
+
+/// What a new task is: a question to answer, or a change to plan and build.
+public enum CodeTaskMode: String, CaseIterable, Sendable {
+    case ask, plan
+
+    public var title: String { self == .ask ? "Ask" : "Change" }
+    public var placeholder: String {
+        self == .ask ? "Ask a question about the code…" : "Describe a change for the agent…"
+    }
+    public var startLabel: String { self == .ask ? "Ask" : "Start planning" }
+    public var explanation: String {
+        self == .ask ? "The agent reads the code and answers. It changes nothing, and you can turn the answer into a plan."
+                     : "The agent explores the code and writes a plan first. Nothing changes until you approve it."
     }
 }
 

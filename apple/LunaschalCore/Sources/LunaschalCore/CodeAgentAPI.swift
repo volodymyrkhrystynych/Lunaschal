@@ -27,10 +27,17 @@ extension JournalAPI {
     }
 
     /// A nil repo means the server's default repository.
-    public func createCodeTask(repoID: String?, prompt: String, harness: String? = nil) async throws -> CodeTask {
-        struct Body: Encodable { let repoId: String?; let prompt: String; let harness: String? }
+    public func createCodeTask(repoID: String?, prompt: String, mode: CodeTaskMode = .plan,
+                               harness: String? = nil) async throws -> CodeTask {
+        struct Body: Encodable { let repoId: String?; let prompt: String; let mode: String; let harness: String? }
         return try JSONDecoder().decode(CodeTask.self, from: await chatJSON(
-            "api/code/tasks", Body(repoId: repoID, prompt: prompt, harness: harness)))
+            "api/code/tasks", Body(repoId: repoID, prompt: prompt, mode: mode.rawValue, harness: harness)))
+    }
+
+    /// Turns an answered question into a change, starting with its plan.
+    /// Empty `text` means the change the conversation points to.
+    public func planFromCodeAnswer(_ id: String, text: String = "") async throws -> CodeTask {
+        try await codeAction(id, "make-plan", ["text": JSONValue.string(text)])
     }
 
     public func approveCodePlan(_ id: String) async throws -> CodeTask {

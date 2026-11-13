@@ -11,10 +11,12 @@ import {
   canContinue,
   canDiscard,
   canMessage,
+  canPlanFromAnswer,
   canPush,
   elapsedLabel,
   isActive,
   lineTotals,
+  MODES,
   needsYou,
   parseDiff,
   pollIntervalMs,
@@ -22,6 +24,7 @@ import {
   terminalLines,
   testVerdict,
   type CodeActivity,
+  type CodeTaskMode,
   type TerminalLine,
 } from '@/lib/codeTasks';
 
@@ -38,6 +41,7 @@ const primary =
 export function CodeTasks() {
   const [selected, setSelected] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [mode, setMode] = useState<CodeTaskMode>('plan');
   const queryClient = useQueryClient();
   const { data } = useQuery({
     queryKey: ['code', 'tasks'],
@@ -45,7 +49,7 @@ export function CodeTasks() {
     refetchInterval: q => pollIntervalMs(q.state.data?.tasks),
   });
   const create = useMutation({
-    mutationFn: (prompt: string) => api.code.create({ prompt }),
+    mutationFn: (prompt: string) => api.code.create({ prompt, mode }),
     onSuccess: task => {
       setDraft('');
       setSelected(task.id);
@@ -65,10 +69,23 @@ export function CodeTasks() {
   return (
     <div className="h-full overflow-y-auto p-4 space-y-4">
       <div className="space-y-2">
+        <div className="flex gap-1" role="radiogroup" aria-label="Kind of task">
+          {(['ask', 'plan'] as const).map(m => (
+            <button
+              key={m}
+              role="radio"
+              aria-checked={mode === m}
+              className={mode === m ? primary : btn}
+              onClick={() => setMode(m)}
+            >
+              {MODES[m].title}
+            </button>
+          ))}
+        </div>
         <textarea
           value={draft}
           onChange={e => setDraft(e.target.value)}
-          placeholder="Describe a change for the agent…"
+          placeholder={MODES[mode].placeholder}
           rows={3}
           className="w-full rounded-lg bg-[var(--color-surface)] border border-white/10 p-2 text-sm"
         />
@@ -79,10 +96,10 @@ export function CodeTasks() {
             disabled={!draft.trim() || create.isPending}
             onClick={() => create.mutate(draft.trim())}
           >
-            Start planning
+            {MODES[mode].start}
           </button>
           <span className="text-xs text-[var(--color-text-muted)]">
-            It writes a plan first; nothing changes until you approve it.
+            {MODES[mode].explanation}
           </span>
         </div>
         {create.error && (
@@ -315,6 +332,23 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
               Approve &amp; build
             </button>
           )}
+          {canPlanFromAnswer(task) && (
+            // Whatever is typed in the reply line says what to change.
+            <button
+              className={primary}
+              disabled={act.isPending}
+              onClick={() => {
+                const text = reply.trim();
+                // Cleared only once it is accepted: a refused or failed
+                // request leaves the typed change there to try again.
+                act.mutate(() => api.code.planFromAnswer(task.id, text), {
+                  onSuccess: () => setReply(r => (r.trim() === text ? '' : r)),
+                });
+              }}
+            >
+              {reply.trim() ? 'Plan what I typed' : 'Plan this'}
+            </button>
+          )}
           {verdict && (
             <span
               className={`text-xs ${verdict === 'passed' ? 'text-green-400' : 'text-red-400'}`}
@@ -414,7 +448,9 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
                   ? 'What should change in the plan?'
                   : question
                     ? 'Your answer'
-                    : 'Ask for a follow-up change'
+                    : canPlanFromAnswer(task)
+                      ? 'Ask a follow-up, or type a change and press Plan'
+                      : 'Ask for a follow-up change'
               }
               className="flex-1 rounded-lg bg-[var(--color-surface)] border border-white/10 px-2 py-1 text-sm"
             />
