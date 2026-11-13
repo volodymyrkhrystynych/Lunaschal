@@ -2871,6 +2871,12 @@ def seed_coach(db):
                (ts(0), 'A good day: reading and water both done, and the weigh-in was fairly skipped '
                 'while travelling. Try stretching right after brushing your teeth tonight.', today_key(1)))
     review.draft(today_key())
+    # The gaming lock, switched on for weekdays, and yesterday lifted through
+    # the end-of-work review — so Settings shows the lock and the record.
+    db.execute("UPDATE settings SET gaming_lock_enabled=1, gaming_lock_days='[0,1,2,3,4]' WHERE id=1")
+    db.execute("INSERT INTO gaming_unlocks (id,day,method,reason,rating_at_unlock,work_end,unlocked_at) "
+               "VALUES (?,?,'review',NULL,4,'17:00',?)", (new_id(), today_key(1), ts(1)))
+    db.commit()
     # Three weeks of reminder decisions — sent in each framing, held back as
     # the control, skipped once logged — so Settings → Coach has stats to show.
     import random

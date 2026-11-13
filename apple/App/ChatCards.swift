@@ -127,6 +127,22 @@ private struct ProposalForm: View {
                 Text("Keeps getting in the way: \(obstacle)").font(.caption).foregroundStyle(.secondary)
             }
             TextField("Cue", text: text("cue"), axis: .vertical).lineLimit(1...3).textFieldStyle(.roundedBorder)
+        case "unlock_gaming":
+            // The end of the workday: today's provisional review, then games.
+            let rating = data["rating"]?.int.map { max(1, min(5, $0)) }
+            Text(rating.map { "Today so far: \(String(repeating: "★", count: $0))\(String(repeating: "☆", count: 5 - $0))" }
+                 ?? "Nothing tracked today")
+                .font(.subheadline.weight(.medium))
+            let open = (data["open"]?.array ?? []).compactMap(\.string)
+            if !open.isEmpty {
+                Text("Still open: \(open.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
+            }
+            if let end = data["workEnd"]?.string {
+                Text("Work was down to end at \(end).").font(.caption).foregroundStyle(.secondary)
+            }
+            Toggle("Also pause GPU inference", isOn: Binding(get: { data["pauseInference"]?.bool ?? true },
+                                                             set: { data["pauseInference"] = .bool($0) }))
+                .font(.caption)
         case "todo":
             // Yesterday's unfinished bar item, carried over by the morning
             // briefing, or something heard in a journal entry.

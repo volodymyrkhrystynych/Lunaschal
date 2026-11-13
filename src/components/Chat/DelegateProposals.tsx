@@ -40,6 +40,10 @@ function resolvedLabel(p: DelegateProposalRecord): string {
       return `Added habit: ${str(p.data, 'title')}`;
     case 'habit_plan':
       return `Cue set for ${str(p.data, 'habitTitle')}: ${str(p.data, 'cue')}`;
+    case 'unlock_gaming': {
+      const rating = p.result?.rating ?? (p.data.rating as number | undefined);
+      return `Games unlocked${rating ? ` · today ${'★'.repeat(rating)}` : ''}${p.result?.pausedInference ? ' · GPU freed' : ''}`;
+    }
     case 'flashcards':
       return `Queued ${p.result?.count ?? 0} card${p.result?.count === 1 ? '' : 's'} for review in Learning`;
     case 'writing_note':
@@ -94,6 +98,7 @@ const HEADLINE: Record<string, string> = {
   todo_review: 'You keep skipping this',
   habit_plan: 'Make this the plan for that habit?',
   habit: 'Start a new habit?',
+  unlock_gaming: 'Done with work — unlock games?',
   writing_note: 'Add to the notes?',
   writing_note_update: 'Update this note?',
   screenshot_titles: 'Rename these screenshots?',
@@ -111,6 +116,7 @@ const ACCEPT_LABEL: Record<string, string> = {
   todo_review: 'Apply',
   habit_plan: 'Use as cue',
   habit: 'Add habit',
+  unlock_gaming: 'Unlock gaming',
   writing_note: 'Add Note',
   writing_note_update: 'Update Note',
   screenshot_titles: 'Rename',
@@ -366,6 +372,39 @@ function ProposalForm({
           />
         </div>
       );
+
+    // The end of the workday: today's provisional review, then games.
+    case 'unlock_gaming': {
+      const rating = Math.max(0, Math.min(5, Number(data.rating) || 0));
+      const open = Array.isArray(data.open) ? (data.open as string[]) : [];
+      return (
+        <div className="space-y-1.5">
+          <p className="text-sm font-medium">
+            {rating
+              ? `Today so far: ${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}`
+              : 'Nothing tracked today'}
+          </p>
+          {open.length > 0 && (
+            <p className="text-xs text-[var(--color-text-muted)]">
+              Still open: {open.join(', ')}
+            </p>
+          )}
+          {str(data, 'workEnd') && (
+            <p className="text-xs text-[var(--color-text-muted)]">
+              Work was down to end at {str(data, 'workEnd')}.
+            </p>
+          )}
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={data.pauseInference !== false}
+              onChange={e => set({ pauseInference: e.target.checked })}
+            />
+            Also pause GPU inference
+          </label>
+        </div>
+      );
+    }
 
     // Yesterday's unfinished bar item, carried over by the morning briefing.
     case 'todo':

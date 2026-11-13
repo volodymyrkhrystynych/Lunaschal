@@ -149,7 +149,7 @@ def _model_summary(review: dict, recurring: list[dict]) -> dict:
         'items': [{'title': i['title'], 'kind': i['kind'],
                    'status': 'excused' if i.get('excused') else
                              'unknown' if i['done'] is None else 'done' if i['done'] else 'missed',
-                   'reason': i.get('excuse')} for i in review['items']],
+                   'reason': i.get('excuse') or i.get('note')} for i in review['items']],
         'goals': context_text(review['day']),
         'recurring': recurring,
     }

@@ -925,6 +925,23 @@ CREATE TABLE IF NOT EXISTS day_excuses (
 );
 CREATE INDEX IF NOT EXISTS idx_day_excuses_day ON day_excuses(day);
 
+-- The day the gaming lock was lifted, and how (backend/gaming/lock.py). One
+-- row per 4am day at most; no row on a lock weekday means games are closed.
+-- `review` is the end-of-work chat card, stamped with the day's provisional
+-- rating; `override` skipped the review, needs a reason, and counts as a
+-- missed item in that day's review. `work_end` is when the calendar said work
+-- ended ("HH:MM"), kept beside `unlocked_at` so the morning review can show
+-- an unlock at two against a workday that ran to five.
+CREATE TABLE IF NOT EXISTS gaming_unlocks (
+    id TEXT PRIMARY KEY,
+    day TEXT NOT NULL UNIQUE,
+    method TEXT NOT NULL CHECK(method IN ('review','override')),
+    reason TEXT,
+    rating_at_unlock INTEGER,
+    work_end TEXT,
+    unlocked_at INTEGER NOT NULL
+);
+
 -- One row per moment the coach considered a reminder (backend/coach/engine.py):
 -- planned for a slot, then sent, held back (the randomized no-send control, or
 -- the policy judging a send not worth it) or skipped (already logged, quiet
