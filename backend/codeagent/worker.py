@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import functools
 import time
 from pathlib import Path
 
@@ -34,6 +35,10 @@ DISCARDABLE = frozenset({'answered', 'awaiting_plan', 'needs_input', 'done', 'er
 
 _wake = threading.Event()
 _lock = threading.Lock()
+# Held across each action's check-then-write, so two taps (or the phone and the
+# web at once) cannot both pass the same state check. Reentrant because
+# send_message hands an awaiting plan to revise_plan.
+_actions = threading.RLock()
 _current: dict = {'task_id': None, 'cancel': None}
 _thread: threading.Thread | None = None
 _driver = None
@@ -137,6 +142,14 @@ def cleanup(task_id: str) -> None:
 
 # --------------------------------------------------------------- actions
 
+def _serialized(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _actions:
+            return fn(*args, **kwargs)
+    return wrapper
+
+
 def _settings() -> dict:
     from backend.db.connection import get_db
     row = get_db().execute(
@@ -166,6 +179,7 @@ def _requeue(task_id: str, **fields) -> dict:
     return task
 
 
+@_serialized
 def approve_plan(task_id: str) -> dict:
     task = tasks.get(task_id)
     if task['status'] != 'awaiting_plan':
@@ -177,6 +191,7 @@ def approve_plan(task_id: str) -> dict:
     return _requeue(task_id, phase='build', pending_input=None)
 
 
+@_serialized
 def revise_plan(task_id: str, text: str) -> dict:
     text = (text or '').strip()
     if not text:
@@ -191,13 +206,22 @@ def revise_plan(task_id: str, text: str) -> dict:
     return _requeue(task_id, phase='plan', pending_input=text)
 
 
+def can_plan_from_answer(task: dict) -> bool:
+    """A question with an answer on record and nothing running. A follow-up
+    that failed or was interrupted still leaves the earlier answer in
+    `summary`, so it can become a plan as well as an answered one can."""
+    return (task['phase'] == 'ask' and bool(task.get('summary'))
+            and task['status'] in ('answered', 'error', 'interrupted'))
+
+
+@_serialized
 def plan_from_answer(task_id: str, text: str = '') -> dict:
     """Turn an answered question into a change: the task moves to the plan
     phase in the same session, so the agent plans from what it just read.
     `text` says what to change; empty means the change the conversation points
     to. From here it is an ordinary task — plan, approve, build."""
     task = tasks.get(task_id)
-    if task['status'] != 'answered':
+    if not can_plan_from_answer(task):
         raise ActionRefused('Only an answered question can become a plan')
     text = (text or '').strip()
     # The event, not pending_input, is the request's durable copy: the run
@@ -207,9 +231,10 @@ def plan_from_answer(task_id: str, text: str = '') -> dict:
     if text:
         # The title becomes the PR's title, which should name the change.
         tasks.update(task_id, title=tasks.title_from(text))
-    return _requeue(task_id, phase='plan', pending_input=text or None)
+    return _requeue(task_id, phase='plan', pending_input=text or None, error=None)
 
 
+@_serialized
 def send_message(task_id: str, text: str) -> dict:
     """An answer to the agent's question, a follow-up question, or a follow-up
     change once it has finished."""
@@ -234,12 +259,25 @@ CONTINUE_TEXT = ('You were interrupted. Your work so far is in /work — check `
                  '`git status` — so continue from where you left off.')
 
 
+def _resume_text(task: dict) -> str | None:
+    """What to send again when a run died with nothing pending: the run
+    cleared pending_input as it started, so a follow-up question survives only
+    in the event log. A first question or a plan rebuilds from the row."""
+    if task['phase'] == 'build':
+        return CONTINUE_TEXT
+    if task['phase'] == 'ask':
+        follow_ups = ((tasks.question_thread(task['id']) or {}).get('questions') or [])[1:]
+        return follow_ups[-1] if follow_ups else None
+    return None
+
+
+@_serialized
 def continue_task(task_id: str) -> dict:
     task = tasks.get(task_id)
     if task['status'] not in ('interrupted', 'error'):
         raise ActionRefused('Only an interrupted or failed task can be continued')
     tasks.append_event(task_id, 'user', {'text': 'Continue.', 'action': 'continue'})
-    pending = task.get('pendingInput') or (CONTINUE_TEXT if task['phase'] == 'build' else None)
+    pending = task.get('pendingInput') or _resume_text(task)
     return _requeue(task_id, pending_input=pending, error=None)
 
 

@@ -1419,7 +1419,10 @@ def _ensure_agent_task_ask(db: sqlite3.Connection) -> None:
             raise RuntimeError(f'agent_tasks migration broke FK integrity: {fk_problems}')
         db.execute('COMMIT')
     except Exception:
-        db.execute('ROLLBACK')
+        # BEGIN itself may have failed, or SQLite may have rolled back already;
+        # a ROLLBACK then would raise and bury the error that matters.
+        if db.in_transaction:
+            db.execute('ROLLBACK')
         raise
     finally:
         db.execute('PRAGMA foreign_keys=ON')

@@ -70,8 +70,12 @@ public struct CodeTask: Codable, Equatable, Identifiable, Sendable {
     public var isActive: Bool { CodeTaskStatus.active.contains(status) }
     /// A question about the code rather than a change to it.
     public var isQuestion: Bool { phase == "ask" }
-    /// An answered question can become a change, planned in the same session.
-    public var canPlanFromAnswer: Bool { status == "answered" }
+    /// A question with an answer on record can become a change, planned in the
+    /// same session — also after a later follow-up failed or was interrupted,
+    /// since the earlier answer is still there. Mirrors worker.can_plan_from_answer.
+    public var canPlanFromAnswer: Bool {
+        isQuestion && !(summary ?? "").isEmpty && ["answered", "error", "interrupted"].contains(status)
+    }
     public var isClosed: Bool { CodeTaskStatus.closed.contains(status) }
     public var awaitsPlanApproval: Bool { status == "awaiting_plan" }
     public var canMessage: Bool {

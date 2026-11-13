@@ -325,6 +325,90 @@ def test_a_fresh_follow_up_question_is_given_the_earlier_answer(repo_id):
     assert prompt.endswith('The user then asked:\nAnd who reads it?')
 
 
+def _fail(task_id: str, status: str) -> None:
+    # A run that died after clearing pending_input, as driver.run does.
+    tasks.update(task_id, pending_input=None)
+    get_db().execute('UPDATE agent_tasks SET status=? WHERE id=?', (status, task_id))
+    get_db().commit()
+
+
+@pytest.mark.parametrize('status', ['interrupted', 'error'])
+def test_continuing_a_follow_up_resends_the_follow_up(repo_id, status):
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver(FAKE_LOAD_SESSION='1')
+    d.run(t['id'])
+    worker.send_message(t['id'], 'And who reads it?')
+    _fail(t['id'], status)
+    task = worker.continue_task(t['id'])
+    assert task['pendingInput'] == 'And who reads it?'
+    assert d._prompt_for(task, fresh=False).startswith('And who reads it?')
+
+
+def test_continuing_a_first_question_asks_it_again(repo_id):
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    _fail(t['id'], 'interrupted')
+    task = worker.continue_task(t['id'])
+    assert task['pendingInput'] is None
+    d, _ = make_driver()
+    assert 'What does a.py set?' in d._prompt_for(task, fresh=True)
+
+
+def test_a_message_while_planning_from_an_answer_keeps_the_request(repo_id):
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver()
+    d.run(t['id'])
+    worker.plan_from_answer(t['id'], 'Make it 2')
+    _fail(t['id'], 'error')
+    worker.send_message(t['id'], 'try again')
+    prompt = d._prompt_for(tasks.get(t['id']), fresh=True)
+    assert 'Now the user wants a change:\nMake it 2\n\nThe user has since said:\ntry again' in prompt
+
+
+def test_a_question_whose_follow_up_failed_can_still_become_a_plan(repo_id):
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver()
+    d.run(t['id'])
+    worker.send_message(t['id'], 'And who reads it?')
+    _fail(t['id'], 'error')
+    tasks.update(t['id'], error='boom')
+    task = worker.plan_from_answer(t['id'], 'Make it 2')
+    assert task['status'] == 'queued' and task['phase'] == 'plan' and not task.get('error')
+    # A plan never became an answer, and nothing answered can't be planned from.
+    with pytest.raises(worker.ActionRefused):
+        worker.plan_from_answer(t['id'])
+    fresh = tasks.create(repo_id, 'Why?', mode='ask')
+    _fail(fresh['id'], 'error')
+    with pytest.raises(worker.ActionRefused):
+        worker.plan_from_answer(fresh['id'])
+
+
+def test_two_plan_requests_at_once_let_only_one_through(repo_id, monkeypatch):
+    import threading
+    t = tasks.create(repo_id, 'What does a.py set?', mode='ask')
+    d, _ = make_driver()
+    d.run(t['id'])
+    # Widen the gap between the state check and the write.
+    real = tasks.append_event
+    monkeypatch.setattr(tasks, 'append_event',
+                        lambda *a, **k: (threading.Event().wait(0.1), real(*a, **k))[1])
+    results = []
+
+    def tap(text):
+        try:
+            worker.plan_from_answer(t['id'], text)
+            results.append('ok')
+        except worker.ActionRefused:
+            results.append('refused')
+    threads = [threading.Thread(target=tap, args=(x,)) for x in ('Make it 2', 'Make it 3')]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert sorted(results) == ['ok', 'refused']
+    plans = [e for e in tasks.events(t['id']) if e['payload'].get('action') == 'plan']
+    assert len(plans) == 1
+
+
 def test_permission_choice():
     opts = [{'optionId': 'a', 'kind': 'allow_once'}, {'optionId': 'r', 'kind': 'reject_once'}]
     assert driver._choose(opts, True) == 'a'

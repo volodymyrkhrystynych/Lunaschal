@@ -121,6 +121,10 @@ final class CodeAgentTests: XCTestCase {
         XCTAssertEqual(CodeTaskStatus.pollInterval([answering]), 3)
 
         XCTAssertFalse(try task("awaiting_plan", "plan").canPlanFromAnswer)
+        // A failed follow-up still leaves the earlier answer to plan from.
+        XCTAssertTrue(try task("error", "ask").canPlanFromAnswer)
+        XCTAssertTrue(try task("interrupted", "ask").canPlanFromAnswer)
+        XCTAssertFalse(try task("error", "plan").canPlanFromAnswer)
         XCTAssertFalse(try task("awaiting_plan", "plan").isQuestion)
     }
 

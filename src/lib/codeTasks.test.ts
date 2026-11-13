@@ -100,6 +100,21 @@ describe('codeTasks', () => {
     expect(canPlanFromAnswer(task('awaiting_plan', { phase: 'plan' }))).toBe(
       false
     );
+    // A failed follow-up still leaves the earlier answer to plan from.
+    expect(
+      canPlanFromAnswer(task('error', { phase: 'ask', summary: 'In y.py.' }))
+    ).toBe(true);
+    expect(
+      canPlanFromAnswer(
+        task('interrupted', { phase: 'ask', summary: 'In y.py.' })
+      )
+    ).toBe(true);
+    expect(
+      canPlanFromAnswer(task('error', { phase: 'ask', summary: null }))
+    ).toBe(false);
+    expect(
+      canPlanFromAnswer(task('error', { phase: 'plan', summary: 'Done.' }))
+    ).toBe(false);
     // The same words as CodeAgentTests.testModesSayWhatHappensNext.
     expect(MODES.ask.start).toBe('Ask');
     expect(MODES.plan.start).toBe('Start planning');

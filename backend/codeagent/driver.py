@@ -417,8 +417,18 @@ class Driver:
             return (base + between + f'\n\nYou answered that already:\n{answer}'
                     f'\n\nThe user then asked:\n{pending}')
         if task['phase'] == 'plan' and _from_answer(task):
-            # pending is empty after an interrupted run; the thread keeps the request.
-            request = pending or (thread or {}).get('request') or PLAN_FROM_ANSWER_DEFAULT
+            # The thread keeps the request: pending is empty after an interrupted
+            # run, and is something said since (a retry, an answer to the agent's
+            # question) once the plan has begun — added to the request, never
+            # taking its place.
+            if not (thread or {}).get('planned'):
+                # No logged request to keep: whatever is pending is the request.
+                request = pending or PLAN_FROM_ANSWER_DEFAULT
+            else:
+                asked = thread['request']
+                request = asked or PLAN_FROM_ANSWER_DEFAULT
+                if pending and pending != asked:
+                    request += f'\n\nThe user has since said:\n{pending}'
             context = ANSWER_CONTEXT.format(
                 branch=mirror.branch_for(task['id']),
                 questions=_asked(thread, task), answer=task['summary']) if fresh else ''

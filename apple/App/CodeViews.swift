@@ -334,7 +334,7 @@ struct CodeTaskDetailView: View {
             Text("❯").font(Terminal.font).foregroundStyle(Terminal.prompt).padding(.bottom, 9)
             TextField(task.awaitsPlanApproval ? "What should change in the plan?"
                       : task.pending?.question != nil ? "Your answer"
-                      : task.canPlanFromAnswer ? "Ask a follow-up, or say what to change"
+                      : task.canPlanFromAnswer ? "Ask a follow-up, or type a change and press Plan"
                       : "Ask for a follow-up change",
                       text: $reply, axis: .vertical)
                 .font(Terminal.font)

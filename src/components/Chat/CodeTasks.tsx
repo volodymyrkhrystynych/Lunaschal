@@ -449,7 +449,7 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
                   : question
                     ? 'Your answer'
                     : canPlanFromAnswer(task)
-                      ? 'Ask a follow-up, or say what to change'
+                      ? 'Ask a follow-up, or type a change and press Plan'
                       : 'Ask for a follow-up change'
               }
               className="flex-1 rounded-lg bg-[var(--color-surface)] border border-white/10 px-2 py-1 text-sm"

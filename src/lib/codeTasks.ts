@@ -56,8 +56,13 @@ export const canMessage = (t: CodeTask) =>
     'interrupted',
     'awaiting_plan',
   ].includes(t.status);
-/** An answered question can become a change, planned in the same session. */
-export const canPlanFromAnswer = (t: CodeTask) => t.status === 'answered';
+/** A question with an answer on record can become a change, planned in the
+ * same session — also after a later follow-up failed or was interrupted, since
+ * the earlier answer is still there. Mirrors worker.can_plan_from_answer. */
+export const canPlanFromAnswer = (t: CodeTask) =>
+  t.phase === 'ask' &&
+  !!t.summary &&
+  ['answered', 'error', 'interrupted'].includes(t.status);
 
 /** What a new task is: a question to answer, or a change to plan and build. */
 export type CodeTaskMode = 'ask' | 'plan';
