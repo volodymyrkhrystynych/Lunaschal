@@ -16,9 +16,13 @@ class GitHubError(RuntimeError):
     pass
 
 
-def _headers(token: str) -> dict:
-    return {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28'}
+def headers(token: str | None) -> dict:
+    """GitHub REST headers; no Authorization when there is no token, which is
+    enough for reading a public repository (backend/github_prs/)."""
+    out = {'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}
+    if token:
+        out['Authorization'] = f'Bearer {token}'
+    return out
 
 
 def open_pull_request(token: str, owner: str, repo: str, *, head: str, base: str,
@@ -26,7 +30,7 @@ def open_pull_request(token: str, owner: str, repo: str, *, head: str, base: str
     """Open (or find the already-open) PR for `head` and return its URL."""
     url = f'{API}/repos/{owner}/{repo}/pulls'
     try:
-        resp = requests.post(url, headers=_headers(token), timeout=TIMEOUT, json={
+        resp = requests.post(url, headers=headers(token), timeout=TIMEOUT, json={
             'title': title, 'head': head, 'base': base, 'body': body, 'draft': False,
         })
     except requests.RequestException as e:
@@ -36,7 +40,7 @@ def open_pull_request(token: str, owner: str, repo: str, *, head: str, base: str
     if resp.status_code == 422:
         # Most often "a pull request already exists" — a second push of the
         # same task. Return that one rather than failing the push.
-        existing = requests.get(url, headers=_headers(token), timeout=TIMEOUT,
+        existing = requests.get(url, headers=headers(token), timeout=TIMEOUT,
                                 params={'head': f'{owner}:{head}', 'state': 'open'})
         if existing.ok and existing.json():
             return existing.json()[0]['html_url']

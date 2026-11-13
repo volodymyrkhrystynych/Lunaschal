@@ -823,6 +823,7 @@ def _accept_todo(db, data: dict, ctx: dict) -> dict:
     to-do or habit goes in linked to it (backend/day_plan.py)."""
     from backend import day_plan
     from backend.routes.tasks import _parse_due
+    from backend.ai.todo import todo_title_and_notes
     from backend.todo_recurrence import parse_priority
     title = (data.get('title') or '').strip()
     if not title:
@@ -838,6 +839,10 @@ def _accept_todo(db, data: dict, ctx: dict) -> dict:
     notes = data.get('notes')
     notes = (notes.strip() or None) if isinstance(notes, str) else None
     reason = data.get('reason') if isinstance(data.get('reason'), str) else None
+    # A sentence for a title is split, the whole of it kept in the notes; the
+    # link below is still matched against what the card said.
+    said = title
+    title, notes = todo_title_and_notes(said, notes)
 
     today = day_key_for()
     for row in db.execute('SELECT id, title FROM chat_todos WHERE day_key=?', (today,)):
@@ -850,7 +855,7 @@ def _accept_todo(db, data: dict, ctx: dict) -> dict:
     if source_type in day_plan.LIST_SOURCES and day_plan.source_open(db, source_type, source_id):
         source = (source_type, source_id)
     if source is None:
-        source = day_plan.resolve_list_source(db, today, title)
+        source = day_plan.resolve_list_source(db, today, said)
     if source is not None:
         # Already in the bar under another wording: that row is this card.
         same = db.execute('SELECT id FROM chat_todos WHERE day_key=? AND source_type=? AND source_id=?',

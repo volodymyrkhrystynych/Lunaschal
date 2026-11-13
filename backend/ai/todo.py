@@ -90,6 +90,11 @@ _TODO_SCHEMA = {
 }
 
 _SENTENCE_END = re.compile(r'(?<=[.!?])\s+|\n+')
+# A full stop after one of these does not end a sentence: "Call Dr. Smith".
+_ABBREVIATIONS = frozenset({
+    'dr', 'mr', 'mrs', 'ms', 'st', 'mt', 'jr', 'sr', 'prof', 'vs', 'etc', 'approx',
+    'no', 'ave', 'rd', 'apt', 'dept', 'e.g', 'i.e',
+})
 _CLAUSE_BREAK = re.compile(r'\s*(?:[,;:]|\s[—–-]\s)\s*')
 _TRAILING = ' \t.,;:!?-—–'
 
@@ -98,18 +103,34 @@ def _words(text: str) -> list[str]:
     return re.findall(r'\w+', text.lower())
 
 
+def _sentences(text: str) -> list[str]:
+    """*text* cut at sentence ends, except after an abbreviation or an initial."""
+    out, start = [], 0
+    for m in _SENTENCE_END.finditer(text):
+        before = text[start:m.start()]
+        if before.endswith('.') and '\n' not in m.group():
+            word = before.rsplit(None, 1)[-1].rstrip('.').lower() if before.split() else ''
+            if word in _ABBREVIATIONS or (len(word) == 1 and word.isalpha()):
+                continue
+        out.append(text[start:m.start()])
+        start = m.end()
+    out.append(text[start:])
+    return [s for s in out if s.strip()]
+
+
 def split_title_notes(text: str, limit: int = TITLE_TARGET) -> tuple[str, str | None]:
     """A title for *text* and the notes that keep the rest of it, without a model.
 
-    The title is the first sentence, else its first clause, else as many whole
-    words as fit, marked with an ellipsis so it reads as cut rather than as the
+    The title is the first sentence of two words or more ("ok." and "so." are
+    not a to-do), else its first clause, else as many whole words as fit, marked with an ellipsis so it reads as cut rather than as the
     whole thought. Whenever the title is not all of *text*, the notes are all
     of it, so nothing that was said is lost to the split.
     """
     whole = ' '.join((text or '').split())
     if not whole:
         return '', None
-    first = _SENTENCE_END.split((text or '').strip(), maxsplit=1)[0]
+    sentences = _sentences((text or '').strip())
+    first = next((s for s in sentences if len(s.split()) >= 2), sentences[0])
     first = ' '.join(first.split()).rstrip(_TRAILING)
     if len(first) > limit:
         clause = _CLAUSE_BREAK.split(first, maxsplit=1)[0].rstrip(_TRAILING)
@@ -158,14 +179,45 @@ def _priority(value) -> int | None:
     return min(5, max(1, value))
 
 
+# Words a good title and notes are expected to drop: filler, the "remind me
+# to" framing, and the dates and urgency the model moves into `due`/`priority`.
+_DROPPABLE = frozenset("""
+    a an the and or but so to of in on at by for with about from as into than then
+    i me my im i'm it its it's is are was be been do does did done this that these those
+    um uh er erm hmm like ok okay yeah well just really actually basically pretty
+    remind remember need needs gotta got have has want should must can could would will
+    thing things stuff some because also again still
+    today tomorrow tonight morning afternoon evening next week weekend later soon
+    monday tuesday wednesday thursday friday saturday sunday
+    urgent urgently important asap quickly please
+""".split())
+
+
+def _stem(word: str) -> str:
+    """Crude enough to match "moving" with "move" and "trips" with "trip"."""
+    for suffix in ('ing', 'ed', 'es', 's', 'e'):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[:-len(suffix)]
+    return word
+
+
 def _covers(transcript: str, title: str, notes: str | None) -> bool:
-    """Whether the title and notes plausibly hold what was said. Filler and a
-    date the model turned into `due` account for a few words, so this is a
-    floor against an empty `notes` beside a long transcript, not a diff."""
-    said = _words(transcript)
-    kept = set(_words(title)) | set(_words(notes or ''))
+    """Whether the title and notes plausibly hold what was said: a floor against
+    an empty `notes` beside a long transcript, not a diff. Only content words
+    count, compared by stem, so a model that tidied "moving my cleaning" into
+    "move my cleaning" and dropped the filler still covers it; up to a third of
+    them may go (a reworded phrase, a word the model judged noise)."""
+    said = [_stem(w) for w in _words(transcript) if w not in _DROPPABLE]
+    kept = {_stem(w) for w in _words(title) + _words(notes or '')}
     missing = [w for w in said if w not in kept]
-    return len(missing) <= 6
+    return len(missing) <= max(2, len(said) // 3)
+
+
+def _tidy_notes(notes: str) -> str | None:
+    """Spaces collapsed within each line, the lines themselves kept: notes the
+    model wrote as steps stay steps."""
+    lines = [' '.join(line.split()) for line in notes.splitlines()]
+    return re.sub(r'\n{3,}', '\n\n', '\n'.join(lines)).strip() or None
 
 
 def extract_todo_fields(transcript: str, today: str) -> dict | None:
@@ -192,7 +244,7 @@ def extract_todo_fields(transcript: str, today: str) -> dict | None:
         return None
     title = ' '.join(title.split()).rstrip(' .')
     notes = data.get('notes')
-    notes = ' '.join(notes.split()) or None if isinstance(notes, str) else None
+    notes = _tidy_notes(notes) if isinstance(notes, str) else None
 
     if len(title) > TITLE_LIMIT:
         # The model wrote a sentence. Split it rather than cut it, and keep

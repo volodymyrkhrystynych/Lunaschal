@@ -53,6 +53,7 @@ from backend.ai.briefing import (
     MAX_NEW_TODOS,
 )
 from backend.ai.llm import EmptyCompletion
+from backend.ai.todo import todo_title_and_notes
 from backend.briefing_events import stage_events
 from backend.coach import review as day_review
 from backend.goals import rollover as goal_rollover
@@ -118,7 +119,10 @@ def _seed_chat_todos(db, proposed: list, today: str, now: int, *,
             break
         if not isinstance(item, dict):
             continue
-        title = (item.get('title') or '').strip()
+        # The bar row's title is a label: a sentence is split and kept in the
+        # notes, and the link is matched against the whole of it.
+        said = (item.get('title') or '').strip()
+        title, notes = todo_title_and_notes(said, None)
         norm = day_plan.normalize_title(title)
         if not title or norm in seen or norm in taken:
             continue
@@ -127,7 +131,7 @@ def _seed_chat_todos(db, proposed: list, today: str, now: int, *,
         if item.get('sourceType') in day_plan.LIST_SOURCES and item.get('sourceId'):
             source = (item['sourceType'], item['sourceId'])
         else:
-            source = day_plan.resolve_list_source(db, today, title, item.get('linkedTitle'), sources)
+            source = day_plan.resolve_list_source(db, today, said, item.get('linkedTitle'), sources)
         if source and source in linked:
             continue
         basis = item.get('basis')
@@ -150,7 +154,7 @@ def _seed_chat_todos(db, proposed: list, today: str, now: int, *,
         if err:
             due = None
         reason = item.get('reason') if isinstance(item.get('reason'), str) else None
-        day_plan.insert_bar_row(db, today, title, now, due=due, priority=priority,
+        day_plan.insert_bar_row(db, today, title, now, notes=notes, due=due, priority=priority,
                                 source=source, reason=reason)
         seen.add(norm)
         if source and source[0] in day_plan.LIST_SOURCES:

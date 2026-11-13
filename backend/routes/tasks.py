@@ -593,11 +593,13 @@ def add_to_bar(db, today: str, items: list, now: int) -> list[dict]:
     for item in items:
         if not isinstance(item, dict):
             continue
-        # A title too long to be a label is split, the sentence moved into notes.
-        title, notes = todo_title_and_notes(item.get('title') or '', item.get('notes'))
+        # A title too long to be a label is split, the sentence moved into notes;
+        # the link is still matched against the whole of what was written.
+        said = item.get('title') or ''
+        title, notes = todo_title_and_notes(said, item.get('notes'))
         if not title or day_plan.normalize_title(title) in taken:
             continue
-        source = day_plan.resolve_list_source(db, today, title, sources=sources)
+        source = day_plan.resolve_list_source(db, today, said.strip(), sources=sources)
         if source and source in linked:
             continue
         row_id = day_plan.insert_bar_row(db, today, title, now, notes=notes, source=source)
@@ -825,13 +827,16 @@ def transcribe_todo():
     return jsonify({'id': todo_id}), 201
 
 
-def _todo_from_speech(db, text: str, todo_id: str | None) -> tuple[str | None, str | None]:
+def _todo_from_speech(db, text: str, todo_id: str | None,
+                      said_at: int | None = None) -> tuple[str | None, str | None]:
     """Insert the to-do a spoken sentence describes; the caller commits.
 
     Shared by the synchronous route above and the recording job below, so a
     to-do said into the phone comes out the same whichever way it arrived.
+    *said_at* is when the words were recorded: "tomorrow" means the day after
+    that, not the day after a clip that sat on the Watch overnight was uploaded.
     """
-    today = day_key_for()
+    today = day_key_for(said_at)
     paused = False
     try:
         fields = extract_todo_fields(text, today)
@@ -1066,7 +1071,7 @@ def _transcribe_recording_bg(recording_id: str, *, now: bool = False) -> None:
         db.execute('UPDATE todo_recordings SET transcript=? WHERE id=?', (text, recording_id))
         db.commit()
 
-    _, err = _todo_from_speech(db, text, recording_id)
+    _, err = _todo_from_speech(db, text, recording_id, row['captured_at'] or row['created_at'])
     if err:
         db.rollback()
         _finish_recording(db, recording_id, 'error', err)
@@ -1090,7 +1095,7 @@ def todo_from_entry(entry_id: str) -> None:
     what makes it idempotent.
     """
     db = get_db()
-    row = db.execute('SELECT todo_id, raw_content, content FROM journal_entries WHERE id=?',
+    row = db.execute('SELECT todo_id, raw_content, content, created_at FROM journal_entries WHERE id=?',
                      (entry_id,)).fetchone()
     if row is None or not row['todo_id']:
         return
@@ -1099,7 +1104,8 @@ def todo_from_entry(entry_id: str) -> None:
     text = (row['raw_content'] or row['content'] or '').strip()
     if not text:
         return
-    _, err = _todo_from_speech(db, text, row['todo_id'])
+    # An entry's created_at is the clip's capture time (see the recording route).
+    _, err = _todo_from_speech(db, text, row['todo_id'], row['created_at'])
     if err:
         db.rollback()
         logger.warning('Making a to-do from journal entry %s failed: %s', entry_id, err)

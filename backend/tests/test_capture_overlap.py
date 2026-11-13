@@ -177,3 +177,13 @@ def test_no_capture_timestamp_never_uses_upload_time_for_matching(client):
     assert response.status_code == 201
     assert response.json['attachment']['durationSeconds'] is None
     assert len(attachments(photo['id'])) == 1
+
+
+def test_a_todo_clip_takes_in_no_screenshots(client):
+    """A to-do clip is kept out of merging both ways, like an idea clip. The
+    screenshot side holds because the clip never gets a `duration_seconds`
+    (only `_finish_recording_overlap` writes it, and to-do clips skip it)."""
+    response, fields = record(client, todoId=str(ULID()))
+    assert response.status_code == 201
+    assert shot(client, 3)['id'] != fields['id']
+    assert len(attachments(fields['id'])) == 1

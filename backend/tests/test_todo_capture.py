@@ -58,6 +58,18 @@ def test_empty_text():
     assert todo_ai.split_title_notes('   ') == ('', None)
 
 
+def test_an_abbreviation_does_not_end_the_title():
+    title, _ = todo_ai.split_title_notes('Call Dr. Smith. Ask about the blood test results.')
+    assert title == 'Call Dr. Smith'
+
+
+def test_a_one_word_opening_sentence_is_not_the_title():
+    said = 'ok. so buy milk and eggs on the way home'
+    title, notes = todo_ai.split_title_notes(said)
+    assert title == 'so buy milk and eggs on the way home'
+    assert notes == said
+
+
 # --- extract_todo_fields post-processing -------------------------------------------
 
 def _fields(model_answer, said='anything'):
@@ -87,6 +99,25 @@ def test_notes_left_empty_beside_a_long_transcript_keep_the_transcript():
                  'priority': None, 'due': None}, said)
     assert f['title'] == 'Buy a present for Anna'
     assert f['notes'] == said
+
+
+@pytest.mark.parametrize('said, title, notes', [
+    # The examples the prompt itself shows the model.
+    ('um remind me to call the dentist tomorrow about moving my cleaning to next week '
+     'because I have the trip', 'Call the dentist', 'Move my cleaning to next week, because of the trip.'),
+    ("I need to sort out the VPN port forwarding thing the port changed again and all the "
+     "downloads are stuck it's pretty urgent", 'Fix the VPN port forwarding',
+     'The port changed again and all the downloads are stuck.'),
+])
+def test_a_good_answer_with_the_filler_dropped_does_not_get_the_transcript(said, title, notes):
+    f = _fields({'title': title, 'notes': notes, 'priority': None, 'due': None}, said)
+    assert f['notes'] == notes
+
+
+def test_notes_keep_their_lines():
+    f = _fields({'title': 'Reinstall the laptop', 'notes': 'Steps:\n1.  Back up\n\n\n2. Reinstall ',
+                 'priority': None, 'due': None}, 'reinstall the laptop back up first')
+    assert f['notes'] == 'Steps:\n1. Back up\n\n2. Reinstall'
 
 
 def test_a_paused_gpu_is_raised_not_swallowed():
@@ -123,6 +154,36 @@ def test_add_todos_splits_rather_than_cuts(client):
     row = connection.get_db().execute('SELECT title, notes FROM chat_todos').fetchone()
     assert len(row['title'].rstrip('…')) <= todo_ai.TITLE_TARGET
     assert row['notes'] == long_title
+
+
+def _long_title():
+    return ('Book the car in for its winter tyres before the first snow, the '
+            'garage on Dundas said Tuesdays are quietest')
+
+
+def test_the_briefing_plan_splits_a_sentence_title(client):
+    import time
+    from backend import briefing_job
+    from backend.day_boundary import day_key_for
+
+    db = connection.get_db()
+    briefing_job._seed_chat_todos(db, [{'title': _long_title()}], day_key_for(), int(time.time()))
+    row = db.execute('SELECT title, notes FROM chat_todos').fetchone()
+    assert len(row['title'].rstrip('…')) <= todo_ai.TITLE_TARGET
+    assert row['notes'] == _long_title()
+
+
+def test_an_accepted_card_splits_a_sentence_title(client):
+    from backend.routes.chat import _accept_todo
+
+    db = connection.get_db()
+    _accept_todo(db, {'title': _long_title(), 'notes': 'Ask for the alignment too.'}, {})
+    row = db.execute('SELECT title, notes FROM chat_todos').fetchone()
+    assert len(row['title'].rstrip('…')) <= todo_ai.TITLE_TARGET
+    assert row['notes'] == f'{_long_title()}\n\nAsk for the alignment too.'
+    # Accepting it again finds the row it made rather than adding a second.
+    _accept_todo(db, {'title': _long_title()}, {})
+    assert db.execute('SELECT COUNT(*) FROM chat_todos').fetchone()[0] == 1
 
 
 # --- a pause, then the refine pass ---------------------------------------------------
@@ -222,6 +283,19 @@ def test_a_watch_todo_is_a_journal_entry_and_a_todo(client, monkeypatch, run_job
     todo = next(t for t in client.get('/api/tasks/todos').get_json() if t['id'] == todo_id)
     assert (todo['title'], todo['notes']) == (fields['title'], fields['notes'])
     assert todo['list'] == 'todo'
+
+
+def test_a_late_watch_todo_resolves_dates_against_when_it_was_said(
+        client, monkeypatch, run_jobs_sync, _journal_media):
+    _transcribes(monkeypatch, 'call the dentist tomorrow')
+    form = {
+        'file': (io.BytesIO(b'\x00' * 2048), 'recording.m4a', 'audio/mp4'),
+        'id': str(ULID()), 'attachmentId': str(ULID()), 'todoId': str(ULID()),
+        'transcribe': 'true', 'capturedAt': '2026-03-02T12:00:00-05:00',
+    }
+    with patch('backend.routes.tasks.extract_todo_fields', return_value=None) as extract:
+        client.post('/api/journal/recordings', data=form, content_type='multipart/form-data')
+    assert extract.call_args.args[1] == '2026-03-02'
 
 
 def test_a_replayed_watch_todo_makes_one_todo(client, monkeypatch, run_jobs_sync, _journal_media):
