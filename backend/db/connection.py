@@ -421,7 +421,7 @@ def init_db() -> None:
     _ensure_inference_pause_settings(db)
     _ensure_mobile_sync(db)
     _ensure_code_agent_settings(db)
-    _ensure_agent_task_ask(db)
+    _ensure_agent_task_checks(db)
     _ensure_pr_journal_settings(db)
     _ensure_chat_todo_source(db)
     # No _reset_stale_torrents() belongs below: the torrent client runs in its
@@ -1383,16 +1383,18 @@ def _ensure_code_agent_settings(db: sqlite3.Connection) -> None:
     db.commit()
 
 
-def _ensure_agent_task_ask(db: sqlite3.Connection) -> None:
-    """Code tasks grew a question mode: phase 'ask' and the statuses
-    'answering' / 'answered'. SQLite cannot widen a CHECK in place, so an older
+def _ensure_agent_task_checks(db: sqlite3.Connection) -> None:
+    """Code tasks grew a question mode (phase 'ask', the statuses 'answering' /
+    'answered'), then a way to finish one (phase 'finish', status 'finished').
+    Keyed on the newest value, so a table from before either is rebuilt once.
+    SQLite cannot widen a CHECK in place, so an older
     `agent_tasks` is rebuilt from schema.sql's own statement, as goals are.
     foreign_keys is off for the swap, outside the transaction, because the
     events and approvals cascade from this table: with it on, the DROP would
     take every task's log with it."""
     row = db.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_tasks'").fetchone()
-    if not row or "'answered'" in row[0]:
+    if not row or "'finished'" in row[0]:
         return
     schema = (Path(__file__).parent / 'schema.sql').read_text()
     ddl = re.search(r'CREATE TABLE IF NOT EXISTS agent_tasks \(.*?\n\);', schema, re.S).group(0)

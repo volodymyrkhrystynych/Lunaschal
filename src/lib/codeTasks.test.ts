@@ -6,6 +6,9 @@ import {
   canMessage,
   canPlanFromAnswer,
   canPush,
+  canDiscard,
+  canFinish,
+  finishExplanation,
   isActive,
   MODES,
   needsYou,
@@ -71,6 +74,7 @@ describe('codeTasks', () => {
         'cancelled',
         'pushed',
         'discarded',
+        'finished',
       ].map(statusLabel)
     ).toEqual([
       'Queued',
@@ -87,7 +91,23 @@ describe('codeTasks', () => {
       'Cancelled',
       'Pushed',
       'Discarded',
+      'Finished',
     ]);
+  });
+
+  it('finishes only a task that stopped short, and a finished one is closed', () => {
+    expect(canFinish(task('interrupted'))).toBe(true);
+    expect(canFinish(task('error', { phase: 'ask' }))).toBe(true);
+    for (const s of ['done', 'answered', 'needs_input', 'running', 'queued'])
+      expect(canFinish(task(s))).toBe(false);
+    const finished = task('finished', { phase: 'ask', summary: 'In y.py.' });
+    expect(needsYou(finished)).toBe(false);
+    expect(canMessage(finished)).toBe(false);
+    expect(canDiscard(finished)).toBe(false);
+    expect(finishExplanation(task('error'))).toMatch(/committed and tested/);
+    expect(finishExplanation(task('error', { phase: 'ask' }))).toMatch(
+      /^Close this task/
+    );
   });
 
   it('treats an answered question as waiting on you, and plannable', () => {

@@ -588,3 +588,57 @@ def test_stderr_stays_in_the_batch_that_wrote_it(repo_id):
     head = out['testOutput'].partition('── end of the output ──')[0]
     assert 'batch 1/2' in head and 'Fatal Python error' in head
     assert 'batch 2/2' not in head
+
+
+def _stopped_build(repo_id, status='interrupted'):
+    """A build the agent left half done: a planned task whose clone has an
+    uncommitted edit in it, parked the way a crash or a restart leaves it."""
+    t = tasks.create(repo_id, 'Change a.py')
+    d, rt = make_driver()
+    d.run(t['id'])
+    (mirror.work_dir(t['id']) / 'a.py').write_text('x = 1\n# built halfway\n')
+    tasks.update(t['id'], phase='build', summary='Working on it.')
+    get_db().execute('UPDATE agent_tasks SET status=? WHERE id=?', (status, t['id']))
+    get_db().commit()
+    return t, d, rt
+
+
+@pytest.mark.parametrize('status', ['interrupted', 'error'])
+def test_finishing_a_stopped_build_exports_and_tests_what_it_got_done(repo_id, status):
+    t, d, rt = _stopped_build(repo_id, status)
+    queued = worker.finish_task(t['id'])
+    assert (queued['status'], queued['phase']) == ('queued', 'finish')
+
+    out = d.run(t['id'])
+
+    # No agent was started: the run went straight to export and tests.
+    assert not any(c == driver.HARNESS_COMMANDS['pi'] for c in rt.commands)
+    assert out['status'] == 'done' and out['phase'] == 'build'
+    assert out['summary'] == 'Working on it.'
+    assert [f['path'] for f in out['diffStat']] == ['a.py']
+    assert out['testExit'] == 0 and 'tests ran' in out['testOutput']
+    assert '+# built halfway' in mirror.diff(t['id'], out['baseSha'])['patch']
+    assert 'test' in kinds(t['id'])
+
+
+def test_finishing_a_build_that_changed_nothing_closes_it(repo_id):
+    t, d, rt = _stopped_build(repo_id)
+    subprocess.run(['git', 'checkout', '--', '.'], cwd=mirror.work_dir(t['id']), env=ENV)
+    worker.finish_task(t['id'])
+    out = d.run(t['id'])
+    assert out['status'] == 'finished' and out['phase'] == 'build'
+    assert out['finishedAt'] and out['diffStat'] is None
+
+
+def test_a_finish_that_fails_leaves_an_ordinary_failed_build(repo_id):
+    t, d, rt = _stopped_build(repo_id)
+    worker.finish_task(t['id'])
+
+    def broken(task_id, command, timeout=120, max_bytes=None):
+        raise RuntimeError('docker went away')
+    rt.run = broken
+    out = d.run(t['id'])
+    assert out['status'] == 'error' and 'docker went away' in out['error']
+    # A build again, so Continue hands it back to the agent.
+    assert out['phase'] == 'build'
+    assert worker.continue_task(t['id'])['pendingInput'] == worker.CONTINUE_TEXT

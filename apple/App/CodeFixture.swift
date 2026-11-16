@@ -4,7 +4,7 @@ import LunaschalCore
 /// Demo data for the Code screens, since UI tests run with no server:
 /// launched with `-codeFixture`, the Code page shows an answered question, a
 /// task with a plan to approve, one with a question, a finished one with a
-/// diff and a pushed one.
+/// diff, a question whose follow-up failed and a pushed one.
 /// Actions change the canned tasks in memory; nothing is fetched or saved.
 struct CodeFixture {
     static let argument = "-codeFixture"
@@ -22,6 +22,7 @@ struct CodeFixture {
     static let finished = "01K9CODEFIXTURETASK0000003"
     static let pushed = "01K9CODEFIXTURETASK0000004"
     static let answered = "01K9CODEFIXTURETASK0000005"
+    static let failed = "01K9CODEFIXTURETASK0000006"
 
     let repos = [CodeRepo(id: "01K9CODEFIXTUREREPO0000001", slug: "lunaschal", name: "Lunaschal",
                           cloneState: "ready", isDefault: 1)]
@@ -48,6 +49,8 @@ struct CodeFixture {
              diff: [CodeFileStat(path: "backend/lifestyle/activity.py", added: 2, removed: 1),
                     CodeFileStat(path: "backend/tests/test_lifestyle_streak.py", added: 3, removed: 0)],
              head: "5555555", testExit: 0, testOutput: "1803 passed in 412.11s"),
+        task(failed, "Which tables does the briefing read?", status: "error", phase: "ask",
+             summary: "`journal_entries`, `calendar_events` and `wiki_articles`."),
         task(pushed, "Document the backup states", status: "pushed", phase: "build",
              head: "7777777", testExit: 0, prURL: "https://github.com/example/demo-app/pull/12"),
     ]
@@ -123,6 +126,9 @@ struct CodeFixture {
         case "approve": status = "queued"; phase = "build"
         case "make-plan": status = "queued"; phase = "plan"
         case "revise", "message", "continue": status = "queued"
+        // A build is queued to be exported and tested; anything else closes.
+        case "finish" where t.phase == "build": status = "queued"; phase = "finish"
+        case "finish": status = "finished"
         case "cancel": status = "cancelled"
         case "discard": status = "discarded"
         case "push": status = "pushed"

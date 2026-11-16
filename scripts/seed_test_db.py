@@ -2643,6 +2643,20 @@ def seed_code_agent(db):
          head_sha='7' * 40, finished_at=ts(5), test_exit=0,
          pr_url='https://github.com/example/demo-app/pull/12')
 
+    # A question whose follow-up failed, closed with Finish: the earlier answer
+    # stays readable, and nothing more can be said to it.
+    finished = task('finished', 'Which tables does the briefing read?',
+                    'Which tables does the briefing read?', days=3, phase='ask',
+                    started_at=ts(3, 2), finished_at=ts(3),
+                    summary='`journal_entries`, `calendar_events`, `server_oddities` and '
+                            '`wiki_articles` — see `backend/briefing.py`.')
+    events(finished, ('user', {'text': 'Which tables does the briefing read?'}),
+           ('status', {'status': 'answered'}),
+           ('user', {'text': 'And in what order?', 'action': 'message'}),
+           ('status', {'status': 'error', 'error': 'the model went away'}),
+           ('user', {'text': 'Finish.', 'action': 'finish'}),
+           ('status', {'status': 'finished'}))
+
 
 
 def seed_infra(db):

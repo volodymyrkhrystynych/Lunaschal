@@ -1238,6 +1238,38 @@ final class OfflineCaptureTests: XCTestCase {
             .firstMatch.waitForExistence(timeout: 5))
     }
 
+    // A question whose follow-up failed is finished from the phone: it keeps
+    // its transcript, can no longer be replied to, and leaves "Needs you".
+    func testCodeTaskFinishClosesAFailedQuestion() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-codeFixture")
+        app.launch()
+        selectTab(app, "Chat")
+        let code = app.segmentedControls.buttons.element(boundBy: 1)
+        XCTAssertTrue(code.waitForExistence(timeout: 5))
+        code.tap()
+
+        let failed = app.staticTexts["Which tables does the briefing read?"]
+        XCTAssertTrue(failed.waitForExistence(timeout: 5))
+        failed.tap()
+        let finish = app.buttons["code-finish"]
+        XCTAssertTrue(finish.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["code-reply"].exists || app.textViews["code-reply"].exists)
+        finish.tap()
+        let confirm = app.buttons["Finish"].firstMatch
+        XCTAssertTrue(app.staticTexts["Finish this task?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Close this task'"))
+            .firstMatch.exists)
+        confirm.tap()
+
+        XCTAssertTrue(app.staticTexts["Finished"].waitForExistence(timeout: 5))
+        XCTAssertFalse(finish.exists)
+        XCTAssertFalse(app.textFields["code-reply"].exists || app.textViews["code-reply"].exists)
+        // The answer it had is still there to read.
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'wiki_articles'"))
+            .firstMatch.exists)
+    }
+
     private func openWritingChapter(_ app: XCUIApplication, _ title: String = "The Wreck") -> XCUIElement {
         openMore(app, "Writing")
         let project = app.buttons["writing-project"].firstMatch

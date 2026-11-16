@@ -76,7 +76,7 @@ def run_next() -> bool:
         _current.update(task_id=task['id'], cancel=cancel)
     try:
         result = _driver.run(task['id'], cancel)
-        if result and result.get('status') == 'cancelled':
+        if result and result.get('status') in ('cancelled', 'finished'):
             cleanup(task['id'])
     finally:
         with _lock:
@@ -279,6 +279,36 @@ def continue_task(task_id: str) -> dict:
     tasks.append_event(task_id, 'user', {'text': 'Continue.', 'action': 'continue'})
     pending = task.get('pendingInput') or _resume_text(task)
     return _requeue(task_id, pending_input=pending, error=None)
+
+
+def can_finish(task: dict) -> bool:
+    """An interrupted or failed task, wrapped up without asking the agent for
+    another turn."""
+    return task['status'] in ('interrupted', 'error')
+
+
+def _salvageable(task: dict) -> bool:
+    """A build whose clone is still there may hold work worth reviewing."""
+    return (task['phase'] == 'build' and bool(task.get('baseSha'))
+            and mirror.work_dir(task['id']).exists())
+
+
+@_serialized
+def finish_task(task_id: str) -> dict:
+    """Wrap up a task that stopped short. A build with its clone still there
+    is queued for the driver to export and test what the agent got done, and
+    comes back 'done' — pushable — or 'finished' if it changed nothing. Anything
+    else (a question, a plan, a build whose clone is gone) is closed now as
+    'finished': its transcript and its last answer stay readable, and its
+    container and clone are removed, as a discard's would be."""
+    task = tasks.get(task_id)
+    if not can_finish(task) or current_task() == task_id:
+        raise ActionRefused('Only an interrupted or failed task can be finished')
+    tasks.append_event(task_id, 'user', {'text': 'Finish.', 'action': 'finish'})
+    if _salvageable(task):
+        return _requeue(task_id, phase='finish', pending_input=None, error=None)
+    cleanup(task_id)
+    return tasks.set_status(task_id, 'finished', pending_input=None)
 
 
 def cancel_task(task_id: str) -> dict:

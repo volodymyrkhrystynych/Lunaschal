@@ -14,7 +14,12 @@ export const ACTIVE_STATES = new Set([
   'running',
   'testing',
 ]);
-export const CLOSED_STATES = new Set(['cancelled', 'pushed', 'discarded']);
+export const CLOSED_STATES = new Set([
+  'cancelled',
+  'pushed',
+  'discarded',
+  'finished',
+]);
 const NEEDS_YOU = new Set([
   'answered',
   'awaiting_plan',
@@ -39,6 +44,7 @@ const LABELS: Record<string, string> = {
   cancelled: 'Cancelled',
   pushed: 'Pushed',
   discarded: 'Discarded',
+  finished: 'Finished',
 };
 
 export function statusLabel(status: string): string {
@@ -89,6 +95,16 @@ export const canPush = (t: CodeTask) =>
   (t.status === 'done' || t.status === 'needs_input') && !!t.headSha;
 export const canContinue = (t: CodeTask) =>
   t.status === 'interrupted' || t.status === 'error';
+/** Wrap up a task that stopped short, without another agent turn: a build is
+ * exported and tested, anything else is closed. Mirrors worker.can_finish. */
+export const canFinish = (t: CodeTask) =>
+  t.status === 'interrupted' || t.status === 'error';
+/** What Finish does, said before it is done. Same words as CodeAgent.swift. */
+export function finishExplanation(t: CodeTask): string {
+  return t.phase === 'build'
+    ? 'Finish without the agent: whatever it changed is committed and tested, ready to review and push. If it changed nothing, the task is closed.'
+    : 'Close this task. Its transcript stays readable; its workspace is removed.';
+}
 export const canDiscard = (t: CodeTask) =>
   !isActive(t) && !CLOSED_STATES.has(t.status);
 

@@ -82,6 +82,17 @@ public struct CodeTask: Codable, Equatable, Identifiable, Sendable {
         ["answered", "needs_input", "done", "error", "interrupted", "awaiting_plan"].contains(status)
     }
     public var canContinue: Bool { status == "interrupted" || status == "error" }
+    /// Wrap up a task that stopped short without another agent turn: a build
+    /// has what it changed committed and tested, anything else is closed.
+    /// Mirrors worker.can_finish.
+    public var canFinish: Bool { status == "interrupted" || status == "error" }
+    /// What Finish does, said before it is done. Same words as
+    /// src/lib/codeTasks.ts's `finishExplanation`.
+    public var finishExplanation: String {
+        phase == "build"
+            ? "Finish without the agent: whatever it changed is committed and tested, ready to review and push. If it changed nothing, the task is closed."
+            : "Close this task. Its transcript stays readable; its workspace is removed."
+    }
     public var canPush: Bool { (status == "done" || status == "needs_input") && headSha != nil }
     public var canCancel: Bool { isActive }
     public var canDiscard: Bool { !isActive && !isClosed }
@@ -101,7 +112,7 @@ public enum CodeTaskStatus {
     /// States that wait on the user: the "Needs you" section.
     public static let needsYou: Set<String> = ["answered", "awaiting_plan", "needs_input", "done", "error",
                                                "interrupted"]
-    public static let closed: Set<String> = ["cancelled", "pushed", "discarded"]
+    public static let closed: Set<String> = ["cancelled", "pushed", "discarded", "finished"]
 
     /// The same words as src/lib/codeTasks.ts — CodeAgentTests pins them.
     public static func label(_ status: String) -> String {
@@ -120,6 +131,7 @@ public enum CodeTaskStatus {
         case "cancelled": return "Cancelled"
         case "pushed": return "Pushed"
         case "discarded": return "Discarded"
+        case "finished": return "Finished"
         default: return status.capitalized
         }
     }

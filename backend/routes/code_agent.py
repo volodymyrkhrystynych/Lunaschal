@@ -108,6 +108,12 @@ def continue_task(task_id):
     return _action(worker.continue_task, task_id)
 
 
+@bp.post('/tasks/<task_id>/finish')
+def finish_task(task_id):
+    """Wrap up an interrupted or failed task without another agent turn."""
+    return _action(worker.finish_task, task_id)
+
+
 @bp.post('/tasks/<task_id>/cancel')
 def cancel_task(task_id):
     return _action(worker.cancel_task, task_id)
