@@ -1481,10 +1481,15 @@ final class OfflineCaptureTests: XCTestCase {
         let start = app.buttons["code-new-start"]
         XCTAssertEqual(start.label, "Ask")
         start.tap()
-        XCTAssertTrue(app.staticTexts["Who reads the backup path?"].waitForExistence(timeout: 5))
+        // The new task is under "Working", below everything that needs you,
+        // and a List only draws the rows on screen.
+        let asked = app.staticTexts["Who reads the backup path?"]
+        for _ in 0..<4 where !asked.waitForExistence(timeout: 2) { app.swipeUp() }
+        XCTAssertTrue(asked.exists)
 
         let answered = app.staticTexts["Where do Code-tab notifications come from?"]
-        XCTAssertTrue(answered.waitForExistence(timeout: 5))
+        for _ in 0..<4 where !answered.waitForExistence(timeout: 2) { app.swipeDown() }
+        XCTAssertTrue(answered.exists)
         answered.tap()
         let plan = app.buttons["code-plan-from-answer"]
         XCTAssertTrue(plan.waitForExistence(timeout: 5))
