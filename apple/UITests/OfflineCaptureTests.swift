@@ -782,6 +782,56 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Body weight"].exists)
     }
 
+    /// Entry sits in the middle of Capture's switch and a sideways swipe
+    /// walks the pages, stopping at the ends.
+    func testCaptureOpensOnTheMiddlePageAndSwipesBetweenPages() {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        let pages = app.segmentedControls.firstMatch
+        let daily = pages.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Daily'")).firstMatch
+        let entry = pages.buttons["Entry"], workout = pages.buttons["Workout"]
+        XCTAssertLessThan(daily.frame.midX, entry.frame.midX)
+        XCTAssertLessThan(entry.frame.midX, workout.frame.midX)
+        XCTAssertTrue(entry.isSelected)
+        app.swipeLeft()
+        XCTAssertTrue(app.textFields["Exercise entry"].waitForExistence(timeout: 5))
+        XCTAssertTrue(workout.isSelected)
+        app.swipeLeft()
+        XCTAssertTrue(workout.isSelected, "the last page stays put")
+        app.swipeRight()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
+        app.swipeRight()
+        XCTAssertTrue(app.staticTexts["Weather"].waitForExistence(timeout: 5))
+        XCTAssertTrue(daily.isSelected)
+    }
+
+    /// Journal sits between Calendar and Context. On the calendar a swipe is
+    /// still the day's, so the switch is the way back.
+    func testJournalOpensOnTheMiddlePageAndTheCalendarKeepsItsDaySwipe() {
+        let app = XCUIApplication()
+        app.launch()
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        let calendar = pages.buttons["Calendar"], journal = pages.buttons["Journal"]
+        let context = pages.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Context'")).firstMatch
+        XCTAssertLessThan(calendar.frame.midX, journal.frame.midX)
+        XCTAssertLessThan(journal.frame.midX, context.frame.midX)
+        XCTAssertTrue(journal.isSelected)
+        app.swipeLeft()
+        XCTAssertTrue(context.waitForSelection(timeout: 5))
+        app.swipeRight()
+        XCTAssertTrue(journal.waitForSelection(timeout: 5))
+        app.swipeRight()
+        XCTAssertTrue(app.buttons["calendar-day"].waitForExistence(timeout: 5))
+        XCTAssertTrue(calendar.isSelected)
+        XCTAssertEqual(app.buttons["calendar-day"].label, "Today")
+        app.swipeLeft()
+        XCTAssertTrue(calendar.isSelected, "the calendar's swipe turns the day, not the page")
+        XCTAssertNotEqual(app.buttons["calendar-day"].label, "Today")
+    }
+
     func testJournalHasSyncOnTheLeftAndSwitchesToTheCalendar() {
         let app = XCUIApplication()
         app.launch()
@@ -3394,5 +3444,14 @@ final class OfflineCaptureTests: XCTestCase {
         shot.name = name
         shot.lifetime = .keepAlways
         add(shot)
+    }
+}
+
+private extension XCUIElement {
+    /// A segment selected by a swipe updates a beat after the gesture ends.
+    func waitForSelection(timeout: TimeInterval) -> Bool {
+        let selected = NSPredicate(format: "isSelected == true")
+        return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: selected, object: self)],
+                              timeout: timeout) == .completed
     }
 }
