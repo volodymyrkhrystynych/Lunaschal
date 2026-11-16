@@ -30,11 +30,42 @@ def selected(now=NOW):
     return [r['id'] for r in context_prompts.prepare(get_db(), now=now)]
 
 
-def test_all_yesterday_entries_even_above_three_and_no_today_or_older():
+def test_all_yesterday_entries_even_above_three_and_no_older():
     yesterday = [entry(YESTERDAY + i) for i in range(5)]
-    entry(NOW)
     entry(YESTERDAY - 86400)
     assert selected() == yesterday[::-1]
+
+
+def test_today_comes_first_uncapped_and_takes_no_backlog_slot():
+    today = [entry(NOW - i * 60) for i in range(5)]
+    old = [entry(YESTERDAY - i * 86400) for i in range(1, 5)]
+    assert selected() == [*today, *old[:3]]
+    # Asking again later in the day picks up a new capture and keeps the slots.
+    later = entry(NOW + 60)
+    assert selected(NOW + 120) == [later, *today, *old[:3]]
+
+
+def test_today_answered_or_dismissed_drops_out(client, queued_jobs):
+    answered, dismissed, waiting = entry(NOW - 3), entry(NOW - 2), entry(NOW - 1)
+    assert client.post(f'/api/journal/{answered}/context-prompt', json={'action': 'save', 'content': 'Lunch'}).status_code == 200
+    assert client.post(f'/api/journal/{dismissed}/context-prompt', json={'action': 'dismiss'}).status_code == 200
+    assert selected() == [waiting]
+
+
+def test_unanswered_today_rolls_into_tomorrows_backlog():
+    old = [entry(YESTERDAY - i * 86400) for i in range(1, 4)]
+    today = [entry(NOW - i) for i in range(4)]
+    assert selected() == [*today, *old]
+    # Tomorrow they are yesterday's, which joins uncapped and fills the slots.
+    assert selected(NOW + 86400) == today
+
+
+def test_today_waits_for_a_running_transcription():
+    entry(NOW, kinds=('audio',), status='running')
+    spoken = entry(NOW, kinds=('audio',), transcript='Talking about lunch', status='done')
+    silent = entry(NOW + 1, kinds=('audio',), transcript='', status='done')
+    assert selected() == [silent]
+    assert spoken not in selected()
 
 
 def test_top_up_newest_first_and_do_not_refill_completed_slots(client, queued_jobs):
@@ -76,12 +107,12 @@ def test_four_am_boundary_and_late_arrival():
     before = entry(int(datetime(2026, 10, 14, 3, 59).timestamp()))
     after = entry(int(datetime(2026, 10, 14, 4).timestamp()))
     older = [entry(YESTERDAY - i * 86400) for i in range(1, 4)]
-    assert selected() == [before, *older[:2]]
+    # 04:00 on the 14th is today's: listed first, outside the backlog slots.
+    assert selected() == [after, before, *older[:2]]
     late = entry(YESTERDAY)
-    assert selected() == [before, late, older[0]]
-    assert after not in selected()
-    # At 03:59 on the 14th, yesterday is still the 12th.
-    assert before not in selected(int(datetime(2026, 10, 14, 3, 59).timestamp()))
+    assert selected() == [after, before, late, older[0]]
+    # At 03:59 on the 14th, today is still the 13th: `before` is today's.
+    assert selected(int(datetime(2026, 10, 14, 3, 59).timestamp()))[0] == before
 
 
 def test_prepare_route_returns_media_urls_and_keeps_date(client, monkeypatch):

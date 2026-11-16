@@ -71,8 +71,12 @@ and permanent dismissals. iPhone and iPad can preview the original photos/audio,
 type context, or attach a recording that the server transcribes into the original
 entry without changing its date. Loading, typed saves and dismissal need the
 server; staged recordings survive relaunch and queue offline on Save or Close.
-Three iPhone simulator tests cover the context sheet, failure recovery and
-recording persistence across relaunch, all passed in simulator.
+Today's wordless photos and recordings also head Capture → Daily as "Needs
+context", counted in the Daily and Capture-tab badge (the Journal tab is badged
+with everything on the Context page); one still on the device counts before it
+uploads and can be answered once it has. Four iPhone simulator tests cover the
+context sheet, failure recovery, recording persistence across relaunch and the
+Daily to-do, all passed in simulator.
 Physical-device microphone and background-upload behavior remain unverified.
 
 Capture → Daily includes a seven-night sleep graph with selectable nights,

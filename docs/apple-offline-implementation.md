@@ -32,6 +32,15 @@ saved report without a new API or sync format, so existing cached briefings work
 Parser regression tests cover counts, explanations, notices and ordinary replies.
 Native sheet interaction remains to be verified in the iOS simulator.
 
+Today's context to-dos (2026-11-16, `feat/daily-context-todos`): the prepare
+endpoint now returns today's eligible entries first and uncapped, outside the
+frozen backlog slots. Capture → Daily lists them as "Needs context" and counts
+them in its badge; the Journal tab is badged with the Context page's count.
+`JournalContextToday` (LunaschalCore) merges them with unsent captures judged on
+the device, deferring to the device while an entry's words are still unsent.
+Passed: 3 new Swift core tests, 4 new/updated backend tests, and one new iPhone
+simulator test (`testTodaysWordlessEntryIsADailyToDo`). Not verified on device.
+
 Journal-context prompts (2026-10-15, `feat/journal-context-prompts`): the native
 Journal tab's Context page (right of Calendar; the web keeps them in Chat) uses the same daily selection and permanent-dismissal endpoints as the web.
 Sheets reuse journal photo/audio viewers and stage transcribed clips through

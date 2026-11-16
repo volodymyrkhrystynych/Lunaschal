@@ -24,13 +24,17 @@ _ELIGIBLE = f"""
 
 
 def prepare(db, *, now=None):
-    """Freeze the day's backlog slots, counting answered/dismissed slots too.
+    """Today's waiting entries, then the day's frozen backlog slots.
 
-    Late-arriving captures from yesterday are still added without a cap. Older
-    unfinished prompts rejoin the backlog next day, newest first. Merely closing
-    a modal has no effect on its eligibility.
+    Today's come first and uncapped: they are what the phone's Daily page asks
+    about while the day is still remembered, so they take no slot and are never
+    frozen. Left unanswered, they are yesterday's tomorrow, which joins the
+    backlog uncapped like any late-arriving capture. Backlog slots count
+    answered/dismissed slots too. Older unfinished prompts rejoin the backlog
+    next day, newest first. Merely closing a modal has no effect on eligibility.
     """
     today = day_key_for(now)
+    today_start, today_end = day_bounds(today)
     yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
     start, end = day_bounds(yesterday)
     with lock:
@@ -63,7 +67,12 @@ def prepare(db, *, now=None):
                 (today, start, today, 3 - chosen),
             )
         db.commit()
-        return db.execute(
+        todays = db.execute(
+            f'SELECT e.* FROM journal_entries e WHERE {_ELIGIBLE}'
+            ' AND e.created_at>=? AND e.created_at<?'
+            ' ORDER BY e.created_at DESC, e.id DESC', (today_start, today_end),
+        ).fetchall()
+        return todays + db.execute(
             f'SELECT e.* FROM journal_entries e WHERE {_ELIGIBLE}'
             ' AND e.context_prompt_day=? AND e.created_at<?'
             ' ORDER BY e.created_at DESC, e.id DESC', (today, end),

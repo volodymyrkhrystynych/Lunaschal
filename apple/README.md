@@ -342,8 +342,12 @@ what each device can currently do and which work remains device-only.
   picked up by polling, as on the desktop. Passed in simulator, offline and
   against a local test server with a stand-in model; not yet verified on device.
 - Journal → Context (the speech-bubble page right of Calendar; the bubble
-  fills while any are waiting) offers journal-context cards for yesterday's image/audio-only
-  entries, filled to three from older entries when needed. The server owns
+  fills while any are waiting, and the Journal tab is badged with the count)
+  offers journal-context cards for today's and yesterday's image/audio-only
+  entries, filled to three from older entries when needed. Today's also head
+  Capture → Daily as "Needs context" and count in the Daily badge; a capture
+  still on the device is judged there before it uploads (`JournalContextToday`
+  in LunaschalCore) and can be answered once it has. The server owns
   the daily batch and permanent dismissals, shared with the web. Each sheet
   previews photos and plays audio, accepts typed context, and stages transcribed
   recordings on the original entry. Typed saves and dismissals need a connection;

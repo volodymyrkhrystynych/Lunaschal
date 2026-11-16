@@ -24,6 +24,12 @@ struct CaptureRoot: View {
 
     private var dailyRemaining: Int {
         DailySummary(day: today, server: model.dailyStatus, local: model.dailyLogs).remainingCount
+            + contextToday.count
+    }
+
+    /// Today's photos and recordings still waiting for a word: a to-do on Daily.
+    private var contextToday: [JournalContextToday.Item] {
+        JournalContextToday.items(prompts: context.prompts, captures: model.captures, day: today)
     }
 
     enum Tab: Hashable { case capture, journal, chat, todo, more, study, draw, library, jobs, writing, learning, settings }
@@ -50,11 +56,16 @@ struct CaptureRoot: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            NavigationStack { CaptureTab(model: model, page: $capturePage, dailyRemaining: dailyRemaining) }
+            NavigationStack {
+                CaptureTab(model: model, page: $capturePage, dailyRemaining: dailyRemaining,
+                           context: context, chat: chat, contextToday: contextToday)
+            }
                 .tabItem { Label("Capture", systemImage: "square.and.pencil") }.tag(Tab.capture)
                 .badge(dailyRemaining)
             NavigationStack { JournalTab(model: model, context: context, chat: chat) }
                 .tabItem { Label("Journal", systemImage: "book.closed") }.tag(Tab.journal)
+                // Everything on the Context page, today's and the backlog's.
+                .badge(context.prompts.count)
             NavigationStack(path: $chatPath) { ChatView(chat: chat, capture: model, code: code, page: $chatPage) }
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }.tag(Tab.chat)
                 // A plan to approve or a question from the coding agent.
@@ -121,9 +132,16 @@ struct CaptureRoot: View {
         // pass that didn't touch it.
         .onChange(of: model.syncChanges) { _, changes in
             if changes.touches([SyncChanges.todos]) { Task { await todo.refresh() } }
+            if changes.touches(["journal_entries", "journal_attachments"]) { Task { await context.refresh() } }
             if changes.full { Task { await learning.refresh() } }
         }
         // A tapped Code-tab notification: straight to that task.
+        // A capture that just uploaded moves from this device's judgement to
+        // the server's list, which only a fresh fetch shows.
+        .onChange(of: model.captures.filter { $0.state != .synced }.count) { _, _ in
+            Task { await context.refresh() }
+        }
+        .onChange(of: today) { _, _ in Task { await context.refresh() } }
         .onChange(of: push.openTaskID) { _, id in
             guard let id else { return }
             push.openTaskID = nil
@@ -138,6 +156,8 @@ struct CaptureRoot: View {
             guard scenePhase == .active else { model.leaveForeground(); return }
             // The Chat tab's badge counts what the coding agent is waiting on.
             Task { await code.refresh() }
+            // Daily's and Journal's badges count entries waiting for context.
+            Task { await context.refresh() }
             today = DayKey.of(Date())
             model.takeSharedLinks()
             await model.takeWidgetTodos()
@@ -165,6 +185,9 @@ private struct CaptureTab: View {
     @ObservedObject var model: CaptureModel
     @Binding var page: Page
     let dailyRemaining: Int
+    let context: JournalContextModel
+    let chat: ChatModel
+    let contextToday: [JournalContextToday.Item]
     @State private var notebook: Notebook?
     @State private var fetchingPaper = false
 
@@ -175,7 +198,9 @@ private struct CaptureTab: View {
             KeptPage(shown: page == .entry) {
                 CaptureComposer(model: model, recorder: model.recorder) { openNotes() }
             }
-            KeptPage(shown: page == .daily) { DailyView(model: model) }
+            KeptPage(shown: page == .daily) {
+                DailyView(model: model, context: context, chat: chat, contextToday: contextToday)
+            }
             KeptPage(shown: page == .workout) { WorkoutView(model: model) }
         }
         .ignoresSafeArea()

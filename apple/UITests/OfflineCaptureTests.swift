@@ -171,6 +171,37 @@ final class OfflineCaptureTests: XCTestCase {
 
     /// Journal → Context, the page to the right of Calendar. Its segment
     /// carries a count while anything is waiting, so it is found by prefix.
+    func testTodaysWordlessEntryIsADailyToDo() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-journalContextFixture")
+        app.launch()
+        selectTab(app, "Capture")
+        let daily = app.segmentedControls.buttons["Daily"]
+        XCTAssertTrue(daily.waitForExistence(timeout: settle))
+        daily.tap()
+        let todayID = "01K00000000000000000000005"
+        let open = app.buttons["daily-context-open-\(todayID)"]
+        XCTAssertTrue(open.waitForExistence(timeout: settle))
+        XCTAssertTrue(app.staticTexts["1 photo"].exists)
+        XCTAssertFalse(app.buttons["daily-context-open-01K00000000000000000000001"].exists,
+                       "older entries stay on Journal → Context")
+        attach(app, "daily needs context")
+        open.tap()
+        let text = app.textViews["journal-context-text"]
+        XCTAssertTrue(text.waitForExistence(timeout: settle))
+        text.tap(); text.typeText("Lunch with Sam")
+        app.swipeUp()
+        app.buttons["journal-context-save"].tap()
+        XCTAssertTrue(waitForSheetToClose(app))
+        let gone = NSPredicate(format: "exists == false")
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: gone, object: open)],
+                                      timeout: settle), .completed)
+        // The Context page lists today's alongside the backlog.
+        openContextPage(app)
+        XCTAssertTrue(app.buttons["journal-context-open-01K00000000000000000000001"].waitForExistence(timeout: settle))
+        XCTAssertFalse(app.buttons["journal-context-open-\(todayID)"].exists)
+    }
+
     private func openContextPage(_ app: XCUIApplication) {
         selectTab(app, "Journal")
         let pages = app.segmentedControls["journal-page"]
