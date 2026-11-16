@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
+from backend import authorship
 from backend.ai import jobs
 from backend.ai.food import parse_food_entry
 from backend.capture_time import optional_capture_time
@@ -69,6 +70,7 @@ def _linked_recipe(db, recipe_id: str | None) -> dict | None:
 def _entry_dict(db, row) -> dict:
     d = row_to_dict(row)
     d.pop('generatedNotes', None)
+    authorship.attach(db, 'food_entries', [d])
     d['polishing'] = db.execute(
         "SELECT 1 FROM llm_jobs WHERE target_id=? AND kind='food.structure'"
         " AND status IN ('pending', 'running')", (row['id'],),
@@ -260,6 +262,8 @@ def structure_food_entry(entry_id: str, text: str, *, force_notes: bool = False)
         if updates:
             updates['updated_at'] = int(time.time())
             build_update(db, 'food_entries', updates, 'id=?', (entry_id,))
+            if notes_updated:
+                authorship.mark_ai(db, 'food_entries', entry_id, 'notes', updates['notes'])
             db.commit()
 
     check_homemade_recipe_match(entry_id)
@@ -386,7 +390,7 @@ def _transcribe_media_bg(media_id: str, entry_id: str, path: str, *, now: bool =
                 updates['transcript'] = text
             build_update(db, 'food_media', updates, 'id=?', (media_id,))
             if text is not None and first_time:
-                _append_entry_text(db, entry_id, text)
+                _append_entry_text(db, entry_id, text, source=media_id)
             db.commit()
         except Exception as e:
             print(f'Failed to record meal transcription for {media_id}: {e}')
@@ -412,7 +416,7 @@ def _transcribe_media_bg(media_id: str, entry_id: str, path: str, *, now: bool =
                      {'entry_id': entry_id, 'path': path})
 
 
-def _append_entry_text(db, entry_id: str, text: str) -> None:
+def _append_entry_text(db, entry_id: str, text: str, *, source: str | None = None) -> None:
     """Add a clip's transcript to the end of a meal's raw note.
 
     A blank line between clips, not a space — the gap is the pause that was
@@ -426,6 +430,8 @@ def _append_entry_text(db, entry_id: str, text: str) -> None:
         return
     existing = (row['raw_content'] or '').strip()
     merged = f'{existing}\n\n{text}' if existing else text
+    authorship.record_change(db, 'food_entries', entry_id, 'raw_content', merged,
+                             author=authorship.SPEECH, source=source)
     db.execute(
         'UPDATE food_entries SET raw_content=?, updated_at=? WHERE id=?',
         (merged, int(time.time()), entry_id),
@@ -540,6 +546,7 @@ def journal_entries():
             'recipe': _linked_recipe(db, r['recipe_id']),
             'media': _entry_media(db, r['id']),
         })
+    authorship.attach(db, 'food_entries', result)
     return jsonify(result)
 
 
@@ -677,6 +684,7 @@ def update_entry(id):
     if 'notes' in body:
         updates['notes'] = (body['notes'] or '').strip() or None
         updates['generated_notes'] = None
+        authorship.record_edit(db, 'food_entries', id, 'notes', updates['notes'])
     if 'rating' in body:
         updates['rating'] = _parse_rating(body['rating'])
     if 'tags' in body:

@@ -9,6 +9,15 @@ Chat's saved Server oddities reports open in a large sheet with expandable
 explanations and selectable log text, including from the offline message cache.
 The iOS sheet still needs simulator verification.
 
+Text is coloured by who produced it: typed is blue, speech-to-text of a
+recording is teal, and AI-written text (polish, generated titles, structured
+notes, chat replies, accepted Writing proposals) keeps the normal colour. Editing
+turns only the edited words blue once the server has merged the edit. Covered:
+Journal, food, spending, chat, to-dos and the chat bar, Writing (the chapter and
+note editor is painted per span), calendar and learning cards. The colours come
+from the replica or the API rows, so they work offline. Passed in simulator build
+and app unit tests; not verified on device.
+
 The Capture entry text box accepts pasted images as persistent draft photo
 attachments, alongside typed text. Standard text paste remains available.
 

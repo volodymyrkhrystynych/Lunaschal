@@ -292,7 +292,7 @@ def _create_entry(content: str, raw_content: str) -> str:
     return entry_id
 
 
-def _promote_attachment(entry_id: str, draft_id: str, draft_path: str, mime: str | None) -> None:
+def _promote_attachment(entry_id: str, draft_id: str, draft_path: str, mime: str | None) -> str | None:
     """Move the draft's audio file into the entry's attachment storage and
     register it as a journal_attachments row, so the original recording stays
     reachable exactly like any other attachment — a move, not a copy, since
@@ -323,6 +323,7 @@ def _promote_attachment(entry_id: str, draft_id: str, draft_path: str, mime: str
         (attachment_id, entry_id, 'audio', 'Recording', str(dest), mime, size, position, int(time.time())),
     )
     db.commit()
+    return attachment_id
 
 
 def _generate_metadata(entry_id: str, content: str) -> None:
@@ -431,6 +432,15 @@ def _process_draft_inner(draft_id: str) -> None:
     )
     get_db().commit()
 
-    _promote_attachment(entry_id, draft_id, path, mime)
+    clip = _promote_attachment(entry_id, draft_id, path, mime)
+    # The raw text is one transcript of that clip end to end; the body is the
+    # model's merge of the candidates, or that same transcript when it failed.
+    from backend import authorship
+    db = get_db()
+    authorship.mark(db, 'journal_entries', entry_id, 'raw_content', raw_text,
+                    authorship.SPEECH, clip)
+    if merged is not None:
+        authorship.mark_ai(db, 'journal_entries', entry_id, 'content', content_text)
+    db.commit()
     _generate_metadata(entry_id, content_text)
     _finish_done(draft_id, entry_id, results)

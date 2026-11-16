@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
 from ulid import ULID
+from backend import authorship
 from backend.db.connection import build_update, get_db, row_to_dict, search_journal_fts
 from backend.capture_time import optional_capture_time as _optional_capture_time
 from backend.capture_time import parse_capture_time as _parse_capture_time
@@ -559,6 +560,7 @@ def polish_entry(id):
         'UPDATE journal_entries SET content=?, updated_at=? WHERE id=?',
         (polished, int(time.time()), id),
     )
+    authorship.mark_ai(db, 'journal_entries', id, 'content', polished)
     db.commit()
     _notify_subscribers(id)
     # Regenerate title/tags from the polished text if they're missing
@@ -579,6 +581,9 @@ def update_entry(id):
     if 'tags' in body:
         updates['tags'] = tags_json(body['tags'])
     db = get_db()
+    for field in ('content', 'title'):
+        if field in updates:
+            authorship.record_edit(db, 'journal_entries', id, field, updates[field])
     build_update(db, 'journal_entries', updates, 'id=?', (id,))
     if any(field in body for field in ('content', 'title', 'tags')):
         _close_screenshot_session(db, id)
@@ -769,6 +774,7 @@ def _polish_bg(journal_id: str, raw_content: str, *, now: bool = False) -> None:
                 'UPDATE journal_entries SET content=?, updated_at=? WHERE id=?',
                 (polished, int(time.time()), journal_id),
             )
+            authorship.mark_ai(db, 'journal_entries', journal_id, 'content', polished)
             db.commit()
             _notify_subscribers(journal_id)
         except Exception as e:
@@ -866,6 +872,7 @@ def _attachment_dict(row) -> dict:
 def _enrich_with_attachments(db, dicts: list[dict]) -> list[dict]:
     if not dicts:
         return dicts
+    authorship.attach(db, 'journal_entries', dicts)
     ids = [d['id'] for d in dicts]
     placeholders = ','.join('?' * len(ids))
     rows = db.execute(
@@ -1235,6 +1242,7 @@ def _sync_screenshot_event(db, session) -> None:
             (event_id, 'Screenshots', first_date, first_time[:5],
              last_time[:5], session['entry_id'], int(time.time())),
         )
+        authorship.mark_ai(db, 'calendar_events', event_id, 'title', 'Screenshots')
         db.execute(
             'UPDATE journal_screenshot_sessions SET calendar_event_id=?'
             ' WHERE entry_id=?',
@@ -2332,7 +2340,10 @@ def _deliver_idea_transcript(entry_id: str, text: str) -> None:
         return
     from backend.routes.ideas import apply_recording_transcript
 
-    apply_recording_transcript(row['idea_id'], text)
+    # The entry's raw spans name each clip; the idea keeps them.
+    raw = authorship.current(get_db(), 'journal_entries', entry_id, 'raw_content')
+    apply_recording_transcript(row['idea_id'], text,
+                               spans=raw[1] if raw and raw[0] == text else None)
 
 
 def _deliver_todo_transcript(entry_id: str) -> None:
@@ -2344,7 +2355,8 @@ def _deliver_todo_transcript(entry_id: str) -> None:
         jobs.enqueue('todo.from_entry', entry_id)
 
 
-def _append_entry_text(db, entry_id: str, text: str) -> None:
+def _append_entry_text(db, entry_id: str, text: str, *, author: str = authorship.USER,
+                       source: str | None = None) -> None:
     """Add a clip's transcript to the end of an entry's body.
 
     Both columns move together: `raw_content` is what the polish pass reads and
@@ -2362,10 +2374,19 @@ def _append_entry_text(db, entry_id: str, text: str) -> None:
         return
     existing = (row['raw_content'] or row['content'] or '').strip()
     merged = f'{existing}\n\n{text}' if existing else text
+    # Diffed against whichever column `existing` came from, so a clip landing
+    # on a typed entry with no raw text yet keeps the typing as typing.
+    basis = 'raw_content' if (row['raw_content'] or '').strip() else 'content'
+    was = authorship.current(db, 'journal_entries', entry_id, basis)
+    if was is not None:
+        authorship.store(db, 'journal_entries', entry_id, 'raw_content', merged,
+                         authorship.merge_edit(was[0], was[1], merged, author=author, source=source))
     db.execute(
         'UPDATE journal_entries SET content=?, raw_content=?, updated_at=? WHERE id=?',
         (merged, merged, int(time.time()), entry_id),
     )
+    # The body is the raw text again until the next polish (authorship.MIRRORS).
+    authorship.clear(db, 'journal_entries', entry_id, 'content')
     _close_screenshot_session(db, entry_id)
 
 
@@ -2441,7 +2462,8 @@ def _transcribe_attachment_bg(
                 # the entry reads as one passage with a blank line where each
                 # pause was — the transcript of a second thought used to
                 # overwrite the first.
-                _append_entry_text(db, entry_id, text)
+                _append_entry_text(db, entry_id, text, author=authorship.SPEECH,
+                                   source=attachment_id)
             db.commit()
             _notify_subscribers(entry_id)
 
@@ -2845,6 +2867,8 @@ def _generate_metadata_bg(
                 return
             db = get_db()
             build_update(db, 'journal_entries', updates, 'id=?', (journal_id,))
+            if 'title' in updates:
+                authorship.mark_ai(db, 'journal_entries', journal_id, 'title', updates['title'])
             db.commit()
             _notify_subscribers(journal_id)
         except Exception as e:

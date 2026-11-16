@@ -6,6 +6,7 @@ file path. New projections change the schema fingerprint and force a bootstrap.
 import hashlib
 import json
 
+from backend import authorship
 from backend.fanfic.source_lists import backlog_sql
 
 COLLECTIONS = {
@@ -47,11 +48,15 @@ COLLECTIONS = {
 COLLECTIONS = {name: tuple(columns.split()) for name, columns in COLLECTIONS.items()}
 # The column a collection's record id comes from, where it is not `id`.
 KEYS = {'fic_chapter_reads': 'chapter_id', 'fic_chapter_reactions': 'chapter_id'}
+# Collections whose records carry a derived `authorship` (who wrote which part
+# of each text field, see backend/authorship.py), resolved here so the phone
+# never needs the default rules or the columns they read.
+AUTHORED = ('journal_entries', 'food_entries', 'spending_logs', 'messages', 'calendar_events')
 
 
 def key(table: str) -> str:
     return KEYS.get(table, 'id')
-SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, KEYS, 'book-metadata-v4'], sort_keys=True).encode()).hexdigest()
+SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, KEYS, 'book-metadata-v4', 'authorship-v2'], sort_keys=True).encode()).hexdigest()
 
 
 def payload(table: str, prefix: str) -> str:
@@ -80,6 +85,8 @@ def payload(table: str, prefix: str) -> str:
             'has_thumb',({prefix}.thumb_path IS NOT NULL AND {prefix}.thumb_path != ''),
             'has_motion',({prefix}.motion_path IS NOT NULL AND {prefix}.motion_path != '')
         """
+    if table in AUTHORED:
+        fields += f",'authorship',json({authorship.sql_object(table, prefix)})"
     return f'json_object({fields})'
 
 

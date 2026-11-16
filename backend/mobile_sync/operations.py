@@ -3,6 +3,7 @@ import hashlib
 import json
 import time
 
+from backend import authorship
 from backend.routes.journal import _client_id, _close_screenshot_session, delete_journal_entry
 from backend.tags import tags_json
 from .feed import change_dict, database
@@ -76,6 +77,7 @@ def food_mutation(db, body):
     updates = {name: value.strip() or None for name, value in body['data'].items()}
     if 'notes' in updates:
         # As PATCH /api/food/<id>: a hand edit wins over the structuring pass.
+        authorship.record_edit(db, 'food_entries', body['recordId'], 'notes', updates['notes'])
         updates['generated_notes'] = None
     updates['updated_at'] = int(time.time())
     setters = ','.join(f'"{name}"=?' for name in updates)
@@ -116,6 +118,7 @@ def spending_mutation(db, body):
             updates[name] = value.strip()[:200 if name != 'notes' else 15000] or None
     if 'notes' in updates:
         # As PATCH /api/spending/<id>: a hand edit wins over the structuring pass.
+        authorship.record_edit(db, 'spending_logs', body['recordId'], 'notes', updates['notes'])
         updates['generated_notes'] = None
     updates['updated_at'] = int(time.time())
     setters = ','.join(f'"{name}"=?' for name in updates)
@@ -149,6 +152,9 @@ def journal_mutation(db, body):
             updates = {**data, 'updated_at': int(time.time())}
             if 'tags' in updates:
                 updates['tags'] = tags_json(updates['tags'])
+            for field in ('content', 'title'):
+                if field in updates:
+                    authorship.record_edit(db, 'journal_entries', body['recordId'], field, updates[field])
             setters = ','.join(f'"{name}"=?' for name in updates)
             db.execute(f'UPDATE journal_entries SET {setters} WHERE id=?',
                        [*updates.values(), body['recordId']])

@@ -35,14 +35,18 @@ public struct WritingChapter: Codable, Equatable, Identifiable {
     /// Only on a single chapter or in a bundle; the list leaves the bodies out.
     public var content: String?
     public var revision: Int
+    /// Who produced `title` and `content`: typed, or an accepted proposal.
+    public var authorship: [String: JSONValue]?
 
     public init(id: String, projectId: String, title: String, position: Int = 0, content: String? = nil,
-                revision: Int = 0) {
+                revision: Int = 0, authorship: [String: JSONValue]? = nil) {
         self.id = id; self.projectId = projectId; self.title = title; self.position = position
-        self.content = content; self.revision = revision
+        self.content = content; self.revision = revision; self.authorship = authorship
     }
 
-    enum CodingKeys: String, CodingKey { case id, projectId, title, position, content, revision }
+    public var authoredContent: AuthoredText? { AuthoredText.field(content, authorship, "content", fallback: .user) }
+
+    enum CodingKeys: String, CodingKey { case id, projectId, title, position, content, revision, authorship }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -52,6 +56,7 @@ public struct WritingChapter: Codable, Equatable, Identifiable {
         position = try c.decodeIfPresent(Int.self, forKey: .position) ?? 0
         content = try c.decodeIfPresent(String.self, forKey: .content)
         revision = try c.decodeIfPresent(Int.self, forKey: .revision) ?? 0
+        authorship = try? c.decodeIfPresent([String: JSONValue].self, forKey: .authorship)
     }
 }
 
@@ -101,14 +106,22 @@ public struct WritingNote: Codable, Equatable, Identifiable {
     public var content: String?
     public var revision: Int
     public let updatedAt: String?
+    /// Who produced `title` and `content`: typed, or written by a discussion.
+    public var authorship: [String: JSONValue]?
 
     public init(id: String, projectId: String, title: String, docType: String = "note", pinned: Bool = false,
-                content: String? = nil, revision: Int = 0, updatedAt: String? = nil) {
+                content: String? = nil, revision: Int = 0, updatedAt: String? = nil,
+                authorship: [String: JSONValue]? = nil) {
         self.id = id; self.projectId = projectId; self.title = title; self.docType = docType
         self.pinned = pinned; self.content = content; self.revision = revision; self.updatedAt = updatedAt
+        self.authorship = authorship
     }
 
-    enum CodingKeys: String, CodingKey { case id, projectId, title, docType, pinned, content, revision, updatedAt }
+    public var authoredContent: AuthoredText? { AuthoredText.field(content, authorship, "content", fallback: .user) }
+
+    enum CodingKeys: String, CodingKey {
+        case id, projectId, title, docType, pinned, content, revision, updatedAt, authorship
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -124,6 +137,7 @@ public struct WritingNote: Codable, Equatable, Identifiable {
         content = try c.decodeIfPresent(String.self, forKey: .content)
         revision = try c.decodeIfPresent(Int.self, forKey: .revision) ?? 0
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt)
+        authorship = try? c.decodeIfPresent([String: JSONValue].self, forKey: .authorship)
     }
 }
 

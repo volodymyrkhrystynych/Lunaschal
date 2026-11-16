@@ -19,6 +19,7 @@ import time
 
 from ulid import ULID
 
+from backend import authorship
 from backend.db.connection import get_db
 from backend.writing import revisioned
 
@@ -80,9 +81,10 @@ def snapshot(db, doc_id: str, *, source: str, message_id: str | None = None,
     rev_id = str(ULID())
     db.execute(
         'INSERT INTO writing_context_doc_revisions'
-        '(id, doc_id, title, content, source, message_id, created_at)'
-        ' VALUES (?,?,?,?,?,?,?)',
-        (rev_id, doc_id, row['title'], row['content'], source, message_id, now),
+        '(id, doc_id, title, content, source, message_id, created_at, spans)'
+        ' VALUES (?,?,?,?,?,?,?,?)',
+        (rev_id, doc_id, row['title'], row['content'], source, message_id, now,
+         authorship.snapshot(db, 'writing_context_docs', doc_id)),
     )
     return rev_id
 
@@ -149,6 +151,9 @@ def apply_update(db, project_id: str, *, note_id: str, mode: str, content: str,
 
         now = int(time.time())
         revision_id = snapshot(db, note_id, source='accept', message_id=message_id, now=now)
+        # Only what the proposal added or replaced is the model's.
+        authorship.record_change(db, 'writing_context_docs', note_id, 'content', new,
+                                 author=authorship.AI)
         db.execute(
             'UPDATE writing_context_docs SET content=?, revision=revision+1, updated_at=? WHERE id=?',
             (new, now, note_id),
@@ -162,7 +167,7 @@ def restore(db, note_id: str, revision_id: str) -> bool:
     itself undoable. False when either does not exist."""
     with revisioned.LOCK:
         rev = db.execute(
-            'SELECT title, content FROM writing_context_doc_revisions WHERE id=? AND doc_id=?',
+            'SELECT title, content, spans FROM writing_context_doc_revisions WHERE id=? AND doc_id=?',
             (revision_id, note_id),
         ).fetchone()
         if rev is None:
@@ -170,6 +175,8 @@ def restore(db, note_id: str, revision_id: str) -> bool:
         now = int(time.time())
         if snapshot(db, note_id, source='restore', now=now) is None:
             return False
+        authorship.restore(db, 'writing_context_docs', note_id, rev['spans'],
+                           {'title': rev['title'], 'content': rev['content']})
         db.execute(
             'UPDATE writing_context_docs SET title=?, content=?, revision=revision+1, updated_at=?'
             ' WHERE id=?',

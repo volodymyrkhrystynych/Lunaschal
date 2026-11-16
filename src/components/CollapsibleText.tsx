@@ -18,11 +18,15 @@ export function CollapsibleText({
   storageKey,
   label,
   children,
+  textClassName = '',
 }: {
   /** Unique per block; what "already seen" is remembered against. */
   storageKey: string;
   label: string;
   children: string;
+  /** Colours the text by who produced it, e.g. `text-speech` for a transcript
+   *  (src/lib/authorship.ts). The label stays muted either way. */
+  textClassName?: string;
 }) {
   const [isOpen, setIsOpen] = useState(() => {
     try {
@@ -51,7 +55,11 @@ export function CollapsibleText({
       <summary className="cursor-pointer select-none px-3 py-2">
         {label}
       </summary>
-      <div className="px-3 pb-2 whitespace-pre-wrap italic">{children}</div>
+      <div
+        className={`px-3 pb-2 whitespace-pre-wrap italic ${textClassName}`.trim()}
+      >
+        {children}
+      </div>
     </details>
   );
 }

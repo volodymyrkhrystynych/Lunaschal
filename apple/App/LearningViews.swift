@@ -178,7 +178,7 @@ private struct LearningAnswerCard: View {
             VStack(alignment: .leading, spacing: 16) {
                 LearningStatsLine(stats: learning.stats)
                 LearningProgress(label: "Card", position: session.position, total: session.total, tint: .accentColor)
-                MarkdownText(text: card.question)
+                MarkdownText(text: card.question, authored: card.authoredQuestion)
                     .font(.title3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 TextField("Type your answer…", text: $answer, axis: .vertical)
@@ -237,10 +237,10 @@ private struct LearningResultCard: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 LearningProgress(label: "Result", position: session.position, total: session.answers.count, tint: .green)
-                MarkdownText(text: result.card.question)
+                MarkdownText(text: result.card.question, authored: result.card.authoredQuestion)
                     .font(.title3)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                LearningBox(title: "Answer") { MarkdownText(text: result.card.answer) }
+                LearningBox(title: "Answer") { MarkdownText(text: result.card.answer, authored: result.card.authoredAnswer) }
                 if let text = learning.text(of: result) {
                     LearningBox(title: "Your answer") { Text(text).textSelection(.enabled) }
                 }
@@ -528,8 +528,8 @@ private struct LearningQueuePane: View {
             ForEach(learning.queue) { card in
                 VStack(alignment: .leading, spacing: 10) {
                     LearningCardLabels(card: card)
-                    LearningBox(title: "Question") { MarkdownText(text: card.question) }
-                    LearningBox(title: "Answer") { MarkdownText(text: card.answer) }
+                    LearningBox(title: "Question") { MarkdownText(text: card.question, authored: card.authoredQuestion) }
+                    LearningBox(title: "Answer") { MarkdownText(text: card.answer, authored: card.authoredAnswer) }
                     HStack {
                         Button("Approve") { Task { await approve(card) } }
                             .buttonStyle(.borderedProminent).tint(.green)
@@ -654,7 +654,9 @@ private struct LearningBrowseRow: View {
                 Text("\(card.review?.pages.count ?? 0) pages to read").font(.subheadline).foregroundStyle(.secondary)
             } else {
                 Text(card.question).font(.body).lineLimit(3)
-                Text(card.answer).font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
+                    .foregroundStyle(card.authoredQuestion?.fieldColor ?? .primary)
+                Text(card.answer).font(.subheadline).lineLimit(3)
+                    .foregroundStyle(card.authoredAnswer?.fieldColor ?? .secondary)
             }
             if !card.tags.isEmpty {
                 Text(card.tags.map { "#\($0)" }.joined(separator: " ")).font(.caption).foregroundStyle(.secondary)

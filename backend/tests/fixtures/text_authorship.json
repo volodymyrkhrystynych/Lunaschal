@@ -1,0 +1,302 @@
+{
+  "_comment": "Shared by backend/tests/test_authorship.py, src/lib/authorship.test.ts and apple/LunaschalCore TextAuthorshipTests. Authors: u typed, s speech-to-text, a AI. A span may carry a third element, the recording it came from. Lengths are Unicode code points. `runs` is how every client slices text by spans; `merges` is the server's change rule (backend/authorship.py merge_edit). `aligned` is how the clients colour Markdown: the rendered pieces, in source order, each get the authors of the source characters they came from (AuthorAligner / alignAuthors).",
+  "runs": [
+    {
+      "name": "ascii",
+      "text": "Hello world",
+      "spans": [
+        ["a", 6],
+        ["u", 5]
+      ],
+      "fallback": "u",
+      "runs": [
+        ["a", "Hello "],
+        ["u", "world"]
+      ]
+    },
+    {
+      "name": "cyrillic",
+      "text": "Привіт світ",
+      "spans": [
+        ["u", 7],
+        ["a", 4]
+      ],
+      "fallback": "u",
+      "runs": [
+        ["u", "Привіт "],
+        ["a", "світ"]
+      ]
+    },
+    {
+      "name": "speech with its recording",
+      "text": "said aloud, then typed",
+      "spans": [
+        ["s", 10, "01JREC"],
+        ["u", 12]
+      ],
+      "fallback": "u",
+      "runs": [
+        ["s", "said aloud"],
+        ["u", ", then typed"]
+      ]
+    },
+    {
+      "name": "unknown author falls back",
+      "text": "abc",
+      "spans": [["z", 3]],
+      "fallback": "u",
+      "runs": [["u", "abc"]]
+    },
+    {
+      "name": "emoji with skin tone is two code points",
+      "text": "hi 👋🏽 there",
+      "spans": [
+        ["u", 3],
+        ["a", 2],
+        ["u", 6]
+      ],
+      "fallback": "u",
+      "runs": [
+        ["u", "hi "],
+        ["a", "👋🏽"],
+        ["u", " there"]
+      ]
+    },
+    {
+      "name": "combining accent",
+      "text": "éx",
+      "spans": [
+        ["a", 2],
+        ["u", 1]
+      ],
+      "fallback": "u",
+      "runs": [
+        ["a", "é"],
+        ["u", "x"]
+      ]
+    },
+    {
+      "name": "crlf is two code points",
+      "text": "a\r\nb",
+      "spans": [
+        ["a", 2],
+        ["u", 2]
+      ],
+      "fallback": "u",
+      "runs": [
+        ["a", "a\r"],
+        ["u", "\nb"]
+      ]
+    },
+    {
+      "name": "spans not covering the text fall back",
+      "text": "abc",
+      "spans": [["a", 5]],
+      "fallback": "u",
+      "runs": [["u", "abc"]]
+    },
+    {
+      "name": "missing spans fall back",
+      "text": "abc",
+      "spans": null,
+      "fallback": "a",
+      "runs": [["a", "abc"]]
+    },
+    {
+      "name": "malformed author falls back",
+      "text": "abc",
+      "spans": [["x", 3]],
+      "fallback": "a",
+      "runs": [["a", "abc"]]
+    },
+    {
+      "name": "zero-length runs are skipped",
+      "text": "ab",
+      "spans": [
+        ["u", 0],
+        ["a", 1],
+        ["a", 1]
+      ],
+      "fallback": "u",
+      "runs": [["a", "ab"]]
+    },
+    {
+      "name": "empty",
+      "text": "",
+      "spans": [],
+      "fallback": "u",
+      "runs": []
+    }
+  ],
+  "merges": [
+    {
+      "name": "one word replaced in polished text",
+      "old": "I went to the store today.",
+      "oldSpans": [["a", 26]],
+      "new": "I went to the market today.",
+      "spans": [
+        ["a", 14],
+        ["u", 6],
+        ["a", 7]
+      ]
+    },
+    {
+      "name": "typing into an empty field",
+      "old": "",
+      "oldSpans": [],
+      "new": "hello",
+      "spans": [["u", 5]]
+    },
+    {
+      "name": "deleting everything",
+      "old": "abc",
+      "oldSpans": [["a", 3]],
+      "new": "",
+      "spans": []
+    },
+    {
+      "name": "appending a sentence",
+      "old": "Done.",
+      "oldSpans": [["a", 5]],
+      "new": "Done. Really.",
+      "spans": [
+        ["a", 5],
+        ["u", 8]
+      ]
+    },
+    {
+      "name": "invalid old spans use the fallback",
+      "old": "abc",
+      "oldSpans": [["a", 9]],
+      "new": "abcd",
+      "spans": [["u", 4]]
+    },
+    {
+      "name": "unchanged text keeps its spans",
+      "old": "Hi there",
+      "oldSpans": [
+        ["u", 3],
+        ["a", 5]
+      ],
+      "new": "Hi there",
+      "spans": [
+        ["u", 3],
+        ["a", 5]
+      ]
+    },
+    {
+      "name": "cyrillic word changed",
+      "old": "Я був удома",
+      "oldSpans": [["a", 11]],
+      "new": "Я була удома",
+      "spans": [
+        ["a", 2],
+        ["u", 4],
+        ["a", 6]
+      ]
+    },
+    {
+      "name": "deleting a word leaves no user text",
+      "old": "one two three",
+      "oldSpans": [["a", 13]],
+      "new": "one three",
+      "spans": [["a", 9]]
+    },
+    {
+      "name": "user text inside AI text survives a later edit elsewhere",
+      "old": "The cat sat.",
+      "oldSpans": [
+        ["a", 4],
+        ["u", 3],
+        ["a", 5]
+      ],
+      "new": "The cat sat down.",
+      "spans": [
+        ["a", 4],
+        ["u", 3],
+        ["a", 4],
+        ["u", 5],
+        ["a", 1]
+      ]
+    },
+    {
+      "name": "a transcript appended to typed text names its recording",
+      "old": "Lunch.",
+      "oldSpans": [["u", 6]],
+      "new": "Lunch.\n\nramen with extra egg",
+      "author": "s",
+      "source": "01JCLIP",
+      "spans": [
+        ["u", 6],
+        ["s", 22, "01JCLIP"]
+      ]
+    },
+    {
+      "name": "a user edit inside speech keeps the recording on the rest",
+      "old": "ramen with extra egg",
+      "oldSpans": [["s", 20, "01JCLIP"]],
+      "new": "ramen with two eggs",
+      "spans": [
+        ["s", 11, "01JCLIP"],
+        ["u", 3],
+        ["s", 1, "01JCLIP"],
+        ["u", 4]
+      ]
+    },
+    {
+      "name": "an accepted AI passage beside typed prose",
+      "old": "She ran.",
+      "oldSpans": [["u", 8]],
+      "new": "She ran.\n\nThe door slammed behind her.",
+      "author": "a",
+      "spans": [
+        ["u", 8],
+        ["a", 30]
+      ]
+    }
+  ],
+  "aligned": [
+    {
+      "name": "heading then a paragraph with bold",
+      "source": "# Plan\n\nBuy **milk** now",
+      "spans": [
+        ["a", 8],
+        ["u", 16]
+      ],
+      "rendered": ["Plan", "Buy milk now"],
+      "runs": [[["a", "Plan"]], [["u", "Buy milk now"]]]
+    },
+    {
+      "name": "a link's URL is skipped",
+      "source": "See [docs](http://x.io) ok",
+      "spans": [
+        ["u", 4],
+        ["a", 19],
+        ["u", 3]
+      ],
+      "rendered": ["See docs ok"],
+      "runs": [
+        [
+          ["u", "See "],
+          ["a", "docs"],
+          ["u", " ok"]
+        ]
+      ]
+    },
+    {
+      "name": "speech beside typing in one paragraph",
+      "source": "Typed. *said aloud*",
+      "spans": [
+        ["u", 7],
+        ["s", 12, "R1"]
+      ],
+      "rendered": ["Typed. said aloud"],
+      "runs": [
+        [
+          ["u", "Typed. "],
+          ["s", "said aloud"]
+        ]
+      ]
+    }
+  ]
+}

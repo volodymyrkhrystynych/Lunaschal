@@ -536,9 +536,13 @@ private struct TodoRow: View {
             CheckButton(done: todo.done, id: "todo-check", action: toggle)
             Button(action: open) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(todo.title).foregroundStyle(.primary)
-                    if let notes = todo.notes, !notes.isEmpty {
-                        Text(notes).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    if let title = todo.authoredTitle {
+                        AuthoredTextView(text: title)
+                    } else {
+                        Text(todo.title).foregroundStyle(.primary)
+                    }
+                    if let notes = todo.authoredNotes {
+                        AuthoredTextView(text: notes).font(.caption).lineLimit(2)
                     }
                     details
                 }

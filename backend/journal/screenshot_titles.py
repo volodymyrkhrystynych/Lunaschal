@@ -123,9 +123,13 @@ def rename_run(db, entry_id: str, title) -> dict:
     if row['entry_title'] == DEFAULT_TITLE:
         db.execute('UPDATE journal_entries SET title=?, updated_at=? WHERE id=?',
                    (title, now, entry_id))
+        from backend import authorship
+        authorship.mark_ai(db, 'journal_entries', entry_id, 'title', title)
     if row['event_title'] == DEFAULT_TITLE:
         db.execute('UPDATE calendar_events SET title=? WHERE id=?',
                    (title, row['calendar_event_id']))
+        from backend import authorship
+        authorship.mark_ai(db, 'calendar_events', row['calendar_event_id'], 'title', title)
     db.execute(
         'UPDATE journal_screenshot_sessions SET is_open=0, updated_at=?'
         ' WHERE entry_id=? AND is_open=1',

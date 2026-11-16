@@ -16,6 +16,7 @@ from backend.ai import jobs
 from backend.ai.service import InferencePaused, PAUSED_MESSAGE
 from backend.ai.provider import is_ai_configured
 from backend.delegate import limits
+from backend import authorship
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.routes.paper import page_image_url
 from backend.tags import tags_json
@@ -84,6 +85,7 @@ def list_ideas():
             assessment and snapshot and assessment['snapshot_id'] != snapshot['id']
         )
         result.append(d)
+    authorship.attach(get_db(), 'ideas', result)
     return jsonify(result)
 
 
@@ -134,6 +136,7 @@ def get_idea(idea_id):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     d = row_to_dict(row)
+    authorship.attach(get_db(), 'ideas', [d])
     d['recording'] = _idea_recording(idea_id)
     return jsonify(d)
 
@@ -201,6 +204,9 @@ def update_idea(idea_id):
     if 'repoId' in body:
         updates['repo_id'] = (body['repoId'] or '').strip() or None
     db = get_db()
+    for field in ('content', 'title'):
+        if field in updates:
+            authorship.record_edit(db, 'ideas', idea_id, field, updates[field])
     build_update(db, 'ideas', updates, 'id=?', (idea_id,))
     db.commit()
     return jsonify({'success': True})
@@ -245,6 +251,7 @@ def _enrich_idea_bg(idea_id: str, raw_content: str, *, polish: bool = True,
                     'UPDATE ideas SET content=?, updated_at=? WHERE id=?',
                     (text, int(time.time()), idea_id),
                 )
+                authorship.mark_ai(db, 'ideas', idea_id, 'content', text)
                 db.commit()
 
         title = generate_idea_title(text, memory=memory)
@@ -253,11 +260,13 @@ def _enrich_idea_bg(idea_id: str, raw_content: str, *, polish: bool = True,
         # Guarded: the user may well have typed a title into the detail pane
         # in the seconds this took, and their name beats the model's.
         db = get_db()
-        db.execute(
+        named = db.execute(
             "UPDATE ideas SET title=?, updated_at=? WHERE id=?"
             " AND (title IS NULL OR title='')",
             (title, int(time.time()), idea_id),
         )
+        if named.rowcount:
+            authorship.mark_ai(db, 'ideas', idea_id, 'title', title)
         db.commit()
 
     if now:
@@ -294,7 +303,7 @@ def create_recording_idea(idea_id: str, repo_id=None) -> None:
     db.commit()
 
 
-def apply_recording_transcript(idea_id: str, text: str) -> None:
+def apply_recording_transcript(idea_id: str, text: str, *, spans=None) -> None:
     """Give a dictated idea the text of its recordings, then name it.
 
     `text` is the whole journal entry the clips were transcribed into — every
@@ -324,6 +333,16 @@ def apply_recording_transcript(idea_id: str, text: str) -> None:
     merged = f'{typed}\n\n{text}' if typed.strip() else text
     if merged == (row['raw_content'] or ''):
         return
+    # The typed half keeps its authors; the delivered half is speech-to-text,
+    # by recording when the entry's spans say which.
+    was = authorship.current(db, 'ideas', idea_id, 'raw_content')
+    kept = authorship.expand(was[1], len(was[0]), authorship.USER)[:len(typed)] if was else []
+    heard_spans = spans if authorship.valid(spans, len(text)) else [[authorship.SPEECH, len(text)]]
+    authorship.store(db, 'ideas', idea_id, 'raw_content', merged, [
+        *([who, 1, src] if src else [who, 1] for who, src in kept),
+        [authorship.SPEECH, len(merged) - len(typed) - len(text)],
+        *heard_spans,
+    ])
     db.execute(
         'UPDATE ideas SET raw_content=?, recording_text=?, updated_at=? WHERE id=?',
         (merged, text, int(time.time()), idea_id),

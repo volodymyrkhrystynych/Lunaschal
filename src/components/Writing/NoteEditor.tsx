@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { fieldClass } from '@/lib/authorship';
 import { api } from '../../hooks/api';
 import { documentKey, resetRevision } from '../../lib/writingDocuments';
 import { useWritingNoteUpdate } from '../../offline/mutationDefaults';
@@ -201,7 +202,9 @@ export function NoteEditor({ noteId }: Props) {
         value={content}
         onChange={e => handleContentChange(e.target.value)}
         placeholder="Write your note…"
-        className="flex-1 resize-none bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] p-6 focus:outline-none leading-relaxed"
+        // One colour, as ChapterEditor: a note the discussion wrote is the
+        // normal colour, one typed by hand blue.
+        className={`flex-1 resize-none bg-transparent ${fieldClass(note?.content, note?.authorship, 'content', 'u')} placeholder:text-[var(--color-text-muted)] p-6 focus:outline-none leading-relaxed`}
         spellCheck
       />
     </div>

@@ -270,7 +270,7 @@ private struct KnowledgeArticleView: View {
                 }
                 // Render stored text directly: article HTML, external images,
                 // scripts, and embedded links cannot trigger network requests.
-                Text(article.data?["content"]?.string ?? "No article text was downloaded.")
+                Text(article.data?["content"]?.string ?? "No article text was downloaded.").authored(.ai)
                     .font(.system(.body, design: .serif)).textSelection(.enabled)
             }.frame(maxWidth: 760, alignment: .leading).padding()
                 .frame(maxWidth: .infinity)
@@ -676,9 +676,13 @@ struct JournalRecordView: View {
                     Button("Delete entry", role: .destructive) { confirmingDelete = true }
                 }
             } else {
-                Text(record.data?["content"]?.string ?? "").textSelection(.enabled)
-                if let original = record.data?["rawContent"]?.string, !original.isEmpty {
-                    DisclosureGroup("Original text and dictation") { Text(original).textSelection(.enabled) }
+                if let content = record.authored("content", fallback: record.journalContentFallback) {
+                    AuthoredTextView(text: content).textSelection(.enabled)
+                }
+                if let original = record.authored("rawContent", fallback: .user) {
+                    DisclosureGroup("Original text and dictation") {
+                        AuthoredTextView(text: original).textSelection(.enabled)
+                    }
                 }
                 PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
                 Section("Attachments") {
@@ -689,7 +693,11 @@ struct JournalRecordView: View {
                         }
                         if let transcript = attachment.data?["transcript"]?.string, !transcript.isEmpty {
                             DisclosureGroup("Transcript: \(attachment.data?["name"]?.string ?? "Attachment")") {
-                                Text(transcript).textSelection(.enabled)
+                                // A recording's transcript is the user's words; an imported
+                                // page or video's text is not.
+                                let own = attachment.data?["kind"]?.string == "audio"
+                                    || (attachment.data?["kind"]?.string == "video" && attachment.data?["sourceUrl"]?.string == nil)
+                                Text(transcript).authored(own ? .speech : .ai).textSelection(.enabled)
                             }
                         }
                     }

@@ -37,3 +37,53 @@ describe('MessageMarkdown font scaling', () => {
     expect(table!.className).not.toContain('text-xs');
   });
 });
+
+describe('MessageMarkdown authorship', () => {
+  it('paints mixed authors through the markdown syntax', () => {
+    // "**Buy** milk" typed, ", said aloud" speech-to-text of a recording.
+    const { container } = render(
+      <MessageMarkdown
+        content="**Buy** milk, said aloud"
+        authored={{
+          authorship: {
+            content: [
+              ['u', 12],
+              ['s', 12, 'R'],
+            ],
+          },
+          field: 'content',
+          fallback: 'a',
+        }}
+      />
+    );
+    const runs = [...container.querySelectorAll('span[class^="text-"]')].map(
+      s => [s.className, s.textContent]
+    );
+    expect(runs).toEqual([
+      ['text-user', 'Buy'],
+      ['text-user', ' milk'],
+      ['text-speech', ', said aloud'],
+    ]);
+    expect(container.querySelector('strong')?.textContent).toBe('Buy');
+  });
+
+  it('colours a single-author field as a whole and adds no spans', () => {
+    const { container } = render(
+      <MessageMarkdown
+        content="All **generated**."
+        authored={{
+          authorship: { content: [['a', 18]] },
+          field: 'content',
+          fallback: 'u',
+        }}
+      />
+    );
+    expect(container.firstElementChild?.className).toContain('text-ai');
+    expect(container.querySelectorAll('span[class^="text-"]')).toHaveLength(0);
+  });
+
+  it('is unchanged without authorship', () => {
+    const { container } = render(<MessageMarkdown content="plain" />);
+    expect(container.firstElementChild?.className.trim()).toBe('break-words');
+  });
+});

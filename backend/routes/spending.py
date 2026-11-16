@@ -22,6 +22,7 @@ from datetime import date as date_cls, timedelta
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
+from backend import authorship
 from backend.ai import jobs
 from backend.ai.spending import MAX_CENTS, parse_spending_entry
 from backend.capture_time import optional_capture_time
@@ -69,6 +70,7 @@ def _entry_media(db, entry_id: str) -> list[dict]:
 def _entry_dict(db, row) -> dict:
     d = row_to_dict(row)
     d.pop('generatedNotes', None)
+    authorship.attach(db, 'spending_logs', [d])
     # Still being read: a structuring pass is queued, or a receipt/clip is.
     d['reading'] = db.execute(
         "SELECT 1 FROM llm_jobs WHERE status IN ('pending', 'running') AND ("
@@ -246,6 +248,8 @@ def structure_spending_entry(entry_id: str) -> bool:
         return False
     updates['updated_at'] = int(time.time())
     build_update(db, 'spending_logs', updates, 'id=?', (entry_id,))
+    if 'notes' in updates:
+        authorship.mark_ai(db, 'spending_logs', entry_id, 'notes', updates['notes'])
     db.commit()
     return True
 
@@ -324,9 +328,11 @@ def transcribe_spending_media(media_id: str) -> None:
                            (row['entry_id'],)).fetchone()
         if entry is not None:
             existing = (entry['raw_content'] or '').strip()
+            merged = f'{existing}\n\n{text}' if existing else text
+            authorship.record_change(db, 'spending_logs', row['entry_id'], 'raw_content', merged,
+                                     author=authorship.SPEECH, source=media_id)
             db.execute('UPDATE spending_logs SET raw_content=?, updated_at=? WHERE id=?',
-                       (f'{existing}\n\n{text}' if existing else text, int(time.time()),
-                        row['entry_id']))
+                       (merged, int(time.time()), row['entry_id']))
     jobs.enqueue('spending.structure', row['entry_id'], commit=False)
     db.commit()
 
@@ -491,6 +497,7 @@ def update_entry(entry_id):
     if 'notes' in body:
         updates['notes'] = _text(body, 'notes', limit=15000)
         updates['generated_notes'] = None
+        authorship.record_edit(db, 'spending_logs', entry_id, 'notes', updates['notes'])
     if 'amountCents' in body:
         cents, err = _parse_cents(body['amountCents'])
         if err:
