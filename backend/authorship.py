@@ -33,7 +33,8 @@ each client:
   what it inserted to whoever inserted it (`record_change`): a user edit, a
   transcript appended to a note, an accepted Writing proposal. The diff is over
   word and whitespace tokens, so fixing a typo recolours the word rather than
-  one stray letter.
+  one stray letter, and a rewrite takes over the odd 'the' it happened to
+  share with what it replaced (`_absorb_scraps`).
 
 `backend/mobile_sync/registry.py` folds the same `sql_object` into the phone's
 replica payload, and `backend/mobile_sync/schema.py` re-sends a record when its
@@ -43,8 +44,11 @@ from __future__ import annotations
 
 import difflib
 import json
+import logging
 import re
 import time
+
+logger = logging.getLogger(__name__)
 
 USER = 'u'
 SPEECH = 's'
@@ -202,6 +206,79 @@ def _tokens(text: str) -> list[str]:
     return _TOKEN.findall(text)
 
 
+# Past this many differing tokens (on both sides together) the middle of an
+# edit is treated as one replacement rather than aligned token by token:
+# SequenceMatcher is quadratic in the worst case, and this runs on every
+# Writing autosave under the database lock.
+_MAX_ALIGNED = 20_000
+
+
+def _opcodes(a: list[str], b: list[str]) -> list[list]:
+    """`[op, i1, i2, j1, j2]` over token lists, like SequenceMatcher's.
+
+    The common prefix and suffix are trimmed first, so an edit costs its own
+    size plus one linear scan: a one-word change in a 20k-word chapter aligns
+    one token, not the whole chapter.
+    """
+    n = min(len(a), len(b))
+    pre = 0
+    while pre < n and a[pre] == b[pre]:
+        pre += 1
+    suf = 0
+    while suf < n - pre and a[len(a) - 1 - suf] == b[len(b) - 1 - suf]:
+        suf += 1
+    a_end, b_end = len(a) - suf, len(b) - suf
+    ops: list[list] = []
+    if pre:
+        ops.append(['equal', 0, pre, 0, pre])
+    if pre < a_end or pre < b_end:
+        if (a_end - pre) + (b_end - pre) > _MAX_ALIGNED:
+            ops.append(['replace', pre, a_end, pre, b_end])
+        else:
+            matcher = difflib.SequenceMatcher(a=a[pre:a_end], b=b[pre:b_end], autojunk=False)
+            ops.extend([op, i1 + pre, i2 + pre, j1 + pre, j2 + pre]
+                       for op, i1, i2, j1, j2 in matcher.get_opcodes())
+    if suf:
+        ops.append(['equal', a_end, len(a), b_end, len(b)])
+    return ops
+
+
+def _absorb_scraps(ops: list[list], a: list[str], b: list[str]) -> list[list]:
+    """Fold into the change around it any scrap of old text a rewrite happened
+    to share with the new one.
+
+    Rewriting 'buy milk at the store' as 'pick up the kids' leaves ' the '
+    matched; kept, it speckles the new author's text with the old one's. An
+    equality between two changes is absorbed when it holds at most one word and
+    is no longer than either change around it (the rule diff-match-patch's
+    semantic cleanup uses), so two typo fixes either side of a real word
+    leave that word alone.
+    """
+    def size(toks, i, j):
+        return sum(len(t) for t in toks[i:j])
+
+    def larger(change):
+        return max(size(a, change[1], change[2]), size(b, change[3], change[4]))
+
+    changed = True
+    while changed:
+        changed = False
+        for k in range(1, len(ops) - 1):
+            op, i1, i2, j1, j2 = ops[k]
+            before, after = ops[k - 1], ops[k + 1]
+            if op != 'equal' or before[0] == 'equal' or after[0] == 'equal':
+                continue
+            if sum(1 for t in a[i1:i2] if not t.isspace()) > 1:
+                continue
+            length = size(a, i1, i2)
+            if length > larger(before) or length > larger(after):
+                continue
+            ops[k - 1:k + 2] = [['replace', before[1], after[2], before[3], after[4]]]
+            changed = True
+            break
+    return ops
+
+
 def merge_edit(old_text: str, old_spans, new_text: str, *, fallback: str = USER,
                author: str = USER, source: str | None = None) -> list[list]:
     """Spans for `new_text`, given that `author` turned `old_text` into it.
@@ -220,8 +297,7 @@ def merge_edit(old_text: str, old_spans, new_text: str, *, fallback: str = USER,
     for t in b:
         b_start.append(b_start[-1] + len(t))
     out: list[list] = []
-    matcher = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
-    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+    for op, i1, i2, j1, j2 in _absorb_scraps(_opcodes(a, b), a, b):
         if op == 'equal':
             out.extend([who, 1, src] if src else [who, 1]
                        for who, src in authors[a_start[i1]:a_start[i2]])
@@ -244,9 +320,9 @@ def find_spans(text: str, pieces: list[tuple[str, str]], *, rest: str = USER) ->
         piece = (piece or '').strip()
         if not piece:
             continue
+        # Only ever after the last one: searching from the start again would
+        # find an earlier clip's identical words and re-mark them as this one.
         found = text.find(piece, at)
-        if found < 0:
-            found = text.find(piece)
         if found < 0:
             continue
         for i in range(found, found + len(piece)):
@@ -269,8 +345,19 @@ def current(db, table: str, row_id: str, field: str) -> tuple[str, list[list]] |
 
 
 def store(db, table: str, row_id: str, field: str, text: str | None, spans) -> None:
-    """Record `spans` as describing `text`, the field's value once written."""
+    """Record `spans` as describing `text`, the field's value once written.
+
+    Spans that don't cover `text` exactly are a caller's bug. They are refused
+    and any stored row is cleared, so the field falls back to its default; the
+    save they rode along with still goes through, since raising here would lose
+    the user's text over a colouring mistake.
+    """
     text = text or ''
+    if not valid(spans, len(text)):
+        logger.warning('Refusing spans that do not cover %s.%s of %s (%d code points): %r',
+                       table, field, row_id, len(text), spans)
+        clear(db, table, row_id, field)
+        return
     db.execute(
         'INSERT INTO text_authorship(target, row_id, field, spans, text, updated_at)'
         ' VALUES (?,?,?,?,?,?) ON CONFLICT(target, row_id, field) DO UPDATE SET'
@@ -312,6 +399,14 @@ def record_change(db, table: str, row_id: str, field: str, new_text: str | None,
     new_text = new_text or ''
     if new_text == old_text:
         return old_spans
+    mirror = MIRRORS.get((table, field))
+    if not old_text and mirror:
+        # A body nobody has polished is still empty while the client edits the
+        # raw text it shows in its place; diffing against '' would hand every
+        # dictated word to the typist.
+        base = current(db, table, row_id, mirror)
+        if base and base[0]:
+            old_text, old_spans = base
     spans = merge_edit(old_text, old_spans, new_text, author=author, source=source)
     store(db, table, row_id, field, new_text, spans)
     return spans
@@ -320,6 +415,15 @@ def record_change(db, table: str, row_id: str, field: str, new_text: str | None,
 def record_edit(db, table: str, row_id: str, field: str, new_text: str | None) -> None:
     """The user is about to save `new_text` over the field (see `record_change`)."""
     record_change(db, table, row_id, field, new_text)
+
+
+def record_edits(db, table: str, row_id: str, updates: dict, *, author: str = USER,
+                 source: str | None = None) -> None:
+    """`record_change` for every tracked field of `table` that `updates` (column
+    name -> new value, as an UPDATE is about to write) sets."""
+    for field in FIELDS[table]:
+        if field in updates:
+            record_change(db, table, row_id, field, updates[field], author=author, source=source)
 
 
 def carry(db, table: str, from_id: str, to_id: str, field: str, new_text: str | None,

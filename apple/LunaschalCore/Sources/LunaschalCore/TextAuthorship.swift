@@ -146,7 +146,13 @@ public final class AuthorAligner {
 
     /// One author per scalar of `rendered`, advancing through the source.
     public func authors(for rendered: String) -> [TextAuthor] {
-        rendered.unicodeScalars.map { scalar in
+        // A piece that is only whitespace is usually the renderer's own line
+        // break between list items or rows; matching it would jump the cursor
+        // to the next newline in the source, past a whole item.
+        if rendered.unicodeScalars.allSatisfy(\.properties.isWhitespace) {
+            return Array(repeating: last, count: rendered.unicodeScalars.count)
+        }
+        return rendered.unicodeScalars.map { scalar in
             var k = cursor
             while k < source.count, source[k] != scalar { k += 1 }
             if k < source.count {

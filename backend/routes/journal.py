@@ -560,7 +560,12 @@ def polish_entry(id):
         'UPDATE journal_entries SET content=?, updated_at=? WHERE id=?',
         (polished, int(time.time()), id),
     )
-    authorship.mark_ai(db, 'journal_entries', id, 'content', polished)
+    if polished == source:
+        # Nothing to polish: the body is the transcript again and takes its
+        # spans, recordings included (authorship.MIRRORS), as _polish_bg leaves it.
+        authorship.clear(db, 'journal_entries', id, 'content')
+    else:
+        authorship.mark_ai(db, 'journal_entries', id, 'content', polished)
     db.commit()
     _notify_subscribers(id)
     # Regenerate title/tags from the polished text if they're missing
@@ -581,9 +586,7 @@ def update_entry(id):
     if 'tags' in body:
         updates['tags'] = tags_json(body['tags'])
     db = get_db()
-    for field in ('content', 'title'):
-        if field in updates:
-            authorship.record_edit(db, 'journal_entries', id, field, updates[field])
+    authorship.record_edits(db, 'journal_entries', id, updates)
     build_update(db, 'journal_entries', updates, 'id=?', (id,))
     if any(field in body for field in ('content', 'title', 'tags')):
         _close_screenshot_session(db, id)

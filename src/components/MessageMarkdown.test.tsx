@@ -67,6 +67,34 @@ describe('MessageMarkdown authorship', () => {
     expect(container.querySelector('strong')?.textContent).toBe('Buy');
   });
 
+  it('keeps each list item its own author across the breaks between them', () => {
+    const { container } = render(
+      <MessageMarkdown
+        content={'- typed item\n- AI item'}
+        authored={{
+          authorship: {
+            content: [
+              ['u', 13],
+              ['a', 9],
+            ],
+          },
+          field: 'content',
+          fallback: 'a',
+        }}
+      />
+    );
+    const items = [...container.querySelectorAll('li')].map(li =>
+      [...li.querySelectorAll('span[class^="text-"]')].map(s => [
+        s.className,
+        s.textContent,
+      ])
+    );
+    expect(items).toEqual([
+      [['text-user', 'typed item']],
+      [['text-ai', 'AI item']],
+    ]);
+  });
+
   it('colours a single-author field as a whole and adds no spans', () => {
     const { container } = render(
       <MessageMarkdown

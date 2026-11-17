@@ -204,9 +204,7 @@ def update_idea(idea_id):
     if 'repoId' in body:
         updates['repo_id'] = (body['repoId'] or '').strip() or None
     db = get_db()
-    for field in ('content', 'title'):
-        if field in updates:
-            authorship.record_edit(db, 'ideas', idea_id, field, updates[field])
+    authorship.record_edits(db, 'ideas', idea_id, updates)
     build_update(db, 'ideas', updates, 'id=?', (idea_id,))
     db.commit()
     return jsonify({'success': True})
@@ -330,7 +328,10 @@ def apply_recording_transcript(idea_id: str, text: str, *, spans=None) -> None:
         # same entry; replace that half rather than stacking a longer copy of it
         # on top.
         typed = typed[: len(typed) - len(heard)].rstrip()
-    merged = f'{typed}\n\n{text}' if typed.strip() else text
+    if not typed.strip():
+        typed = ''
+    separator = '\n\n' if typed else ''
+    merged = f'{typed}{separator}{text}'
     if merged == (row['raw_content'] or ''):
         return
     # The typed half keeps its authors; the delivered half is speech-to-text,
@@ -340,7 +341,7 @@ def apply_recording_transcript(idea_id: str, text: str, *, spans=None) -> None:
     heard_spans = spans if authorship.valid(spans, len(text)) else [[authorship.SPEECH, len(text)]]
     authorship.store(db, 'ideas', idea_id, 'raw_content', merged, [
         *([who, 1, src] if src else [who, 1] for who, src in kept),
-        [authorship.SPEECH, len(merged) - len(typed) - len(text)],
+        *([[authorship.SPEECH, len(separator)]] if separator else []),
         *heard_spans,
     ])
     db.execute(

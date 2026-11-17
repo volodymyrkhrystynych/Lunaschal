@@ -67,10 +67,11 @@ def _entry_media(db, entry_id: str) -> list[dict]:
     return [_media_dict(r) for r in rows]
 
 
-def _entry_dict(db, row) -> dict:
+def _entry_dict(db, row, *, attribute: bool = True) -> dict:
     d = row_to_dict(row)
     d.pop('generatedNotes', None)
-    authorship.attach(db, 'spending_logs', [d])
+    if attribute:
+        authorship.attach(db, 'spending_logs', [d])
     # Still being read: a structuring pass is queued, or a receipt/clip is.
     d['reading'] = db.execute(
         "SELECT 1 FROM llm_jobs WHERE status IN ('pending', 'running') AND ("
@@ -445,7 +446,8 @@ def journal_entries():
     rows = db.execute(
         'SELECT * FROM spending_logs ORDER BY created_at DESC, id DESC LIMIT ?', (limit,)
     ).fetchall()
-    return jsonify([_entry_dict(db, r) for r in rows])
+    # One attribution query for the page rather than one per row.
+    return jsonify(authorship.attach(db, 'spending_logs', [_entry_dict(db, r, attribute=False) for r in rows]))
 
 
 @bp.get('/trends')

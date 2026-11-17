@@ -149,6 +149,10 @@ export class AuthorAligner {
 
   /** One author per code point of `rendered`, advancing through the source. */
   authorsFor(rendered: string): TextAuthor[] {
+    // A piece that is only whitespace is usually the renderer's own: the line
+    // break it puts between list items or table rows. Matching it would jump
+    // the cursor to the next newline in the source, past a whole item.
+    if (!/\S/u.test(rendered)) return Array.from(rendered).map(() => this.last);
     return Array.from(rendered).map(point => {
       let k = this.cursor;
       while (k < this.source.length && this.source[k] !== point) k++;

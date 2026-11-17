@@ -152,9 +152,7 @@ def journal_mutation(db, body):
             updates = {**data, 'updated_at': int(time.time())}
             if 'tags' in updates:
                 updates['tags'] = tags_json(updates['tags'])
-            for field in ('content', 'title'):
-                if field in updates:
-                    authorship.record_edit(db, 'journal_entries', body['recordId'], field, updates[field])
+            authorship.record_edits(db, 'journal_entries', body['recordId'], updates)
             setters = ','.join(f'"{name}"=?' for name in updates)
             db.execute(f'UPDATE journal_entries SET {setters} WHERE id=?',
                        [*updates.values(), body['recordId']])

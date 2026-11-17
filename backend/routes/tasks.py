@@ -382,10 +382,8 @@ def _insert_todo_row(db, body: dict) -> tuple[str | None, str | None]:
 def _record_text_edits(db, table: str, row_id: str, fields: list, values: list) -> None:
     """Who wrote a to-do's words, for the `fields`/`values` an update route
     built; called before the UPDATE (backend/authorship.py's rule)."""
-    for field, value in zip(fields, values):
-        name = field.removesuffix('=?')
-        if name in ('title', 'notes'):
-            authorship.record_edit(db, table, row_id, name, value)
+    authorship.record_edits(db, table, row_id,
+                            {field.removesuffix('=?'): value for field, value in zip(fields, values)})
 
 
 @bp.post('/todos')

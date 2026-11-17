@@ -238,9 +238,38 @@
       "new": "ramen with two eggs",
       "spans": [
         ["s", 11, "01JCLIP"],
+        ["u", 8]
+      ]
+    },
+    {
+      "name": "a rewrite takes the words it happened to share",
+      "old": "Remember to buy milk and eggs at the store",
+      "oldSpans": [["u", 42]],
+      "new": "Pick up the kids from school",
+      "author": "s",
+      "spans": [["s", 28]]
+    },
+    {
+      "name": "a typo fix recolours only the word",
+      "old": "I went to teh store",
+      "oldSpans": [["s", 19, "R1"]],
+      "new": "I went to the store",
+      "spans": [
+        ["s", 10, "R1"],
         ["u", 3],
-        ["s", 1, "01JCLIP"],
-        ["u", 4]
+        ["s", 6, "R1"]
+      ]
+    },
+    {
+      "name": "a real word between two typo fixes keeps its author",
+      "old": "teh cat adn dog",
+      "oldSpans": [["s", 15]],
+      "new": "the cat and dog",
+      "spans": [
+        ["u", 3],
+        ["s", 5],
+        ["u", 3],
+        ["s", 4]
       ]
     },
     {
@@ -296,6 +325,22 @@
           ["u", "Typed. "],
           ["s", "said aloud"]
         ]
+      ]
+    },
+    {
+      "name": "the line breaks between list items don't skip an item",
+      "source": "- typed item\n- AI item",
+      "spans": [
+        ["u", 13],
+        ["a", 9]
+      ],
+      "rendered": ["\n", "typed item", "\n", "AI item", "\n"],
+      "runs": [
+        [["u", "\n"]],
+        [["u", "typed item"]],
+        [["u", "\n"]],
+        [["a", "AI item"]],
+        [["a", "\n"]]
       ]
     }
   ]

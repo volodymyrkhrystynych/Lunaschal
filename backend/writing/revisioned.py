@@ -65,9 +65,7 @@ def save(db, table: str, doc_id: str, text: dict, *, extra: dict | None = None,
         before_write(db, doc_id, now)
         # Every hand save of a chapter or note passes here, phone or desktop.
         from backend import authorship
-        for column, value in text.items():
-            if (table, column) in authorship.DEFAULTS:
-                authorship.record_edit(db, table, doc_id, column, value)
+        authorship.record_edits(db, table, doc_id, text)
         revision += 1
         updates.update(text, revision=revision, updated_at=now)
     if updates:

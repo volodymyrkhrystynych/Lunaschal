@@ -383,10 +383,12 @@ def transcribe_event(id):
         updates['classification_error'] = None
 
     if updates:
-        for field in ('title', 'description'):
-            if field in updates:
-                authorship.record_change(db, 'calendar_events', id, field, updates[field],
-                                         author=voice_author)
+        if voice_author == authorship.SPEECH:
+            # The fallback replaces the whole description with the sentence.
+            authorship.mark(db, 'calendar_events', id, 'description', updates['description'],
+                            authorship.SPEECH)
+        else:
+            authorship.record_edits(db, 'calendar_events', id, updates, author=authorship.AI)
         build_update(db, 'calendar_events', updates, 'id=?', (id,))
         db.commit()
 
@@ -532,9 +534,7 @@ def update_event(id):
         return jsonify({'error': err}), 400
     if not updates:
         return jsonify({'success': True})
-    for field in ('title', 'description'):
-        if field in updates:
-            authorship.record_edit(db, 'calendar_events', id, field, updates[field])
+    authorship.record_edits(db, 'calendar_events', id, updates)
     build_update(db, 'calendar_events', updates, 'id=?', (id,))
     db.commit()
     return jsonify({'success': True})
@@ -650,9 +650,7 @@ def update_series_from(id, date):
     if row['repeat_freq'] is None or cutoff is None:
         # A one-off, or a cut with no earlier occurrences: nothing to preserve,
         # so edit in place rather than leaving an empty husk of a series behind.
-        for field in ('title', 'description'):
-            if field in updates:
-                authorship.record_edit(db, 'calendar_events', id, field, updates[field])
+        authorship.record_edits(db, 'calendar_events', id, updates)
         build_update(db, 'calendar_events', updates, 'id=?', (id,))
         db.commit()
         return jsonify({'id': id, 'split': False})

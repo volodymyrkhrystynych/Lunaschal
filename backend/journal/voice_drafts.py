@@ -439,7 +439,9 @@ def _process_draft_inner(draft_id: str) -> None:
     db = get_db()
     authorship.mark(db, 'journal_entries', entry_id, 'raw_content', raw_text,
                     authorship.SPEECH, clip)
-    if merged is not None:
+    if content_text != raw_text:
+        # A merge that came back empty or unchanged left the body equal to
+        # the transcript, which then mirrors its spans (authorship.MIRRORS).
         authorship.mark_ai(db, 'journal_entries', entry_id, 'content', content_text)
     db.commit()
     _generate_metadata(entry_id, content_text)

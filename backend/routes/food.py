@@ -67,10 +67,11 @@ def _linked_recipe(db, recipe_id: str | None) -> dict | None:
     return {'id': row['id'], 'title': row['title']} if row else None
 
 
-def _entry_dict(db, row) -> dict:
+def _entry_dict(db, row, *, attribute: bool = True) -> dict:
     d = row_to_dict(row)
     d.pop('generatedNotes', None)
-    authorship.attach(db, 'food_entries', [d])
+    if attribute:
+        authorship.attach(db, 'food_entries', [d])
     d['polishing'] = db.execute(
         "SELECT 1 FROM llm_jobs WHERE target_id=? AND kind='food.structure'"
         " AND status IN ('pending', 'running')", (row['id'],),
@@ -520,7 +521,8 @@ def list_entries():
             'SELECT * FROM food_entries ORDER BY created_at DESC LIMIT ? OFFSET ?',
             (limit, offset),
         ).fetchall()
-    return jsonify([_entry_dict(db, r) for r in rows])
+    # One attribution query for the page rather than one per row.
+    return jsonify(authorship.attach(db, 'food_entries', [_entry_dict(db, r, attribute=False) for r in rows]))
 
 
 @bp.get('/journal')
