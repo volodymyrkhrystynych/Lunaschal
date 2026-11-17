@@ -1598,7 +1598,7 @@ final class OfflineCaptureTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments.append("-libraryFixture")
         app.launch()
-        var firstLook: Data?
+        var firstLook: XCUIScreenshot?
         for visit in 1...2 {
             openMore(app, "Library")
             XCTAssertTrue(app.staticTexts["The Long Way Round"].waitForExistence(timeout: 10))
@@ -1612,9 +1612,12 @@ final class OfflineCaptureTests: XCTestCase {
             shot.name = "latest-pill-visit-\(visit)"
             add(shot)
             if let firstLook {
-                XCTAssertEqual(latest.pngRepresentation, firstLook, "the pill is not drawn as it was on the first visit")
+                // A clipped pill shows the background where the capsule was,
+                // tens of levels apart; the same pill drawn twice has measured
+                // 0.8 apart, so the comparison cannot be byte-for-byte.
+                XCTAssertLessThan(meanPixelDifference(latest, firstLook), 4, "the pill is not drawn as it was on the first visit")
             } else {
-                firstLook = latest.pngRepresentation
+                firstLook = latest
             }
             app.navigationBars["Library"].buttons["More"].tap()
         }
@@ -3290,6 +3293,30 @@ final class OfflineCaptureTests: XCTestCase {
         let remove = app.buttons["Remove"]
         if remove.waitForExistence(timeout: 3) { remove.tap() }
         XCTAssertTrue(waitForAbsence(row), "the old notes left the draft")
+    }
+
+    /// Mean per-channel difference between two screenshots, 0...255, or
+    /// infinity when they are not the same size. The simulator does not draw a
+    /// translucent control identically every time, so a picture expected to be
+    /// unchanged needs a tolerance rather than equal PNG bytes.
+    private func meanPixelDifference(_ a: XCUIScreenshot, _ b: XCUIScreenshot) -> Double {
+        func rgba(_ shot: XCUIScreenshot) -> (bytes: [UInt8], width: Int, height: Int)? {
+            guard let image = shot.image.cgImage else { return nil }
+            let width = image.width, height = image.height
+            var bytes = [UInt8](repeating: 0, count: width * height * 4)
+            guard let context = CGContext(
+                data: &bytes, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return nil }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return (bytes, width, height)
+        }
+        guard let x = rgba(a), let y = rgba(b), x.width == y.width, x.height == y.height else { return .infinity }
+        var total = 0
+        for i in x.bytes.indices where i % 4 != 3 {
+            total += abs(Int(x.bytes[i]) - Int(y.bytes[i]))
+        }
+        return Double(total) / Double(x.width * x.height * 3)
     }
 
     private func waitForAbsence(_ element: XCUIElement) -> Bool {
