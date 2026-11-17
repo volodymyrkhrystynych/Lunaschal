@@ -158,9 +158,9 @@ final class CodeAgentTests: XCTestCase {
     }
 
     func testOnlyAStoppedTaskCanBeFinishedAndAFinishedOneIsClosed() {
-        func task(_ status: String, _ phase: String = "build") -> CodeTask {
+        func task(_ status: String, _ phase: String = "build", baseSha: String? = "b") -> CodeTask {
             CodeTask(id: "T", repoId: "R", title: "t", prompt: "p", harness: "pi", status: status, phase: phase,
-                     summary: "In y.py.")
+                     summary: "In y.py.", baseSha: baseSha)
         }
         XCTAssertTrue(task("interrupted").canFinish)
         XCTAssertTrue(task("error", "ask").canFinish)
@@ -173,6 +173,11 @@ final class CodeAgentTests: XCTestCase {
         XCTAssertFalse(finished.canMessage || finished.canDiscard || finished.canPlanFromAnswer)
         XCTAssertTrue(task("error").finishExplanation.contains("committed and tested"))
         XCTAssertTrue(task("error", "ask").finishExplanation.hasPrefix("Close this task"))
+        // The server closes a build with no clone at once, testing nothing.
+        XCTAssertTrue(task("error", baseSha: nil).finishExplanation.hasPrefix("Close this task"))
+        for status in ["interrupted", "error", "done", "running", "finished"] {
+            XCTAssertEqual(task(status).canFinish, task(status).canContinue, status)
+        }
     }
 
     func testUnifiedDiffParsesFilesHunksAndLineNumbers() {

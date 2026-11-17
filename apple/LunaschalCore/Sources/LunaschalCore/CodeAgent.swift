@@ -44,6 +44,8 @@ public struct CodeTask: Codable, Equatable, Identifiable, Sendable {
     public let plan: String?
     public let summary: String?
     public let diffStat: [CodeFileStat]?
+    /// Where the build's clone started; nil until a workspace was made.
+    public let baseSha: String?
     public let headSha: String?
     public let testExit: Int?
     public let testOutput: String?
@@ -56,12 +58,12 @@ public struct CodeTask: Codable, Equatable, Identifiable, Sendable {
 
     public init(id: String, repoId: String, title: String, prompt: String, harness: String, status: String,
                 phase: String, plan: String? = nil, summary: String? = nil, diffStat: [CodeFileStat]? = nil,
-                headSha: String? = nil, testExit: Int? = nil, testOutput: String? = nil, prUrl: String? = nil,
+                baseSha: String? = nil, headSha: String? = nil, testExit: Int? = nil, testOutput: String? = nil, prUrl: String? = nil,
                 error: String? = nil, createdAt: String? = nil, updatedAt: String? = nil,
                 pending: CodeApproval? = nil, running: Bool? = nil) {
         self.id = id; self.repoId = repoId; self.title = title; self.prompt = prompt; self.harness = harness
         self.status = status; self.phase = phase; self.plan = plan; self.summary = summary
-        self.diffStat = diffStat; self.headSha = headSha; self.testExit = testExit; self.testOutput = testOutput
+        self.diffStat = diffStat; self.baseSha = baseSha; self.headSha = headSha; self.testExit = testExit; self.testOutput = testOutput
         self.prUrl = prUrl; self.error = error; self.createdAt = createdAt; self.updatedAt = updatedAt
         self.pending = pending; self.running = running
     }
@@ -81,15 +83,18 @@ public struct CodeTask: Codable, Equatable, Identifiable, Sendable {
     public var canMessage: Bool {
         ["answered", "needs_input", "done", "error", "interrupted", "awaiting_plan"].contains(status)
     }
-    public var canContinue: Bool { status == "interrupted" || status == "error" }
+    /// Interrupted or failed: it waits to be continued with the agent or
+    /// finished without it. Mirrors worker.is_stopped.
+    public var isStopped: Bool { status == "interrupted" || status == "error" }
+    public var canContinue: Bool { isStopped }
     /// Wrap up a task that stopped short without another agent turn: a build
     /// has what it changed committed and tested, anything else is closed.
-    /// Mirrors worker.can_finish.
-    public var canFinish: Bool { status == "interrupted" || status == "error" }
+    public var canFinish: Bool { isStopped }
     /// What Finish does, said before it is done. Same words as
-    /// src/lib/codeTasks.ts's `finishExplanation`.
+    /// src/lib/codeTasks.ts's `finishExplanation`, and the same rule: a build
+    /// that never got a clone (no baseSha) is closed at once.
     public var finishExplanation: String {
-        phase == "build"
+        phase == "build" && baseSha != nil
             ? "Finish without the agent: whatever it changed is committed and tested, ready to review and push. If it changed nothing, the task is closed."
             : "Close this task. Its transcript stays readable; its workspace is removed."
     }

@@ -1556,10 +1556,11 @@ export interface CodeTask {
   prompt: string;
   harness: 'pi' | 'omp' | 'qwen';
   status: string;
-  phase: 'ask' | 'plan' | 'build';
+  phase: 'ask' | 'plan' | 'build' | 'finish';
   plan: string | null;
   summary: string | null;
   diffStat: CodeFileStat[] | null;
+  baseSha: string | null;
   headSha: string | null;
   testExit: number | null;
   testOutput: string | null;

@@ -93,15 +93,19 @@ export const MODES: Record<
 };
 export const canPush = (t: CodeTask) =>
   (t.status === 'done' || t.status === 'needs_input') && !!t.headSha;
-export const canContinue = (t: CodeTask) =>
+/** Interrupted or failed: it waits to be continued with the agent or finished
+ * without it. Mirrors worker.is_stopped. */
+export const isStopped = (t: CodeTask) =>
   t.status === 'interrupted' || t.status === 'error';
+export const canContinue = isStopped;
 /** Wrap up a task that stopped short, without another agent turn: a build is
- * exported and tested, anything else is closed. Mirrors worker.can_finish. */
-export const canFinish = (t: CodeTask) =>
-  t.status === 'interrupted' || t.status === 'error';
-/** What Finish does, said before it is done. Same words as CodeAgent.swift. */
+ * exported and tested, anything else is closed. */
+export const canFinish = isStopped;
+/** What Finish does, said before it is done. Same words as CodeAgent.swift.
+ * A build that never got a clone (no baseSha) is closed at once, as the
+ * server does; a clone gone missing is the one case only the server sees. */
 export function finishExplanation(t: CodeTask): string {
-  return t.phase === 'build'
+  return t.phase === 'build' && t.baseSha
     ? 'Finish without the agent: whatever it changed is committed and tested, ready to review and push. If it changed nothing, the task is closed.'
     : 'Close this task. Its transcript stays readable; its workspace is removed.';
 }

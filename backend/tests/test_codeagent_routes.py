@@ -303,3 +303,20 @@ def test_only_a_stopped_task_can_be_finished(client, repo_id, status):
     t = tasks.create(repo_id, 'Fix it')
     at(t['id'], status)
     assert client.post(f"/api/code/tasks/{t['id']}/finish").status_code == 409
+
+
+def test_finishing_without_salvage_clears_the_old_error(client, repo_id):
+    t = tasks.create(repo_id, 'Where is X?', mode='ask')
+    at(t['id'], 'error', summary='In y.py.', error='model went away')
+    body = client.post(f"/api/code/tasks/{t['id']}/finish").get_json()
+    assert body['status'] == 'finished' and body['error'] is None
+
+
+@pytest.mark.parametrize('action', ['cancel', 'discard'])
+def test_a_queued_finish_that_is_dropped_is_a_build_again(client, repo_id, action):
+    t = tasks.create(repo_id, 'Fix it')
+    mirror.work_dir(t['id']).mkdir(parents=True)
+    at(t['id'], 'interrupted', phase='build', plan='p', base_sha='b' * 40)
+    assert client.post(f"/api/code/tasks/{t['id']}/finish").get_json()['phase'] == 'finish'
+    body = client.post(f"/api/code/tasks/{t['id']}/{action}").get_json()
+    assert body['phase'] == 'build'

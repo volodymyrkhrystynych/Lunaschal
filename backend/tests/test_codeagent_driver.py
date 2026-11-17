@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -642,3 +643,77 @@ def test_a_finish_that_fails_leaves_an_ordinary_failed_build(repo_id):
     # A build again, so Continue hands it back to the agent.
     assert out['phase'] == 'build'
     assert worker.continue_task(t['id'])['pendingInput'] == worker.CONTINUE_TEXT
+
+
+def _cancel_during_tests(rt, cancel):
+    """Press Cancel while the (uninterruptible) test command is running."""
+    real_run = rt.run
+
+    def run(task_id, command, timeout=120, max_bytes=None):
+        if command[:2] == ['sh', '-c']:
+            cancel.set()
+        return real_run(task_id, command, timeout, max_bytes)
+    rt.run = run
+
+
+def test_a_cancel_during_the_test_run_ends_cancelled_not_done(repo_id):
+    t = tasks.create(repo_id, 'Change a.py')
+    d, rt = make_driver()
+    d.run(t['id'])
+    requeue(t['id'], phase='build')
+    cancel = threading.Event()
+    _cancel_during_tests(rt, cancel)
+    out = d.run(t['id'], cancel)
+    assert out['status'] == 'cancelled'
+
+
+def test_a_cancel_during_a_finish_test_run_ends_cancelled(repo_id):
+    t, d, rt = _stopped_build(repo_id)
+    worker.finish_task(t['id'])
+    cancel = threading.Event()
+    _cancel_during_tests(rt, cancel)
+    assert d.run(t['id'], cancel)['status'] == 'cancelled'
+
+
+def test_a_finish_cancelled_before_it_started_starts_nothing(repo_id):
+    t, d, rt = _stopped_build(repo_id)
+    worker.finish_task(t['id'])
+    rt.started.clear()
+    cancel = threading.Event()
+    cancel.set()
+    assert d.run(t['id'], cancel)['status'] == 'cancelled'
+    assert rt.started == []
+
+
+def test_a_cancelled_finish_is_cleaned_up_by_the_worker(repo_id, monkeypatch):
+    t, d, rt = _stopped_build(repo_id)
+    worker.finish_task(t['id'])
+    monkeypatch.setattr(worker, '_driver', d)
+    monkeypatch.setattr(worker, '_runtime', rt)
+    real_run = d.run
+    d.run = lambda task_id, cancel: (cancel.set(), real_run(task_id, cancel))[1]
+    assert worker.run_next()
+    assert tasks.get(t['id'])['status'] == 'cancelled'
+    assert not mirror.task_dir(t['id']).exists()
+
+
+def test_finishing_with_nothing_new_drops_an_earlier_export(repo_id):
+    t, d, rt = _stopped_build(repo_id)
+    subprocess.run(['git', 'checkout', '--', '.'], cwd=mirror.work_dir(t['id']), env=ENV)
+    # An earlier turn exported something that the clone no longer holds past
+    # its base: the bundle is empty now, and out.git goes with the clone.
+    tasks.update(t['id'], head_sha='c' * 40, diff_stat=[{'path': 'a.py'}])
+    worker.finish_task(t['id'])
+    out = d.run(t['id'])
+    assert out['status'] == 'finished'
+    assert out['headSha'] is None and out['diffStat'] is None
+
+
+def test_finishing_a_build_without_a_base_drops_an_earlier_export(repo_id):
+    t, d, rt = _stopped_build(repo_id)
+    tasks.update(t['id'], head_sha='c' * 40, diff_stat=[{'path': 'a.py'}])
+    worker.finish_task(t['id'])
+    tasks.update(t['id'], base_sha=None)
+    out = d.run(t['id'])
+    assert out['status'] == 'finished'
+    assert out['headSha'] is None and out['diffStat'] is None

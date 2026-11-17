@@ -106,7 +106,8 @@ struct CodeFixture {
                              head: String? = nil, testExit: Int? = nil, testOutput: String? = nil,
                              prURL: String? = nil, pending: CodeApproval? = nil) -> CodeTask {
         CodeTask(id: id, repoId: "01K9CODEFIXTUREREPO0000001", title: title, prompt: title, harness: "pi",
-                 status: status, phase: phase, plan: plan, summary: summary, diffStat: diff, headSha: head,
+                 status: status, phase: phase, plan: plan, summary: summary, diffStat: diff,
+                 baseSha: "4f1c2a9e0b7d3c6f5a8e1d2b9c0a7f6e5d4c3b2a", headSha: head,
                  testExit: testExit, testOutput: testOutput, prUrl: prURL, error: nil,
                  createdAt: "2026-11-02T10:00:00+00:00", updatedAt: "2026-11-02T10:30:00+00:00",
                  pending: pending, running: false)
@@ -127,7 +128,7 @@ struct CodeFixture {
         case "make-plan": status = "queued"; phase = "plan"
         case "revise", "message", "continue": status = "queued"
         // A build is queued to be exported and tested; anything else closes.
-        case "finish" where t.phase == "build": status = "queued"; phase = "finish"
+        case "finish" where t.phase == "build" && t.baseSha != nil: status = "queued"; phase = "finish"
         case "finish": status = "finished"
         case "cancel": status = "cancelled"
         case "discard": status = "discarded"
@@ -136,7 +137,7 @@ struct CodeFixture {
         }
         let updated = CodeTask(id: t.id, repoId: t.repoId, title: t.title, prompt: t.prompt, harness: t.harness,
                                status: status, phase: phase, plan: t.plan, summary: t.summary, diffStat: t.diffStat,
-                               headSha: t.headSha, testExit: t.testExit, testOutput: t.testOutput,
+                               baseSha: t.baseSha, headSha: t.headSha, testExit: t.testExit, testOutput: t.testOutput,
                                prUrl: action == "push" ? "https://github.com/example/demo-app/pull/13" : t.prUrl,
                                error: nil, createdAt: t.createdAt, updatedAt: t.updatedAt, pending: nil, running: false)
         tasks[index] = updated

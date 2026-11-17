@@ -6,6 +6,7 @@ import {
   canMessage,
   canPlanFromAnswer,
   canPush,
+  canContinue,
   canDiscard,
   canFinish,
   finishExplanation,
@@ -36,6 +37,7 @@ const task = (status: string, extra: Partial<CodeTask> = {}): CodeTask => ({
   plan: null,
   summary: null,
   diffStat: null,
+  baseSha: 'b',
   headSha: null,
   testExit: null,
   testOutput: null,
@@ -106,6 +108,18 @@ describe('codeTasks', () => {
     expect(canDiscard(finished)).toBe(false);
     expect(finishExplanation(task('error'))).toMatch(/committed and tested/);
     expect(finishExplanation(task('error', { phase: 'ask' }))).toMatch(
+      /^Close this task/
+    );
+  });
+
+  it('continues and finishes the same stopped tasks', () => {
+    for (const s of ['interrupted', 'error', 'done', 'running', 'finished'])
+      expect(canFinish(task(s))).toBe(canContinue(task(s)));
+  });
+
+  it('promises no commit for a build that never got a clone', () => {
+    // The server closes such a build at once rather than testing anything.
+    expect(finishExplanation(task('error', { baseSha: null }))).toMatch(
       /^Close this task/
     );
   });

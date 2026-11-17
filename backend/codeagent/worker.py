@@ -271,20 +271,20 @@ def _resume_text(task: dict) -> str | None:
     return None
 
 
+def is_stopped(task: dict) -> bool:
+    """A task that stopped short — interrupted or failed — and waits for the
+    user to either continue it with the agent or finish it without."""
+    return task['status'] in ('interrupted', 'error')
+
+
 @_serialized
 def continue_task(task_id: str) -> dict:
     task = tasks.get(task_id)
-    if task['status'] not in ('interrupted', 'error'):
+    if not is_stopped(task):
         raise ActionRefused('Only an interrupted or failed task can be continued')
     tasks.append_event(task_id, 'user', {'text': 'Continue.', 'action': 'continue'})
     pending = task.get('pendingInput') or _resume_text(task)
     return _requeue(task_id, pending_input=pending, error=None)
-
-
-def can_finish(task: dict) -> bool:
-    """An interrupted or failed task, wrapped up without asking the agent for
-    another turn."""
-    return task['status'] in ('interrupted', 'error')
 
 
 def _salvageable(task: dict) -> bool:
@@ -302,13 +302,19 @@ def finish_task(task_id: str) -> dict:
     'finished': its transcript and its last answer stay readable, and its
     container and clone are removed, as a discard's would be."""
     task = tasks.get(task_id)
-    if not can_finish(task) or current_task() == task_id:
+    if not is_stopped(task) or current_task() == task_id:
         raise ActionRefused('Only an interrupted or failed task can be finished')
     tasks.append_event(task_id, 'user', {'text': 'Finish.', 'action': 'finish'})
     if _salvageable(task):
         return _requeue(task_id, phase='finish', pending_input=None, error=None)
     cleanup(task_id)
-    return tasks.set_status(task_id, 'finished', pending_input=None)
+    return tasks.set_status(task_id, 'finished', pending_input=None, error=None)
+
+
+def _unqueued_finish(task: dict) -> dict:
+    """A Finish that never ran is still a build: 'finish' is only a queued
+    phase, and the driver is what sets it back."""
+    return {'phase': 'build'} if task['phase'] == 'finish' else {}
 
 
 def cancel_task(task_id: str) -> dict:
@@ -323,7 +329,7 @@ def cancel_task(task_id: str) -> dict:
     if task['status'] not in DISCARDABLE:
         raise ActionRefused('That task has already finished')
     cleanup(task_id)
-    return tasks.set_status(task_id, 'cancelled')
+    return tasks.set_status(task_id, 'cancelled', **_unqueued_finish(task))
 
 
 def discard_task(task_id: str) -> dict:
@@ -331,7 +337,7 @@ def discard_task(task_id: str) -> dict:
     if task['status'] not in DISCARDABLE or current_task() == task_id:
         raise ActionRefused('Cancel the task before discarding it')
     cleanup(task_id)
-    return tasks.set_status(task_id, 'discarded')
+    return tasks.set_status(task_id, 'discarded', **_unqueued_finish(task))
 
 
 def push_task(task_id: str) -> dict:
