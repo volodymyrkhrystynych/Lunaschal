@@ -5,6 +5,10 @@ import LunaschalCore
 /// Everything is saved on the device first and uploads with the next sync.
 struct DailyView: View {
     @ObservedObject var model: CaptureModel
+    let context: JournalContextModel
+    let chat: ChatModel
+    let contextToday: [JournalContextToday.Item]
+    @State private var contextOpened: JournalContextPrompt?
     @State private var weight = ""
     // Kept across launches, like the desktop card's draft.
     @AppStorage("dailyCaloriesDraft") private var calorieLine = ""
@@ -25,6 +29,8 @@ struct DailyView: View {
     var body: some View {
         let today = summary
         Form {
+            // First: the one thing here that only today can answer well.
+            TodayContextSection(context: context, items: contextToday, opened: $contextOpened)
             Section("Weather") { WeatherCard(weather: model.weather) }
             Section("Sleep · past 7 nights") {
                 SleepWeekView(week: model.sleepWeek, error: model.sleepError)
@@ -171,6 +177,7 @@ struct DailyView: View {
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker(front: true) { _ = model.logSelfie($0) }.ignoresSafeArea()
         }
+        .todayContextSheet($contextOpened, context: context, capture: model, chat: chat)
     }
 
     /// One line, split the way the desktop's Calories card splits it.

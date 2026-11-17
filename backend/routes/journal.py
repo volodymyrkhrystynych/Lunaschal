@@ -219,8 +219,12 @@ def get_entry(id):
 
 @bp.post('/context-prompts/prepare')
 def prepare_context_prompts():
+    # Only the phone's Daily page asks for today's (`{"includeToday": true}`);
+    # the web's Chat cards are the backlog and nothing else.
+    body = request.get_json(silent=True)
+    include_today = isinstance(body, dict) and body.get('includeToday') is True
     db = get_db()
-    entries = [row_to_dict(row) for row in context_prompts.prepare(db)]
+    entries = [row_to_dict(row) for row in context_prompts.prepare(db, include_today=include_today)]
     return jsonify(_enrich_with_attachments(db, entries))
 
 
