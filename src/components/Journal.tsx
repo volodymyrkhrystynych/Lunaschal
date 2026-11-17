@@ -72,6 +72,8 @@ import {
 } from '../lib/food';
 import { useShortcutScope } from '../shortcuts/ShortcutProvider';
 import { useListSelection } from '../shortcuts/useListSelection';
+import { AuthoredText } from './AuthoredText';
+import { journalContentFallback } from '../lib/authorship';
 import { useClipStage } from '../hooks/useClipStage';
 import { ClipStrip } from './ClipRecorder';
 import { MealClips, visualMedia } from './Food/MealClips';
@@ -949,19 +951,34 @@ export function Journal({
           <>
             {entry.title && (
               <h3 className="text-base font-bold text-[var(--color-text)] mb-2">
-                {entry.title}
+                <AuthoredText
+                  text={entry.title}
+                  authorship={entry.authorship}
+                  field="title"
+                  fallback="a"
+                />
               </h3>
             )}
             <div className="content-text text-[var(--color-text)] whitespace-pre-wrap">
-              {entry.content}
+              <AuthoredText
+                text={entry.content}
+                authorship={entry.authorship}
+                field="content"
+                fallback={journalContentFallback(entry)}
+              />
             </div>
             {entry.rawContent && (
               <details className="mt-3">
                 <summary className="text-xs text-[var(--color-text-muted)] cursor-pointer select-none hover:text-[var(--color-text)] transition-colors">
                   Original transcription
                 </summary>
-                <div className="mt-2 px-3 py-2 bg-white/5 rounded text-sm text-[var(--color-text-muted)] whitespace-pre-wrap italic">
-                  {entry.rawContent}
+                <div className="mt-2 px-3 py-2 bg-white/5 rounded text-sm whitespace-pre-wrap italic">
+                  <AuthoredText
+                    text={entry.rawContent}
+                    authorship={entry.authorship}
+                    field="rawContent"
+                    fallback="u"
+                  />
                 </div>
               </details>
             )}
@@ -1152,7 +1169,12 @@ export function Journal({
               >
                 <div className="px-1 mb-1 flex items-baseline justify-between gap-2 text-xs text-[var(--color-text-muted)]">
                   <span className="font-medium text-[var(--color-text)]">
-                    {span.event.title}
+                    <AuthoredText
+                      text={span.event.title}
+                      authorship={span.event.authorship}
+                      field="title"
+                      fallback="u"
+                    />
                   </span>
                   {eventTimeLabel(span.event) && (
                     <span>{eventTimeLabel(span.event)}</span>
@@ -1160,7 +1182,12 @@ export function Journal({
                 </div>
                 {span.event.description && (
                   <div className="px-1 pb-1.5 text-sm text-[var(--color-text)] whitespace-pre-wrap">
-                    {span.event.description}
+                    <AuthoredText
+                      text={span.event.description}
+                      authorship={span.event.authorship}
+                      field="description"
+                      fallback="u"
+                    />
                   </div>
                 )}
                 <div className="space-y-2">
@@ -2173,7 +2200,12 @@ const JournalSpendingItem = memo(function JournalSpendingItem({
         <>
           {entry.notes && (
             <div className="text-sm text-[var(--color-text)] whitespace-pre-wrap mb-2">
-              {entry.notes}
+              <AuthoredText
+                text={entry.notes}
+                authorship={entry.authorship}
+                field="notes"
+                fallback="u"
+              />
             </div>
           )}
           <MealClips media={entry.media} />
@@ -2253,7 +2285,12 @@ const JournalFoodItem = memo(function JournalFoodItem({
           <EntryWeatherLine weather={food.weather} className="block mb-2" />
           {food.notes && (
             <div className="text-sm text-[var(--color-text)] whitespace-pre-wrap mb-2">
-              {food.notes}
+              <AuthoredText
+                text={food.notes}
+                authorship={food.authorship}
+                field="notes"
+                fallback="u"
+              />
             </div>
           )}
 

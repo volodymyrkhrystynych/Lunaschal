@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   buildMonthGrid,
   parseEventTags,
+  eventDateForStart,
   eventTimeLabel,
+  newEventSlot,
   repeatDraftFromEvent,
   repeatDraftToPayload,
   repeatLabel,
@@ -299,5 +301,70 @@ describe('repeatDraftToPayload', () => {
         until: '',
       }).repeatUntil
     ).toBeNull();
+  });
+});
+
+describe('newEventSlot', () => {
+  const at = (iso: string) => new Date(`${iso}:00`);
+
+  it('ends now, the default length long', () => {
+    expect(newEventSlot('2026-10-05', at('2026-10-05T14:10'))).toEqual({
+      date: '2026-10-05',
+      time: '13:40',
+      endTime: '14:10',
+    });
+  });
+
+  it('lands on the next date past midnight', () => {
+    expect(newEventSlot('2026-10-05', at('2026-10-06T01:20'))).toEqual({
+      date: '2026-10-06',
+      time: '00:50',
+      endTime: '01:20',
+    });
+  });
+
+  it('keeps the day when it started before midnight', () => {
+    expect(newEventSlot('2026-10-05', at('2026-10-06T00:10'))).toEqual({
+      date: '2026-10-05',
+      time: '23:40',
+      endTime: '00:10',
+    });
+  });
+
+  it('starts no earlier than the top of the day', () => {
+    expect(newEventSlot('2026-10-05', at('2026-10-05T04:20'))).toEqual({
+      date: '2026-10-05',
+      time: '04:00',
+      endTime: '04:20',
+    });
+  });
+
+  it('is never shorter than the minimum, even at the very top of the day', () => {
+    // At 04:00 "now" is no length at all, which reads as ending the next day.
+    expect(newEventSlot('2026-10-05', at('2026-10-05T04:00'))).toEqual({
+      date: '2026-10-05',
+      time: '04:00',
+      endTime: '04:15',
+    });
+    expect(newEventSlot('2026-10-05', at('2026-10-05T04:10')).endTime).toBe(
+      '04:15'
+    );
+  });
+});
+
+describe('eventDateForStart', () => {
+  it('keeps the day from 04:00 on', () => {
+    expect(eventDateForStart('2026-10-05', '04:00')).toBe('2026-10-05');
+    expect(eventDateForStart('2026-10-05', '23:59')).toBe('2026-10-05');
+  });
+
+  it('moves a start before 04:00 to the next date', () => {
+    expect(eventDateForStart('2026-10-05', '00:00')).toBe('2026-10-06');
+    expect(eventDateForStart('2026-10-05', '03:59')).toBe('2026-10-06');
+    expect(eventDateForStart('2026-10-31', '01:00')).toBe('2026-11-01');
+  });
+
+  it('keeps the day with no start', () => {
+    expect(eventDateForStart('2026-10-05', '')).toBe('2026-10-05');
   });
 });

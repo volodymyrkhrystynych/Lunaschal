@@ -182,6 +182,12 @@ def _write_rows(db, entry, target: str, plan) -> None:
             (entry_id, day_key_for(entry['created_at']), text, entry['latitude'],
              entry['longitude'], entry['created_at'], now),
         )
+    # The words keep who produced them, recordings included: the attachment
+    # ids the speech spans name move with the files.
+    from backend import authorship
+    authorship.carry(db, TARGETS[target], entry_id, entry_id, 'raw_content', text,
+                     from_table='journal_entries',
+                     from_field='raw_content' if (entry['raw_content'] or '').strip() else 'content')
     table = _MEDIA_TABLES[TARGETS[target]]
     for position, (a, _, dst) in enumerate(plan):
         # A transcript is carried: it is the same speech model either way, and

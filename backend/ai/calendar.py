@@ -5,17 +5,20 @@ render. Same idiom as backend/ai/email.py's classify_email: a closed-vocab
 tuple doubles as the JSON-schema enum, so an off-vocabulary category can't be
 emitted at all.
 
-Runs on the llm_jobs worker (backend/ai/jobs.py) right after a
-transcription is saved (backend/routes/calendar.py's transcribe_event), so a
-slow LLM call never blocks the recording itself. classified_at IS NULL is the
+Runs on the llm_jobs worker (backend/ai/jobs.py) when an event is created with
+no categories ticked, and after a recording or spoken edit gives it new words
+(backend/routes/calendar.py), so a slow LLM call never blocks the save.
+classified_at IS NULL is the
 "still pending" state, for both never-classified and previously-failed
 events — a crash mid-classification needs no separate in-progress flag.
 """
 import json
 import time
 
+from backend import authorship
 from backend.ai.llm import chat_json
 from backend.ai.provider import is_ai_configured
+from backend.ai.service import InferencePaused, Preempted
 from backend.calendar_voice import (
     VOICE_EDIT_SCHEMA,
     VOICE_EDIT_SYSTEM,
@@ -88,6 +91,65 @@ def classify_event_categories(event_id: str) -> None:
     except Exception as e:
         build_update(db, 'calendar_events', {'classification_error': str(e)}, 'id=?', (event_id,))
         db.commit()
+
+
+_TITLE_SYSTEM = (
+    "You write the title of a personal calendar event from a spoken description "
+    "of what happened during it.\n"
+    "Return ONLY valid JSON with one field:\n"
+    '- "title": 2-6 words naming the activity, in the language of the description, '
+    "with no quotes, date or time and no ending punctuation.\n"
+    'Example: {"title": "Lunch with Sam"}'
+)
+_TITLE_SCHEMA = {
+    'type': 'object',
+    'properties': {'title': {'type': 'string'}},
+    'required': ['title'],
+}
+_TITLE_MAX = 80
+_FALLBACK_TITLE_WORDS = 6
+
+
+def _clean_title(raw) -> str:
+    if not isinstance(raw, str):
+        return ''
+    return ' '.join(raw.split()).strip('"\'“”').rstrip('.!?,;:')[:_TITLE_MAX].strip()
+
+
+def fill_event_title(event_id: str) -> None:
+    """Title an event that was saved blank, from what its clips said.
+
+    Only ever fills a blank, down to the UPDATE itself, so a title typed while
+    the job waited wins. With no usable answer from the model the first words of
+    the transcript do the job: an event left "Untitled" is one nobody can find.
+    A pause or preemption is not that case and is left to requeue the job.
+    """
+    db = get_db()
+    row = db.execute(
+        'SELECT title, description FROM calendar_events WHERE id=?', (event_id,)
+    ).fetchone()
+    body = (row['description'] or '').strip() if row else ''
+    if not body or (row['title'] or '').strip():
+        return
+
+    title = ''
+    if is_ai_configured():
+        try:
+            title = _clean_title(
+                chat_json(body, system=_TITLE_SYSTEM, schema=_TITLE_SCHEMA).get('title'))
+        except (InferencePaused, Preempted):
+            raise
+        except Exception as e:
+            print(f'Event title generation failed for {event_id}: {e}')
+    title = title or _clean_title(' '.join(body.split()[:_FALLBACK_TITLE_WORDS]))
+    cur = db.execute(
+        "UPDATE calendar_events SET title=? WHERE id=? AND TRIM(title)=''",
+        (title, event_id),
+    )
+    if cur.rowcount:
+        # The model's words (or the transcript's first few, which the app chose).
+        authorship.mark_ai(db, 'calendar_events', event_id, 'title', title)
+    db.commit()
 
 
 def _voice_edit_prompt(current: dict, transcript: str) -> str:

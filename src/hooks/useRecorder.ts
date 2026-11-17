@@ -7,6 +7,7 @@ import {
   finalizeRecording,
   type RecordingChat,
   type RecordingFic,
+  type RecordingCalendar,
   type RecordingFood,
   type RecordingIdea,
   type RecordingMode,
@@ -308,6 +309,7 @@ export function useRecorder(
       idea?: RecordingIdea;
       fic?: RecordingFic;
       food?: RecordingFood;
+      calendar?: RecordingCalendar;
       chat?: RecordingChat;
     } = {}
   ) => {
@@ -441,6 +443,7 @@ export function useRecorder(
           idea: opts.idea,
           fic: opts.fic,
           food: opts.food,
+          calendar: opts.calendar,
           chat: opts.chat,
         });
       }

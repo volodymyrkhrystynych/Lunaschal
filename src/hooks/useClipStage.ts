@@ -7,6 +7,7 @@ import {
   type StoredRecording,
 } from '../offline/recordingStore';
 import {
+  enqueueCalendarRecording,
   enqueueFoodRecording,
   enqueueRecordingUpload,
 } from '../offline/recordingQueue';
@@ -23,18 +24,21 @@ export type ClipTarget =
   | { kind: 'journal'; entryId?: string }
   | { kind: 'idea'; repoId?: string }
   | { kind: 'fic'; ficId: string; chapterId?: string }
-  | { kind: 'food' };
+  | { kind: 'food' }
+  /** `date` is the day the form is open on. */
+  | { kind: 'calendar'; date: string };
 
 /**
  * What a clip's journal attachment is called, matching the names the old
- * capture paths used. `food` is here only to keep the map exhaustive — a meal
- * clip is `food_media`, which carries no name.
+ * capture paths used. `food` and `calendar` are here only to keep the map
+ * exhaustive — their clips are rows of their own, which carry no name.
  */
 const NAMES: Record<ClipTarget['kind'], string> = {
   journal: 'Recording',
   idea: 'Idea',
   fic: 'Commentary',
   food: 'Meal',
+  calendar: 'Event',
 };
 
 interface ClipIds {
@@ -44,6 +48,8 @@ interface ClipIds {
   ideaId?: string;
   /** The meal, for a food capture. */
   foodId?: string;
+  /** The event, for the calendar's new-event form. */
+  calendarId?: string;
 }
 
 export interface ClipStage {
@@ -122,6 +128,7 @@ export function useClipStage(target: ClipTarget): ClipStage {
     const next: ClipIds = { entryId: ulid() };
     if (t.kind === 'idea') next.ideaId = ulid();
     if (t.kind === 'food') next.foodId = next.entryId;
+    if (t.kind === 'calendar') next.calendarId = next.entryId;
     idsRef.current = next;
     return next;
   }, []);
@@ -152,7 +159,10 @@ export function useClipStage(target: ClipTarget): ClipStage {
     const claimed = ids();
     void recorder.start('transcribe', {
       durable: true,
-      entryId: t.kind === 'food' ? undefined : claimed.entryId,
+      entryId:
+        t.kind === 'food' || t.kind === 'calendar'
+          ? undefined
+          : claimed.entryId,
       idea:
         t.kind === 'idea'
           ? { id: claimed.ideaId!, ...(t.repoId ? { repoId: t.repoId } : {}) }
@@ -165,6 +175,10 @@ export function useClipStage(target: ClipTarget): ClipStage {
             }
           : undefined,
       food: t.kind === 'food' ? { id: claimed.foodId! } : undefined,
+      calendar:
+        t.kind === 'calendar'
+          ? { id: claimed.calendarId!, date: t.date }
+          : undefined,
     });
   }, [ids, recorder, starting]);
 
@@ -180,6 +194,7 @@ export function useClipStage(target: ClipTarget): ClipStage {
     const t = targetRef.current;
     if (t.kind === 'idea') return claimed.ideaId!;
     if (t.kind === 'food') return claimed.foodId!;
+    if (t.kind === 'calendar') return claimed.calendarId!;
     return claimed.entryId;
   }, [ids]);
 
@@ -199,7 +214,9 @@ export function useClipStage(target: ClipTarget): ClipStage {
       // open at Save files the commentary under the wrong one. This is the same
       // reason `resumeStoredRecordings` reads them back off the store.
       try {
-        if (clip.food || claimed.foodId) {
+        if (clip.calendar) {
+          await enqueueCalendarRecording(qc, clip.id, clip.calendar.id);
+        } else if (clip.food || claimed.foodId) {
           await enqueueFoodRecording(
             qc,
             clip.id,

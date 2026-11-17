@@ -32,6 +32,7 @@ import {
 } from '@/lib/chatAttachments';
 import { currentPosition } from '@/lib/geo';
 import { ulid } from '@/lib/ulid';
+import { AuthoredText } from '../AuthoredText';
 import { enqueueChatRecording } from '../../offline/recordingQueue';
 import { type StoredRecording } from '../../offline/recordingStore';
 
@@ -813,7 +814,7 @@ export function ChatPanel() {
               <div className="max-w-[80%]">
                 {hasBody && (
                   <div
-                    className={`content-text rounded-lg px-4 py-2 ${message.role === 'user' ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-surface)] text-[var(--color-text)]'}`}
+                    className={`content-text rounded-lg px-4 py-2 ${message.role === 'user' ? 'bg-[var(--color-text-user)]/15 text-user' : 'bg-[var(--color-surface)] text-ai'}`}
                   >
                     {photos.length > 0 && (
                       <div className="mb-2 flex flex-wrap gap-2">
@@ -842,7 +843,13 @@ export function ChatPanel() {
                     <ChatClips clips={clipAttachments(message.attachments)} />
                     {message.role === 'user' ? (
                       <div className="whitespace-pre-wrap">
-                        {message.content}
+                        {/* Typed and dictated parts of one message, apart. */}
+                        <AuthoredText
+                          text={message.content}
+                          authorship={message.authorship}
+                          field="content"
+                          fallback="u"
+                        />
                       </div>
                     ) : (
                       <BriefingContent

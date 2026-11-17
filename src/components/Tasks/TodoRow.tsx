@@ -7,6 +7,7 @@ import {
   repeatLabel,
 } from '../../lib/todos';
 import { InlineEditableText } from '../InlineEditableText';
+import { AuthoredText } from '../AuthoredText';
 import { ListRowShell } from '../ListRow';
 
 interface TodoRowProps {
@@ -80,6 +81,16 @@ export function TodoRow({
             todo.done
               ? 'line-through text-[var(--color-text-muted)]'
               : 'text-[var(--color-text)]'
+          }
+          display={
+            todo.done ? undefined : (
+              <AuthoredText
+                text={todo.title}
+                authorship={todo.authorship}
+                field="title"
+                fallback="u"
+              />
+            )
           }
         />
       }

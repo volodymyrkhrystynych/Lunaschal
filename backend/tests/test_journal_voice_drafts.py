@@ -451,3 +451,20 @@ def test_a_draft_deleted_while_queued_is_a_quiet_no_op(client, monkeypatch):
     assert get_db().execute(
         'SELECT COUNT(*) c FROM journal_voice_drafts'
     ).fetchone()['c'] == 0
+
+
+@pytest.mark.parametrize('merged', ['', 'text from parakeet'], ids=['empty', 'unchanged'])
+def test_a_merge_that_changed_nothing_leaves_the_body_speech(client, monkeypatch, merged):
+    """The body is then the transcript and mirrors its spans, recording and all;
+    marking it AI would claim the model wrote words it never touched."""
+    monkeypatch.setattr(
+        stt_routes, 'run_multi_backend_transcribe',
+        lambda *a, **k: _candidates_ok('parakeet', 'local'),
+    )
+    monkeypatch.setattr('backend.journal.voice_drafts.merge_voice_draft',
+                        lambda c, context=None: merged)
+    _post_draft(client)
+    entry = client.get(f"/api/journal/{_settled()['entryId']}").get_json()
+    clip = entry['attachments'][0]['id']
+    assert entry['content'] == 'text from parakeet'
+    assert entry['authorship']['content'] == [['s', 18, clip]]

@@ -7,6 +7,11 @@
   --color-text-muted: #a6adc8;
   --color-primary: #89b4fa;
   --color-accent: #f5c2e7;
+  /* Who produced a piece of text (src/lib/authorship.ts): typed is blue,
+     speech-to-text teal, AI-written the normal text colour. */
+  --color-text-user: #89b4fa;
+  --color-text-speech: #94e2d5;
+  --color-text-ai: var(--color-text);
   /* Base size for reading content; overridden by the font-size setting. Only
      the main content region consumes it, so the chrome never scales. */
   --content-font-size: 1rem;
@@ -63,6 +68,17 @@ body {
    chrome around it — buttons, search bars, toolbars — stays a fixed size. */
 .content-text {
   font-size: var(--content-font-size);
+}
+
+/* Authorship colouring; see src/lib/authorship.ts and AuthoredText.tsx. */
+.text-user {
+  color: var(--color-text-user);
+}
+.text-speech {
+  color: var(--color-text-speech);
+}
+.text-ai {
+  color: var(--color-text-ai);
 }
 
 /* Tag / filter pill rows: on phones a long row wraps into many lines and eats

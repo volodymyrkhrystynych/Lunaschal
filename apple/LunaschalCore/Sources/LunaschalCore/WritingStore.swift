@@ -25,8 +25,11 @@ public struct WritingServerCopy: Codable, Equatable, Sendable {
     public var title: String
     public var content: String
     public var revision: Int
-    public init(title: String, content: String, revision: Int) {
-        self.title = title; self.content = content; self.revision = revision
+    /// Who produced the server's title and content: typed, or an accepted
+    /// proposal. Optional so a store written before it still decodes.
+    public var authorship: [String: JSONValue]?
+    public init(title: String, content: String, revision: Int, authorship: [String: JSONValue]? = nil) {
+        self.title = title; self.content = content; self.revision = revision; self.authorship = authorship
     }
 }
 
@@ -65,6 +68,17 @@ public struct WritingDocument: Codable, Equatable, Identifiable, Sendable {
     public var title: String { draft?.title ?? server.title }
     public var content: String { draft?.content ?? server.content }
     public var isDirty: Bool { draft != nil || !onServer }
+    /// The server's content cut by author, for painting the editor while it
+    /// still shows exactly that text.
+    public var authoredServerContent: AuthoredText? {
+        AuthoredText.field(server.content, server.authorship, "content", fallback: .user)
+    }
+    /// The title as shown, cut by author; a renamed draft is the user's.
+    public var authoredTitle: AuthoredText? {
+        draft?.title != nil
+            ? AuthoredText.field(title, nil, "title", fallback: .user)
+            : AuthoredText.field(server.title, server.authorship, "title", fallback: .user)
+    }
 
     public init(kind: WritingDocumentKind, id: String, projectId: String, server: WritingServerCopy,
                 position: Int = 0, docType: String = "note", pinned: Bool = false, onServer: Bool = true) {
@@ -276,13 +290,15 @@ public final class WritingStore {
         let project = bundle.project.id
         var incoming = [WritingDocumentKey: WritingDocument]()
         for chapter in bundle.chapters {
-            let copy = WritingServerCopy(title: chapter.title, content: chapter.content ?? "", revision: chapter.revision)
+            let copy = WritingServerCopy(title: chapter.title, content: chapter.content ?? "", revision: chapter.revision,
+                                         authorship: chapter.authorship)
             let document = WritingDocument(kind: .chapter, id: chapter.id, projectId: project, server: copy,
                                            position: chapter.position)
             incoming[document.key] = document
         }
         for (index, note) in bundle.notes.enumerated() {
-            let copy = WritingServerCopy(title: note.title, content: note.content ?? "", revision: note.revision)
+            let copy = WritingServerCopy(title: note.title, content: note.content ?? "", revision: note.revision,
+                                         authorship: note.authorship)
             let document = WritingDocument(kind: .note, id: note.id, projectId: project, server: copy,
                                            position: index, docType: note.docType, pinned: note.pinned)
             incoming[document.key] = document

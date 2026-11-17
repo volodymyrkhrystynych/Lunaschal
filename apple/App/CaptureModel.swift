@@ -232,6 +232,7 @@ final class CaptureModel: ObservableObject {
         jobSyncer = JobSync(store: jobStore)
         calendarOutbox = try CalendarOutbox(root: store.root.appendingPathComponent("calendar-outbox", isDirectory: true))
         calendarSyncer = CalendarSyncer(outbox: calendarOutbox)
+        try? calendarOutbox.sweepClips()
         ficActivity = try FicActivityStore(root: store.root.appendingPathComponent("fic-activity", isDirectory: true))
         ficActivitySyncer = FicActivitySync(store: ficActivity)
         // Shared with the share extension when the App Group is there.
@@ -1103,6 +1104,15 @@ final class CaptureModel: ObservableObject {
             return true
         } catch { message = error.localizedDescription; return false }
     }
+
+    /// A clip recorded into the event form, kept with the queue until Save
+    /// sends it or Cancel throws it away.
+    func stageCalendarClip(_ recorded: URL) -> String? {
+        do { return try calendarOutbox.stageClip(from: recorded) }
+        catch { message = error.localizedDescription; return nil }
+    }
+
+    func discardCalendarClip(_ id: String) { calendarOutbox.discardClip(id) }
 
     @discardableResult
     private func sendCalendarEvents(using api: JournalAPI) async throws -> Bool {

@@ -22,6 +22,10 @@ public struct FoodEntryRecord: Identifiable, Equatable {
     public let place: String?
     public let notes: String?
     public let rawContent: String?
+    /// `notes` cut by author (see `AuthoredText`), trimmed as `notes` is.
+    public let authoredNotes: AuthoredText?
+    /// `rawContent` cut by author: typed, or speech-to-text by recording.
+    public let authoredRaw: AuthoredText?
     public let rating: Int?
     public let weather: String?
     public let createdAt: Date?
@@ -35,6 +39,8 @@ public struct FoodEntryRecord: Identifiable, Equatable {
         }
         id = record.id
         dish = text("dish"); place = text("place"); notes = text("notes"); rawContent = text("rawContent")
+        authoredNotes = record.authored("notes", fallback: .user)?.trimmed()
+        authoredRaw = record.authored("rawContent", fallback: .user)?.trimmed()
         rating = data["rating"]?.number.map { Int($0) }
         weather = data["weather"]?.string
         createdAt = JournalTimestamp.parse(data["createdAt"]?.string)
@@ -46,6 +52,12 @@ public struct FoodEntryRecord: Identifiable, Equatable {
     /// The words under the heading: the cleaned notes, or the raw note while
     /// the structuring pass has not run.
     public var body: String? { notes ?? rawContent }
+
+    /// `body` cut by author: the notes, or the raw words, as the server
+    /// attributes them.
+    public var authoredBody: AuthoredText? {
+        notes != nil ? authoredNotes : authoredRaw
+    }
 }
 
 extension JournalAttachmentItem {

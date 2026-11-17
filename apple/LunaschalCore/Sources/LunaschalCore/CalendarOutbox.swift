@@ -22,12 +22,20 @@ public struct CalendarDraft: Codable, Equatable, Identifiable {
     public var repeatInterval: Int?
     public var repeatByweekday: [Int]?
     public var repeatUntil: String?
+    /// How many clips follow this change, which is what lets a create go up
+    /// with no title. Nil, and not sent, when there are none.
+    public var pendingClips: Int?
+    /// The clips staged in the form. The outbox turns them into their own
+    /// uploads when the draft is queued, so they are never stored on it.
+    public var clipIDs: [String] = []
 
     public init(id: String = ULID.make(), title: String, date: String, time: String? = nil, endTime: String? = nil,
                 allDay: Bool = false, description: String? = nil, tags: [String] = [],
                 categoryTags: [String]? = nil, repeatFreq: String? = nil, repeatInterval: Int = 1, repeatByweekday: [Int] = [],
-                repeatUntil: String? = nil) {
+                repeatUntil: String? = nil, clipIDs: [String] = []) {
         self.id = id
+        self.clipIDs = clipIDs
+        self.pendingClips = clipIDs.isEmpty ? nil : clipIDs.count
         self.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         self.date = date
         self.allDay = allDay
@@ -57,7 +65,7 @@ public struct CalendarDraft: Codable, Equatable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, title, date, time, endTime, allDay, description, tags, categoryTags
-        case repeatFreq, repeatInterval, repeatByweekday, repeatUntil
+        case repeatFreq, repeatInterval, repeatByweekday, repeatUntil, pendingClips
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -75,11 +83,12 @@ public struct CalendarDraft: Codable, Equatable, Identifiable {
         try c.encode(repeatInterval, forKey: .repeatInterval)
         try c.encode(repeatByweekday, forKey: .repeatByweekday)
         try c.encode(repeatUntil, forKey: .repeatUntil)
+        try c.encodeIfPresent(pendingClips, forKey: .pendingClips)
     }
 
     /// What the form must not send: the server would refuse it.
     public var problem: String? {
-        if title.isEmpty { return "Give the event a title." }
+        if title.isEmpty && pendingClips == nil { return "Give the event a title." }
         if CivilDate(date) == nil { return "That date isn't valid." }
         if let until = repeatUntil, until < date { return "A repeat can't end before it starts." }
         return nil
@@ -91,6 +100,14 @@ public struct CalendarDraft: Codable, Equatable, Identifiable {
                       allDay: allDay, tags: tags ?? [], categoryTags: categoryTags ?? [], repeatFreq: repeatFreq, repeatInterval: repeatInterval ?? 1,
                       repeatByweekday: repeatByweekday?.map(String.init).joined(separator: ","),
                       repeatUntil: repeatUntil)
+    }
+
+    /// An end at or before the start runs past midnight: allowed, and worth
+    /// saying now that moving one time leaves the other where it is.
+    public var endsNextDay: Bool {
+        guard !allDay, let time, let endTime, let start = CalendarTimeline.minutes(time),
+              let end = CalendarTimeline.minutes(endTime) else { return false }
+        return end <= start
     }
 
     /// Comma-separated input → tags, as the web form reads it.
@@ -124,6 +141,18 @@ public enum CalendarChange: Codable, Equatable {
     /// The day's wake and sleep, set by hand ('HH:MM'); nil hands that end
     /// back to the server's derived value.
     case sleep(date: String, wake: String?, sleep: String?)
+    /// A clip spoken into the event's form. Queued behind the change that
+    /// saved the form, so the server has the event before it hears about it.
+    case recording(eventID: String, clipID: String)
+
+    /// The uploads a saved form's clips turn into.
+    var clipUploads: [CalendarChange] {
+        switch self {
+        case let .create(draft), let .update(draft):
+            return draft.clipIDs.map { .recording(eventID: draft.id, clipID: $0) }
+        default: return []
+        }
+    }
 
     /// Every event id this change touches.
     var eventIDs: [String] {
@@ -131,7 +160,7 @@ public enum CalendarChange: Codable, Equatable {
         case let .create(draft), let .update(draft): return [draft.id]
         case let .updateFrom(_, newID, draft): return [draft.id, newID]
         case let .delete(id), let .skip(id, _), let .endSeries(id, _), let .reschedule(id, _, _, _, _),
-             let .categories(id, _): return [id]
+             let .categories(id, _), let .recording(id, _): return [id]
         case .sleep: return []
         }
     }
@@ -143,12 +172,20 @@ public enum CalendarChange: Codable, Equatable {
         }
     }
 
+    /// A 404 here means what was asked for no longer matters: the deletion
+    /// already happened, or the clip's event was deleted before it went up.
+    var isMootWhenGone: Bool {
+        if case .recording = self { return true }
+        return isDelete
+    }
+
     var subject: String {
         switch self {
         case let .create(draft), let .update(draft), let .updateFrom(_, _, draft): return "“\(draft.title)”"
         case .reschedule: return "a moved event"
         case .categories: return "the categories"
         case .sleep: return "the sleep times"
+        case .recording: return "a recording"
         default: return "a deletion"
         }
     }
@@ -165,10 +202,37 @@ public struct CalendarOp: Codable, Equatable, Identifiable {
 public final class CalendarOutbox {
     public let root: URL
     private var file: URL { root.appendingPathComponent("outbox.json") }
+    private var clips: URL { root.appendingPathComponent("clips", isDirectory: true) }
 
     public init(root: URL) throws {
         self.root = root
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: clips, withIntermediateDirectories: true)
+    }
+
+    func clipURL(_ id: String) -> URL { clips.appendingPathComponent(id).appendingPathExtension("m4a") }
+
+    /// Takes a finished recording in, under the id its upload will carry.
+    public func stageClip(from recorded: URL) throws -> String {
+        let id = ULID.make()
+        try FileManager.default.moveItem(at: recorded, to: clipURL(id))
+        return id
+    }
+
+    public func discardClip(_ id: String) {
+        try? FileManager.default.removeItem(at: clipURL(id))
+    }
+
+    /// Clips nothing is waiting to send: staged in a form the app died under.
+    /// Only for launch, before a form can be open.
+    public func sweepClips() throws {
+        let queued = Set(try list().compactMap { op -> String? in
+            if case let .recording(_, clip) = op.change { return clip }
+            return nil
+        })
+        for url in try FileManager.default.contentsOfDirectory(at: clips, includingPropertiesForKeys: nil)
+        where !queued.contains(url.deletingPathExtension().lastPathComponent) {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     public func list() throws -> [CalendarOp] {
@@ -179,12 +243,15 @@ public final class CalendarOutbox {
         return try JSONDecoder().decode([CalendarDraft].self, from: data).map { CalendarOp(id: $0.id, change: .create($0)) }
     }
 
+    /// A change and the clips saved with it, in one write, so a sync can't
+    /// start between them and leave the clips waiting for the next one.
     public func append(_ change: CalendarChange) throws {
-        try write(try list() + [CalendarOp(change: change)])
+        try write(try list() + ([change] + change.clipUploads).map { CalendarOp(change: $0) })
     }
 
     public func remove(_ op: CalendarOp) throws {
         try write(try list().filter { $0.id != op.id })
+        if case let .recording(_, clip) = op.change { discardClip(clip) }
     }
 
     private func write(_ ops: [CalendarOp]) throws {
@@ -253,7 +320,7 @@ public struct CalendarOverlay: Equatable {
             }
         case let .categories(id, tags):
             edit(id) { $0.categoryTags = CalendarCategory.all.filter(tags.contains) }
-        case .sleep:
+        case .sleep, .recording:
             break
         case let .endSeries(id, date):
             guard let event = events.first(where: { $0.id == id }) else { return }
@@ -292,7 +359,8 @@ public struct CalendarOverlay: Equatable {
 }
 
 public protocol CalendarTransport {
-    func send(_ change: CalendarChange) async throws
+    /// `audio` is the clip's file, for a `.recording`.
+    func send(_ change: CalendarChange, audio: URL?) async throws
 }
 
 /// Sends the queue in order. A refusal is dropped and reported; anything else
@@ -306,11 +374,22 @@ public final class CalendarSyncer {
         var refused: [String] = []
         for op in try outbox.list() {
             try Task.checkCancellation()
+            var audio: URL?
+            if case let .recording(_, clip) = op.change {
+                let file = outbox.clipURL(clip)
+                // Sending it would fail the same way forever, holding up the queue.
+                guard FileManager.default.fileExists(atPath: file.path) else {
+                    refused.append("A recording for an event is missing from this device.")
+                    try outbox.remove(op)
+                    continue
+                }
+                audio = file
+            }
             do {
-                try await transport.send(op.change)
+                try await transport.send(op.change, audio: audio)
             } catch let refusal as TodoRefusal {
                 // Removing something already gone is what was wanted.
-                if !(refusal.status == 404 && op.change.isDelete) {
+                if !(refusal.status == 404 && op.change.isMootWhenGone) {
                     refused.append("The server didn't take \(op.change.subject): \(refusal.message)")
                 }
             }
@@ -327,9 +406,37 @@ struct CalendarRoute {
     let body: Data?
 }
 
+/// `POST /api/calendar/recordings`: one clip, under the event it was spoken
+/// for. No date goes with it, so a clip can't bring back a deleted event.
+struct CalendarRecordingMultipart {
+    let url: URL
+    let boundary: String
+
+    init(eventID: String, clipID: String, audioURL: URL) throws {
+        guard ULID.isValid(eventID), ULID.isValid(clipID) else { throw CaptureError.invalidID }
+        guard (try audioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
+            throw CaptureError.missingAudio
+        }
+        (url, boundary) = try writeMultipart(
+            fields: [("id", eventID), ("mediaId", clipID)],
+            files: [MultipartFile(field: "audio", filename: "recording.m4a", contentType: "audio/mp4", source: audioURL)])
+    }
+}
+
 extension JournalAPI: CalendarTransport {
-    public func send(_ change: CalendarChange) async throws {
-        try await calendarCall(try Self.calendarRoute(change))
+    public func send(_ change: CalendarChange, audio: URL?) async throws {
+        let route = try Self.calendarRoute(change)
+        guard case let .recording(eventID, clipID) = change else {
+            try await calendarCall(route)
+            return
+        }
+        guard let audio else { throw CaptureError.missingAudio }
+        let body = try CalendarRecordingMultipart(eventID: eventID, clipID: clipID, audioURL: audio)
+        defer { try? FileManager.default.removeItem(at: body.url) }
+        var req = request(route.path, method: route.method)
+        req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.upload(for: req, fromFile: body.url)
+        try checkCalendar(data, response)
     }
 
     private static func encode<T: Encodable>(_ body: T) throws -> Data { try JSONEncoder().encode(body) }
@@ -387,6 +494,9 @@ extension JournalAPI: CalendarTransport {
             }
             return CalendarRoute(method: "PUT", path: "api/calendar/sleep/\(try calendarPath(date))",
                                  body: try encode(Ends(wake: wake, sleep: sleep)))
+        case .recording:
+            // The body is the clip's multipart, written when it is sent.
+            return CalendarRoute(method: "POST", path: "api/calendar/recordings", body: nil)
         }
     }
 
@@ -405,6 +515,10 @@ extension JournalAPI: CalendarTransport {
             req.httpBody = body
         }
         let (data, response) = try await session.data(for: req)
+        try checkCalendar(data, response)
+    }
+
+    private func checkCalendar(_ data: Data, _ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { throw CaptureError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
             let failure = HTTPFailure(status: http.statusCode)

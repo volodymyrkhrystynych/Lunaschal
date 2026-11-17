@@ -22,8 +22,15 @@ struct CaptureRoot: View {
     @State private var showQuickCamera = false
     @State private var today = DayKey.of(Date())
 
-    private var dailyRemaining: Int {
+    private func dailyRemaining(_ contextToday: [JournalContextToday.Item]) -> Int {
         DailySummary(day: today, server: model.dailyStatus, local: model.dailyLogs).remainingCount
+            + contextToday.count
+    }
+
+    /// Today's photos and recordings still waiting for a word: a to-do on Daily.
+    /// Not cheap (it walks every capture), so `body` asks once.
+    private func contextTodayItems() -> [JournalContextToday.Item] {
+        JournalContextToday.items(prompts: context.prompts, captures: model.captures, day: today)
     }
 
     enum Tab: Hashable { case capture, journal, chat, todo, more, study, draw, library, jobs, writing, learning, settings }
@@ -49,12 +56,19 @@ struct CaptureRoot: View {
     }
 
     var body: some View {
+        let contextToday = contextTodayItems()
+        let dailyRemaining = dailyRemaining(contextToday)
         TabView(selection: $tab) {
-            NavigationStack { CaptureTab(model: model, page: $capturePage, dailyRemaining: dailyRemaining) }
+            NavigationStack {
+                CaptureTab(model: model, page: $capturePage, dailyRemaining: dailyRemaining,
+                           context: context, chat: chat, contextToday: contextToday)
+            }
                 .tabItem { Label("Capture", systemImage: "square.and.pencil") }.tag(Tab.capture)
                 .badge(dailyRemaining)
             NavigationStack { JournalTab(model: model, context: context, chat: chat) }
                 .tabItem { Label("Journal", systemImage: "book.closed") }.tag(Tab.journal)
+                // Everything on the Context page, today's and the backlog's.
+                .badge(context.prompts.count)
             NavigationStack(path: $chatPath) { ChatView(chat: chat, capture: model, code: code, page: $chatPage) }
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }.tag(Tab.chat)
                 // A plan to approve or a question from the coding agent.
@@ -118,11 +132,21 @@ struct CaptureRoot: View {
             }.ignoresSafeArea()
         }
         // The Todo badge stays current, but neither list is fetched again for a
-        // pass that didn't touch it.
+        // pass that didn't touch it. The context refresh lives here rather than
+        // on Journal → Context, so Daily's list and both badges follow it too.
         .onChange(of: model.syncChanges) { _, changes in
             if changes.touches([SyncChanges.todos]) { Task { await todo.refresh() } }
+            if changes.touches(["journal_entries", "journal_attachments"]) { Task { await context.refresh() } }
             if changes.full { Task { await learning.refresh() } }
         }
+        // A capture that just uploaded moves from this device's judgement to
+        // the server's list, which only a fresh fetch shows. Keyed on the ids,
+        // not the count: an upload that lands as a new capture is saved leaves
+        // the count where it was.
+        .onChange(of: Set(model.captures.lazy.filter { $0.state != .synced }.map(\.id))) { _, _ in
+            Task { await context.refresh() }
+        }
+        .onChange(of: today) { _, _ in Task { await context.refresh() } }
         // A tapped Code-tab notification: straight to that task.
         .onChange(of: push.openTaskID) { _, id in
             guard let id else { return }
@@ -138,6 +162,8 @@ struct CaptureRoot: View {
             guard scenePhase == .active else { model.leaveForeground(); return }
             // The Chat tab's badge counts what the coding agent is waiting on.
             Task { await code.refresh() }
+            // Daily's and Journal's badges count entries waiting for context.
+            Task { await context.refresh() }
             today = DayKey.of(Date())
             model.takeSharedLinks()
             await model.takeWidgetTodos()
@@ -149,22 +175,29 @@ struct CaptureRoot: View {
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
                 today = DayKey.of(Date())
                 model.checkIn()
+                // An upload the server is still letting settle shows up on its
+                // list only when asked again, and nothing else would ask.
+                if contextTodayItems().contains(where: \.awaitingServer) { await context.refresh() }
             }
         }
     }
 }
 
-/// The Capture tab: a switch in place of its title between the entry
-/// composer, which it opens on, and the Daily log.
+/// The Capture tab: a switch in place of its title between the Daily log, the
+/// entry composer it opens on, in the middle, and the workout log. A sideways
+/// swipe moves to the page beside.
 private struct CaptureTab: View {
     enum Page: String, CaseIterable, Identifiable {
-        case entry = "Entry", daily = "Daily", workout = "Workout"
+        case daily = "Daily", entry = "Entry", workout = "Workout"
         var id: Self { self }
     }
 
     @ObservedObject var model: CaptureModel
     @Binding var page: Page
     let dailyRemaining: Int
+    let context: JournalContextModel
+    let chat: ChatModel
+    let contextToday: [JournalContextToday.Item]
     @State private var notebook: Notebook?
     @State private var fetchingPaper = false
 
@@ -175,10 +208,13 @@ private struct CaptureTab: View {
             KeptPage(shown: page == .entry) {
                 CaptureComposer(model: model, recorder: model.recorder) { openNotes() }
             }
-            KeptPage(shown: page == .daily) { DailyView(model: model) }
+            KeptPage(shown: page == .daily) {
+                DailyView(model: model, context: context, chat: chat, contextToday: contextToday)
+            }
             KeptPage(shown: page == .workout) { WorkoutView(model: model) }
         }
         .ignoresSafeArea()
+        .subtabSwipe($page, pages: Page.allCases)
         // The pages stay built, so their own onAppear no longer marks opening one.
         .onChange(of: page) { _, page in if page != .entry { model.requestSync() } }
         // Still titled for VoiceOver and the back button; the switch is what shows.
@@ -872,10 +908,12 @@ struct CameraPicker: UIViewControllerRepresentable {
 }
 
 /// The Journal tab: Sync on the left on every page, and a switch on the right
-/// between the journal, the calendar, and the entries waiting for context.
+/// between the calendar, the journal in the middle, and the entries waiting
+/// for context. A sideways swipe moves to the page beside, except on the
+/// calendar, where it already turns the day; the switch leaves that one.
 private struct JournalTab: View {
     enum Page: String, CaseIterable, Identifiable {
-        case journal = "Journal", calendar = "Calendar", context = "Context"
+        case calendar = "Calendar", journal = "Journal", context = "Context"
         var id: Self { self }
     }
 
@@ -894,6 +932,7 @@ private struct JournalTab: View {
             case .context: JournalContextPage(context: context, capture: model, chat: chat)
             }
         }
+        .subtabSwipe($page, pages: Page.allCases, enabled: page != .calendar)
         .onChange(of: page) { _, page in if page == .calendar { model.requestSync() } }
         .task { await context.refresh() }
         .toolbar {
@@ -991,16 +1030,18 @@ struct CaptureDetail: View {
             if let error = capture.lastError { Text(error).foregroundStyle(.orange) }
         }
         if let snapshot = capture.snapshot, !snapshot.content.isEmpty {
-            Section("Journal entry") { Text(snapshot.content).textSelection(.enabled) }
+            // Polished (the model's) once the server's text is no longer what was sent.
+            let polished = !(snapshot.rawContent ?? "").isEmpty && snapshot.rawContent != snapshot.content
+            Section("Journal entry") { Text(snapshot.content).authored(polished ? .ai : .user).textSelection(.enabled) }
         }
         if !capture.text.isEmpty {
-            Section("Original text") { Text(capture.text).textSelection(.enabled) }
+            Section("Original text") { Text(capture.text).authored(.user).textSelection(.enabled) }
         }
         if let raw = capture.snapshot?.rawContent, !raw.isEmpty, raw != capture.text {
-            Section("Server original text") { Text(raw).textSelection(.enabled) }
+            Section("Server original text") { Text(raw).authored(.user).textSelection(.enabled) }
         }
         if let transcript = capture.recordingTranscript?.transcript, !transcript.isEmpty {
-            Section("Recording transcript") { Text(transcript).textSelection(.enabled) }
+            Section("Recording transcript") { Text(transcript).authored(.speech).textSelection(.enabled) }
         }
         ForEach(capture.clips) { clip in
             if let url = try? model.store.clipURL(clip) {

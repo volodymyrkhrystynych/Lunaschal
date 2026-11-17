@@ -23,13 +23,24 @@ public struct LearningCard: Codable, Equatable, Identifiable {
     public var kind: String?
     /// A review card's entry and its pages.
     public var review: LearningReviewPages?
+    /// Who produced `question` and `answer`: generated, or written by hand.
+    public var authorship: [String: JSONValue]?
 
     public init(id: String, folderId: String? = nil, question: String, answer: String, state: String = "active",
                 tags: [String] = [], sourceType: String? = nil, derivedFrom: String? = nil, revisedFrom: String? = nil,
-                due: String? = nil, kind: String? = nil, review: LearningReviewPages? = nil) {
+                due: String? = nil, kind: String? = nil, review: LearningReviewPages? = nil,
+                authorship: [String: JSONValue]? = nil) {
         self.id = id; self.folderId = folderId; self.question = question; self.answer = answer; self.state = state
         self.tags = tags; self.sourceType = sourceType; self.derivedFrom = derivedFrom; self.revisedFrom = revisedFrom
-        self.due = due; self.kind = kind; self.review = review
+        self.due = due; self.kind = kind; self.review = review; self.authorship = authorship
+    }
+
+    private var generatedFallback: TextAuthor { sourceType == "manual" ? .user : .ai }
+    public var authoredQuestion: AuthoredText? {
+        AuthoredText.field(question, authorship, "question", fallback: generatedFallback)
+    }
+    public var authoredAnswer: AuthoredText? {
+        AuthoredText.field(answer, authorship, "answer", fallback: generatedFallback)
     }
 
     /// No back side: its pages are read, then rated. Never answered or graded.

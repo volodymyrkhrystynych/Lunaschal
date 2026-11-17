@@ -6,6 +6,10 @@ import {
   canMessage,
   canPlanFromAnswer,
   canPush,
+  canContinue,
+  canDiscard,
+  canFinish,
+  finishExplanation,
   isActive,
   MODES,
   needsYou,
@@ -33,6 +37,7 @@ const task = (status: string, extra: Partial<CodeTask> = {}): CodeTask => ({
   plan: null,
   summary: null,
   diffStat: null,
+  baseSha: 'b',
   headSha: null,
   testExit: null,
   testOutput: null,
@@ -71,6 +76,7 @@ describe('codeTasks', () => {
         'cancelled',
         'pushed',
         'discarded',
+        'finished',
       ].map(statusLabel)
     ).toEqual([
       'Queued',
@@ -87,7 +93,35 @@ describe('codeTasks', () => {
       'Cancelled',
       'Pushed',
       'Discarded',
+      'Finished',
     ]);
+  });
+
+  it('finishes only a task that stopped short, and a finished one is closed', () => {
+    expect(canFinish(task('interrupted'))).toBe(true);
+    expect(canFinish(task('error', { phase: 'ask' }))).toBe(true);
+    for (const s of ['done', 'answered', 'needs_input', 'running', 'queued'])
+      expect(canFinish(task(s))).toBe(false);
+    const finished = task('finished', { phase: 'ask', summary: 'In y.py.' });
+    expect(needsYou(finished)).toBe(false);
+    expect(canMessage(finished)).toBe(false);
+    expect(canDiscard(finished)).toBe(false);
+    expect(finishExplanation(task('error'))).toMatch(/committed and tested/);
+    expect(finishExplanation(task('error', { phase: 'ask' }))).toMatch(
+      /^Close this task/
+    );
+  });
+
+  it('continues and finishes the same stopped tasks', () => {
+    for (const s of ['interrupted', 'error', 'done', 'running', 'finished'])
+      expect(canFinish(task(s))).toBe(canContinue(task(s)));
+  });
+
+  it('promises no commit for a build that never got a clone', () => {
+    // The server closes such a build at once rather than testing anything.
+    expect(finishExplanation(task('error', { baseSha: null }))).toMatch(
+      /^Close this task/
+    );
   });
 
   it('treats an answered question as waiting on you, and plannable', () => {
