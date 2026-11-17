@@ -100,6 +100,23 @@ describe('the chat has one mode', () => {
   });
 });
 
+describe('layout', () => {
+  it('gives the panel a flex parent so the transcript scrolls', async () => {
+    // jsdom computes no layout, so this pins the structure instead: ChatPanel
+    // fills its parent with `flex-1`, which only bounds its height — and so
+    // only lets the transcript scroll — when that parent is a flex container.
+    // Wrapping it in a plain block for the Code page is what took scrolling away.
+    const { container } = renderChat();
+    await screen.findByPlaceholderText('Type a message...');
+    const wrapper = (container.firstElementChild as HTMLElement)
+      .lastElementChild!;
+    expect(wrapper.firstElementChild!.className).toContain('flex-1');
+    const classes = wrapper.className.split(' ');
+    expect(classes).toContain('flex');
+    expect(classes).toContain('flex-col');
+  });
+});
+
 describe('delegate steps', () => {
   it('renders live steps collapsed, then persists them on the message', async () => {
     const stream = openStream();
