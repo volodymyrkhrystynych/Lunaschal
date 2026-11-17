@@ -225,8 +225,8 @@ private struct EventGroup<Content: View>: View {
                     Spacer()
                     Text(eventTimeLabel(occurrence)).font(.caption).foregroundStyle(.secondary)
                 }
-                if let description = occurrence.event.description, !description.isEmpty {
-                    Text(description).font(.subheadline)
+                if let description = occurrence.event.authoredDescriptionText {
+                    AuthoredTextView(text: description).font(.subheadline)
                 }
             }
             .padding(.horizontal, 4)
@@ -257,6 +257,8 @@ private struct LocalCaptureCard: View {
             Text(capture.snapshot?.title ?? (capture.text.isEmpty
                 ? (capture.files.first?.name ?? (capture.links.isEmpty ? "Recording" : "Journal entry")) : capture.text))
                 .lineLimit(2)
+                // The server's title is generated; the words typed here are the user's.
+                .authored(capture.snapshot?.title == nil && !capture.text.isEmpty ? .user : .ai)
             if capture.kind == .food { Label("Food log", systemImage: "fork.knife").font(.caption) }
             if capture.kind == .spending { Label("Spending", systemImage: "banknote").font(.caption) }
             let photos = capture.files.filter(\.isImage).compactMap { try? model.store.fileURL($0) }
@@ -332,7 +334,14 @@ private struct EntryCard: View {
             NavigationLink { JournalRecordView(model: model, record: record) } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .firstTextBaseline) {
-                        Text(title ?? (content.isEmpty ? "Entry" : "Untitled")).font(.headline).lineLimit(2)
+                        Group {
+                            if let title = record.authored("title", fallback: .ai) {
+                                AuthoredTextView(text: title)
+                            } else {
+                                Text(content.isEmpty ? "Entry" : "Untitled")
+                            }
+                        }
+                        .font(.headline).lineLimit(2)
                         Spacer()
                         if let created {
                             Text(created, format: .dateTime.month(.abbreviated).day().hour().minute())
@@ -340,8 +349,8 @@ private struct EntryCard: View {
                         }
                     }
                     EntryWeatherText(weather: EntryWeather.parse(record.data?["weather"]?.string))
-                    if !content.isEmpty {
-                        Text(content).font(.body).lineLimit(10).multilineTextAlignment(.leading)
+                    if let content = record.authored("content", fallback: record.journalContentFallback) {
+                        AuthoredTextView(text: content).font(.body).lineLimit(10).multilineTextAlignment(.leading)
                     }
                     PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
                 }
@@ -397,8 +406,8 @@ private struct FoodEntryCard: View {
                     }
                     if let place = meal?.place { Text(place).font(.subheadline).foregroundStyle(.secondary) }
                     EntryWeatherText(weather: EntryWeather.parse(meal?.weather))
-                    if let body = meal?.body {
-                        Text(body).font(.body).lineLimit(6).multilineTextAlignment(.leading)
+                    if let body = meal?.authoredBody {
+                        AuthoredTextView(text: body).font(.body).lineLimit(6).multilineTextAlignment(.leading)
                     }
                     PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
                 }
@@ -475,9 +484,11 @@ struct FoodRecordView: View {
                         LabeledContent("Rating", value: String(repeating: "★", count: rating))
                     }
                     if let created = meal?.createdAt { LabeledContent("Eaten", value: created.formatted()) }
-                    if let notes = meal?.notes { Text(notes).textSelection(.enabled) }
-                    if let raw = meal?.rawContent, raw != meal?.notes {
-                        DisclosureGroup("What was written and said") { Text(raw).textSelection(.enabled) }
+                    if let notes = meal?.authoredNotes { AuthoredTextView(text: notes).textSelection(.enabled) }
+                    if let raw = meal?.authoredRaw, raw.text != meal?.notes {
+                        DisclosureGroup("What was written and said") {
+                            AuthoredTextView(text: raw).textSelection(.enabled)
+                        }
                     }
                     PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
                 }
@@ -524,8 +535,8 @@ private struct SpendingEntryCard: View {
                         Text(created, format: .dateTime.month(.abbreviated).day().hour().minute())
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if let body = purchase?.body {
-                        Text(body).font(.body).lineLimit(4).multilineTextAlignment(.leading)
+                    if let body = purchase?.authoredBody {
+                        AuthoredTextView(text: body).font(.body).lineLimit(4).multilineTextAlignment(.leading)
                     }
                     PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
                 }
@@ -608,9 +619,11 @@ struct SpendingRecordView: View {
                     if let merchant = purchase?.merchant { LabeledContent("Merchant", value: merchant) }
                     if let category = purchase?.category { LabeledContent("Category", value: category) }
                     if let created = purchase?.createdAt { LabeledContent("Spent", value: created.formatted()) }
-                    if let notes = purchase?.notes { Text(notes).textSelection(.enabled) }
-                    if let raw = purchase?.rawContent, raw != purchase?.notes {
-                        DisclosureGroup("What was written and said") { Text(raw).textSelection(.enabled) }
+                    if let notes = purchase?.authoredNotes { AuthoredTextView(text: notes).textSelection(.enabled) }
+                    if let raw = purchase?.authoredRaw, raw.text != purchase?.notes {
+                        DisclosureGroup("What was written and said") {
+                            AuthoredTextView(text: raw).textSelection(.enabled)
+                        }
                     }
                     PendingAdditionsRow(additions: model.pendingAdditions(to: record.id))
                 }
@@ -934,11 +947,17 @@ struct AudioRow: View {
                 }
             }
             if let transcript = item.transcript {
-                DisclosureGroup("Transcript") { Text(transcript).font(.subheadline).textSelection(.enabled) }
+                DisclosureGroup("Transcript") {
+                    // Speech-to-text of the user's own recording; a YouTube video's is not theirs.
+                    Text(transcript).font(.subheadline).authored(item.media == .youtube ? .ai : .speech)
+                        .textSelection(.enabled)
+                }
                     .font(.caption)
             }
             if let description = item.description {
-                DisclosureGroup("What was heard") { Text(description).font(.subheadline).textSelection(.enabled) }
+                DisclosureGroup("What was heard") {
+                    Text(description).font(.subheadline).authored(.ai).textSelection(.enabled)
+                }
                     .font(.caption)
             }
         }
@@ -1108,7 +1127,11 @@ private struct VideoCard: View {
                 Text(description).font(.subheadline).textSelection(.enabled)
             }
             if let transcript = item.transcript {
-                DisclosureGroup("Transcript") { Text(transcript).font(.subheadline).textSelection(.enabled) }
+                DisclosureGroup("Transcript") {
+                    // Speech-to-text of the user's own recording; a YouTube video's is not theirs.
+                    Text(transcript).font(.subheadline).authored(item.media == .youtube ? .ai : .speech)
+                        .textSelection(.enabled)
+                }
                     .font(.caption)
             }
         }

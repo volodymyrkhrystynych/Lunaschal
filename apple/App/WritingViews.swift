@@ -316,7 +316,7 @@ struct WritingProjectView: View {
         ForEach(chapters) { chapter in
             NavigationLink { WritingEditorView(writing: writing, document: chapter) } label: {
                 HStack {
-                    Text(chapter.title)
+                    Text(chapter.title).foregroundStyle(chapter.authoredTitle?.fieldColor ?? .primary)
                     Spacer()
                     documentState(chapter)
                     Text(WritingStats.words(chapter.content), format: .number)
@@ -343,7 +343,7 @@ struct WritingProjectView: View {
             NavigationLink { WritingEditorView(writing: writing, document: note) } label: {
                 HStack {
                     Text(WritingDocType.label(note.docType)).font(.caption).foregroundStyle(.secondary)
-                    Text(note.title)
+                    Text(note.title).foregroundStyle(note.authoredTitle?.fieldColor ?? .primary)
                     Spacer()
                     documentState(note)
                     if note.pinned {
@@ -554,12 +554,19 @@ private struct WritingMessageRow: View {
             VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
                 if !message.content.isEmpty {
                     Group {
-                        if isUser { Text(message.content).textSelection(.enabled) }
+                        if isUser {
+                            if let authored = message.authoredContent {
+                                AuthoredTextView(text: authored).textSelection(.enabled)
+                            } else {
+                                Text(message.content).textSelection(.enabled)
+                            }
+                        }
                         else { MarkdownText(text: message.content) }
                     }
                     .padding(.horizontal, 14).padding(.vertical, 9)
-                    .foregroundStyle(isUser ? Color.white : Color.primary)
-                    .background(isUser ? Color.accentColor : Color(.secondarySystemBackground),
+                    // As in Chat: blue is the user's words, so not white on accent.
+                    .foregroundStyle(isUser ? Color.userText : Color.aiText)
+                    .background(isUser ? Color.userText.opacity(0.14) : Color(.secondarySystemBackground),
                                 in: RoundedRectangle(cornerRadius: 16))
                 } else if isUser, !message.clips.isEmpty {
                     Label("Voice message — transcribing", systemImage: "waveform").font(.caption).foregroundStyle(.secondary)

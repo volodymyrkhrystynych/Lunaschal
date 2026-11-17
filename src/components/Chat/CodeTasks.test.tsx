@@ -23,6 +23,7 @@ const task = (status: string, extra: Partial<CodeTask> = {}): CodeTask => ({
   plan: '1.',
   summary: null,
   diffStat: null,
+  baseSha: 'b',
   headSha: 'abc',
   testExit: 1,
   testOutput: 'What failed:\nFAILED t.py::x',

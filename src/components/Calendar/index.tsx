@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AuthoredText } from '../AuthoredText';
 import { useDraftState } from '@/hooks/useDraftState';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type CalendarEvent } from '../../hooks/api';
@@ -773,7 +774,16 @@ export function Calendar() {
                         className="w-full text-left p-3 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
                       >
                         <div className="font-medium text-[var(--color-text)]">
-                          {event.title || 'Untitled'}
+                          {event.title ? (
+                            <AuthoredText
+                              text={event.title}
+                              authorship={event.authorship}
+                              field="title"
+                              fallback="u"
+                            />
+                          ) : (
+                            'Untitled'
+                          )}
                         </div>
                         {eventTimeLabel(event) && (
                           <div className="text-sm text-[var(--color-text-muted)]">
@@ -787,7 +797,12 @@ export function Calendar() {
                         )}
                         {event.description && (
                           <div className="text-sm text-[var(--color-text-muted)] mt-1 line-clamp-2">
-                            {event.description}
+                            <AuthoredText
+                              text={event.description}
+                              authorship={event.authorship}
+                              field="description"
+                              fallback="u"
+                            />
                           </div>
                         )}
                         {event.journalId && (

@@ -26,7 +26,7 @@ NOTIFY_STATES = frozenset({'answered', 'awaiting_plan', 'needs_input', 'done', '
                            'interrupted'})
 ACTIVE_STATES = frozenset({'queued', 'answering', 'planning', 'running', 'testing'})
 # A task in one of these is finished with its container and workspace.
-CLOSED_STATES = frozenset({'cancelled', 'pushed', 'discarded'})
+CLOSED_STATES = frozenset({'cancelled', 'pushed', 'discarded', 'finished'})
 
 _seq_lock = threading.Lock()
 _listeners: list[Callable[[dict, str], None]] = []
@@ -136,7 +136,7 @@ def set_status(task_id: str, status: str, **fields) -> dict:
         row = db.execute('SELECT started_at FROM agent_tasks WHERE id=?', (task_id,)).fetchone()
         if row and row['started_at'] is None:
             extra['started_at'] = now
-    if status in ('done', 'error', 'cancelled', 'pushed', 'discarded') and 'finished_at' not in extra:
+    if status in ('done', 'error', *CLOSED_STATES) and 'finished_at' not in extra:
         extra['finished_at'] = now
     bad = set(extra) - _COLUMNS
     if bad:

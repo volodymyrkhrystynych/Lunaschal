@@ -38,6 +38,7 @@ export function MealClips({ media }: { media: FoodMedia[] }) {
             <CollapsibleText
               storageKey={`food-media-transcript-seen:${clip.id}`}
               label="Transcript"
+              textClassName="text-speech"
             >
               {clip.transcript}
             </CollapsibleText>

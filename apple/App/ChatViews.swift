@@ -200,13 +200,21 @@ private struct MessageRow: View {
                         }
                         ForEach(message.clips) { ClipRow(chat: chat, clip: $0) }
                         if !message.content.isEmpty {
-                            if isUser { Text(message.content).textSelection(.enabled) }
-                            else { BriefingContent(message: message) }
+                            if isUser {
+                                // Typed and dictated parts of one message, apart.
+                                if let authored = message.authoredContent {
+                                    AuthoredTextView(text: authored).textSelection(.enabled)
+                                } else {
+                                    Text(message.content).textSelection(.enabled)
+                                }
+                            } else { BriefingContent(message: message) }
                         }
                     }
                     .padding(.horizontal, 14).padding(.vertical, 9)
-                    .foregroundStyle(isUser ? Color.white : Color.primary)
-                    .background(isUser ? Color.accentColor : Color(.secondarySystemBackground),
+                    // Blue is the user's own words everywhere in the app (Theme.swift),
+                    // so a user bubble is blue text on a faint blue, not white on accent.
+                    .foregroundStyle(isUser ? Color.userText : Color.aiText)
+                    .background(isUser ? Color.userText.opacity(0.14) : Color(.secondarySystemBackground),
                                 in: RoundedRectangle(cornerRadius: 16))
                     .accessibilityIdentifier(isUser ? "chat-user-message" : "chat-reply")
                 }
@@ -218,7 +226,9 @@ private struct MessageRow: View {
                     Text("Cut off at the reply time limit (Settings → llama.cpp)").font(.caption).italic().foregroundStyle(.secondary)
                 }
                 if isUser, let raw = message.rawContent, !raw.isEmpty {
-                    DisclosureGroup("As dictated") { Text(raw).frame(maxWidth: .infinity, alignment: .leading) }
+                    DisclosureGroup("As dictated") {
+                        Text(raw).authored(.speech).frame(maxWidth: .infinity, alignment: .leading)
+                    }
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 StepsDisclosure(steps: meta.steps, thinking: meta.thinking, live: message.status == "streaming")
@@ -396,55 +406,92 @@ private struct BriefingContent: View {
 
 /// A reply's Markdown: blocks from `MarkdownBlock`, inline styling from
 /// Foundation's own parser.
+///
+/// `authored`, when given, colours the text by who produced it (Theme.swift).
+/// One author colours the whole block; several are painted per character
+/// through `AuthorAligner`, which has to see the blocks in source order — so
+/// every block's text is styled here, in a loop, before any view is built,
+/// rather than inside `ForEach`, whose evaluation order is SwiftUI's business.
 struct MarkdownText: View {
     let text: String
+    var authored: AuthoredText? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(MarkdownBlock.parse(text).enumerated()), id: \.offset) { block($0.element) }
+        let blocks = MarkdownBlock.parse(text)
+        let mixed = authored.flatMap { $0.soleAuthor == nil && $0.text == text ? AuthorAligner($0) : nil }
+        let styled = blocks.map { Self.styled($0, mixed) }
+        let content = VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { block($0.element, styled[$0.offset]) }
         }
         .textSelection(.enabled)
+        // With no authorship the colour is inherited, as it always was.
+        if let sole = authored?.soleAuthor {
+            content.foregroundStyle(sole.color)
+        } else {
+            content
+        }
     }
 
-    @ViewBuilder private func block(_ block: MarkdownBlock) -> some View {
+    /// Every inline string of one block, styled and (when mixed) painted.
+    private static func styled(_ block: MarkdownBlock, _ aligner: AuthorAligner?) -> [AttributedString] {
+        let texts: [String]
         switch block {
-        case let .heading(level, text):
-            inline(text).font(level == 1 ? .title3.bold() : level == 2 ? .headline : .subheadline.bold())
-        case let .paragraph(text):
-            inline(text)
-        case let .listItem(marker, indent, text):
+        case let .heading(_, text), let .paragraph(text), let .listItem(_, _, text), let .quote(text):
+            texts = [text]
+        case let .code(_, text):
+            return [aligner.map { AuthoredTextView.paint(AttributedString(text), $0) } ?? AttributedString(text)]
+        case .rule:
+            texts = []
+        case let .table(rows):
+            texts = rows.flatMap { $0 }
+        }
+        return texts.map { text in
+            let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+            let styled = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+            return aligner.map { AuthoredTextView.paint(styled, $0) } ?? styled
+        }
+    }
+
+    @ViewBuilder private func block(_ block: MarkdownBlock, _ styled: [AttributedString]) -> some View {
+        switch block {
+        case let .heading(level, _):
+            Text(styled[0]).font(level == 1 ? .title3.bold() : level == 2 ? .headline : .subheadline.bold())
+        case .paragraph:
+            Text(styled[0])
+        case let .listItem(marker, indent, _):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(marker).monospacedDigit()
-                inline(text)
+                Text(styled[0])
             }
             .padding(.leading, CGFloat(indent) * 16)
-        case let .quote(text):
-            inline(text).foregroundStyle(.secondary).padding(.leading, 10)
+        case .quote:
+            Text(styled[0]).foregroundStyle(.secondary).padding(.leading, 10)
                 .overlay(alignment: .leading) { Rectangle().frame(width: 3).foregroundStyle(.tertiary) }
-        case let .code(_, text):
+        case .code:
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(text).font(.system(.footnote, design: .monospaced)).padding(8)
+                Text(styled[0]).font(.system(.footnote, design: .monospaced)).padding(8)
             }
             .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
         case .rule:
             Divider()
         case let .table(rows):
+            // `styled` is the cells row by row; each row starts where the
+            // rows before it ended.
+            let starts = rows.indices.map { rows[..<$0].reduce(0) { $0 + $1.count } }
             ScrollView(.horizontal, showsIndicators: false) {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                        GridRow { ForEach(Array(row.enumerated()), id: \.offset) { inline($0.element).bold(index == 0) } }
+                        GridRow {
+                            ForEach(Array(row.indices), id: \.self) { column in
+                                Text(styled[starts[index] + column]).bold(index == 0)
+                            }
+                        }
                         if index == 0 { Divider() }
                     }
                 }
             }
             .font(.footnote)
         }
-    }
-
-    private func inline(_ text: String) -> Text {
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        if let styled = try? AttributedString(markdown: text, options: options) { return Text(styled) }
-        return Text(text)
     }
 }
 

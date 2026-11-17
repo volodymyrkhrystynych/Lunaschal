@@ -15,6 +15,7 @@ events — a crash mid-classification needs no separate in-progress flag.
 import json
 import time
 
+from backend import authorship
 from backend.ai.llm import chat_json
 from backend.ai.provider import is_ai_configured
 from backend.ai.service import InferencePaused, Preempted
@@ -141,10 +142,13 @@ def fill_event_title(event_id: str) -> None:
         except Exception as e:
             print(f'Event title generation failed for {event_id}: {e}')
     title = title or _clean_title(' '.join(body.split()[:_FALLBACK_TITLE_WORDS]))
-    db.execute(
+    cur = db.execute(
         "UPDATE calendar_events SET title=? WHERE id=? AND TRIM(title)=''",
         (title, event_id),
     )
+    if cur.rowcount:
+        # The model's words (or the transcript's first few, which the app chose).
+        authorship.mark_ai(db, 'calendar_events', event_id, 'title', title)
     db.commit()
 
 

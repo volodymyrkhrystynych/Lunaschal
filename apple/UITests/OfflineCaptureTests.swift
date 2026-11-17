@@ -169,6 +169,37 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(open.waitForExistence(timeout: settle))
     }
 
+    func testTodaysWordlessEntryIsADailyToDo() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-journalContextFixture")
+        app.launch()
+        selectTab(app, "Capture")
+        let daily = app.segmentedControls.buttons["Daily"]
+        XCTAssertTrue(daily.waitForExistence(timeout: settle))
+        daily.tap()
+        let todayID = "01K00000000000000000000005"
+        let open = app.buttons["daily-context-open-\(todayID)"]
+        XCTAssertTrue(open.waitForExistence(timeout: settle))
+        XCTAssertTrue(app.staticTexts["1 photo"].exists)
+        XCTAssertFalse(app.buttons["daily-context-open-01K00000000000000000000001"].exists,
+                       "older entries stay on Journal → Context")
+        attach(app, "daily needs context")
+        open.tap()
+        let text = app.textViews["journal-context-text"]
+        XCTAssertTrue(text.waitForExistence(timeout: settle))
+        text.tap(); text.typeText("Lunch with Sam")
+        app.swipeUp()
+        app.buttons["journal-context-save"].tap()
+        XCTAssertTrue(waitForSheetToClose(app))
+        let gone = NSPredicate(format: "exists == false")
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: gone, object: open)],
+                                      timeout: settle), .completed)
+        // The Context page lists today's alongside the backlog.
+        openContextPage(app)
+        XCTAssertTrue(app.buttons["journal-context-open-01K00000000000000000000001"].waitForExistence(timeout: settle))
+        XCTAssertFalse(app.buttons["journal-context-open-\(todayID)"].exists)
+    }
+
     /// Journal → Context, the page to the right of Calendar. Its segment
     /// carries a count while anything is waiting, so it is found by prefix.
     private func openContextPage(_ app: XCUIApplication) {
@@ -762,6 +793,9 @@ final class OfflineCaptureTests: XCTestCase {
         for _ in 0..<10 where !entry.exists || !entry.isHittable { app.swipeUp() }
         XCTAssertTrue(entry.exists, "The purchase survives a restart without a server")
         entry.swipeLeft()
+        // A row's swipe actions win over the page swipe; were the page to turn
+        // instead, the row would also vanish, so check the page directly.
+        XCTAssertTrue(app.segmentedControls.buttons["Daily"].isSelected, "the row's swipe, not the page's")
         if app.buttons["Delete"].exists { app.buttons["Delete"].tap() }
         XCTAssertTrue(entry.waitForNonExistence(timeout: settle))
     }
@@ -780,6 +814,56 @@ final class OfflineCaptureTests: XCTestCase {
         // Only the chosen page is on screen.
         XCTAssertFalse(app.textFields["Exercise entry"].exists)
         XCTAssertFalse(app.staticTexts["Body weight"].exists)
+    }
+
+    /// Entry sits in the middle of Capture's switch and a sideways swipe
+    /// walks the pages, stopping at the ends.
+    func testCaptureOpensOnTheMiddlePageAndSwipesBetweenPages() {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        let pages = app.segmentedControls.firstMatch
+        let daily = pages.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Daily'")).firstMatch
+        let entry = pages.buttons["Entry"], workout = pages.buttons["Workout"]
+        XCTAssertLessThan(daily.frame.midX, entry.frame.midX)
+        XCTAssertLessThan(entry.frame.midX, workout.frame.midX)
+        XCTAssertTrue(entry.isSelected)
+        app.swipeLeft()
+        XCTAssertTrue(app.textFields["Exercise entry"].waitForExistence(timeout: 5))
+        XCTAssertTrue(workout.isSelected)
+        app.swipeLeft()
+        XCTAssertTrue(workout.isSelected, "the last page stays put")
+        app.swipeRight()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
+        app.swipeRight()
+        XCTAssertTrue(app.staticTexts["Weather"].waitForExistence(timeout: 5))
+        XCTAssertTrue(daily.isSelected)
+    }
+
+    /// Journal sits between Calendar and Context. On the calendar a swipe is
+    /// still the day's, so the switch is the way back.
+    func testJournalOpensOnTheMiddlePageAndTheCalendarKeepsItsDaySwipe() {
+        let app = XCUIApplication()
+        app.launch()
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        let calendar = pages.buttons["Calendar"], journal = pages.buttons["Journal"]
+        let context = pages.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Context'")).firstMatch
+        XCTAssertLessThan(calendar.frame.midX, journal.frame.midX)
+        XCTAssertLessThan(journal.frame.midX, context.frame.midX)
+        XCTAssertTrue(journal.isSelected)
+        app.swipeLeft()
+        XCTAssertTrue(context.waitForSelection(timeout: 5))
+        app.swipeRight()
+        XCTAssertTrue(journal.waitForSelection(timeout: 5))
+        app.swipeRight()
+        XCTAssertTrue(app.buttons["calendar-day"].waitForExistence(timeout: 5))
+        XCTAssertTrue(calendar.isSelected)
+        XCTAssertEqual(app.buttons["calendar-day"].label, "Today")
+        app.swipeLeft()
+        XCTAssertTrue(calendar.isSelected, "the calendar's swipe turns the day, not the page")
+        XCTAssertNotEqual(app.buttons["calendar-day"].label, "Today")
     }
 
     func testJournalHasSyncOnTheLeftAndSwitchesToTheCalendar() {
@@ -1239,6 +1323,38 @@ final class OfflineCaptureTests: XCTestCase {
             .firstMatch.waitForExistence(timeout: 5))
     }
 
+    // A question whose follow-up failed is finished from the phone: it keeps
+    // its transcript, can no longer be replied to, and leaves "Needs you".
+    func testCodeTaskFinishClosesAFailedQuestion() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-codeFixture")
+        app.launch()
+        selectTab(app, "Chat")
+        let code = app.segmentedControls.buttons.element(boundBy: 1)
+        XCTAssertTrue(code.waitForExistence(timeout: 5))
+        code.tap()
+
+        let failed = app.staticTexts["Which tables does the briefing read?"]
+        XCTAssertTrue(failed.waitForExistence(timeout: 5))
+        failed.tap()
+        let finish = app.buttons["code-finish"]
+        XCTAssertTrue(finish.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["code-reply"].exists || app.textViews["code-reply"].exists)
+        finish.tap()
+        let confirm = app.buttons["Finish"].firstMatch
+        XCTAssertTrue(app.staticTexts["Finish this task?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Close this task'"))
+            .firstMatch.exists)
+        confirm.tap()
+
+        XCTAssertTrue(app.staticTexts["Finished"].waitForExistence(timeout: 5))
+        XCTAssertFalse(finish.exists)
+        XCTAssertFalse(app.textFields["code-reply"].exists || app.textViews["code-reply"].exists)
+        // The answer it had is still there to read.
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'wiki_articles'"))
+            .firstMatch.exists)
+    }
+
     private func openWritingChapter(_ app: XCUIApplication, _ title: String = "The Wreck") -> XCUIElement {
         openMore(app, "Writing")
         let project = app.buttons["writing-project"].firstMatch
@@ -1450,10 +1566,15 @@ final class OfflineCaptureTests: XCTestCase {
         let start = app.buttons["code-new-start"]
         XCTAssertEqual(start.label, "Ask")
         start.tap()
-        XCTAssertTrue(app.staticTexts["Who reads the backup path?"].waitForExistence(timeout: 5))
+        // The new task is under "Working", below everything that needs you,
+        // and a List only draws the rows on screen.
+        let asked = app.staticTexts["Who reads the backup path?"]
+        for _ in 0..<4 where !asked.waitForExistence(timeout: 2) { app.swipeUp() }
+        XCTAssertTrue(asked.exists)
 
         let answered = app.staticTexts["Where do Code-tab notifications come from?"]
-        XCTAssertTrue(answered.waitForExistence(timeout: 5))
+        for _ in 0..<4 where !answered.waitForExistence(timeout: 2) { app.swipeDown() }
+        XCTAssertTrue(answered.exists)
         answered.tap()
         let plan = app.buttons["code-plan-from-answer"]
         XCTAssertTrue(plan.waitForExistence(timeout: 5))
@@ -3422,5 +3543,14 @@ final class OfflineCaptureTests: XCTestCase {
         shot.name = name
         shot.lifetime = .keepAlways
         add(shot)
+    }
+}
+
+private extension XCUIElement {
+    /// A segment selected by a swipe updates a beat after the gesture ends.
+    func waitForSelection(timeout: TimeInterval) -> Bool {
+        let selected = NSPredicate(format: "isSelected == true")
+        return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: selected, object: self)],
+                              timeout: timeout) == .completed
     }
 }

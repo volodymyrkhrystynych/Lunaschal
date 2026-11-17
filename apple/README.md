@@ -117,8 +117,15 @@ what each device can currently do and which work remains device-only.
   or a Full Keyboard Access command does the same in the app's process (Back Tap
   is iPhone-only); with no notebook open, its screenshot waits for the next one.
 
-- The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
-  default on launch and when returning from another tab) is the composer below.
+- The Capture tab has a **Daily | Entry | Workout** switch where its title was.
+  Entry, in the middle (the default on launch and when returning from another
+  tab), is the composer below. A sideways swipe moves to the page beside it, as
+  it does between the Journal tab's **Calendar | Journal | Context**, where
+  Journal is the middle default. The swipe stands aside for a row's swipe
+  actions (so on Daily, a left swipe that starts on a log reveals Remove rather
+  than turning to Entry) and for anything that scrolls sideways, and on the Calendar page it
+  still turns the day, so the switch is the way off it (`SubtabSwipe`,
+  `SubtabSwipeGesture`; passed in the iPhone simulator).
   Capture and Daily show the same remaining count: one each for fewer than
   2,000 calories, no selfie, and no body weight in the current 4am day.
   Saved offline logs count immediately. **Daily** logs the day's selfie (front camera,
@@ -342,8 +349,13 @@ what each device can currently do and which work remains device-only.
   picked up by polling, as on the desktop. Passed in simulator, offline and
   against a local test server with a stand-in model; not yet verified on device.
 - Journal → Context (the speech-bubble page right of Calendar; the bubble
-  fills while any are waiting) offers journal-context cards for yesterday's image/audio-only
-  entries, filled to three from older entries when needed. The server owns
+  fills while any are waiting, and the Journal tab is badged with the count)
+  offers journal-context cards for today's and yesterday's image/audio-only
+  entries, filled to three from older entries when needed. Today's also head
+  Capture → Daily as "Needs context" and count in the Daily badge; a capture
+  still on the device is judged there before it uploads (`JournalContextToday`
+  in LunaschalCore; a Capture-tab Save, which may become a meal or a purchase,
+  is not) and can be answered once the server lists it, about two minutes on. The server owns
   the daily batch and permanent dismissals, shared with the web. Each sheet
   previews photos and plays audio, accepts typed context, and stages transcribed
   recordings on the original entry. Typed saves and dismissals need a connection;
@@ -355,7 +367,10 @@ what each device can currently do and which work remains device-only.
 - Chat has a Code page (the switch in its title bar) for the server's local
   coding agent: start a task, approve or revise its plan, answer its
   questions, review the diff file by file and the test run Lunaschal measured,
-  then push the `agent/<id>` branch and open a PR. The Chat tab's badge counts
+  then push the `agent/<id>` branch and open a PR. An interrupted or failed
+  task can be continued or finished: Finish has the server commit and test
+  what a build got done (ready to push), and closes anything else with its
+  transcript kept. The Chat tab's badge counts
   plans and questions waiting. A tapped notification opens the task. The app
   is signed for push; delivery needs the server's APNs key (docs/code-agent.md).
   Passed in simulator with the `-codeFixture` demo data; notifications and a

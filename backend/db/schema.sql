@@ -3082,18 +3082,21 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     -- answering/planning/running/testing are in flight and become
     -- 'interrupted' at startup (_reset_stale_agent_tasks). answered,
     -- awaiting_plan and needs_input are waiting on the user, which survives a
-    -- restart as-is. Widening this list means a table rebuild — see
-    -- _ensure_agent_task_ask.
+    -- restart as-is. 'finished' is closed by the user rather than pushed or
+    -- thrown away: its transcript stays, its container and clone do not.
+    -- Widening this list means a table rebuild — see _ensure_agent_task_checks.
     status TEXT NOT NULL DEFAULT 'queued'
         CHECK(status IN ('queued','answering','answered','planning','awaiting_plan',
                          'running','needs_input','testing','done','interrupted',
-                         'error','cancelled','pushed','discarded')),
+                         'error','cancelled','pushed','discarded','finished')),
     -- Which half runs next when the worker picks the task up. Each phase is
     -- its own worker run, so a plan waiting hours for approval holds neither
     -- the worker nor an agent process. 'ask' is a question rather than a
     -- change: read-only like 'plan', answered rather than approved, and it can
-    -- become a 'plan' once the answer shows what to change.
-    phase TEXT NOT NULL DEFAULT 'plan' CHECK(phase IN ('ask','plan','build')),
+    -- become a 'plan' once the answer shows what to change. 'finish' is a
+    -- failed build being wrapped up without the agent — its work exported and
+    -- tested — and is only ever queued: the run sets it back to 'build'.
+    phase TEXT NOT NULL DEFAULT 'plan' CHECK(phase IN ('ask','plan','build','finish')),
     -- The agent's ACP session, resumed with session/load when it supports it.
     session_id TEXT,
     -- A revision, answer or follow-up waiting for the next run.
@@ -3192,3 +3195,72 @@ CREATE TABLE IF NOT EXISTS merged_prs (
     created_at INTEGER NOT NULL,
     PRIMARY KEY (repo, number)
 );
+
+-- Who produced which part of a text field -- typed by the user ('u'),
+-- speech-to-text ('s', optionally naming the recording), or AI ('a') -- as JSON
+-- run-lengths in Unicode code points, e.g. [["s",40,"<attachment id>"],["u",3]].
+-- It is what says which text a better model could regenerate; clients also
+-- colour by it. A row is trusted only while
+-- `text` (what the spans were computed for) still equals the field -- a length
+-- check is not enough, two edits of one length are common -- so a write that skipped
+-- backend/authorship.py falls back to the field's default rule rather than
+-- mis-colouring; rows that never had one use that rule too. See
+-- backend/authorship.py.
+CREATE TABLE IF NOT EXISTS text_authorship (
+    target TEXT NOT NULL,
+    row_id TEXT NOT NULL,
+    field TEXT NOT NULL,
+    spans TEXT NOT NULL,
+    text TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (target, row_id, field)
+);
+
+CREATE TRIGGER IF NOT EXISTS text_authorship_journal_entries_delete
+AFTER DELETE ON journal_entries BEGIN
+    DELETE FROM text_authorship WHERE target='journal_entries' AND row_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS text_authorship_food_entries_delete
+AFTER DELETE ON food_entries BEGIN
+    DELETE FROM text_authorship WHERE target='food_entries' AND row_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS text_authorship_spending_logs_delete
+AFTER DELETE ON spending_logs BEGIN
+    DELETE FROM text_authorship WHERE target='spending_logs' AND row_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS text_authorship_ideas_delete
+AFTER DELETE ON ideas BEGIN
+    DELETE FROM text_authorship WHERE target='ideas' AND row_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS text_authorship_messages_delete
+AFTER DELETE ON messages BEGIN
+    DELETE FROM text_authorship WHERE target='messages' AND row_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS text_authorship_todos_delete
+AFTER DELETE ON todos BEGIN
+    DELETE FROM text_authorship WHERE target='todos' AND row_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS text_authorship_chat_todos_delete
+AFTER DELETE ON chat_todos BEGIN
+    DELETE FROM text_authorship WHERE target='chat_todos' AND row_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS text_authorship_writing_chapters_delete
+AFTER DELETE ON writing_chapters BEGIN
+    DELETE FROM text_authorship WHERE target='writing_chapters' AND row_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS text_authorship_writing_context_docs_delete
+AFTER DELETE ON writing_context_docs BEGIN
+    DELETE FROM text_authorship WHERE target='writing_context_docs' AND row_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS text_authorship_calendar_events_delete
+AFTER DELETE ON calendar_events BEGIN
+    DELETE FROM text_authorship WHERE target='calendar_events' AND row_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS text_authorship_notes_to_self_delete
+AFTER DELETE ON notes_to_self BEGIN
+    DELETE FROM text_authorship WHERE target='notes_to_self' AND row_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS text_authorship_learning_cards_delete
+AFTER DELETE ON learning_cards BEGIN
+    DELETE FROM text_authorship WHERE target='learning_cards' AND row_id=OLD.id;
+END;

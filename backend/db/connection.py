@@ -262,6 +262,14 @@ def _ensure_health_lifestyle(db):
 
 def init_db() -> None:
     db = get_db()
+    # The phone's authorship re-send triggers sit on text_authorship but name
+    # the tables they re-send (journal_entries, food_entries, spending_logs), so
+    # a rebuild migration's DROP does not take them with it -- and its RENAME
+    # then fails validating them against a table that is momentarily gone.
+    # `_ensure_mobile_sync` puts them back after every migration has run.
+    for row in db.execute("SELECT name FROM sqlite_master WHERE type='trigger'"
+                          " AND name GLOB 'mobile_sync_authorship_*'").fetchall():
+        db.execute(f'DROP TRIGGER "{row[0]}"')
     schema = (Path(__file__).parent / 'schema.sql').read_text()
     db.executescript(schema)
     db.commit()
@@ -419,9 +427,11 @@ def init_db() -> None:
     _ensure_study_archive_requested(db)
     _ensure_torrent_settings(db)
     _ensure_inference_pause_settings(db)
+    # Before mobile sync, so a replica bootstrap already carries the spans.
+    _ensure_authorship(db)
     _ensure_mobile_sync(db)
     _ensure_code_agent_settings(db)
-    _ensure_agent_task_ask(db)
+    _ensure_agent_task_checks(db)
     _ensure_pr_journal_settings(db)
     _ensure_chat_todo_source(db)
     # No _reset_stale_torrents() belongs below: the torrent client runs in its
@@ -441,6 +451,30 @@ def init_db() -> None:
     _reset_stale_llm_jobs(db)
     _requeue_jobs_lost_to_a_pause(db)
     _reset_stale_agent_tasks(db)
+
+
+def _ensure_authorship(db: sqlite3.Connection) -> None:
+    """Revision tables keep each revision's spans, and rows written before
+    spans existed get their speech-to-text spans found once.
+
+    The backfill is latched by a sentinel row rather than re-run on every
+    start: it is idempotent, but it would otherwise re-scan every raw text that
+    never had a recording, each time the server came up.
+    """
+    for table in ('writing_chapter_revisions', 'writing_context_doc_revisions'):
+        cols = {r[1] for r in db.execute(f'PRAGMA table_info({table})')}
+        if 'spans' not in cols:
+            db.execute(f'ALTER TABLE {table} ADD COLUMN spans TEXT')
+    latched = db.execute(
+        "SELECT 1 FROM text_authorship WHERE target='_backfill' AND row_id='speech' AND field='v1'"
+    ).fetchone()
+    if not latched:
+        from backend import authorship
+        authorship.backfill(db)
+        db.execute(
+            "INSERT OR IGNORE INTO text_authorship(target, row_id, field, spans, text, updated_at)"
+            " VALUES ('_backfill', 'speech', 'v1', '[]', '', ?)", (int(time.time()),))
+    db.commit()
 
 
 def _ensure_mobile_sync(db: sqlite3.Connection) -> None:
@@ -1383,16 +1417,18 @@ def _ensure_code_agent_settings(db: sqlite3.Connection) -> None:
     db.commit()
 
 
-def _ensure_agent_task_ask(db: sqlite3.Connection) -> None:
-    """Code tasks grew a question mode: phase 'ask' and the statuses
-    'answering' / 'answered'. SQLite cannot widen a CHECK in place, so an older
+def _ensure_agent_task_checks(db: sqlite3.Connection) -> None:
+    """Code tasks grew a question mode (phase 'ask', the statuses 'answering' /
+    'answered'), then a way to finish one (phase 'finish', status 'finished').
+    Keyed on the newest value, so a table from before either is rebuilt once.
+    SQLite cannot widen a CHECK in place, so an older
     `agent_tasks` is rebuilt from schema.sql's own statement, as goals are.
     foreign_keys is off for the swap, outside the transaction, because the
     events and approvals cascade from this table: with it on, the DROP would
     take every task's log with it."""
     row = db.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_tasks'").fetchone()
-    if not row or "'answered'" in row[0]:
+    if not row or "'finished'" in row[0]:
         return
     schema = (Path(__file__).parent / 'schema.sql').read_text()
     ddl = re.search(r'CREATE TABLE IF NOT EXISTS agent_tasks \(.*?\n\);', schema, re.S).group(0)

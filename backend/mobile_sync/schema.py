@@ -3,7 +3,9 @@ import time
 
 from ulid import ULID
 
-from .registry import COLLECTIONS, SCHEMA_HASH, included, key, payload
+from backend import authorship
+
+from .registry import AUTHORED, COLLECTIONS, SCHEMA_HASH, included, key, payload
 
 
 def ensure(db):
@@ -61,6 +63,29 @@ def ensure(db):
                     INSERT INTO mobile_sync_changes(collection,record_id,payload)
                     SELECT 'fics',source.id,{payload('fics', 'source')} FROM fics source
                     WHERE source.id IN ({ids});
+                END
+            """)
+    # Spans are part of the record's payload but live in their own table, so a
+    # span change that moves no projected column (a model write landing after
+    # the row's UPDATE) re-sends the record from here. Only spans that describe
+    # the record's current text are sent: an edit is recorded just *before* its
+    # UPDATE, and publishing then would put the old text with stale spans into
+    # history as a revision of its own.
+    for table in AUTHORED:
+        for event in ('INSERT', 'UPDATE', 'DELETE'):
+            prefix = 'OLD' if event == 'DELETE' else 'NEW'
+            field = ' '.join(f"WHEN '{f}' THEN COALESCE(source.\"{f}\", '')"
+                             for f in authorship.FIELDS[table])
+            in_effect = (f'{prefix}.text IS (SELECT CASE {prefix}.field {field} END'
+                         f' FROM "{table}" source WHERE source.id={prefix}.row_id)')
+            db.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS mobile_sync_authorship_{table}_{event.lower()}
+                AFTER {event} ON text_authorship
+                WHEN {prefix}.target='{table}' AND {in_effect}
+                BEGIN
+                    INSERT INTO mobile_sync_changes(collection,record_id,payload)
+                    SELECT '{table}',source.id,{payload(table, 'source')} FROM "{table}" source
+                    WHERE source.id={prefix}.row_id AND {included(table, 'source')};
                 END
             """)
     # A site's first complete pass over a list that counts is what lets its

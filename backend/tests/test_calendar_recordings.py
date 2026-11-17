@@ -9,6 +9,7 @@ import io
 
 import pytest
 
+from backend import authorship
 from backend.ai import calendar as calendar_ai
 from backend.ai import job_handlers  # noqa: F401  (registers handlers)
 from backend.ai import jobs as llm_jobs
@@ -137,6 +138,37 @@ def test_a_clip_fills_the_description_title_and_categories(client, transcript, m
     assert event['description'] == f"Typed first.\n\n{transcript['text']}"
     assert event['title'] == 'Lake walk'
     assert event['category_tags'] == '["outside"]'
+
+
+def test_a_clips_transcript_is_speech_naming_its_recording(client, transcript, monkeypatch):
+    replies = {'title': {'title': 'Lake walk'}, 'categories': {'categories': []}}
+    monkeypatch.setattr(calendar_ai, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(
+        calendar_ai, 'chat_json',
+        lambda text, system, schema: replies['title' if 'title' in schema['properties'] else 'categories'])
+    _create(client, title='', description='Typed first.', pendingClips=1)
+    _upload(client)
+    _drain()
+    db = get_db()
+    text, spans = authorship.current(db, 'calendar_events', EVENT, 'description')
+    assert text == f"Typed first.\n\n{transcript['text']}"
+    typed = len('Typed first.')
+    assert spans == [['u', typed], ['s', len(text) - typed, CLIP]]
+    # The blank title was filled by the model, so it is the model's.
+    assert authorship.current(db, 'calendar_events', EVENT, 'title') == ('Lake walk', [['a', 9]])
+
+
+def test_a_typed_title_is_never_marked_as_the_models(client, monkeypatch):
+    _create(client, title='', description='Spoken words', pendingClips=1)
+
+    def typed_meanwhile(*args, **kwargs):
+        client.patch(f'/api/calendar/{EVENT}', json={'title': 'Mine'})
+        return {'title': 'Generated'}
+
+    monkeypatch.setattr(calendar_ai, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(calendar_ai, 'chat_json', typed_meanwhile)
+    calendar_ai.fill_event_title(EVENT)
+    assert authorship.current(get_db(), 'calendar_events', EVENT, 'title') == ('Mine', [['u', 4]])
 
 
 def test_a_typed_title_is_kept(client, transcript, monkeypatch):

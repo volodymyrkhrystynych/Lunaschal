@@ -36,6 +36,16 @@ plan left unapproved overnight holds neither the worker nor a process. The ACP s
 runs with `session/load` where the agent supports it; otherwise the next session's prompt carries the
 task and the approved plan. The container stays up between phases.
 
+**A task that stopped short can be finished rather than continued** (`worker.finish_task`, the
+Finish button on the phone and the web). A build whose clone is still there is queued once more as
+phase `finish`: the driver starts no agent, and does to the clone exactly what the end of a turn
+does (commit what is uncommitted, bundle, import, diff, test), so it lands on `done` and can be
+pushed, or on `finished` if there was nothing in it. Anything else (a question, a plan, a build
+whose clone is gone) is closed straight away as `finished`, a closed state like `discarded` except
+that the transcript and the last answer are what it is for. The run sets the phase back to `build`
+first, so a finish that fails leaves an ordinary failed build that Continue can hand back to the
+agent.
+
 **One task at a time.** The GPU lane has two slots and chat needs one.
 
 **The proxy, not the agent, talks to llama-server.** Every model request the agent makes goes through

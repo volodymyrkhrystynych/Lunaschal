@@ -1,4 +1,5 @@
 import { useDraftState } from '@/hooks/useDraftState';
+import { AuthoredText } from '../AuthoredText';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import {
@@ -218,7 +219,16 @@ export function EventDetails({
         <div className="flex items-start justify-between mb-4">
           <div>
             <h2 className="text-xl font-semibold text-[var(--color-text)]">
-              {event.title || 'Untitled'}
+              {event.title ? (
+                <AuthoredText
+                  text={event.title}
+                  authorship={event.authorship}
+                  field="title"
+                  fallback="u"
+                />
+              ) : (
+                'Untitled'
+              )}
             </h2>
             <div className="text-sm text-[var(--color-text-muted)] mt-1">
               {new Date(shownDate + 'T00:00:00').toLocaleDateString('en-US', {
@@ -315,7 +325,12 @@ export function EventDetails({
         ) : (
           event.description && (
             <div className="mb-4 text-[var(--color-text)]">
-              {event.description}
+              <AuthoredText
+                text={event.description}
+                authorship={event.authorship}
+                field="description"
+                fallback="u"
+              />
             </div>
           )
         )}

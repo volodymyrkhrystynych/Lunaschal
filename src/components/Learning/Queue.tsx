@@ -1,3 +1,4 @@
+import { cardAuthored } from '@/lib/authorship';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type ApproveResult, type LearningCard } from '../../hooks/api';
@@ -146,13 +147,19 @@ export function Queue() {
             Question
           </div>
           <div className="text-[var(--color-text)] mb-3">
-            <MessageMarkdown content={card.question} />
+            <MessageMarkdown
+              content={card.question}
+              authored={cardAuthored(card, 'question')}
+            />
           </div>
           <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
             Answer
           </div>
           <div className="text-[var(--color-text)] mb-4">
-            <MessageMarkdown content={card.answer} />
+            <MessageMarkdown
+              content={card.answer}
+              authored={cardAuthored(card, 'answer')}
+            />
           </div>
 
           {regenFor === card.id ? (
@@ -266,10 +273,16 @@ function DuplicateHintDialog({
               New card
             </div>
             <div className="text-sm text-[var(--color-text)]">
-              <MessageMarkdown content={hint.card.question} />
+              <MessageMarkdown
+                content={hint.card.question}
+                authored={cardAuthored(hint.card, 'question')}
+              />
             </div>
             <div className="text-sm text-[var(--color-text-muted)] mt-1">
-              <MessageMarkdown content={hint.card.answer} />
+              <MessageMarkdown
+                content={hint.card.answer}
+                authored={cardAuthored(hint.card, 'answer')}
+              />
             </div>
           </div>
           <div className="border border-orange-500/30 rounded-lg p-3">
