@@ -169,8 +169,6 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(open.waitForExistence(timeout: settle))
     }
 
-    /// Journal → Context, the page to the right of Calendar. Its segment
-    /// carries a count while anything is waiting, so it is found by prefix.
     func testTodaysWordlessEntryIsADailyToDo() {
         let app = XCUIApplication()
         app.launchArguments.append("-journalContextFixture")
@@ -202,6 +200,8 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(app.buttons["journal-context-open-\(todayID)"].exists)
     }
 
+    /// Journal → Context, the page to the right of Calendar. Its segment
+    /// carries a count while anything is waiting, so it is found by prefix.
     private func openContextPage(_ app: XCUIApplication) {
         selectTab(app, "Journal")
         let pages = app.segmentedControls["journal-page"]

@@ -347,7 +347,8 @@ what each device can currently do and which work remains device-only.
   entries, filled to three from older entries when needed. Today's also head
   Capture → Daily as "Needs context" and count in the Daily badge; a capture
   still on the device is judged there before it uploads (`JournalContextToday`
-  in LunaschalCore) and can be answered once it has. The server owns
+  in LunaschalCore; a Capture-tab Save, which may become a meal or a purchase,
+  is not) and can be answered once the server lists it, about two minutes on. The server owns
   the daily batch and permanent dismissals, shared with the web. Each sheet
   previews photos and plays audio, accepts typed context, and stages transcribed
   recordings on the original entry. Typed saves and dismissals need a connection;

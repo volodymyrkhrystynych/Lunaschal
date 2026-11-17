@@ -22,13 +22,14 @@ struct CaptureRoot: View {
     @State private var showQuickCamera = false
     @State private var today = DayKey.of(Date())
 
-    private var dailyRemaining: Int {
+    private func dailyRemaining(_ contextToday: [JournalContextToday.Item]) -> Int {
         DailySummary(day: today, server: model.dailyStatus, local: model.dailyLogs).remainingCount
             + contextToday.count
     }
 
     /// Today's photos and recordings still waiting for a word: a to-do on Daily.
-    private var contextToday: [JournalContextToday.Item] {
+    /// Not cheap (it walks every capture), so `body` asks once.
+    private func contextTodayItems() -> [JournalContextToday.Item] {
         JournalContextToday.items(prompts: context.prompts, captures: model.captures, day: today)
     }
 
@@ -55,6 +56,8 @@ struct CaptureRoot: View {
     }
 
     var body: some View {
+        let contextToday = contextTodayItems()
+        let dailyRemaining = dailyRemaining(contextToday)
         TabView(selection: $tab) {
             NavigationStack {
                 CaptureTab(model: model, page: $capturePage, dailyRemaining: dailyRemaining,
@@ -129,19 +132,22 @@ struct CaptureRoot: View {
             }.ignoresSafeArea()
         }
         // The Todo badge stays current, but neither list is fetched again for a
-        // pass that didn't touch it.
+        // pass that didn't touch it. The context refresh lives here rather than
+        // on Journal → Context, so Daily's list and both badges follow it too.
         .onChange(of: model.syncChanges) { _, changes in
             if changes.touches([SyncChanges.todos]) { Task { await todo.refresh() } }
             if changes.touches(["journal_entries", "journal_attachments"]) { Task { await context.refresh() } }
             if changes.full { Task { await learning.refresh() } }
         }
-        // A tapped Code-tab notification: straight to that task.
         // A capture that just uploaded moves from this device's judgement to
-        // the server's list, which only a fresh fetch shows.
-        .onChange(of: model.captures.filter { $0.state != .synced }.count) { _, _ in
+        // the server's list, which only a fresh fetch shows. Keyed on the ids,
+        // not the count: an upload that lands as a new capture is saved leaves
+        // the count where it was.
+        .onChange(of: Set(model.captures.lazy.filter { $0.state != .synced }.map(\.id))) { _, _ in
             Task { await context.refresh() }
         }
         .onChange(of: today) { _, _ in Task { await context.refresh() } }
+        // A tapped Code-tab notification: straight to that task.
         .onChange(of: push.openTaskID) { _, id in
             guard let id else { return }
             push.openTaskID = nil
@@ -169,6 +175,9 @@ struct CaptureRoot: View {
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
                 today = DayKey.of(Date())
                 model.checkIn()
+                // An upload the server is still letting settle shows up on its
+                // list only when asked again, and nothing else would ask.
+                if contextTodayItems().contains(where: \.awaitingServer) { await context.refresh() }
             }
         }
     }

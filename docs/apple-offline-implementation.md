@@ -34,11 +34,17 @@ Native sheet interaction remains to be verified in the iOS simulator.
 
 Today's context to-dos (2026-11-16, `feat/daily-context-todos`): the prepare
 endpoint now returns today's eligible entries first and uncapped, outside the
-frozen backlog slots. Capture → Daily lists them as "Needs context" and counts
+frozen backlog slots, when the phone asks (`{"includeToday": true}`; the web's
+Chat cards don't) and only once each has settled (two minutes old, no open
+screenshot session, a Capture-tab Save already sorted). A Capture-tab Save
+(`autoFile`) is not counted on the device, and a just-uploaded capture stays
+listed from the device until the server lists it. Capture → Daily lists them as "Needs context" and counts
 them in its badge; the Journal tab is badged with the Context page's count.
 `JournalContextToday` (LunaschalCore) merges them with unsent captures judged on
 the device, deferring to the device while an entry's words are still unsent.
-Passed: 3 new Swift core tests, 4 new/updated backend tests, and one new iPhone
+Passed: 4 new Swift core tests, the backend context-prompt tests, two app unit
+tests for refresh ordering (`JournalContextModelTests`: a late fetch cannot
+bring back a prompt answered or dismissed meanwhile), and one new iPhone
 simulator test (`testTodaysWordlessEntryIsADailyToDo`). Not verified on device.
 
 Journal-context prompts (2026-10-15, `feat/journal-context-prompts`): the native

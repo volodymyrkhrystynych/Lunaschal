@@ -86,6 +86,9 @@ final class JournalContextTests: XCTestCase {
                        "an addition to an entry is not an entry")
         XCTAssertFalse(JournalContextToday.needsContext(capture(files: [photo()], state: .synced)),
                        "once uploaded, the server's list speaks for it")
+        var saved = capture(files: [photo()]); saved.autoFile = true
+        XCTAssertFalse(JournalContextToday.needsContext(saved),
+                       "a Capture-tab Save may yet become a meal or a purchase")
         var food = Capture(now: at("2026-11-16T12:00:00Z"), files: [photo()]); food.state = .pending
         XCTAssertTrue(JournalContextToday.needsContext(food))
         XCTAssertFalse(JournalContextToday.needsContext(
@@ -104,6 +107,25 @@ final class JournalContextTests: XCTestCase {
         XCTAssertEqual(items.map(\.id), [lastNight.id, offline.id, morning.id])
         XCTAssertEqual(items[1].photoCount, 1)
         XCTAssertEqual(items[1].clipCount, 0)
+    }
+
+    func testJustUploadedStaysListedUntilTheServerHasLetItSettle() throws {
+        let uploaded = capture(files: [photo()], state: .synced, at: "2026-11-16T12:00:00Z")
+        func items(_ now: String, _ prompts: [JournalContextPrompt] = []) -> [JournalContextToday.Item] {
+            JournalContextToday.items(prompts: prompts, captures: [uploaded], day: "2026-11-16",
+                                      now: at(now), calendar: utc)
+        }
+        let waiting = items("2026-11-16T12:01:00Z")
+        XCTAssertEqual(waiting, [.local(uploaded)])
+        XCTAssertTrue(waiting[0].awaitingServer)
+        // Past the settle time the server's list alone speaks for it.
+        XCTAssertEqual(items("2026-11-16T12:02:01Z"), [])
+        let served = try prompt(uploaded.id, "2026-11-16T12:00:00Z")
+        XCTAssertEqual(items("2026-11-16T12:01:00Z", [served]), [.prompt(served)])
+        // Words on it, or a Capture-tab Save, were never waiting.
+        var saved = uploaded; saved.autoFile = true
+        XCTAssertEqual(JournalContextToday.items(prompts: [], captures: [saved], day: "2026-11-16",
+                                                 now: at("2026-11-16T12:01:00Z"), calendar: utc), [])
     }
 
     func testServerPromptDefersToTheDeviceWhileItsWordsAreStillUnsent() throws {

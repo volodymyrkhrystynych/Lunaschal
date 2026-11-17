@@ -1,4 +1,5 @@
 """Daily context requests for media-only entries. No model or scheduler needed."""
+import time
 from datetime import date, timedelta
 from threading import RLock
 
@@ -22,17 +23,42 @@ _ELIGIBLE = f"""
     )
 """
 
+# How long one of today's entries must sit before it is asked about. An entry
+# is briefly wordless on its way to having words: a recording is committed
+# before its transcription is marked running, and a second photo or clip can
+# land a request later.
+TODAY_SETTLE_SECONDS = 120
 
-def prepare(db, *, now=None):
-    """Today's waiting entries, then the day's frozen backlog slots.
+# Today's entries that are still arriving or still being sorted. A screenshot
+# session is open while images keep landing on it; a Capture-tab Save
+# (`auto_file`) may yet move to the food log or the spending ledger, and has
+# stayed in the journal only once its `journal.autofile` job has finished — or
+# once plain metadata was queued instead, which is the waiter giving up
+# (`_generate_metadata_bg` in `backend/routes/journal.py`).
+_TODAY_SETTLED = """
+    e.created_at<=?
+    AND NOT EXISTS (SELECT 1 FROM journal_attachments a WHERE a.entry_id=e.id AND a.created_at>?)
+    AND NOT EXISTS (SELECT 1 FROM journal_screenshot_sessions s WHERE s.entry_id=e.id AND s.is_open=1)
+    AND (e.auto_file=0 OR EXISTS (
+        SELECT 1 FROM llm_jobs j WHERE j.target_id=e.id
+        AND ((j.kind='journal.autofile' AND j.status IN ('done', 'error'))
+             OR j.kind='journal.metadata')))
+"""
 
-    Today's come first and uncapped: they are what the phone's Daily page asks
-    about while the day is still remembered, so they take no slot and are never
-    frozen. Left unanswered, they are yesterday's tomorrow, which joins the
-    backlog uncapped like any late-arriving capture. Backlog slots count
-    answered/dismissed slots too. Older unfinished prompts rejoin the backlog
-    next day, newest first. Merely closing a modal has no effect on eligibility.
+
+def prepare(db, *, now=None, include_today=False):
+    """The day's frozen backlog slots, after today's waiting entries if asked.
+
+    `include_today` is the phone's Daily page, which asks about today's while
+    the day is still remembered; the web's Chat cards leave it off and see the
+    backlog alone. Today's are uncapped, take no slot, are never frozen, and
+    are listed only once settled (`_TODAY_SETTLED`). Left unanswered, they are
+    yesterday's tomorrow, which joins the backlog uncapped like any
+    late-arriving capture. Backlog slots count answered/dismissed slots too.
+    Older unfinished prompts rejoin the backlog next day, newest first. Merely
+    closing a modal has no effect on eligibility.
     """
+    now = int(time.time()) if now is None else now
     today = day_key_for(now)
     today_start, today_end = day_bounds(today)
     yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
@@ -68,10 +94,11 @@ def prepare(db, *, now=None):
             )
         db.commit()
         todays = db.execute(
-            f'SELECT e.* FROM journal_entries e WHERE {_ELIGIBLE}'
+            f'SELECT e.* FROM journal_entries e WHERE {_ELIGIBLE} AND {_TODAY_SETTLED}'
             ' AND e.created_at>=? AND e.created_at<?'
-            ' ORDER BY e.created_at DESC, e.id DESC', (today_start, today_end),
-        ).fetchall()
+            ' ORDER BY e.created_at DESC, e.id DESC',
+            (now - TODAY_SETTLE_SECONDS, now - TODAY_SETTLE_SECONDS, today_start, today_end),
+        ).fetchall() if include_today else []
         return todays + db.execute(
             f'SELECT e.* FROM journal_entries e WHERE {_ELIGIBLE}'
             ' AND e.context_prompt_day=? AND e.created_at<?'

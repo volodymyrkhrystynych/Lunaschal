@@ -50,9 +50,11 @@ public protocol JournalContextTransport {
 }
 
 extension JournalAPI: JournalContextTransport {
+    /// The backlog, after today's waiting entries: the phone asks for today's
+    /// (Daily lists them), which the web's Chat cards leave out.
     public func journalContextPrompts() async throws -> [JournalContextPrompt] {
         try JSONDecoder().decode([JournalContextPrompt].self,
-            from: await postJSON("api/journal/context-prompts/prepare", [String: String]()))
+            from: await postJSON("api/journal/context-prompts/prepare", ["includeToday": true]))
     }
 
     public func resolveJournalContext(_ id: String, resolution: JournalContextResolution) async throws {
@@ -65,10 +67,17 @@ extension JournalAPI: JournalContextTransport {
 /// what has uploaded; a capture still on this device is judged here, so a
 /// photo taken offline asks for its words at once rather than after a sync.
 public enum JournalContextToday {
+    /// The server lists one of today's entries only once it has sat this long
+    /// (`TODAY_SETTLE_SECONDS` in `backend/journal/context_prompts.py`), so a
+    /// capture this device has just uploaded is still listed from its own
+    /// judgement until then, rather than vanishing for two minutes.
+    public static let settleSeconds: TimeInterval = 120
+
     public enum Item: Identifiable, Equatable {
         /// On the server, answerable now.
         case prompt(JournalContextPrompt)
-        /// Still on this device; answerable once it has uploaded.
+        /// Still on this device, or just uploaded and not yet listed by the
+        /// server; answerable once the server lists it.
         case local(Capture)
 
         public var id: String {
@@ -76,6 +85,12 @@ public enum JournalContextToday {
             case .prompt(let prompt): return prompt.id
             case .local(let capture): return capture.targetID
             }
+        }
+
+        /// Uploaded, waiting only for the server to list it: worth asking again.
+        public var awaitingServer: Bool {
+            if case .local(let capture) = self { return capture.state == .synced }
+            return false
         }
 
         public var createdAt: Date? {
@@ -108,8 +123,18 @@ public enum JournalContextToday {
     /// Transcribe clip is words on the way, so it never counts; if it turns out
     /// silent, the server lists the entry once the transcript is in.
     public static func needsContext(_ capture: Capture) -> Bool {
-        guard capture.kind == .journal, capture.entryID == nil, !capture.asTodo,
-              capture.state == .pending || capture.state == .failed,
+        (capture.state == .pending || capture.state == .failed) && isWordless(capture)
+    }
+
+    /// Just uploaded, wordless, and still inside the server's settle time.
+    static func awaitingServer(_ capture: Capture, now: Date) -> Bool {
+        capture.state == .synced && now.timeIntervalSince(capture.createdAt) < settleSeconds && isWordless(capture)
+    }
+
+    static func isWordless(_ capture: Capture) -> Bool {
+        // A Capture-tab Save may yet be filed as a meal or a purchase; the
+        // server lists it once it has stayed a journal entry.
+        guard capture.kind == .journal, capture.entryID == nil, !capture.asTodo, !capture.autoFile,
               capture.mode != .transcribe,
               capture.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               capture.links.isEmpty,
@@ -122,7 +147,7 @@ public enum JournalContextToday {
     /// device still holds unsent defers to the device's verdict: the server
     /// may have its photo but not yet the words that go with it.
     public static func items(prompts: [JournalContextPrompt], captures: [Capture], day: String,
-                             calendar: Calendar = .current) -> [Item] {
+                             now: Date = Date(), calendar: Calendar = .current) -> [Item] {
         let unsent = Dictionary(captures.filter { $0.entryID == nil && $0.state != .synced }.map { ($0.id, $0) },
                                 uniquingKeysWith: { first, _ in first })
         let served = prompts.filter { prompt in
@@ -132,7 +157,8 @@ public enum JournalContextToday {
         }
         let ids = Set(served.map(\.id))
         let local = captures.filter {
-            needsContext($0) && !ids.contains($0.id) && DayKey.of($0.createdAt, calendar: calendar) == day
+            (needsContext($0) || awaitingServer($0, now: now)) && !ids.contains($0.id)
+                && DayKey.of($0.createdAt, calendar: calendar) == day
         }
         return (served.map(Item.prompt) + local.map(Item.local))
             .sorted { ($0.createdAt ?? .distantPast, $0.id) > ($1.createdAt ?? .distantPast, $1.id) }

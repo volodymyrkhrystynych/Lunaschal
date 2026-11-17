@@ -26,46 +26,108 @@ def entry(at=YESTERDAY, *, kinds=('image',), content='', raw=None, transcript=No
     return id
 
 
-def selected(now=NOW):
-    return [r['id'] for r in context_prompts.prepare(get_db(), now=now)]
+def selected(now=NOW, *, today=False):
+    return [r['id'] for r in context_prompts.prepare(get_db(), now=now, include_today=today)]
 
 
-def test_all_yesterday_entries_even_above_three_and_no_older():
+# Long enough ago that one of today's entries has settled.
+SETTLED = NOW - context_prompts.TODAY_SETTLE_SECONDS - 60
+
+
+def test_all_yesterday_entries_even_above_three_and_no_today_or_older():
     yesterday = [entry(YESTERDAY + i) for i in range(5)]
+    entry(SETTLED)
     entry(YESTERDAY - 86400)
     assert selected() == yesterday[::-1]
 
 
 def test_today_comes_first_uncapped_and_takes_no_backlog_slot():
-    today = [entry(NOW - i * 60) for i in range(5)]
+    today = [entry(SETTLED - i * 60) for i in range(5)]
     old = [entry(YESTERDAY - i * 86400) for i in range(1, 5)]
-    assert selected() == [*today, *old[:3]]
+    assert selected(today=True) == [*today, *old[:3]]
     # Asking again later in the day picks up a new capture and keeps the slots.
     later = entry(NOW + 60)
-    assert selected(NOW + 120) == [later, *today, *old[:3]]
+    assert selected(NOW + 600, today=True) == [later, *today, *old[:3]]
+
+
+def test_without_the_flag_today_is_left_to_the_backlog():
+    # The web's Chat cards: the same list as before today's existed.
+    entry(SETTLED)
+    old = [entry(YESTERDAY - i * 86400) for i in range(1, 5)]
+    assert selected() == old[:3]
 
 
 def test_today_answered_or_dismissed_drops_out(client, queued_jobs):
-    answered, dismissed, waiting = entry(NOW - 3), entry(NOW - 2), entry(NOW - 1)
+    answered, dismissed, waiting = entry(SETTLED - 3), entry(SETTLED - 2), entry(SETTLED - 1)
     assert client.post(f'/api/journal/{answered}/context-prompt', json={'action': 'save', 'content': 'Lunch'}).status_code == 200
     assert client.post(f'/api/journal/{dismissed}/context-prompt', json={'action': 'dismiss'}).status_code == 200
-    assert selected() == [waiting]
+    assert selected(today=True) == [waiting]
 
 
 def test_unanswered_today_rolls_into_tomorrows_backlog():
     old = [entry(YESTERDAY - i * 86400) for i in range(1, 4)]
-    today = [entry(NOW - i) for i in range(4)]
-    assert selected() == [*today, *old]
+    today = [entry(SETTLED - i) for i in range(4)]
+    assert selected(today=True) == [*today, *old]
     # Tomorrow they are yesterday's, which joins uncapped and fills the slots.
     assert selected(NOW + 86400) == today
 
 
 def test_today_waits_for_a_running_transcription():
-    entry(NOW, kinds=('audio',), status='running')
-    spoken = entry(NOW, kinds=('audio',), transcript='Talking about lunch', status='done')
-    silent = entry(NOW + 1, kinds=('audio',), transcript='', status='done')
-    assert selected() == [silent]
-    assert spoken not in selected()
+    entry(SETTLED, kinds=('audio',), status='running')
+    spoken = entry(SETTLED, kinds=('audio',), transcript='Talking about lunch', status='done')
+    silent = entry(SETTLED + 1, kinds=('audio',), transcript='', status='done')
+    assert selected(today=True) == [silent]
+    assert spoken not in selected(today=True)
+
+
+def test_today_waits_for_an_entry_to_settle():
+    # A recording is committed at 'idle' before its transcription is marked
+    # running: for that moment it looks wordless.
+    fresh = entry(NOW - 30, kinds=('audio',), status='idle')
+    assert selected(today=True) == []
+    assert selected(NOW - 30 + context_prompts.TODAY_SETTLE_SECONDS, today=True) == [fresh]
+    # A photo added a moment ago to an older entry restarts the wait.
+    older = entry(SETTLED)
+    db = get_db()
+    db.execute('INSERT INTO journal_attachments (id, entry_id, kind, name, path, created_at) VALUES (?,?,?,?,?,?)',
+               (str(ULID()), older, 'image', 'Second', '/fake/file', NOW - 10))
+    db.commit()
+    assert older not in selected(today=True)
+    assert older in selected(NOW + context_prompts.TODAY_SETTLE_SECONDS, today=True)
+
+
+def test_today_waits_for_an_open_screenshot_session():
+    id = entry(SETTLED)
+    db = get_db()
+    db.execute('INSERT INTO journal_screenshot_sessions (entry_id, is_open, first_captured_at, last_captured_at,'
+               ' first_local_date, first_local_time, last_local_date, last_local_time, created_at, updated_at)'
+               " VALUES (?,1,?,?,'2026-10-14','11:57','2026-10-14','11:57',?,?)",
+               (id, SETTLED, SETTLED, SETTLED, SETTLED))
+    db.commit()
+    assert selected(today=True) == []
+    db.execute('UPDATE journal_screenshot_sessions SET is_open=0 WHERE entry_id=?', (id,))
+    db.commit()
+    assert selected(today=True) == [id]
+
+
+@pytest.mark.parametrize('job, listed', [
+    (None, False),
+    (('journal.autofile', 'pending'), False),
+    (('journal.autofile', 'running'), False),
+    (('journal.autofile', 'done'), True),
+    (('journal.autofile', 'error'), True),
+    # The waiter ran out of time: it stays in the journal, untouched.
+    (('journal.metadata', 'pending'), True),
+])
+def test_today_waits_for_a_capture_tab_save_to_be_sorted(job, listed):
+    id = entry(SETTLED)
+    db = get_db()
+    db.execute('UPDATE journal_entries SET auto_file=1 WHERE id=?', (id,))
+    if job:
+        db.execute('INSERT INTO llm_jobs (id, kind, target_id, status, created_at) VALUES (?,?,?,?,?)',
+                   (str(ULID()), job[0], id, job[1], SETTLED))
+    db.commit()
+    assert (id in selected(today=True)) is listed
 
 
 def test_top_up_newest_first_and_do_not_refill_completed_slots(client, queued_jobs):
@@ -107,12 +169,14 @@ def test_four_am_boundary_and_late_arrival():
     before = entry(int(datetime(2026, 10, 14, 3, 59).timestamp()))
     after = entry(int(datetime(2026, 10, 14, 4).timestamp()))
     older = [entry(YESTERDAY - i * 86400) for i in range(1, 4)]
-    # 04:00 on the 14th is today's: listed first, outside the backlog slots.
-    assert selected() == [after, before, *older[:2]]
+    assert selected() == [before, *older[:2]]
+    # 04:00 on the 14th is today's: listed first when asked for, outside the slots.
+    assert selected(today=True) == [after, before, *older[:2]]
     late = entry(YESTERDAY)
-    assert selected() == [after, before, late, older[0]]
-    # At 03:59 on the 14th, today is still the 13th: `before` is today's.
-    assert selected(int(datetime(2026, 10, 14, 3, 59).timestamp()))[0] == before
+    assert selected() == [before, late, older[0]]
+    assert after not in selected()
+    # At 03:59 on the 14th, yesterday is still the 12th.
+    assert before not in selected(int(datetime(2026, 10, 14, 3, 59).timestamp()))
 
 
 def test_prepare_route_returns_media_urls_and_keeps_date(client, monkeypatch):
@@ -120,9 +184,21 @@ def test_prepare_route_returns_media_urls_and_keeps_date(client, monkeypatch):
     id = entry()
     result = client.post('/api/journal/context-prompts/prepare').get_json()
     assert [r['id'] for r in result] == [id]
+    # Today's are the phone's to ask for; an empty body is the web's request.
+    assert [r['id'] for r in client.post('/api/journal/context-prompts/prepare', json={}).get_json()] == [id]
     attachment = result[0]['attachments'][0]
     assert attachment['url'].startswith('/api/journal/attachments/')
     assert 'path' not in attachment
+
+
+def test_prepare_route_lists_today_only_when_the_phone_asks(client, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(context_prompts, 'time', SimpleNamespace(time=lambda: NOW))
+    today, backlog = entry(SETTLED), entry()
+    route = '/api/journal/context-prompts/prepare'
+    assert [r['id'] for r in client.post(route, json={}).get_json()] == [backlog]
+    assert [r['id'] for r in client.post(route, json={'includeToday': 'yes'}).get_json()] == [backlog]
+    assert [r['id'] for r in client.post(route, json={'includeToday': True}).get_json()] == [today, backlog]
 
 
 def test_save_is_idempotent_and_preserves_original_entry(client, queued_jobs):

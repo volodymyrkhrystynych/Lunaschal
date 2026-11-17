@@ -10,10 +10,20 @@ final class JournalContextModel: ObservableObject {
     @Published private(set) var problem: String?
     @Published private(set) var loaded = false
     let capture: CaptureModel
+    /// Bumped by every fetch and every local removal. A fetch applies its
+    /// result only if nothing has happened since it started, so one that
+    /// finishes late cannot resurrect a prompt just answered or dismissed.
+    private var generation = 0
+    /// For tests: answers in place of the server.
+    private let injected: (any JournalContextTransport)?
 
-    init(capture: CaptureModel) { self.capture = capture }
+    init(capture: CaptureModel, transport: (any JournalContextTransport)? = nil) {
+        self.capture = capture
+        injected = transport
+    }
 
     private var transport: (any JournalContextTransport)? {
+        if let injected { return injected }
         #if DEBUG
         if let fixture = JournalContextFixture.server { return fixture }
         #endif
@@ -27,23 +37,31 @@ final class JournalContextModel: ObservableObject {
             loaded = true
             return
         }
+        generation += 1
+        let started = generation
         do {
             let fresh = try await transport.journalContextPrompts()
+            guard started == generation else { return }
             // An entry with recordings already queued for it has its answer.
             prompts = fresh.filter { capture.pendingAdditions(to: $0.id).isEmpty }
             problem = nil
         } catch {
-            if Task.isCancelled { return }
+            if Task.isCancelled || started != generation { return }
             problem = "Couldn't refresh the entries waiting for context."
         }
         loaded = true
+    }
+
+    private func remove(_ prompt: JournalContextPrompt) {
+        generation += 1
+        prompts.removeAll { $0.id == prompt.id }
     }
 
     func dismiss(_ prompt: JournalContextPrompt) async -> String? {
         guard let transport else { return "Connect to your server to dismiss this prompt." }
         do {
             try await transport.resolveJournalContext(prompt.id, resolution: .init(action: .dismiss))
-            prompts.removeAll { $0.id == prompt.id }
+            remove(prompt)
             return nil
         } catch { return error.localizedDescription }
     }
@@ -59,7 +77,7 @@ final class JournalContextModel: ObservableObject {
             } catch { return error.localizedDescription }
         }
         guard capture.commitJournalContextClips(prompt.id) else { return capture.message ?? "Couldn't save the recording." }
-        prompts.removeAll { $0.id == prompt.id }
+        remove(prompt)
         return nil
     }
 }
@@ -108,9 +126,6 @@ struct JournalContextPage: View {
         }
         .refreshable { await context.refresh() }
         .task { await context.refresh() }
-        .onChange(of: capture.syncChanges) { _, changes in
-            if changes.touches(["journal_entries", "journal_attachments"]) { Task { await context.refresh() } }
-        }
         .sheet(item: $opened) { prompt in
             JournalContextSheet(context: context, capture: capture, recorder: capture.recorder,
                                 prompt: prompt, otherRecording: chat.isRecording)
@@ -186,10 +201,11 @@ struct TodayContextSection: View {
                     .disabled(busy != nil)
                     .accessibilityIdentifier("daily-context-open-\(prompt.id)")
             case .local:
-                // The server answers for an entry only once it has it.
-                Label("Uploading", systemImage: "icloud.and.arrow.up")
+                // The server answers for an entry only once it has it, and
+                // lists one only after it has settled.
+                Label("Uploading", systemImage: item.awaitingServer ? "clock" : "icloud.and.arrow.up")
                     .labelStyle(.iconOnly).foregroundStyle(.secondary)
-                    .accessibilityLabel("Waiting to upload")
+                    .accessibilityLabel(item.awaitingServer ? "Uploaded, ready in a moment" : "Waiting to upload")
             }
         }
         .accessibilityElement(children: .contain)
@@ -205,6 +221,7 @@ struct TodayContextSection: View {
 
     private func detail(_ item: JournalContextToday.Item) -> String {
         let time = item.createdAt?.formatted(date: .omitted, time: .shortened) ?? ""
+        if item.awaitingServer { return time + " · add words in a moment" }
         if case .local = item { return time + " · add words once it uploads" }
         return time
     }
@@ -324,9 +341,9 @@ actor JournalContextDemoServer: JournalContextTransport {
       "attachments":[{"id":"01K00000000000000000000004","kind":"audio","name":"Game audio","mime":"audio/webm","position":0}]}]
     """.replacingOccurrences(of: "01K00000000000000000000002",
         with: ProcessInfo.processInfo.environment["JOURNAL_CONTEXT_RECORDING_ID"] ?? "01K00000000000000000000002").utf8))) ?? [])
-        // One from a minute ago: today's, so Daily lists it too.
+        // One from five minutes ago: today's and settled, so Daily lists it too.
         + ((try? JSONDecoder().decode([JournalContextPrompt].self, from: Data("""
-    [{"id":"01K00000000000000000000005","createdAt":"\(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-60)))",
+    [{"id":"01K00000000000000000000005","createdAt":"\(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-300)))",
       "attachments":[{"id":"01K00000000000000000000006","kind":"image","name":"Lunch","mime":"image/jpeg","position":0}]}]
     """.utf8))) ?? [])
 
