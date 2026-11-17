@@ -3066,18 +3066,21 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     -- answering/planning/running/testing are in flight and become
     -- 'interrupted' at startup (_reset_stale_agent_tasks). answered,
     -- awaiting_plan and needs_input are waiting on the user, which survives a
-    -- restart as-is. Widening this list means a table rebuild — see
-    -- _ensure_agent_task_ask.
+    -- restart as-is. 'finished' is closed by the user rather than pushed or
+    -- thrown away: its transcript stays, its container and clone do not.
+    -- Widening this list means a table rebuild — see _ensure_agent_task_checks.
     status TEXT NOT NULL DEFAULT 'queued'
         CHECK(status IN ('queued','answering','answered','planning','awaiting_plan',
                          'running','needs_input','testing','done','interrupted',
-                         'error','cancelled','pushed','discarded')),
+                         'error','cancelled','pushed','discarded','finished')),
     -- Which half runs next when the worker picks the task up. Each phase is
     -- its own worker run, so a plan waiting hours for approval holds neither
     -- the worker nor an agent process. 'ask' is a question rather than a
     -- change: read-only like 'plan', answered rather than approved, and it can
-    -- become a 'plan' once the answer shows what to change.
-    phase TEXT NOT NULL DEFAULT 'plan' CHECK(phase IN ('ask','plan','build')),
+    -- become a 'plan' once the answer shows what to change. 'finish' is a
+    -- failed build being wrapped up without the agent — its work exported and
+    -- tested — and is only ever queued: the run sets it back to 'build'.
+    phase TEXT NOT NULL DEFAULT 'plan' CHECK(phase IN ('ask','plan','build','finish')),
     -- The agent's ACP session, resumed with session/load when it supports it.
     session_id TEXT,
     -- A revision, answer or follow-up waiting for the next run.

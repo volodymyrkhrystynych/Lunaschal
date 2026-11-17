@@ -76,7 +76,7 @@ def run_next() -> bool:
         _current.update(task_id=task['id'], cancel=cancel)
     try:
         result = _driver.run(task['id'], cancel)
-        if result and result.get('status') == 'cancelled':
+        if result and result.get('status') in ('cancelled', 'finished'):
             cleanup(task['id'])
     finally:
         with _lock:
@@ -271,14 +271,50 @@ def _resume_text(task: dict) -> str | None:
     return None
 
 
+def is_stopped(task: dict) -> bool:
+    """A task that stopped short — interrupted or failed — and waits for the
+    user to either continue it with the agent or finish it without."""
+    return task['status'] in ('interrupted', 'error')
+
+
 @_serialized
 def continue_task(task_id: str) -> dict:
     task = tasks.get(task_id)
-    if task['status'] not in ('interrupted', 'error'):
+    if not is_stopped(task):
         raise ActionRefused('Only an interrupted or failed task can be continued')
     tasks.append_event(task_id, 'user', {'text': 'Continue.', 'action': 'continue'})
     pending = task.get('pendingInput') or _resume_text(task)
     return _requeue(task_id, pending_input=pending, error=None)
+
+
+def _salvageable(task: dict) -> bool:
+    """A build whose clone is still there may hold work worth reviewing."""
+    return (task['phase'] == 'build' and bool(task.get('baseSha'))
+            and mirror.work_dir(task['id']).exists())
+
+
+@_serialized
+def finish_task(task_id: str) -> dict:
+    """Wrap up a task that stopped short. A build with its clone still there
+    is queued for the driver to export and test what the agent got done, and
+    comes back 'done' — pushable — or 'finished' if it changed nothing. Anything
+    else (a question, a plan, a build whose clone is gone) is closed now as
+    'finished': its transcript and its last answer stay readable, and its
+    container and clone are removed, as a discard's would be."""
+    task = tasks.get(task_id)
+    if not is_stopped(task) or current_task() == task_id:
+        raise ActionRefused('Only an interrupted or failed task can be finished')
+    tasks.append_event(task_id, 'user', {'text': 'Finish.', 'action': 'finish'})
+    if _salvageable(task):
+        return _requeue(task_id, phase='finish', pending_input=None, error=None)
+    cleanup(task_id)
+    return tasks.set_status(task_id, 'finished', pending_input=None, error=None)
+
+
+def _unqueued_finish(task: dict) -> dict:
+    """A Finish that never ran is still a build: 'finish' is only a queued
+    phase, and the driver is what sets it back."""
+    return {'phase': 'build'} if task['phase'] == 'finish' else {}
 
 
 def cancel_task(task_id: str) -> dict:
@@ -293,7 +329,7 @@ def cancel_task(task_id: str) -> dict:
     if task['status'] not in DISCARDABLE:
         raise ActionRefused('That task has already finished')
     cleanup(task_id)
-    return tasks.set_status(task_id, 'cancelled')
+    return tasks.set_status(task_id, 'cancelled', **_unqueued_finish(task))
 
 
 def discard_task(task_id: str) -> dict:
@@ -301,7 +337,7 @@ def discard_task(task_id: str) -> dict:
     if task['status'] not in DISCARDABLE or current_task() == task_id:
         raise ActionRefused('Cancel the task before discarding it')
     cleanup(task_id)
-    return tasks.set_status(task_id, 'discarded')
+    return tasks.set_status(task_id, 'discarded', **_unqueued_finish(task))
 
 
 def push_task(task_id: str) -> dict:

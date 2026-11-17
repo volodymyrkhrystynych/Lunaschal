@@ -264,3 +264,59 @@ def test_a_pr_from_a_question_states_the_change_and_the_question(repo_id):
     plain = tasks.create(repo_id, 'Add a test')
     assert tasks.question_thread(plain['id']) is None
     assert github.pr_body(tasks.get(plain['id'])).startswith('## Task\n\nAdd a test')
+
+
+def test_finishing_a_failed_question_keeps_its_answer_and_closes_it(client, repo_id):
+    t = tasks.create(repo_id, 'Where is X?', mode='ask')
+    mirror.work_dir(t['id']).mkdir(parents=True)
+    at(t['id'], 'error', summary='In y.py.', error='model went away', base_sha='b' * 40)
+    body = client.post(f"/api/code/tasks/{t['id']}/finish").get_json()
+    assert body['status'] == 'finished' and body['summary'] == 'In y.py.'
+    assert body['finishedAt'] is not None
+    assert not mirror.task_dir(t['id']).exists()
+    assert tasks.events(t['id'])[-2]['payload']['action'] == 'finish'
+    # Closed: nothing more to finish, say or throw away.
+    assert client.post(f"/api/code/tasks/{t['id']}/finish").status_code == 409
+    assert client.post(f"/api/code/tasks/{t['id']}/messages", json={'text': 'hi'}).status_code == 409
+    assert client.post(f"/api/code/tasks/{t['id']}/discard").status_code == 409
+
+
+def test_an_interrupted_build_without_its_clone_is_closed_at_once(client, repo_id):
+    t = tasks.create(repo_id, 'Fix it')
+    at(t['id'], 'interrupted', phase='build', plan='p', base_sha='b' * 40)
+    assert client.post(f"/api/code/tasks/{t['id']}/finish").get_json()['status'] == 'finished'
+
+
+def test_an_interrupted_build_with_its_clone_is_queued_to_finish(client, repo_id):
+    t = tasks.create(repo_id, 'Fix it')
+    mirror.work_dir(t['id']).mkdir(parents=True)
+    at(t['id'], 'interrupted', phase='build', plan='p', base_sha='b' * 40,
+       pending_input='half a follow-up', error='Interrupted by an app restart.')
+    body = client.post(f"/api/code/tasks/{t['id']}/finish").get_json()
+    assert (body['status'], body['phase']) == ('queued', 'finish')
+    assert body['pendingInput'] is None and body['error'] is None
+    assert mirror.work_dir(t['id']).exists()
+
+
+@pytest.mark.parametrize('status', ['done', 'answered', 'awaiting_plan', 'needs_input', 'running'])
+def test_only_a_stopped_task_can_be_finished(client, repo_id, status):
+    t = tasks.create(repo_id, 'Fix it')
+    at(t['id'], status)
+    assert client.post(f"/api/code/tasks/{t['id']}/finish").status_code == 409
+
+
+def test_finishing_without_salvage_clears_the_old_error(client, repo_id):
+    t = tasks.create(repo_id, 'Where is X?', mode='ask')
+    at(t['id'], 'error', summary='In y.py.', error='model went away')
+    body = client.post(f"/api/code/tasks/{t['id']}/finish").get_json()
+    assert body['status'] == 'finished' and body['error'] is None
+
+
+@pytest.mark.parametrize('action', ['cancel', 'discard'])
+def test_a_queued_finish_that_is_dropped_is_a_build_again(client, repo_id, action):
+    t = tasks.create(repo_id, 'Fix it')
+    mirror.work_dir(t['id']).mkdir(parents=True)
+    at(t['id'], 'interrupted', phase='build', plan='p', base_sha='b' * 40)
+    assert client.post(f"/api/code/tasks/{t['id']}/finish").get_json()['phase'] == 'finish'
+    body = client.post(f"/api/code/tasks/{t['id']}/{action}").get_json()
+    assert body['phase'] == 'build'

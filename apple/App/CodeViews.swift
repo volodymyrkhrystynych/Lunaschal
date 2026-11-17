@@ -130,7 +130,7 @@ struct CodeStatusBadge: View {
         case "awaiting_plan", "needs_input": return .orange
         case "answered", "done", "pushed": return .green
         case "error", "interrupted": return .red
-        case "cancelled", "discarded": return .secondary
+        case "cancelled", "discarded", "finished": return .secondary
         default: return .blue
         }
     }
@@ -149,6 +149,7 @@ struct CodeTaskDetailView: View {
     @State private var confirmPush = false
     @State private var confirmDiscard = false
     @State private var confirmStop = false
+    @State private var confirmFinish = false
     @StateObject private var dictation: Dictation
 
     init(code: CodeModel, taskID: String) {
@@ -190,6 +191,9 @@ struct CodeTaskDetailView: View {
         .confirmationDialog("Discard this task?", isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button("Discard", role: .destructive) { Task { await code.discard(taskID) } }
         } message: { Text("Its container and clone are deleted.") }
+        .confirmationDialog("Finish this task?", isPresented: $confirmFinish, titleVisibility: .visible) {
+            Button("Finish") { Task { await code.finish(taskID) } }
+        } message: { Text(task?.finishExplanation ?? "") }
         // The banner's Stop sits just above the composer, so a stray tap must
         // not end a turn on its own.
         .confirmationDialog("Stop the agent?", isPresented: $confirmStop, titleVisibility: .visible) {
@@ -235,6 +239,11 @@ struct CodeTaskDetailView: View {
                             Label("Cancel", systemImage: "stop.circle")
                         }
                     }
+                    if task.canFinish {
+                        Button { confirmFinish = true } label: {
+                            Label("Finish", systemImage: "flag.checkered")
+                        }
+                    }
                     if task.canDiscard {
                         Button(role: .destructive) { confirmDiscard = true } label: {
                             Label("Discard", systemImage: "trash")
@@ -254,7 +263,7 @@ struct CodeTaskDetailView: View {
     @ViewBuilder private func actionBar(_ task: CodeTask) -> some View {
         let files = task.diffStat ?? []
         let hasActions = task.awaitsPlanApproval || task.canPlanFromAnswer || task.testVerdict != nil || !files.isEmpty || task.canPush
-            || task.canContinue || task.prUrl != nil || code.notice != nil || dictation.error != nil
+            || task.canContinue || task.canFinish || task.prUrl != nil || code.notice != nil || dictation.error != nil
         if hasActions {
             VStack(alignment: .leading, spacing: 6) {
                 if let notice = code.notice ?? dictation.error {
@@ -314,6 +323,16 @@ struct CodeTaskDetailView: View {
                             }
                             .buttonStyle(.bordered)
                             .disabled(code.busy)
+                        }
+                        if task.canFinish {
+                            // Beside Continue: carry on with the agent, or wrap
+                            // up with what it already got done.
+                            Button { confirmFinish = true } label: {
+                                Label("Finish", systemImage: "flag.checkered")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(code.busy)
+                            .accessibilityIdentifier("code-finish")
                         }
                         if let url = task.prUrl.flatMap(URL.init(string:)) {
                             Link(destination: url) { Label("Pull request", systemImage: "arrow.triangle.pull") }

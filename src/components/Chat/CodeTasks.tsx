@@ -10,6 +10,8 @@ import {
   EVENT_PAGE,
   canContinue,
   canDiscard,
+  canFinish,
+  finishExplanation,
   canMessage,
   canPlanFromAnswer,
   canPush,
@@ -383,6 +385,19 @@ function CodeTaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
               onClick={() => act.mutate(() => api.code.resume(task.id))}
             >
               Continue
+            </button>
+          )}
+          {canFinish(task) && (
+            <button
+              className={btn}
+              disabled={act.isPending}
+              title={finishExplanation(task)}
+              onClick={() =>
+                confirm(finishExplanation(task)) &&
+                act.mutate(() => api.code.finish(task.id))
+              }
+            >
+              Finish
             </button>
           )}
           {task.prUrl && (

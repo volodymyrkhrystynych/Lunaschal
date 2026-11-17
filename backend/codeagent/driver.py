@@ -311,6 +311,8 @@ class Driver:
         cancel = cancel or threading.Event()
         task = tasks.get(task_id)
         phase = task['phase']
+        if phase == 'finish':
+            return self._salvage(task, cancel)
         # A new build turn makes any earlier verdict stale: whatever it ends in —
         # done, a question, a cancel, an error — the code is no longer what was
         # tested. The run itself stays readable in its `test` event.
@@ -342,7 +344,7 @@ class Driver:
                 return self._finish_answer(task, turn.reply)
             if phase == 'plan':
                 return self._finish_plan(task, turn.reply)
-            return self._finish_build(task, turn.reply, script)
+            return self._finish_build(task, turn.reply, cancel, script)
         except Exception as e:
             if cancel.is_set():
                 return tasks.set_status(task_id, 'cancelled')
@@ -534,7 +536,8 @@ class Driver:
         result['head'] = head
         return result
 
-    def _finish_build(self, task: dict, reply: str, script: str | None = None) -> dict:
+    def _finish_build(self, task: dict, reply: str, cancel: threading.Event,
+                      script: str | None = None) -> dict:
         task_id = task['id']
         result = self._export(task)
         fields = {'summary': reply or None}
@@ -545,11 +548,53 @@ class Driver:
             tasks.open_approval(task_id, 'question', {'question': question, 'reply': reply})
             # No test run this turn; run() already cleared the old verdict.
             return tasks.set_status(task_id, 'needs_input', **fields)
+        return self._test(task, fields, cancel, script)
+
+    def _test(self, task: dict, fields: dict, cancel: threading.Event,
+              script: str | None = None) -> dict:
+        task_id = task['id']
         tasks.set_status(task_id, 'testing', **fields)
         exit_code, output = self._run_tests(task, script)
         tasks.append_event(task_id, 'test', {
             'exit': exit_code, 'tail': testreport.clip_report(output, TEST_EVENT_CHARS)})
+        # The test run takes minutes and nothing interrupts it, so a Cancel
+        # pressed meanwhile is only seen here — and must not end up pushable.
+        if cancel.is_set():
+            return tasks.set_status(task_id, 'cancelled')
         return tasks.set_status(task_id, 'done', test_exit=exit_code, test_output=output)
+
+    def _salvage(self, task: dict, cancel: threading.Event) -> dict:
+        """Finish a failed or interrupted build without the agent: whatever is
+        in its clone is committed, exported and tested, exactly as a turn that
+        ended would be, so it lands on 'done' and can be pushed. A clone with
+        no changes in it has nothing to review, and the task is closed as
+        'finished' instead. Either way it is a build again — a failure here
+        leaves an ordinary failed build that can be continued."""
+        task_id = task['id']
+        tasks.update(task_id, phase='build')
+        tasks.set_status(task_id, 'testing', test_exit=None, test_output=None)
+        try:
+            task = tasks.get(task_id)
+            # Closed with nothing to review: an earlier turn's export goes with
+            # the clone, so its files must not stay listed with diffs that 404.
+            nothing = {'head_sha': None, 'diff_stat': None}
+            if not task.get('baseSha') or not mirror.work_dir(task_id).exists():
+                return tasks.set_status(task_id, 'finished', **nothing)
+            if cancel.is_set():
+                return tasks.set_status(task_id, 'cancelled')
+            self.runtime.start(task_id)
+            result = self._export(task)
+            if cancel.is_set():
+                return tasks.set_status(task_id, 'cancelled')
+            if not result:
+                return tasks.set_status(task_id, 'finished', **nothing)
+            return self._test(task, {'head_sha': result['head'], 'diff_stat': result['files']},
+                              cancel)
+        except Exception as e:
+            if cancel.is_set():
+                return tasks.set_status(task_id, 'cancelled')
+            logger.exception('finishing code task %s failed', task_id)
+            return tasks.set_status(task_id, 'error', error=_describe(e, None))
 
     def _test_script(self, task: dict) -> str:
         from backend.db.connection import get_db

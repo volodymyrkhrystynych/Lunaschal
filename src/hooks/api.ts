@@ -1569,10 +1569,11 @@ export interface CodeTask {
   prompt: string;
   harness: 'pi' | 'omp' | 'qwen';
   status: string;
-  phase: 'ask' | 'plan' | 'build';
+  phase: 'ask' | 'plan' | 'build' | 'finish';
   plan: string | null;
   summary: string | null;
   diffStat: CodeFileStat[] | null;
+  baseSha: string | null;
   headSha: string | null;
   testExit: number | null;
   testOutput: string | null;
@@ -5189,6 +5190,7 @@ export const api = {
     message: (id: string, text: string) =>
       post<CodeTask>(`/api/code/tasks/${id}/messages`, { text }),
     resume: (id: string) => post<CodeTask>(`/api/code/tasks/${id}/continue`),
+    finish: (id: string) => post<CodeTask>(`/api/code/tasks/${id}/finish`),
     cancel: (id: string) => post<CodeTask>(`/api/code/tasks/${id}/cancel`),
     discard: (id: string) => post<CodeTask>(`/api/code/tasks/${id}/discard`),
     push: (id: string) => post<CodeTask>(`/api/code/tasks/${id}/push`),

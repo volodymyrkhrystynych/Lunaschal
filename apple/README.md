@@ -360,7 +360,10 @@ what each device can currently do and which work remains device-only.
 - Chat has a Code page (the switch in its title bar) for the server's local
   coding agent: start a task, approve or revise its plan, answer its
   questions, review the diff file by file and the test run Lunaschal measured,
-  then push the `agent/<id>` branch and open a PR. The Chat tab's badge counts
+  then push the `agent/<id>` branch and open a PR. An interrupted or failed
+  task can be continued or finished: Finish has the server commit and test
+  what a build got done (ready to push), and closes anything else with its
+  transcript kept. The Chat tab's badge counts
   plans and questions waiting. A tapped notification opens the task. The app
   is signed for push; delivery needs the server's APNs key (docs/code-agent.md).
   Passed in simulator with the `-codeFixture` demo data; notifications and a
