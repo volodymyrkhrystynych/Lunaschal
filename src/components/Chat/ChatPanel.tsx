@@ -700,7 +700,7 @@ export function ChatPanel() {
   const photoStatus = photoStatusMessage(staged, visionConfigured, chatVision);
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
       <div className="flex items-center justify-end gap-2 border-b border-white/10 px-4 py-2">
         <NoteReviewButton />
         <button
