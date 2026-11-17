@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { fieldClass } from '@/lib/authorship';
 import { api } from '../../hooks/api';
 import { documentKey } from '../../lib/writingDocuments';
 import { useWritingChapterUpdate } from '../../offline/mutationDefaults';
@@ -186,7 +187,9 @@ export function ChapterEditor({ chapterId }: Props) {
         value={content}
         onChange={e => handleContentChange(e.target.value)}
         placeholder="Start writing…"
-        className="flex-1 resize-none bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] p-6 focus:outline-none leading-relaxed font-serif"
+        // A textarea takes one colour: the saved chapter's author when it has
+        // one (src/lib/authorship.ts), the normal colour once it is mixed.
+        className={`flex-1 resize-none bg-transparent ${fieldClass(chapter?.content, chapter?.authorship, 'content', 'u')} placeholder:text-[var(--color-text-muted)] p-6 focus:outline-none leading-relaxed font-serif`}
         style={{ fontSize: `${fontSize}px` }}
         spellCheck
       />

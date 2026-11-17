@@ -337,10 +337,12 @@ final class WritingModel: ObservableObject {
             let server: WritingServerCopy
             if key.kind == .chapter {
                 let chapter = try await api.restoreWritingChapter(key.id, revisionID: revision.id)
-                server = WritingServerCopy(title: chapter.title, content: chapter.content ?? "", revision: chapter.revision)
+                server = WritingServerCopy(title: chapter.title, content: chapter.content ?? "", revision: chapter.revision,
+                                           authorship: chapter.authorship)
             } else {
                 let note = try await api.restoreWritingNote(key.id, revisionID: revision.id)
-                server = WritingServerCopy(title: note.title, content: note.content ?? "", revision: note.revision)
+                server = WritingServerCopy(title: note.title, content: note.content ?? "", revision: note.revision,
+                                           authorship: note.authorship)
             }
             try store.restored(key, project: project, server: server)
             return true

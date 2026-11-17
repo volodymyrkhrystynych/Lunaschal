@@ -10,10 +10,20 @@ final class JournalContextModel: ObservableObject {
     @Published private(set) var problem: String?
     @Published private(set) var loaded = false
     let capture: CaptureModel
+    /// Bumped by every fetch and every local removal. A fetch applies its
+    /// result only if nothing has happened since it started, so one that
+    /// finishes late cannot resurrect a prompt just answered or dismissed.
+    private var generation = 0
+    /// For tests: answers in place of the server.
+    private let injected: (any JournalContextTransport)?
 
-    init(capture: CaptureModel) { self.capture = capture }
+    init(capture: CaptureModel, transport: (any JournalContextTransport)? = nil) {
+        self.capture = capture
+        injected = transport
+    }
 
     private var transport: (any JournalContextTransport)? {
+        if let injected { return injected }
         #if DEBUG
         if let fixture = JournalContextFixture.server { return fixture }
         #endif
@@ -27,23 +37,31 @@ final class JournalContextModel: ObservableObject {
             loaded = true
             return
         }
+        generation += 1
+        let started = generation
         do {
             let fresh = try await transport.journalContextPrompts()
+            guard started == generation else { return }
             // An entry with recordings already queued for it has its answer.
             prompts = fresh.filter { capture.pendingAdditions(to: $0.id).isEmpty }
             problem = nil
         } catch {
-            if Task.isCancelled { return }
+            if Task.isCancelled || started != generation { return }
             problem = "Couldn't refresh the entries waiting for context."
         }
         loaded = true
+    }
+
+    private func remove(_ prompt: JournalContextPrompt) {
+        generation += 1
+        prompts.removeAll { $0.id == prompt.id }
     }
 
     func dismiss(_ prompt: JournalContextPrompt) async -> String? {
         guard let transport else { return "Connect to your server to dismiss this prompt." }
         do {
             try await transport.resolveJournalContext(prompt.id, resolution: .init(action: .dismiss))
-            prompts.removeAll { $0.id == prompt.id }
+            remove(prompt)
             return nil
         } catch { return error.localizedDescription }
     }
@@ -59,7 +77,7 @@ final class JournalContextModel: ObservableObject {
             } catch { return error.localizedDescription }
         }
         guard capture.commitJournalContextClips(prompt.id) else { return capture.message ?? "Couldn't save the recording." }
-        prompts.removeAll { $0.id == prompt.id }
+        remove(prompt)
         return nil
     }
 }
@@ -103,14 +121,11 @@ struct JournalContextPage: View {
                 }
             } else if context.loaded && context.problem == nil {
                 ContentUnavailableView("Nothing waiting", systemImage: "checkmark.circle",
-                    description: Text("Photos and recordings saved without any words show up here, a few a day."))
+                    description: Text("Photos and recordings saved without any words show up here: all of today's, and a few older ones a day."))
             }
         }
         .refreshable { await context.refresh() }
         .task { await context.refresh() }
-        .onChange(of: capture.syncChanges) { _, changes in
-            if changes.touches(["journal_entries", "journal_attachments"]) { Task { await context.refresh() } }
-        }
         .sheet(item: $opened) { prompt in
             JournalContextSheet(context: context, capture: capture, recorder: capture.recorder,
                                 prompt: prompt, otherRecording: chat.isRecording)
@@ -137,6 +152,90 @@ struct JournalContextPage: View {
         Button("Add context") { problem = nil; opened = prompt }
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("journal-context-open-\(prompt.id)")
+    }
+}
+
+/// Daily → Needs context: today's photos and recordings saved without a word,
+/// listed while the day is still remembered. Counted in the Daily badge.
+/// The sheet is the page's (`todayContextSheet`): presented from a Form row,
+/// it closed itself the moment a refresh redrew the list.
+struct TodayContextSection: View {
+    @ObservedObject var context: JournalContextModel
+    let items: [JournalContextToday.Item]
+    @Binding var opened: JournalContextPrompt?
+    @State private var busy: String?
+    @State private var problem: String?
+
+    var body: some View {
+        if !items.isEmpty {
+            Section {
+                ForEach(items) { item in row(item) }
+                if let problem { Text(problem).font(.footnote).foregroundStyle(.red) }
+            } header: {
+                Text("Needs context (\(items.count))")
+            } footer: {
+                Text("Saved today with only photos or sound. A word about what was happening goes into the entry; its time stays the same.")
+            }
+        }
+    }
+
+    @ViewBuilder private func row(_ item: JournalContextToday.Item) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title(item)).font(.subheadline)
+                Text(detail(item)).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            switch item {
+            case .prompt(let prompt):
+                Menu {
+                    Button("Dismiss permanently", role: .destructive) {
+                        busy = prompt.id
+                        Task { problem = await context.dismiss(prompt); busy = nil }
+                    }
+                } label: { Image(systemName: "ellipsis.circle").accessibilityLabel("More") }
+                .disabled(busy != nil)
+                .accessibilityIdentifier("daily-context-more-\(prompt.id)")
+                Button("Add") { problem = nil; opened = prompt }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy != nil)
+                    .accessibilityIdentifier("daily-context-open-\(prompt.id)")
+            case .local:
+                // The server answers for an entry only once it has it, and
+                // lists one only after it has settled.
+                Label("Uploading", systemImage: item.awaitingServer ? "clock" : "icloud.and.arrow.up")
+                    .labelStyle(.iconOnly).foregroundStyle(.secondary)
+                    .accessibilityLabel(item.awaitingServer ? "Uploaded, ready in a moment" : "Waiting to upload")
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("daily-context-\(item.id)")
+    }
+
+    private func title(_ item: JournalContextToday.Item) -> String {
+        if case .prompt(let prompt) = item, prompt.title?.isEmpty == false { return prompt.displayTitle }
+        return [item.photoCount > 0 ? "\(item.photoCount) photo\(item.photoCount == 1 ? "" : "s")" : nil,
+                item.clipCount > 0 ? "\(item.clipCount) recording\(item.clipCount == 1 ? "" : "s")" : nil]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private func detail(_ item: JournalContextToday.Item) -> String {
+        let time = item.createdAt?.formatted(date: .omitted, time: .shortened) ?? ""
+        if item.awaitingServer { return time + " · add words in a moment" }
+        if case .local = item { return time + " · add words once it uploads" }
+        return time
+    }
+}
+
+extension View {
+    /// The context sheet for `TodayContextSection`, hung on the page rather
+    /// than a row. `chat` is read, not observed: it publishes every refresh tick.
+    func todayContextSheet(_ opened: Binding<JournalContextPrompt?>, context: JournalContextModel,
+                           capture: CaptureModel, chat: ChatModel) -> some View {
+        sheet(item: opened) { prompt in
+            JournalContextSheet(context: context, capture: capture, recorder: capture.recorder,
+                                prompt: prompt, otherRecording: chat.isRecording)
+        }
     }
 }
 
@@ -235,13 +334,18 @@ enum JournalContextFixture {
 }
 
 actor JournalContextDemoServer: JournalContextTransport {
-    private var prompts: [JournalContextPrompt] = (try? JSONDecoder().decode([JournalContextPrompt].self, from: Data("""
+    private var prompts: [JournalContextPrompt] = ((try? JSONDecoder().decode([JournalContextPrompt].self, from: Data("""
     [{"id":"01K00000000000000000000001","title":"Game night","createdAt":"2026-10-13T20:00:00Z",
       "attachments":[{"id":"01K00000000000000000000003","kind":"image","name":"Victory screen","mime":"image/jpeg","position":0}]},
      {"id":"01K00000000000000000000002","title":"Evening sounds","createdAt":"2026-10-12T20:00:00Z",
       "attachments":[{"id":"01K00000000000000000000004","kind":"audio","name":"Game audio","mime":"audio/webm","position":0}]}]
     """.replacingOccurrences(of: "01K00000000000000000000002",
-        with: ProcessInfo.processInfo.environment["JOURNAL_CONTEXT_RECORDING_ID"] ?? "01K00000000000000000000002").utf8))) ?? []
+        with: ProcessInfo.processInfo.environment["JOURNAL_CONTEXT_RECORDING_ID"] ?? "01K00000000000000000000002").utf8))) ?? [])
+        // One from five minutes ago: today's and settled, so Daily lists it too.
+        + ((try? JSONDecoder().decode([JournalContextPrompt].self, from: Data("""
+    [{"id":"01K00000000000000000000005","createdAt":"\(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-300)))",
+      "attachments":[{"id":"01K00000000000000000000006","kind":"image","name":"Lunch","mime":"image/jpeg","position":0}]}]
+    """.utf8))) ?? [])
 
     func journalContextPrompts() -> [JournalContextPrompt] { prompts }
     func resolveJournalContext(_ id: String, resolution: JournalContextResolution) throws {

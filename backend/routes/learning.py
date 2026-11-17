@@ -39,7 +39,8 @@ def _cards_to_dicts(rows) -> list[dict]:
         if card.get('kind') == 'review':
             card['review'] = payloads.get(card.get('sourceId')) or {
                 'entryId': card.get('sourceId'), 'title': None, 'pages': []}
-    return cards
+    from backend import authorship
+    return authorship.attach(get_db(), 'learning_cards', cards)
 
 
 def _no_back_side(row):
@@ -809,6 +810,12 @@ def revise_card(id):
          row['derived_from'], id, row['generation_context'],
          fsrs_state, due, now, now),
     )
+    # The revision keeps who wrote what it kept; what changed is the user's
+    # own edit, or the model's when web verification rewrote it.
+    from backend import authorship
+    changed_by = authorship.USER if trigger_type == 'manual_edit' else authorship.AI
+    authorship.carry(db, 'learning_cards', id, new_id, 'question', new_question, author=changed_by)
+    authorship.carry(db, 'learning_cards', id, new_id, 'answer', new_answer, author=changed_by)
     db.execute(
         "UPDATE learning_cards SET state='retired', updated_at=? WHERE id=?",
         (now, id),

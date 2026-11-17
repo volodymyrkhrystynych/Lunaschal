@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
 import { formatNoteCreatedAt } from '../lib/notesToSelf';
 import { Modal } from './Modal';
+import { AuthoredText } from './AuthoredText';
 
 /** Persistent top-right button (mounted once in App.tsx, like SttPanel is
  * persistent at the bottom) showing how many notes to self are due for
@@ -129,7 +130,13 @@ function NoteReviewModal({ onClose }: { onClose: () => void }) {
               />
             ) : (
               <p className="text-sm text-[var(--color-text)] whitespace-pre-wrap">
-                {note.content}
+                {/* Written by the assistant; what was edited by hand is blue. */}
+                <AuthoredText
+                  text={note.content}
+                  authorship={note.authorship}
+                  field="content"
+                  fallback="a"
+                />
               </p>
             )}
 

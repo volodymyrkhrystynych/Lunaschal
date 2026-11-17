@@ -9,6 +9,15 @@ Chat's saved Server oddities reports open in a large sheet with expandable
 explanations and selectable log text, including from the offline message cache.
 The iOS sheet still needs simulator verification.
 
+Text is coloured by who produced it: typed is blue, speech-to-text of a
+recording is teal, and AI-written text (polish, generated titles, structured
+notes, chat replies, accepted Writing proposals) keeps the normal colour. Editing
+turns only the edited words blue once the server has merged the edit. Covered:
+Journal, food, spending, chat, to-dos and the chat bar, Writing (the chapter and
+note editor is painted per span), calendar and learning cards. The colours come
+from the replica or the API rows, so they work offline. Passed in simulator build
+and app unit tests; not verified on device.
+
 The Capture entry text box accepts pasted images as persistent draft photo
 attachments, alongside typed text. Standard text paste remains available.
 
@@ -71,8 +80,12 @@ and permanent dismissals. iPhone and iPad can preview the original photos/audio,
 type context, or attach a recording that the server transcribes into the original
 entry without changing its date. Loading, typed saves and dismissal need the
 server; staged recordings survive relaunch and queue offline on Save or Close.
-Three iPhone simulator tests cover the context sheet, failure recovery and
-recording persistence across relaunch, all passed in simulator.
+Today's wordless photos and recordings also head Capture → Daily as "Needs
+context", counted in the Daily and Capture-tab badge (the Journal tab is badged
+with everything on the Context page); one still on the device counts before it
+uploads and can be answered once it has. Four iPhone simulator tests cover the
+context sheet, failure recovery, recording persistence across relaunch and the
+Daily to-do, all passed in simulator.
 Physical-device microphone and background-upload behavior remain unverified.
 
 Capture → Daily includes a seven-night sleep graph with selectable nights,
