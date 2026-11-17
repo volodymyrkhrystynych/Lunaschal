@@ -793,6 +793,9 @@ final class OfflineCaptureTests: XCTestCase {
         for _ in 0..<10 where !entry.exists || !entry.isHittable { app.swipeUp() }
         XCTAssertTrue(entry.exists, "The purchase survives a restart without a server")
         entry.swipeLeft()
+        // A row's swipe actions win over the page swipe; were the page to turn
+        // instead, the row would also vanish, so check the page directly.
+        XCTAssertTrue(app.segmentedControls.buttons["Daily"].isSelected, "the row's swipe, not the page's")
         if app.buttons["Delete"].exists { app.buttons["Delete"].tap() }
         XCTAssertTrue(entry.waitForNonExistence(timeout: settle))
     }
@@ -811,6 +814,56 @@ final class OfflineCaptureTests: XCTestCase {
         // Only the chosen page is on screen.
         XCTAssertFalse(app.textFields["Exercise entry"].exists)
         XCTAssertFalse(app.staticTexts["Body weight"].exists)
+    }
+
+    /// Entry sits in the middle of Capture's switch and a sideways swipe
+    /// walks the pages, stopping at the ends.
+    func testCaptureOpensOnTheMiddlePageAndSwipesBetweenPages() {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        let pages = app.segmentedControls.firstMatch
+        let daily = pages.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Daily'")).firstMatch
+        let entry = pages.buttons["Entry"], workout = pages.buttons["Workout"]
+        XCTAssertLessThan(daily.frame.midX, entry.frame.midX)
+        XCTAssertLessThan(entry.frame.midX, workout.frame.midX)
+        XCTAssertTrue(entry.isSelected)
+        app.swipeLeft()
+        XCTAssertTrue(app.textFields["Exercise entry"].waitForExistence(timeout: 5))
+        XCTAssertTrue(workout.isSelected)
+        app.swipeLeft()
+        XCTAssertTrue(workout.isSelected, "the last page stays put")
+        app.swipeRight()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
+        app.swipeRight()
+        XCTAssertTrue(app.staticTexts["Weather"].waitForExistence(timeout: 5))
+        XCTAssertTrue(daily.isSelected)
+    }
+
+    /// Journal sits between Calendar and Context. On the calendar a swipe is
+    /// still the day's, so the switch is the way back.
+    func testJournalOpensOnTheMiddlePageAndTheCalendarKeepsItsDaySwipe() {
+        let app = XCUIApplication()
+        app.launch()
+        selectTab(app, "Journal")
+        let pages = app.segmentedControls["journal-page"]
+        XCTAssertTrue(pages.waitForExistence(timeout: 5))
+        let calendar = pages.buttons["Calendar"], journal = pages.buttons["Journal"]
+        let context = pages.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Context'")).firstMatch
+        XCTAssertLessThan(calendar.frame.midX, journal.frame.midX)
+        XCTAssertLessThan(journal.frame.midX, context.frame.midX)
+        XCTAssertTrue(journal.isSelected)
+        app.swipeLeft()
+        XCTAssertTrue(context.waitForSelection(timeout: 5))
+        app.swipeRight()
+        XCTAssertTrue(journal.waitForSelection(timeout: 5))
+        app.swipeRight()
+        XCTAssertTrue(app.buttons["calendar-day"].waitForExistence(timeout: 5))
+        XCTAssertTrue(calendar.isSelected)
+        XCTAssertEqual(app.buttons["calendar-day"].label, "Today")
+        app.swipeLeft()
+        XCTAssertTrue(calendar.isSelected, "the calendar's swipe turns the day, not the page")
+        XCTAssertNotEqual(app.buttons["calendar-day"].label, "Today")
     }
 
     func testJournalHasSyncOnTheLeftAndSwitchesToTheCalendar() {
@@ -1665,7 +1718,7 @@ final class OfflineCaptureTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments.append("-libraryFixture")
         app.launch()
-        var firstLook: Data?
+        var firstLook: XCUIScreenshot?
         for visit in 1...2 {
             openMore(app, "Library")
             XCTAssertTrue(app.staticTexts["The Long Way Round"].waitForExistence(timeout: 10))
@@ -1679,9 +1732,12 @@ final class OfflineCaptureTests: XCTestCase {
             shot.name = "latest-pill-visit-\(visit)"
             add(shot)
             if let firstLook {
-                XCTAssertEqual(latest.pngRepresentation, firstLook, "the pill is not drawn as it was on the first visit")
+                // A clipped pill shows the background where the capsule was,
+                // tens of levels apart; the same pill drawn twice has measured
+                // 0.8 apart, so the comparison cannot be byte-for-byte.
+                XCTAssertLessThan(meanPixelDifference(latest, firstLook), 4, "the pill is not drawn as it was on the first visit")
             } else {
-                firstLook = latest.pngRepresentation
+                firstLook = latest
             }
             app.navigationBars["Library"].buttons["More"].tap()
         }
@@ -3359,6 +3415,30 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(waitForAbsence(row), "the old notes left the draft")
     }
 
+    /// Mean per-channel difference between two screenshots, 0...255, or
+    /// infinity when they are not the same size. The simulator does not draw a
+    /// translucent control identically every time, so a picture expected to be
+    /// unchanged needs a tolerance rather than equal PNG bytes.
+    private func meanPixelDifference(_ a: XCUIScreenshot, _ b: XCUIScreenshot) -> Double {
+        func rgba(_ shot: XCUIScreenshot) -> (bytes: [UInt8], width: Int, height: Int)? {
+            guard let image = shot.image.cgImage else { return nil }
+            let width = image.width, height = image.height
+            var bytes = [UInt8](repeating: 0, count: width * height * 4)
+            guard let context = CGContext(
+                data: &bytes, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return nil }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return (bytes, width, height)
+        }
+        guard let x = rgba(a), let y = rgba(b), x.width == y.width, x.height == y.height else { return .infinity }
+        var total = 0
+        for i in x.bytes.indices where i % 4 != 3 {
+            total += abs(Int(x.bytes[i]) - Int(y.bytes[i]))
+        }
+        return Double(total) / Double(x.width * x.height * 3)
+    }
+
     private func waitForAbsence(_ element: XCUIElement) -> Bool {
         let predicate = NSPredicate(format: "exists == false")
         return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 5) == .completed
@@ -3462,5 +3542,14 @@ final class OfflineCaptureTests: XCTestCase {
         shot.name = name
         shot.lifetime = .keepAlways
         add(shot)
+    }
+}
+
+private extension XCUIElement {
+    /// A segment selected by a swipe updates a beat after the gesture ends.
+    func waitForSelection(timeout: TimeInterval) -> Bool {
+        let selected = NSPredicate(format: "isSelected == true")
+        return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: selected, object: self)],
+                              timeout: timeout) == .completed
     }
 }

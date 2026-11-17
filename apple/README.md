@@ -117,8 +117,15 @@ what each device can currently do and which work remains device-only.
   or a Full Keyboard Access command does the same in the app's process (Back Tap
   is iPhone-only); with no notebook open, its screenshot waits for the next one.
 
-- The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
-  default on launch and when returning from another tab) is the composer below.
+- The Capture tab has a **Daily | Entry | Workout** switch where its title was.
+  Entry, in the middle (the default on launch and when returning from another
+  tab), is the composer below. A sideways swipe moves to the page beside it, as
+  it does between the Journal tab's **Calendar | Journal | Context**, where
+  Journal is the middle default. The swipe stands aside for a row's swipe
+  actions (so on Daily, a left swipe that starts on a log reveals Remove rather
+  than turning to Entry) and for anything that scrolls sideways, and on the Calendar page it
+  still turns the day, so the switch is the way off it (`SubtabSwipe`,
+  `SubtabSwipeGesture`; passed in the iPhone simulator).
   Capture and Daily show the same remaining count: one each for fewer than
   2,000 calories, no selfie, and no body weight in the current 4am day.
   Saved offline logs count immediately. **Daily** logs the day's selfie (front camera,

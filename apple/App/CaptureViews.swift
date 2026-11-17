@@ -183,11 +183,12 @@ struct CaptureRoot: View {
     }
 }
 
-/// The Capture tab: a switch in place of its title between the entry
-/// composer, which it opens on, and the Daily log.
+/// The Capture tab: a switch in place of its title between the Daily log, the
+/// entry composer it opens on, in the middle, and the workout log. A sideways
+/// swipe moves to the page beside.
 private struct CaptureTab: View {
     enum Page: String, CaseIterable, Identifiable {
-        case entry = "Entry", daily = "Daily", workout = "Workout"
+        case daily = "Daily", entry = "Entry", workout = "Workout"
         var id: Self { self }
     }
 
@@ -213,6 +214,7 @@ private struct CaptureTab: View {
             KeptPage(shown: page == .workout) { WorkoutView(model: model) }
         }
         .ignoresSafeArea()
+        .subtabSwipe($page, pages: Page.allCases)
         // The pages stay built, so their own onAppear no longer marks opening one.
         .onChange(of: page) { _, page in if page != .entry { model.requestSync() } }
         // Still titled for VoiceOver and the back button; the switch is what shows.
@@ -906,10 +908,12 @@ struct CameraPicker: UIViewControllerRepresentable {
 }
 
 /// The Journal tab: Sync on the left on every page, and a switch on the right
-/// between the journal, the calendar, and the entries waiting for context.
+/// between the calendar, the journal in the middle, and the entries waiting
+/// for context. A sideways swipe moves to the page beside, except on the
+/// calendar, where it already turns the day; the switch leaves that one.
 private struct JournalTab: View {
     enum Page: String, CaseIterable, Identifiable {
-        case journal = "Journal", calendar = "Calendar", context = "Context"
+        case calendar = "Calendar", journal = "Journal", context = "Context"
         var id: Self { self }
     }
 
@@ -928,6 +932,7 @@ private struct JournalTab: View {
             case .context: JournalContextPage(context: context, capture: model, chat: chat)
             }
         }
+        .subtabSwipe($page, pages: Page.allCases, enabled: page != .calendar)
         .onChange(of: page) { _, page in if page == .calendar { model.requestSync() } }
         .task { await context.refresh() }
         .toolbar {
