@@ -39,7 +39,10 @@ export function Chat() {
       {/* A flex column, not a plain box: ChatPanel sizes itself with `flex-1`,
           which means nothing to a block parent — it would grow to fit every
           message and its overflow-y-auto transcript would never scroll. */}
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div
+        data-testid="chat-page-body"
+        className="flex min-h-0 flex-1 flex-col"
+      >
         {page === 'chat' ? <ChatPanel /> : <CodeTasks />}
       </div>
     </div>

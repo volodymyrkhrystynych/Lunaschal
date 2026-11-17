@@ -106,14 +106,25 @@ describe('layout', () => {
     // fills its parent with `flex-1`, which only bounds its height — and so
     // only lets the transcript scroll — when that parent is a flex container.
     // Wrapping it in a plain block for the Code page is what took scrolling away.
-    const { container } = renderChat();
+    // The panel also carries `min-h-0 h-full` so it stays bounded even in a
+    // non-flex parent.
+    renderChat();
     await screen.findByPlaceholderText('Type a message...');
-    const wrapper = (container.firstElementChild as HTMLElement)
-      .lastElementChild!;
-    expect(wrapper.firstElementChild!.className).toContain('flex-1');
-    const classes = wrapper.className.split(' ');
-    expect(classes).toContain('flex');
-    expect(classes).toContain('flex-col');
+    const wrapper = screen.getByTestId('chat-page-body');
+    const wrapperClasses = wrapper.className.split(/\s+/);
+    expect(wrapperClasses).toEqual(
+      expect.arrayContaining(['flex', 'flex-col', 'flex-1', 'min-h-0'])
+    );
+    const panelClasses = wrapper.firstElementChild!.className.split(/\s+/);
+    expect(panelClasses).toEqual(
+      expect.arrayContaining([
+        'flex-1',
+        'flex',
+        'flex-col',
+        'min-h-0',
+        'h-full',
+      ])
+    );
   });
 });
 
