@@ -430,7 +430,7 @@ private struct TodoRow: View {
                 TextField("Title", text: $title)
                     .focused($editing)
                     .strikethrough(todo.done)
-                    .foregroundStyle(todo.done ? .secondary : .primary)
+                    .foregroundStyle(todo.done ? Color.secondary : (todo.authoredTitle?.fieldColor ?? .primary))
                     .submitLabel(.done)
                     .onSubmit { Task { await chat.rename(todo, to: title) } }
                     .onChange(of: editing) { _, now in if !now { Task { await chat.rename(todo, to: title) } } }

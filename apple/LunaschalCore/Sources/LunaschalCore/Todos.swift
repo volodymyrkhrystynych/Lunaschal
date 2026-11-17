@@ -184,14 +184,19 @@ public struct TodoItem: Codable, Equatable, Identifiable {
     public var repeatUnit: String?
     public var priority: Int?
     public var createdAt: String?
+    /// Who produced `title` and `notes` — typed, spoken, or the model's rewrite.
+    public var authorship: [String: JSONValue]?
 
     public init(id: String, title: String, done: Bool = false, completedAt: String? = nil, list: String = "todo",
                 notes: String? = nil, due: String? = nil, repeatInterval: Int? = nil, repeatUnit: String? = nil,
-                priority: Int? = 3, createdAt: String? = nil) {
+                priority: Int? = 3, createdAt: String? = nil, authorship: [String: JSONValue]? = nil) {
         self.id = id; self.title = title; self.done = done; self.completedAt = completedAt; self.list = list
         self.notes = notes; self.due = due; self.repeatInterval = repeatInterval; self.repeatUnit = repeatUnit
-        self.priority = priority; self.createdAt = createdAt
+        self.priority = priority; self.createdAt = createdAt; self.authorship = authorship
     }
+
+    public var authoredTitle: AuthoredText? { AuthoredText.field(title, authorship, "title", fallback: .user) }
+    public var authoredNotes: AuthoredText? { AuthoredText.field(notes, authorship, "notes", fallback: .user) }
 
     public var isArchived: Bool { list == "archive" }
     public var dueDate: Date? { due.flatMap(TodoRules.date(iso:)) }

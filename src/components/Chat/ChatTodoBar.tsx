@@ -14,6 +14,7 @@ import {
   dueIsoToInput,
 } from '../../lib/todos';
 import { chatTodoSourceLabel, isLinkedChatTodo } from '../../lib/chatTodos';
+import { AuthoredText } from '../AuthoredText';
 
 const fieldClass =
   'bg-[var(--color-surface)] border border-white/20 rounded px-2 py-1 text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]';
@@ -220,7 +221,16 @@ function ChatTodoRow({
                 : 'text-[var(--color-text)]'
             }`}
           >
-            {todo.title}
+            {todo.done ? (
+              todo.title
+            ) : (
+              <AuthoredText
+                text={todo.title}
+                authorship={todo.authorship}
+                field="title"
+                fallback={isLinkedChatTodo(todo) ? 'u' : 'a'}
+              />
+            )}
           </span>
         )}
         {todo.notes && !editing && (

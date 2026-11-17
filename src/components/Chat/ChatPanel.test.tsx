@@ -322,6 +322,12 @@ describe('delegate proposals are durable confirm cards', () => {
 
     expect(await screen.findByText('Save as calendar event?')).toBeTruthy();
     expect(screen.getByText("It's 8am.")).toBeTruthy();
+    // Blue is the user's own words everywhere: a user bubble is blue text, a
+    // reply the normal text colour (src/lib/authorship.ts).
+    expect(
+      screen.getByText('what time is it').closest('.text-user')
+    ).toBeTruthy();
+    expect(screen.getByText("It's 8am.").closest('.text-ai')).toBeTruthy();
   });
 
   it('still shows "Saved to journal" on historical messages saved before the feature was removed', async () => {

@@ -7,6 +7,8 @@ import {
   type IdeaSummary,
 } from '../../hooks/api';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import { fieldClass } from '../../lib/authorship';
+import { AuthoredText } from '../AuthoredText';
 import { IDEA_STATUSES, statusClasses } from '../../lib/ideas';
 import {
   changedFields,
@@ -135,6 +137,14 @@ export function IdeaDetail({ ideaId, onOpenEntry }: IdeaDetailProps) {
   }, [idea]);
 
   const dirty = isDirty(draft, baseline.current);
+  // A textarea takes one colour, so the body takes its author's only while the
+  // saved text has one — judged from the server's copy, not the draft, so the
+  // first keystroke into a polished idea doesn't repaint all of it.
+  const bodyAuthorClass = idea
+    ? idea.content
+      ? fieldClass(idea.content, idea.authorship, 'content', 'u')
+      : fieldClass(idea.rawContent, idea.authorship, 'rawContent', 'u')
+    : 'text-ai';
   const state = saveState({ dirty, inFlight: save.isPending, failed });
 
   // `mutate` is stable across renders; capturing it keeps `flush` stable too,
@@ -331,7 +341,7 @@ export function IdeaDetail({ ideaId, onOpenEntry }: IdeaDetailProps) {
             onBlur={flush}
             placeholder="What's the idea?"
             aria-label="Idea body"
-            className="mx-4 mt-4 min-h-48 flex-1 resize-none rounded bg-[var(--color-bg)] border border-white/10 p-3 text-sm leading-relaxed text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
+            className={`mx-4 mt-4 min-h-48 flex-1 resize-none rounded bg-[var(--color-bg)] border border-white/10 p-3 text-sm leading-relaxed ${bodyAuthorClass} placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]`}
           />
 
           {/* Once the polish step exists, `content` diverges from what was
@@ -342,7 +352,14 @@ export function IdeaDetail({ ideaId, onOpenEntry }: IdeaDetailProps) {
             idea.content !== idea.rawContent && (
               <details className="mx-4 mt-3 text-xs text-[var(--color-text-muted)]">
                 <summary className="cursor-pointer">As captured</summary>
-                <p className="mt-1 whitespace-pre-wrap">{idea.rawContent}</p>
+                <p className="mt-1 whitespace-pre-wrap">
+                  <AuthoredText
+                    text={idea.rawContent}
+                    authorship={idea.authorship}
+                    field="rawContent"
+                    fallback="u"
+                  />
+                </p>
               </details>
             )}
 

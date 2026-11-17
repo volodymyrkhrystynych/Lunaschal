@@ -15,6 +15,7 @@ import { groupByFoodDay } from '../../lib/foodDay';
 import { FoodCapture } from './FoodCapture';
 import { TagPill } from '../TagPill';
 import { FoodDescriptions } from './FoodDescriptions';
+import { AuthoredText } from '../AuthoredText';
 import { EntryWeatherLine } from '../EntryWeatherLine';
 import { LoadingState } from '../LoadStates';
 import { ImageLightbox } from '../ImageLightbox';
@@ -271,7 +272,21 @@ function FoodEntryCard({
         <>
           {(entry.notes || entry.rawContent) && (
             <div className="content-text text-[var(--color-text)] whitespace-pre-wrap mt-2">
-              {showRaw ? entry.rawContent : (entry.notes ?? entry.rawContent)}
+              {showRaw || !entry.notes ? (
+                <AuthoredText
+                  text={entry.rawContent}
+                  authorship={entry.authorship}
+                  field="rawContent"
+                  fallback="u"
+                />
+              ) : (
+                <AuthoredText
+                  text={entry.notes}
+                  authorship={entry.authorship}
+                  field="notes"
+                  fallback="u"
+                />
+              )}
             </div>
           )}
           {hasOriginal && (
