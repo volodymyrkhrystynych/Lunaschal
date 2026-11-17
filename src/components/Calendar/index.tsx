@@ -6,6 +6,7 @@ import { useIsMobile } from '@/hooks/useMediaQuery';
 import {
   buildMonthGrid,
   EMPTY_REPEAT,
+  eventDateForStart,
   eventTimeLabel,
   newEventSlot,
   parseEventTags,
@@ -49,10 +50,9 @@ const instanceKey = (e: CalendarEvent) =>
   `${e.id}:${e.occurrenceDate ?? e.date}`;
 
 const EMPTY_NEW_EVENT = {
-  // Filled when the form opens on the current day past midnight, for the day it
-  // was opened on: `slotDate` is that time's own calendar date.
+  // The 4am day the form filled its times in for, when it opened on today. Its
+  // start decides the date on save: past midnight is the next calendar date.
   slotDay: '',
-  slotDate: '',
   title: '',
   description: '',
   time: '',
@@ -203,15 +203,14 @@ export function Calendar() {
   };
 
   const toggleNewEvent = () => {
-    const opening = !showNewEvent;
-    setShowNewEvent(opening);
-    if (!opening || selectedDate !== todayISO) return;
+    if (showNewEvent) return cancelNewEvent();
+    setShowNewEvent(true);
+    if (selectedDate !== todayISO) return;
     if (newEvent.time || newEvent.endTime) return;
     const slot = newEventSlot(todayISO, new Date());
     setNewEvent({
       ...newEvent,
       slotDay: todayISO,
-      slotDate: slot.date,
       time: slot.time,
       endTime: slot.endTime,
     });
@@ -224,9 +223,11 @@ export function Calendar() {
     !createEvent.isPending;
 
   // Discarded rather than left in the store, where the boot sweep would take
-  // them for a form that died and open an event for them.
+  // them for a form that died and open an event for them. The draft goes too,
+  // or reopening later would keep the times this one was filled in with.
   const cancelNewEvent = () => {
     clips.clips.forEach(clip => clips.remove(clip.id));
+    setNewEvent(EMPTY_NEW_EVENT);
     setShowNewEvent(false);
   };
 
@@ -237,8 +238,12 @@ export function Calendar() {
       id: clips.claimId(),
       title: newEvent.title,
       ...(clips.clips.length ? { pendingClips: clips.clips.length } : {}),
+      // From the start as saved, not as the form opened: on today past
+      // midnight, a start moved back before it is on the earlier date.
       date:
-        newEvent.slotDay === selectedDate ? newEvent.slotDate : selectedDate,
+        newEvent.slotDay === selectedDate && !newEvent.allDay
+          ? eventDateForStart(selectedDate, newEvent.time)
+          : selectedDate,
       description: newEvent.description || undefined,
       time: newEvent.allDay ? undefined : newEvent.time || undefined,
       endTime: newEvent.allDay ? undefined : newEvent.endTime || undefined,

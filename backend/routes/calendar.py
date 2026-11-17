@@ -467,10 +467,19 @@ def create_event():
          category_tags.get('category_tags'), category_tags.get('classified_at'),
          category_tags.get('classification_error')),
     ).rowcount
-    # Not on a replay, and not for categories chosen by hand. Spoken events wait
-    # for their transcript, which is what there is to classify.
-    if inserted and not clips_follow and 'classified_at' not in category_tags:
+    # Not on a replay, and not for categories chosen by hand. A spoken event is
+    # classified now on whatever was typed, not held for its clips: a clip that
+    # never arrives would otherwise leave it unclassified for good, and one that
+    # does reopens classification when its transcript lands (_append_description).
+    # Only an event with no words at all waits, having nothing to classify.
+    description = str(body.get('description') or '').strip()
+    if inserted and 'classified_at' not in category_tags and (title or description):
         jobs.enqueue('calendar.classify', id, commit=False)
+    # Titled from the typed description for the same reason. A pending job still
+    # sees any transcript that lands before it runs, and a title is only ever
+    # filled while blank, so this never overrides one typed later.
+    if inserted and not title and description:
+        jobs.enqueue('calendar.title', id, commit=False)
     db.commit()
     return jsonify({'id': id}), 201
 
@@ -546,7 +555,11 @@ def _transcribe_recording_bg(recording_id: str, event_id: str, path: str,
 
 
 def _append_description(db, event_id: str, text: str) -> None:
-    """After anything typed, a blank line between clips, as a meal's note."""
+    """After anything typed, a blank line between clips, as a meal's note.
+
+    New words are a new thing to classify, so the categories are reopened, as
+    a spoken edit reopens them. Unconditionally: categories ticked by hand are
+    stamped exactly like the classifier's, so the two cannot be told apart."""
     row = db.execute(
         'SELECT description FROM calendar_events WHERE id=?', (event_id,)
     ).fetchone()
@@ -554,7 +567,8 @@ def _append_description(db, event_id: str, text: str) -> None:
         return
     existing = (row['description'] or '').strip()
     db.execute(
-        'UPDATE calendar_events SET description=? WHERE id=?',
+        'UPDATE calendar_events SET description=?, classified_at=NULL,'
+        ' classification_error=NULL WHERE id=?',
         (f'{existing}\n\n{text}' if existing else text, event_id),
     )
 

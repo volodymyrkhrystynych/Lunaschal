@@ -72,14 +72,14 @@ export interface RecordingFic {
  * meal becomes a journal entry, which is a different tab from the one it was
  * spoken into and has no photograph of the plate next to it.
  */
+export interface RecordingFood {
+  id: string;
+}
+
 /** The event a clip was spoken for, and the day to open it on if it is orphaned. */
 export interface RecordingCalendar {
   id: string;
   date: string;
-}
-
-export interface RecordingFood {
-  id: string;
 }
 
 /**

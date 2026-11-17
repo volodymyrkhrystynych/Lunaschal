@@ -5,6 +5,8 @@
 // day off from the local one for several hours around midnight, so events land
 // on the wrong cell and "today" highlights the wrong day.
 
+import { DAY_ROLLOVER_HOUR } from './dates';
+
 export const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // Sunday=0, matching Date#getDay(), the backend's repeat_byweekday CSV, and
 // the left-to-right order of the grid.
@@ -209,8 +211,10 @@ export function repeatDraftToPayload(draft: RepeatDraft) {
 
 /** Minutes a new event runs by default, as on the phone. */
 const NEW_EVENT_MINUTES = 30;
+/** The shortest event a drag allows, as on the phone. */
+const MIN_EVENT_MINUTES = 15;
 /** Where the app's day turns over, in minutes after midnight. */
-const DAY_START_MINUTES = 4 * 60;
+const DAY_START_MINUTES = DAY_ROLLOVER_HOUR * 60;
 
 function hhmm(minutes: number): string {
   const wall = ((minutes % 1440) + 1440) % 1440;
@@ -221,22 +225,39 @@ function hhmm(minutes: number): string {
 /**
  * Where a new event on the current 4am day starts out: ending now, since an
  * event is usually logged once it is over, the default length long, and no
- * earlier than the top of that day. Past midnight its date is the next calendar
- * date, which is what `date` is for. Matches `CalendarTimeline.newEventSlot`.
+ * earlier than the top of that day — nor shorter than the minimum, since at
+ * 04:00 "now" is the top of the day and a zero-length event reads as one
+ * ending the next day. Past midnight its date is the next calendar date, which
+ * is what `date` is for. Matches `CalendarTimeline.newEventSlot`.
  */
 export function newEventSlot(
   day: string,
   now: Date
 ): { date: string; time: string; endTime: string } {
   const wall = now.getHours() * 60 + now.getMinutes();
-  const end = (wall - DAY_START_MINUTES + 1440) % 1440;
-  const start = Math.max(0, end - NEW_EVENT_MINUTES);
-  const pastMidnight = start >= 1440 - DAY_START_MINUTES;
-  const anchor = new Date(`${day}T12:00:00`);
-  if (pastMidnight) anchor.setDate(anchor.getDate() + 1);
+  const nowOffset = (wall - DAY_START_MINUTES + 1440) % 1440;
+  const start = Math.max(0, nowOffset - NEW_EVENT_MINUTES);
+  const end = Math.max(nowOffset, start + MIN_EVENT_MINUTES);
+  const time = hhmm(start + DAY_START_MINUTES);
   return {
-    date: toLocalISO(anchor),
-    time: hhmm(start + DAY_START_MINUTES),
+    date: eventDateForStart(day, time),
+    time,
     endTime: hhmm(end + DAY_START_MINUTES),
   };
+}
+
+/**
+ * The calendar date an event starting at `time` on the 4am `day` is stored
+ * under: the date after `day` before 04:00, `day` itself otherwise or with no
+ * time. Read at save rather than when the form opens, so a start moved back
+ * across midnight takes its date with it.
+ */
+export function eventDateForStart(day: string, time: string): string {
+  const [h, m] = time.split(':').map(Number);
+  if (!time || Number.isNaN(h) || h * 60 + (m || 0) >= DAY_START_MINUTES) {
+    return day;
+  }
+  const anchor = new Date(`${day}T12:00:00`);
+  anchor.setDate(anchor.getDate() + 1);
+  return toLocalISO(anchor);
 }

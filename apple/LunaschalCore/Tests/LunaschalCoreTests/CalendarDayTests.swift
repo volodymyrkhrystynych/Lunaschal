@@ -73,9 +73,15 @@ final class CalendarDayTests: XCTestCase {
         // Started before midnight, it keeps the day's own date.
         let across = CalendarTimeline.newEventSlot(day: "2026-10-05", now: at("2026-10-06 00:10"), calendar: calendar)
         XCTAssertEqual(across.date, "2026-10-05"); XCTAssertEqual(across.time, "23:40"); XCTAssertEqual(across.endTime, "00:10")
-        // Never above the top of the timeline.
-        let early = CalendarTimeline.newEventSlot(day: "2026-10-05", now: at("2026-10-05 04:10"), calendar: calendar)
-        XCTAssertEqual(early.time, "04:00"); XCTAssertEqual(early.endTime, "04:10")
+        // Never above the top of the timeline, and never shorter than a drag allows.
+        let early = CalendarTimeline.newEventSlot(day: "2026-10-05", now: at("2026-10-05 04:20"), calendar: calendar)
+        XCTAssertEqual(early.time, "04:00"); XCTAssertEqual(early.endTime, "04:20")
+        let short = CalendarTimeline.newEventSlot(day: "2026-10-05", now: at("2026-10-05 04:10"), calendar: calendar)
+        XCTAssertEqual(short.time, "04:00"); XCTAssertEqual(short.endTime, "04:15")
+        // At the very top of the day "now" is no length at all, which would read as
+        // an event ending the next day.
+        let top = CalendarTimeline.newEventSlot(day: "2026-10-05", now: at("2026-10-05 04:00"), calendar: calendar)
+        XCTAssertEqual(top.date, "2026-10-05"); XCTAssertEqual(top.time, "04:00"); XCTAssertEqual(top.endTime, "04:15")
         let other = CalendarTimeline.newEventSlot(day: "2026-10-09", now: at("2026-10-05 14:10"), calendar: calendar)
         XCTAssertEqual(other.date, "2026-10-09"); XCTAssertEqual(other.time, "08:00")
     }

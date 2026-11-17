@@ -1036,17 +1036,19 @@ const jobDecideCfg = (qc: QueryClient): Cfg<void, JobDecideVars> => ({
 });
 
 /**
- * The food log's half of the durable recording path.
- *
- * Deliberately a separate mutation from `journalRecording` rather than a flag
- * on it: the two speak to different routes and settle different caches, and
- * the shared part — never let go of the audio until the server confirms it —
- * is `recordingStore`, not this config.
+ * A clip uploaded to a tab's own recordings route: retried with backoff until
+ * the server confirms it, the only point at which the audio may be let go of.
+ * The food log and the event form differ only in the call, the cache it
+ * settles and whether uploads queue behind one another.
  */
-const foodRecordingCfg = (
-  qc: QueryClient
-): Cfg<unknown, FoodRecordingVars> => ({
+const recordingUploadCfg = <TVars extends { id: string }>(
+  qc: QueryClient,
+  upload: (blob: Blob, vars: TVars) => Promise<unknown>,
+  queryKey: readonly unknown[],
+  scope?: { id: string }
+): Cfg<unknown, TVars> => ({
   ...ONLINE,
+  ...(scope ? { scope } : {}),
   retry: (failureCount, error) => !isTerminal(error) && failureCount < 5,
   retryDelay: attempt => Math.min(30_000, 1000 * 2 ** attempt),
   mutationFn: async vars => {
@@ -1061,11 +1063,7 @@ const foodRecordingCfg = (
       throw new Error('That recording was empty.');
     }
     try {
-      const res = await api.food.createRecording(blob, {
-        id: vars.foodId,
-        mediaId: vars.id,
-        position: vars.position,
-      });
+      const res = await upload(blob, vars);
       // Confirmed stored. The only place this audio may be let go of.
       await deleteRecording(vars.id);
       return res;
@@ -1078,8 +1076,28 @@ const foodRecordingCfg = (
       throw e;
     }
   },
-  onSettled: () => qc.invalidateQueries({ queryKey: ['food'] }),
+  onSettled: () => qc.invalidateQueries({ queryKey }),
 });
+
+/**
+ * The food log's half of the durable recording path.
+ *
+ * Deliberately a separate mutation from `journalRecording` rather than a flag
+ * on it: the two speak to different routes and settle different caches, and
+ * the shared part — never let go of the audio until the server confirms it —
+ * is `recordingStore`, not this config.
+ */
+const foodRecordingCfg = (qc: QueryClient): Cfg<unknown, FoodRecordingVars> =>
+  recordingUploadCfg<FoodRecordingVars>(
+    qc,
+    (blob, vars) =>
+      api.food.createRecording(blob, {
+        id: vars.foodId,
+        mediaId: vars.id,
+        position: vars.position,
+      }),
+    ['food']
+  );
 
 /**
  * One at a time, in the order they were saved. A clip that overtook its create
@@ -1091,38 +1109,18 @@ const CALENDAR_SCOPE = { id: 'calendar-create' };
 /** The event form's clip: `foodRecordingCfg`, on the calendar's route. */
 const calendarRecordingCfg = (
   qc: QueryClient
-): Cfg<unknown, CalendarRecordingVars> => ({
-  ...ONLINE,
-  scope: CALENDAR_SCOPE,
-  retry: (failureCount, error) => !isTerminal(error) && failureCount < 5,
-  retryDelay: attempt => Math.min(30_000, 1000 * 2 ** attempt),
-  mutationFn: async vars => {
-    const rec = await getRecording(vars.id);
-    if (!rec) throw new Error('That recording is no longer on this device.');
-    const blob = await assembleBlob(vars.id);
-    if (!blob || blob.size === 0) {
-      await deleteRecording(vars.id);
-      throw new Error('That recording was empty.');
-    }
-    try {
-      const res = await api.calendar.createRecording(blob, {
+): Cfg<unknown, CalendarRecordingVars> =>
+  recordingUploadCfg<CalendarRecordingVars>(
+    qc,
+    (blob, vars) =>
+      api.calendar.createRecording(blob, {
         id: vars.eventId,
         mediaId: vars.id,
         date: vars.date,
-      });
-      await deleteRecording(vars.id);
-      return res;
-    } catch (e) {
-      await markAttempt(
-        vars.id,
-        e instanceof Error ? e.message : 'Upload failed',
-        isTerminal(e)
-      );
-      throw e;
-    }
-  },
-  onSettled: () => qc.invalidateQueries({ queryKey: ['calendar'] }),
-});
+      }),
+    ['calendar'],
+    CALENDAR_SCOPE
+  );
 
 /**
  * The Chat tab's spoken message, which does not go through the journal either.

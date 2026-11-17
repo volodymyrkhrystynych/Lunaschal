@@ -86,7 +86,9 @@ public enum CalendarTimeline {
     /// Where "+" drops a new event. Today it ends now, since an event is usually
     /// logged once it's over, and starts the default length earlier, no further
     /// back than the top of the day (past midnight its date is the *next*
-    /// calendar date). Any other day it starts at 8am.
+    /// calendar date). Any other day it starts at 8am. Never shorter than
+    /// `minDurationMinutes`: at 04:00 "now" is the top of the day, and a
+    /// zero-length event reads as one ending the next day.
     public static func newEventSlot(day: String, now: Date = Date(), calendar: Calendar = .current)
         -> (date: String, time: String, endTime: String) {
         var start = offset(fromWall: defaultHour * 60)
@@ -95,6 +97,7 @@ public enum CalendarTimeline {
             let parts = calendar.dateComponents([.hour, .minute], from: now)
             end = offset(fromWall: (parts.hour ?? 0) * 60 + (parts.minute ?? 0))
             start = max(0, end - defaultDurationMinutes)
+            end = max(end, start + minDurationMinutes)
         }
         return (isAfterMidnight(start) ? addingDays(1, to: day) : day,
                 time(wall(fromOffset: start)), time(wall(fromOffset: end)))

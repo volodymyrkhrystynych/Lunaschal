@@ -3,7 +3,7 @@
 `POST /api/calendar/recordings` keeps the food log's contract: both ids are the
 client's and a replay is a no-op. What is pinned here is what the clip then does
 — the transcript lands in the description once, a blank title is filled from it
-and a typed one never is, and the categories wait for those words.
+and a typed one never is, and the categories are reopened by those words.
 """
 import io
 
@@ -87,9 +87,41 @@ def test_a_blank_title_needs_clips_on_the_way(client):
     assert _event()['title'] == ''
 
 
-def test_a_spoken_event_waits_for_its_transcript_before_classifying(client):
+def test_a_spoken_event_with_no_words_yet_waits_for_its_transcript(client):
     _create(client, title='', pendingClips=1)
     assert _queued() == []
+
+
+def test_a_spoken_event_classifies_what_was_typed_without_waiting(client):
+    # A clip that never arrives must not leave the event unclassified for good.
+    _create(client, title='Lunch', pendingClips=1)
+    assert _queued() == ['calendar.classify']
+
+
+def test_a_spoken_event_whose_clip_never_arrives_is_titled_from_its_description(
+        client, monkeypatch):
+    monkeypatch.setattr(calendar_ai, 'is_ai_configured', lambda: False)
+    _create(client, title='', description='Coffee with Ana at the market', pendingClips=1)
+    assert sorted(_queued()) == ['calendar.classify', 'calendar.title']
+    _drain()
+    assert _event()['title'] == 'Coffee with Ana at the market'
+
+
+def test_a_clip_on_a_classified_event_reclassifies_it(client, transcript, monkeypatch):
+    monkeypatch.setattr(calendar_ai, 'is_ai_configured', lambda: True)
+    answer = {'categories': ['work']}
+    monkeypatch.setattr(calendar_ai, 'chat_json', lambda *a, **k: answer)
+    _create(client, title='Afternoon')
+    _drain()
+    assert _event()['category_tags'] == '["work"]'
+
+    answer['categories'] = ['outside']
+    _upload(client)
+    _drain()
+    event = _event()
+    assert event['description'] == transcript['text']
+    assert event['category_tags'] == '["outside"]'
+    assert event['classified_at'] is not None
 
 
 def test_a_clip_fills_the_description_title_and_categories(client, transcript, monkeypatch):
@@ -179,7 +211,8 @@ def test_a_failed_transcription_still_classifies_what_was_typed(client, monkeypa
     monkeypatch.setattr(calendar_ai, 'is_ai_configured', lambda: False)
     _create(client, title='Lunch', pendingClips=1)
     _upload(client)
-    llm_jobs.process_one(get_db().execute('SELECT id FROM llm_jobs').fetchone()['id'])
+    llm_jobs.process_one(get_db().execute(
+        "SELECT id FROM llm_jobs WHERE kind='calendar.transcribe_recording'").fetchone()['id'])
     row = get_db().execute('SELECT * FROM calendar_recordings').fetchone()
     assert (row['transcript_status'], row['transcript_error']) == ('error', 'no model')
     assert _queued() == ['calendar.classify']
