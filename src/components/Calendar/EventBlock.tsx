@@ -164,12 +164,16 @@ export function EventBlock({
         </button>
         <div className="min-w-0 leading-tight">
           <div className="text-xs font-medium text-[var(--color-text)] truncate">
-            <AuthoredText
-              text={event.title}
-              authorship={event.authorship}
-              field="title"
-              fallback="u"
-            />
+            {event.title ? (
+              <AuthoredText
+                text={event.title}
+                authorship={event.authorship}
+                field="title"
+                fallback="u"
+              />
+            ) : (
+              'Untitled'
+            )}
           </div>
           {/* Takes the time row's place rather than sitting beside it: the
               label band is one line tall by design, and a second row here

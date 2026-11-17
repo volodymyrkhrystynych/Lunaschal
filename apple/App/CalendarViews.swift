@@ -71,7 +71,7 @@ struct CalendarPage: View {
             CalendarEventDetail(model: model, occurrence: occurrence)
         }
         .sheet(item: $creating) { draft in
-            EventForm(draft: draft) { draft, _ in model.queueCalendar(.create(draft)) }
+            EventForm(model: model, draft: draft) { draft, _ in model.queueCalendar(.create(draft)) }
         }
         .sheet(isPresented: $picking) {
             DayPicker(day: $day).presentationDetents([.medium])
@@ -741,7 +741,10 @@ struct EventDeletion {
 /// The web's event form, natively, for creating and for editing: title, all
 /// day, times, description, tags and the repeat rule. A new event also takes
 /// its categories here; an existing one has them on its page, and its Delete here.
+/// Clips spoken into the description go up with Save and are transcribed on the
+/// server, which also titles an event saved without one.
 struct EventForm: View {
+    let model: CaptureModel
     let id: String
     let editing: Bool
     /// Editing a repeating event: Save asks which occurrences, and the date
@@ -765,10 +768,15 @@ struct EventForm: View {
     @State private var ends: Bool
     @State private var until: Date
     @State private var askingScope = false
+    @State private var clips: [String] = []
+    @State private var discarding = false
+    @StateObject private var dictation: Dictation
     @FocusState private var titleFocused: Bool
 
-    init(draft: CalendarDraft, editing: Bool = false, series: Bool = false, deletion: EventDeletion? = nil,
-         save: @escaping (CalendarDraft, EditScope) -> Bool) {
+    init(model: CaptureModel, draft: CalendarDraft, editing: Bool = false, series: Bool = false,
+         deletion: EventDeletion? = nil, save: @escaping (CalendarDraft, EditScope) -> Bool) {
+        self.model = model
+        _dictation = StateObject(wrappedValue: Dictation(capture: model))
         id = draft.id
         self.editing = editing
         self.series = series
@@ -800,30 +808,78 @@ struct EventForm: View {
                       // leaves them alone, since they're ticked on the event's page.
                       categoryTags: !editing && !categories.isEmpty ? Array(categories) : nil,
                       repeatFreq: repeatFreq.isEmpty ? nil : repeatFreq, repeatInterval: repeatInterval,
-                      repeatByweekday: Array(weekdays), repeatUntil: ends ? CalendarPage.iso(until) : nil)
+                      repeatByweekday: Array(weekdays), repeatUntil: ends ? CalendarPage.iso(until) : nil,
+                      clipIDs: clips)
+    }
+
+    private var recording: Bool { dictation.status != .idle }
+
+    private func discardClips() {
+        dictation.cancel()
+        clips.forEach(model.discardCalendarClip)
+        clips = []
+    }
+
+    /// Not offered on a series,
+    /// where a save can start a new series the clip would miss.
+    private var transcribeButton: some View {
+        Button {
+            Task {
+                await dictation.toggle { recorded in
+                    if let clip = model.stageCalendarClip(recorded) { clips.append(clip) }
+                }
+            }
+        } label: {
+            Label(dictation.status == .recording ? "Stop" : "Transcribe",
+                  systemImage: dictation.status == .recording ? "stop.circle.fill" : "mic")
+                .foregroundStyle(dictation.status == .recording ? AnyShapeStyle(.red) : AnyShapeStyle(.tint))
+        }
+        .disabled(dictation.status == .starting)
+        .accessibilityIdentifier("calendar-event-transcribe")
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Event title", text: $title).focused($titleFocused)
+                    TextField(clips.isEmpty ? "Event title" : "Event title (optional)", text: $title).focused($titleFocused)
                         .accessibilityIdentifier("calendar-event-title")
                     Toggle("All day", isOn: $allDay)
                     if !series { DatePicker("Date", selection: $date, displayedComponents: .date) }
                     if !allDay {
                         DatePicker("Starts", selection: $start, displayedComponents: .hourAndMinute)
-                            .onChange(of: start) { old, new in
-                                // Moving the start keeps the length, as the web's voice edit does.
-                                end = end.addingTimeInterval(new.timeIntervalSince(old))
-                            }
                         DatePicker("Ends", selection: $end, displayedComponents: .hourAndMinute)
                     }
+                } footer: {
+                    if draft.endsNextDay { Text("Ends the next day.") }
                 }
                 Section {
                     TextField("Description (optional)", text: $details, axis: .vertical).lineLimit(2...6)
+                    if !series {
+                        transcribeButton
+                        ForEach(Array(clips.enumerated()), id: \.element) { index, clip in
+                            HStack {
+                                Label("Recording \(index + 1)", systemImage: "waveform")
+                                Spacer()
+                                Button(role: .destructive) {
+                                    model.discardCalendarClip(clip)
+                                    clips.removeAll { $0 == clip }
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Discard recording \(index + 1)")
+                            }
+                        }
+                    }
                     TextField("Tags (comma-separated)", text: $tags)
                         .textInputAutocapitalization(.never)
+                } footer: {
+                    if let error = dictation.error {
+                        Text(error)
+                    } else if !clips.isEmpty {
+                        Text("Transcribed into the description after saving. With no title, one is written from what you said.")
+                    }
                 }
                 // A new event has no page yet to tick them on; an existing
                 // one ticks them on its page, outside this form.
@@ -882,13 +938,22 @@ struct EventForm: View {
             .navigationTitle(editing ? "Edit event" : "New event")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        if clips.isEmpty { discardClips(); dismiss() } else { discarding = true }
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         if series { askingScope = true } else if save(draft, .all) { dismiss() }
                     }
-                    .disabled(draft.problem != nil)
+                    .disabled(draft.problem != nil || recording)
                 }
+            }
+            // Audio can't be typed again, so a swipe doesn't get to lose it.
+            .interactiveDismissDisabled(!clips.isEmpty || recording)
+            .confirmationDialog("Discard your recordings?", isPresented: $discarding, titleVisibility: .visible) {
+                Button("Discard", role: .destructive) { discardClips(); dismiss() }
             }
             // Past days are a record of what happened, so "This and future"
             // comes first and rewriting the past is the deliberate choice.
@@ -914,7 +979,7 @@ struct EventForm: View {
     }
 
     private func remove(_ change: CalendarChange) {
-        if deletion?.perform(change) == true { dismiss() }
+        if deletion?.perform(change) == true { discardClips(); dismiss() }
     }
 
     private var unit: String {
@@ -988,7 +1053,7 @@ private struct CalendarEventDetail: View {
             ToolbarItem(placement: .primaryAction) { Button("Edit") { editing = true } }
         }
         .sheet(isPresented: $editing, onDismiss: { if finished { dismiss() } }) {
-            EventForm(draft: CalendarDraft(editing: event), editing: true, series: occurrence.isRecurring,
+            EventForm(model: model, draft: CalendarDraft(editing: event), editing: true, series: occurrence.isRecurring,
                       deletion: EventDeletion(id: event.id, recurring: occurrence.isRecurring,
                                               date: occurrence.occurrenceDate) { change in
                           finished = model.queueCalendar(change)

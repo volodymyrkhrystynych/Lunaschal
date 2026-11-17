@@ -267,7 +267,7 @@ export function DayView({
               onClick={() => onOpenEvent(e)}
               className="text-xs px-2 py-1 rounded bg-[var(--color-accent)]/10 text-[var(--color-accent)]"
             >
-              {e.title}
+              {e.title || 'Untitled'}
             </button>
           ))}
         </div>

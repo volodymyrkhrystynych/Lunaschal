@@ -177,6 +177,18 @@ def _calendar_classify(target_id, payload):
     classify_event_categories(target_id)
 
 
+@jobs.handler('calendar.transcribe_recording')
+def _calendar_transcribe_recording(target_id, payload):
+    from backend.routes.calendar import _transcribe_recording_bg
+    _transcribe_recording_bg(target_id, payload['event_id'], payload['path'], now=True)
+
+
+@jobs.handler('calendar.title')
+def _calendar_title(target_id, payload):
+    from backend.ai.calendar import fill_event_title
+    fill_event_title(target_id)
+
+
 @jobs.handler('ideas.enrich')
 def _ideas_enrich(target_id, payload):
     from backend.routes.ideas import _enrich_idea_bg

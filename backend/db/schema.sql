@@ -277,6 +277,22 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     classification_error TEXT
 );
 
+-- A clip spoken into an event's description. Transcribed in the background after
+-- the upload, then appended to calendar_events.description; a blank title is
+-- filled from that text afterwards. The clip stays, as a meal's does.
+CREATE TABLE IF NOT EXISTS calendar_recordings (
+    id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL REFERENCES calendar_events(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    mime TEXT,
+    transcript TEXT,
+    transcript_status TEXT NOT NULL DEFAULT 'idle',   -- idle|running|done|error
+    transcript_error TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_recordings_event ON calendar_recordings(event_id);
+
 -- Per-occurrence edits to a recurring series: a template row plus dated
 -- exception rows joined at read time (same shape as daily_task_completions).
 CREATE TABLE IF NOT EXISTS calendar_event_exceptions (

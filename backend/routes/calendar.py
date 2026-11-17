@@ -4,7 +4,7 @@ import time
 from datetime import date as dt, datetime, timedelta
 from flask import Blueprint, jsonify, request
 from ulid import ULID
-from backend import authorship, sleep
+from backend import authorship, calendar_media, sleep
 from backend.ai import jobs
 from backend.ai.calendar import EVENT_CATEGORIES
 from backend.calendar_query import events_in_range
@@ -432,7 +432,11 @@ def transcribe_event(id):
 @bp.post('')
 def create_event():
     body = request.json or {}
-    if not body.get('title') or not body.get('date'):
+    title = str(body.get('title') or '').strip()
+    # An event that is being spoken can start blank: its clips follow this
+    # create, and the title comes from what they say.
+    clips_follow = _clip_count(body.get('pendingClips')) > 0
+    if (not title and not clips_follow) or not body.get('date'):
         return jsonify({'error': 'title and date required'}), 400
     if not _valid_date(body['date']):
         return jsonify({'error': 'date must be YYYY-MM-DD'}), 400
@@ -459,14 +463,15 @@ def create_event():
     id = body.get('id') or str(ULID())
     tags = body.get('tags')
     is_all_day = all_day.get('all_day', 0)
-    get_db().execute(
+    db = get_db()
+    inserted = db.execute(
         '''INSERT OR IGNORE INTO calendar_events(
                id, title, description, date, time, end_time, all_day, tags,
                journal_id, created_at,
                repeat_freq, repeat_interval, repeat_byweekday, repeat_until,
                category_tags, classified_at, classification_error)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (id, body['title'], body.get('description'), body['date'],
+        (id, title, body.get('description'), body['date'],
          None if is_all_day else body.get('time'),
          None if is_all_day else body.get('endTime'),
          is_all_day, tags_json(tags),
@@ -475,9 +480,166 @@ def create_event():
          repeat.get('repeat_byweekday'), repeat.get('repeat_until'),
          category_tags.get('category_tags'), category_tags.get('classified_at'),
          category_tags.get('classification_error')),
-    )
-    get_db().commit()
+    ).rowcount
+    # Not on a replay, and not for categories chosen by hand. A spoken event is
+    # classified now on whatever was typed, not held for its clips: a clip that
+    # never arrives would otherwise leave it unclassified for good, and one that
+    # does reopens classification when its transcript lands (_append_description).
+    # Only an event with no words at all waits, having nothing to classify.
+    description = str(body.get('description') or '').strip()
+    if inserted and 'classified_at' not in category_tags and (title or description):
+        jobs.enqueue('calendar.classify', id, commit=False)
+    # Titled from the typed description for the same reason. A pending job still
+    # sees any transcript that lands before it runs, and a title is only ever
+    # filled while blank, so this never overrides one typed later.
+    if inserted and not title and description:
+        jobs.enqueue('calendar.title', id, commit=False)
+    db.commit()
     return jsonify({'id': id}), 201
+
+
+def _clip_count(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+# --- Event recordings ----------------------------------------------------------
+#
+# A clip spoken into the event form. The same contract as POST /api/food/recordings:
+# the client keeps the audio until this confirms it and replays on reconnect, so
+# the id is the client's and a replay is a no-op, checked before the file is read.
+#
+# The difference is the row the clip belongs to. A meal can be opened by its clip,
+# but an event needs a date, so only a client that sends one may open it — the web
+# composer, whose clip is rescued by the boot sweep if the composer died before
+# Save. The phone's outbox always sends the create first, and sends no date, so a
+# clip for an event deleted in the meantime gets a 404 and does not bring it back.
+
+def _transcribe_recording_bg(recording_id: str, event_id: str, path: str,
+                             *, now: bool = False) -> None:
+    """Transcribe one clip, fold it into the description, then let the model
+    finish what the words make possible: the title if it is still blank, and the
+    categories if nobody chose them. A failed transcription still classifies
+    whatever was typed."""
+    if not now:
+        jobs.enqueue('calendar.transcribe_recording', recording_id,
+                     {'event_id': event_id, 'path': path})
+        return
+
+    from backend.routes import stt as stt_routes
+
+    try:
+        p = calendar_media.resolve_stored_path(path)
+        if p is None or not p.is_file():
+            raise RuntimeError('The recording is missing')
+        text = stt_routes.transcribe_file(p)
+        status, error = 'done', None
+    except Exception as e:
+        text, status, error = None, 'error', str(e) or 'Failed'
+        print(f'Event clip transcription failed for {recording_id}: {e}')
+
+    db = get_db()
+    prior = db.execute(
+        'SELECT transcript FROM calendar_recordings WHERE id=?', (recording_id,)
+    ).fetchone()
+    updates = {'transcript_status': status, 'transcript_error': error}
+    if text is not None:
+        updates['transcript'] = text
+    build_update(db, 'calendar_recordings', updates, 'id=?', (recording_id,))
+    # Appended once per clip, so a re-run refreshes the clip's own text without
+    # pasting it into the event twice.
+    if text and not (prior and prior['transcript']):
+        _append_description(db, event_id, text, source=recording_id)
+    db.commit()
+
+    row = db.execute(
+        'SELECT title, description, classified_at FROM calendar_events WHERE id=?',
+        (event_id,),
+    ).fetchone()
+    if row is None:
+        return
+    title = (row['title'] or '').strip()
+    description = (row['description'] or '').strip()
+    if description and not title:
+        jobs.enqueue('calendar.title', event_id)
+    if (title or description) and row['classified_at'] is None:
+        jobs.enqueue('calendar.classify', event_id)
+
+
+def _append_description(db, event_id: str, text: str, *,
+                        source: str | None = None) -> None:
+    """After anything typed, a blank line between clips, as a meal's note.
+
+    New words are a new thing to classify, so the categories are reopened, as
+    a spoken edit reopens them. Unconditionally: categories ticked by hand are
+    stamped exactly like the classifier's, so the two cannot be told apart.
+
+    The appended words are speech, naming the clip (`source`) they came from,
+    so a re-transcription can replace exactly them; what was typed before them
+    keeps its author."""
+    row = db.execute(
+        'SELECT description FROM calendar_events WHERE id=?', (event_id,)
+    ).fetchone()
+    if row is None:
+        return
+    existing = (row['description'] or '').strip()
+    merged = f'{existing}\n\n{text}' if existing else text
+    authorship.record_change(db, 'calendar_events', event_id, 'description', merged,
+                             author=authorship.SPEECH, source=source)
+    db.execute(
+        'UPDATE calendar_events SET description=?, classified_at=NULL,'
+        ' classification_error=NULL WHERE id=?',
+        (merged, event_id),
+    )
+
+
+@bp.post('/recordings')
+def create_recording():
+    audio = request.files.get('audio')
+    if audio is None or not audio.filename:
+        return jsonify({'error': 'Missing audio file'}), 400
+    event_id = (request.form.get('id') or '').strip()
+    recording_id = (request.form.get('mediaId') or '').strip()
+    if not event_id or not recording_id:
+        return jsonify({'error': 'id and mediaId are required'}), 400
+
+    db = get_db()
+    existing = db.execute(
+        'SELECT id, transcript_status FROM calendar_recordings WHERE id=?',
+        (recording_id,),
+    ).fetchone()
+    if existing:
+        return jsonify({'id': event_id, 'recording': dict(existing)}), 201
+
+    ext = calendar_media.resolve_ext(audio.mimetype, audio.filename)
+    path = ext and calendar_media.recording_path(event_id, recording_id, ext)
+    if not path:
+        return jsonify({'error': 'Unsupported audio type'}), 400
+
+    if not db.execute('SELECT 1 FROM calendar_events WHERE id=?', (event_id,)).fetchone():
+        date = request.form.get('date')
+        if not date or not _valid_date(date):
+            return jsonify({'error': 'Not found'}), 404
+        db.execute(
+            'INSERT INTO calendar_events(id, title, date, created_at) VALUES (?,?,?,?)',
+            (event_id, '', date, int(time.time())),
+        )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    audio.save(path)
+    db.execute(
+        'INSERT INTO calendar_recordings(id, event_id, path, mime, transcript_status,'
+        ' created_at) VALUES (?,?,?,?,?,?)',
+        (recording_id, event_id, str(path), audio.mimetype, 'running', int(time.time())),
+    )
+    db.commit()
+    _transcribe_recording_bg(recording_id, event_id, str(path))
+    return jsonify({
+        'id': event_id,
+        'recording': {'id': recording_id, 'transcript_status': 'running'},
+    }), 201
 
 
 _FIELD_MAP = {
@@ -554,6 +716,7 @@ def delete_event(id):
     # Exceptions cascade — deleting the series takes its per-occurrence edits.
     db.execute('DELETE FROM calendar_events WHERE id=?', (id,))
     db.commit()
+    calendar_media.delete_event_dir(id)
     return jsonify({'success': True})
 
 
@@ -589,6 +752,7 @@ def end_series(id, date):
         # there is no history to protect and the row is just noise.
         db.execute('DELETE FROM calendar_events WHERE id=?', (id,))
         db.commit()
+        calendar_media.delete_event_dir(id)
         return jsonify({'success': True, 'deleted': True})
 
     db.execute('UPDATE calendar_events SET repeat_until=? WHERE id=?', (cutoff, id))

@@ -219,12 +219,16 @@ export function EventDetails({
         <div className="flex items-start justify-between mb-4">
           <div>
             <h2 className="text-xl font-semibold text-[var(--color-text)]">
-              <AuthoredText
-                text={event.title}
-                authorship={event.authorship}
-                field="title"
-                fallback="u"
-              />
+              {event.title ? (
+                <AuthoredText
+                  text={event.title}
+                  authorship={event.authorship}
+                  field="title"
+                  fallback="u"
+                />
+              ) : (
+                'Untitled'
+              )}
             </h2>
             <div className="text-sm text-[var(--color-text-muted)] mt-1">
               {new Date(shownDate + 'T00:00:00').toLocaleDateString('en-US', {

@@ -462,8 +462,88 @@ describe('creating a recurring event', () => {
   });
 });
 
+describe('a new event on today', () => {
+  const openToday = async () => {
+    const { container } = renderCalendar();
+    const cells = await waitFor(() => {
+      const found = container.querySelectorAll('[data-testid="month-cell"]');
+      expect(found).toHaveLength(42);
+      return found;
+    });
+    fireEvent.click(cells[14]); // Sunday 2026-02-15, the mocked today
+    fireEvent.click(screen.getByText('+ Add'));
+  };
+
+  it('ends now, and moving the start leaves the end alone', async () => {
+    await openToday();
+    const start = screen.getByLabelText('Start time') as HTMLInputElement;
+    const end = screen.getByLabelText('End time') as HTMLInputElement;
+    expect(start.value).toBe('11:30');
+    expect(end.value).toBe('12:00');
+    fireEvent.change(start, { target: { value: '09:00' } });
+    expect(end.value).toBe('12:00');
+  });
+
+  it('offers a microphone but still wants a title with no clip', async () => {
+    await openToday();
+    expect(screen.getByTestId('calendar-event-transcribe')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+  });
+
+  it('closing it with + Add drops the draft, so reopening starts afresh', async () => {
+    await openToday();
+    fireEvent.change(screen.getByLabelText('Start time'), {
+      target: { value: '09:00' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Event title'), {
+      target: { value: 'Abandoned' },
+    });
+    fireEvent.click(screen.getByText('+ Add'));
+    expect(screen.queryByLabelText('Start time')).toBeNull();
+    fireEvent.click(screen.getByText('+ Add'));
+    expect(
+      (screen.getByLabelText('Start time') as HTMLInputElement).value
+    ).toBe('11:30');
+    expect(
+      (screen.getByPlaceholderText('Event title') as HTMLInputElement).value
+    ).toBe('');
+  });
+
+  // Past midnight the 15th's day is on the 16th's date, so the slot opens
+  // there — but the date follows the start the event is saved with.
+  const saveAfterMidnight = async (start?: string) => {
+    vi.setSystemTime(new Date(2026, 1, 16, 1, 20));
+    await openToday();
+    if (start) {
+      fireEvent.change(screen.getByLabelText('Start time'), {
+        target: { value: start },
+      });
+    }
+    fireEvent.change(screen.getByPlaceholderText('Event title'), {
+      target: { value: 'Late' },
+    });
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(api.calendar.create).toHaveBeenCalled());
+    return vi.mocked(api.calendar.create).mock.calls[0][0];
+  };
+
+  it('saves a slot past midnight on the next date', async () => {
+    const payload = await saveAfterMidnight();
+    expect(payload).toMatchObject({ date: '2026-02-16', time: '00:50' });
+  });
+
+  it('saves on the day itself once the start moves back before midnight', async () => {
+    const payload = await saveAfterMidnight('22:00');
+    expect(payload).toMatchObject({ date: '2026-02-15', time: '22:00' });
+  });
+});
+
 // The `tags` column, `_SPLIT_COLUMNS` and the API type all shipped long before
 // anything could write one — the pills rendered on an event nobody could tag.
+
 describe('event tags', () => {
   it('sends the typed tags as a normalized array when creating an event', async () => {
     const { container } = renderCalendar();

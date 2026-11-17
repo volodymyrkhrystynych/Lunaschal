@@ -76,6 +76,12 @@ export interface RecordingFood {
   id: string;
 }
 
+/** The event a clip was spoken for, and the day to open it on if it is orphaned. */
+export interface RecordingCalendar {
+  id: string;
+  date: string;
+}
+
 /**
  * The chat message this clip *is* — the Chat tab's microphone.
  *
@@ -130,6 +136,8 @@ export interface StoredRecording {
   fic?: RecordingFic;
   /** Set when the clip is a food log capture; absent for journal recordings. */
   food?: RecordingFood;
+  /** Set when the clip was spoken into the event form. */
+  calendar?: RecordingCalendar;
   /** Set when the clip is a spoken chat message; absent for journal recordings. */
   chat?: RecordingChat;
 }
@@ -200,6 +208,7 @@ export function beginRecording(
     idea?: RecordingIdea;
     fic?: RecordingFic;
     food?: RecordingFood;
+    calendar?: RecordingCalendar;
     chat?: RecordingChat;
   } = {}
 ): Promise<StoredRecording> {
@@ -211,6 +220,7 @@ export function beginRecording(
     ...(opts.idea ? { idea: opts.idea } : {}),
     ...(opts.fic ? { fic: opts.fic } : {}),
     ...(opts.food ? { food: opts.food } : {}),
+    ...(opts.calendar ? { calendar: opts.calendar } : {}),
     ...(opts.chat ? { chat: opts.chat } : {}),
     startedAt: Date.now(),
     endedAt: null,

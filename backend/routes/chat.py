@@ -789,6 +789,8 @@ def _accept_calendar(db, data: dict, ctx: dict) -> dict:
     # before Accept (the card does not say which fields were).
     authorship.mark_ai(db, 'calendar_events', id, 'title', title)
     authorship.mark_ai(db, 'calendar_events', id, 'description', description)
+    if 'classified_at' not in category_cols:
+        jobs.enqueue('calendar.classify', id, commit=False)
     return {'id': id}
 
 
