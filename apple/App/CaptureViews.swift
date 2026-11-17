@@ -991,16 +991,18 @@ struct CaptureDetail: View {
             if let error = capture.lastError { Text(error).foregroundStyle(.orange) }
         }
         if let snapshot = capture.snapshot, !snapshot.content.isEmpty {
-            Section("Journal entry") { Text(snapshot.content).textSelection(.enabled) }
+            // Polished (the model's) once the server's text is no longer what was sent.
+            let polished = !(snapshot.rawContent ?? "").isEmpty && snapshot.rawContent != snapshot.content
+            Section("Journal entry") { Text(snapshot.content).authored(polished ? .ai : .user).textSelection(.enabled) }
         }
         if !capture.text.isEmpty {
-            Section("Original text") { Text(capture.text).textSelection(.enabled) }
+            Section("Original text") { Text(capture.text).authored(.user).textSelection(.enabled) }
         }
         if let raw = capture.snapshot?.rawContent, !raw.isEmpty, raw != capture.text {
-            Section("Server original text") { Text(raw).textSelection(.enabled) }
+            Section("Server original text") { Text(raw).authored(.user).textSelection(.enabled) }
         }
         if let transcript = capture.recordingTranscript?.transcript, !transcript.isEmpty {
-            Section("Recording transcript") { Text(transcript).textSelection(.enabled) }
+            Section("Recording transcript") { Text(transcript).authored(.speech).textSelection(.enabled) }
         }
         ForEach(capture.clips) { clip in
             if let url = try? model.store.clipURL(clip) {

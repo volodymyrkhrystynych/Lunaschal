@@ -4,6 +4,7 @@ import logging
 import threading
 from flask import Blueprint, jsonify, request, Response, send_file, stream_with_context
 from ulid import ULID
+from backend import authorship
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.weather import entry as entry_weather
 from backend.chat import storage as chat_storage
@@ -238,6 +239,7 @@ def _load_attachment(attachment_id: str):
 def _enrich_with_attachments(db, messages: list[dict]) -> list[dict]:
     if not messages:
         return messages
+    authorship.attach(db, 'messages', messages)
     ids = [m['id'] for m in messages]
     placeholders = ','.join('?' * len(ids))
     rows = db.execute(
@@ -496,7 +498,7 @@ MAX_AUDIO_BYTES = 100 * 1024 * 1024
 _UNSUPPORTED_AUDIO = 'Unsupported file type — audio only'
 
 
-def _append_message_text(db, message_id: str, text: str) -> None:
+def _append_message_text(db, message_id: str, text: str, *, source: str | None = None) -> None:
     """Add a clip's transcript to the end of a message.
 
     A blank line between clips, not a space — the same rule the food log's
@@ -510,6 +512,8 @@ def _append_message_text(db, message_id: str, text: str) -> None:
         return
     existing = (row['content'] or '').strip()
     merged = f'{existing}\n\n{text}' if existing else text
+    authorship.record_change(db, 'messages', message_id, 'content', merged,
+                             author=authorship.SPEECH, source=source)
     db.execute('UPDATE messages SET content=? WHERE id=?', (merged, message_id))
 
 
@@ -550,7 +554,7 @@ def _transcribe_recording_bg(attachment_id: str, message_id: str, path: str,
             updates['transcript'] = text
         build_update(db, 'chat_attachments', updates, 'id=?', (attachment_id,))
         if text is not None and first_time:
-            _append_message_text(db, message_id, text)
+            _append_message_text(db, message_id, text, source=attachment_id)
         db.commit()
 
         # Committed above, before the run starts: the reply is allowed to fail,
@@ -781,6 +785,10 @@ def _accept_calendar(db, data: dict, ctx: dict) -> dict:
          1 if all_day else 0, json.dumps(data.get('tags', [])),
          category_cols.get('category_tags'), category_cols.get('classified_at'), now),
     )
+    # Proposed by the assistant: its words, even where the card was tweaked
+    # before Accept (the card does not say which fields were).
+    authorship.mark_ai(db, 'calendar_events', id, 'title', title)
+    authorship.mark_ai(db, 'calendar_events', id, 'description', description)
     return {'id': id}
 
 
@@ -1270,6 +1278,11 @@ def _accept_writing_note(db, data: dict, ctx: dict) -> dict:
             content=data.get('content') or '', doc_type=data.get('docType'))
     except writing_notes.NoteRejected as e:
         raise _AcceptRejected(str(e)) from e
+    # Proposed by the discussion: the model's words, even if tweaked on the card.
+    made = db.execute('SELECT title, content FROM writing_context_docs WHERE id=?',
+                      (note_id,)).fetchone()
+    authorship.mark_ai(db, 'writing_context_docs', note_id, 'title', made['title'])
+    authorship.mark_ai(db, 'writing_context_docs', note_id, 'content', made['content'])
     return {'id': note_id}
 
 

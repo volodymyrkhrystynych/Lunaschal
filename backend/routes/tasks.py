@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 
-from backend import todo_storage
+from backend import authorship, todo_storage
 from backend.ai import jobs
 from backend.ai.service import InferencePaused, Preempted
 from backend.capture_time import optional_capture_time
@@ -343,7 +343,7 @@ def list_todos():
     todos = [row_to_dict(r) for r in rows]
     for t in todos:
         t['done'] = bool(t['done'])  # SQLite stores 0/1; the API contract is a boolean
-    return jsonify(todos)
+    return jsonify(authorship.attach(db, 'todos', todos))
 
 
 def _insert_todo_row(db, body: dict) -> tuple[str | None, str | None]:
@@ -377,6 +377,13 @@ def _insert_todo_row(db, body: dict) -> tuple[str | None, str | None]:
         (todo_id, title, todo_list, notes, due, repeat[0], repeat[1], priority, now, now),
     )
     return todo_id, None
+
+
+def _record_text_edits(db, table: str, row_id: str, fields: list, values: list) -> None:
+    """Who wrote a to-do's words, for the `fields`/`values` an update route
+    built; called before the UPDATE (backend/authorship.py's rule)."""
+    authorship.record_edits(db, table, row_id,
+                            {field.removesuffix('=?'): value for field, value in zip(fields, values)})
 
 
 @bp.post('/todos')
@@ -512,6 +519,7 @@ def update_todo(todo_id):
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
     if fields:
+        _record_text_edits(db, 'todos', todo_id, fields, values)
         fields.append('updated_at=?')
         values.extend([now, todo_id])
         db.execute(f'UPDATE todos SET {", ".join(fields)} WHERE id=?', values)
@@ -628,7 +636,7 @@ def list_chat_todos():
     todos = [row_to_dict(r) for r in rows]
     for t in todos:
         t['done'] = bool(t['done'])
-    return jsonify(todos)
+    return jsonify(authorship.attach(db, 'chat_todos', todos))
 
 
 @bp.post('/chat-todos')
@@ -720,6 +728,7 @@ def update_chat_todo(chat_todo_id):
 
     now = int(time.time())
     if fields:
+        _record_text_edits(db, 'chat_todos', chat_todo_id, fields, values)
         fields.append('updated_at=?')
         values.extend([now, chat_todo_id])
         db.execute(f'UPDATE chat_todos SET {", ".join(fields)} WHERE id=?', values)
@@ -788,6 +797,11 @@ def promote_chat_todo(chat_todo_id):
     todo_id, err = _insert_todo_row(db, request.json or {})
     if err:
         return jsonify({'error': err}), 400
+    # The bar row's words, and who wrote them, become the to-do's.
+    made = db.execute('SELECT title, notes FROM todos WHERE id=?', (todo_id,)).fetchone()
+    for field in ('title', 'notes'):
+        authorship.carry(db, 'todos', chat_todo_id, todo_id, field, made[field],
+                         from_table='chat_todos')
     db.execute('DELETE FROM chat_todos WHERE id=?', (chat_todo_id,))
     db.commit()
     return jsonify({'id': todo_id}), 201
@@ -828,7 +842,8 @@ def transcribe_todo():
 
 
 def _todo_from_speech(db, text: str, todo_id: str | None,
-                      said_at: int | None = None) -> tuple[str | None, str | None]:
+                      said_at: int | None = None, *,
+                      recording: str | None = None) -> tuple[str | None, str | None]:
     """Insert the to-do a spoken sentence describes; the caller commits.
 
     Shared by the synchronous route above and the recording job below, so a
@@ -844,9 +859,11 @@ def _todo_from_speech(db, text: str, todo_id: str | None,
         # Not waited out: a pause lasts hours and the to-do is wanted now. It is
         # made from the words below and sorted properly once the GPU is back.
         fields, paused = None, True
+    author = authorship.AI
     if fields is None:
         title, notes = split_title_notes(text)
         fields = {'title': title, 'notes': notes, 'priority': None, 'due': None}
+        author = authorship.SPEECH
 
     todo_id, err = _insert_todo_row(db, {
         'id': todo_id,
@@ -855,6 +872,14 @@ def _todo_from_speech(db, text: str, todo_id: str | None,
         'priority': fields.get('priority'),
         'due': _model_due(fields.get('due')),
     })
+    if todo_id and not err:
+        # The model's rewrite of what was said, or what was said itself (by the
+        # recording it came from, when one was kept) when it could not run.
+        made = db.execute('SELECT title, notes FROM todos WHERE id=?', (todo_id,)).fetchone()
+        source = recording if author == authorship.SPEECH else None
+        for field in ('title', 'notes'):
+            if made and made[field]:
+                authorship.mark(db, 'todos', todo_id, field, made[field], author, source)
     if paused and todo_id:
         # The row as the fallback left it, defaults included: the refine pass
         # changes only what is still exactly this.
@@ -912,6 +937,8 @@ def refine_spoken_todo(todo_id: str, payload: dict) -> None:
         'UPDATE todos SET title=?, notes=?, priority=?, due=?, updated_at=? WHERE id=?',
         (fields['title'], fields.get('notes'), priority, due, int(time.time()), todo_id),
     )
+    authorship.mark_ai(db, 'todos', todo_id, 'title', fields['title'])
+    authorship.mark_ai(db, 'todos', todo_id, 'notes', fields.get('notes'))
     db.commit()
 
 
@@ -1071,7 +1098,8 @@ def _transcribe_recording_bg(recording_id: str, *, now: bool = False) -> None:
         db.execute('UPDATE todo_recordings SET transcript=? WHERE id=?', (text, recording_id))
         db.commit()
 
-    _, err = _todo_from_speech(db, text, recording_id, row['captured_at'] or row['created_at'])
+    _, err = _todo_from_speech(db, text, recording_id, row['captured_at'] or row['created_at'],
+                               recording=recording_id)
     if err:
         db.rollback()
         _finish_recording(db, recording_id, 'error', err)
@@ -1105,7 +1133,10 @@ def todo_from_entry(entry_id: str) -> None:
     if not text:
         return
     # An entry's created_at is the clip's capture time (see the recording route).
-    _, err = _todo_from_speech(db, text, row['todo_id'], row['created_at'])
+    clip = db.execute("SELECT id FROM journal_attachments WHERE entry_id=? AND kind='audio'"
+                      ' ORDER BY position, created_at LIMIT 1', (entry_id,)).fetchone()
+    _, err = _todo_from_speech(db, text, row['todo_id'], row['created_at'],
+                               recording=clip['id'] if clip else None)
     if err:
         db.rollback()
         logger.warning('Making a to-do from journal entry %s failed: %s', entry_id, err)

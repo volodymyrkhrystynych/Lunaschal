@@ -159,6 +159,20 @@ Stages 1–3 are built: the split view, all three import kinds, the Notebook edi
 - 🟡 **Resume position** — saved for PDFs (page) and YouTube (seconds); archived web pages store none, because the sandboxed iframe's scroll offset can't be read.
 - ⬜ **Draggable divider** — the split is still fixed at half.
 
+## Text provenance — regenerating machine text
+
+Every tracked text field records who produced each part: typed (`u`), speech-to-text (`s`, naming the recording it came from), or AI (`a`). See `backend/authorship.py` and the "Every text field records who produced each part" bullet in CLAUDE.md. The point of recording it is that a better model can redo the machine parts later.
+
+- ✅ **Provenance recorded and shown**: spans on journal, food, spending, ideas, chat, to-dos, Writing, calendar, notes to self and learning cards; typed blue, speech-to-text teal, AI the normal colour; older recordings backfilled.
+- ⬜ **Re-transcribe with a newer STT model**: for each `s` span that names a recording, re-run speech-to-text on that recording and replace exactly that span. Typed (`u`) text, including the user's edits inside a transcript, is never touched. Afterwards, re-run what was derived from the raw text (polish, title, food/spending structuring) as AI writes. Needs:
+  - a dry-run that lists what would change, before writing anything;
+  - batch runs that can resume, as `llm_jobs` rows (P2, pausable);
+  - an old→new diff kept per span, so a worse model can be rolled back.
+  - Speech spans with no recording (a spoken calendar edit, a client-side `/todos/transcribe`) can't be redone and should be reported, not guessed at.
+- ⬜ **Regenerate AI text from its source**: re-polish entries and re-summarise with a newer LLM. Only spans marked `a` are rewritten, and user edits inside them are kept.
+- ⬜ **Close the attribution gaps**: OS keyboard dictation and the Writing editor's spoken words arrive as typing, because the client sends only text (it would have to send spans); goal-change journal entries are an app template counted as typed; a chat proposal card edited before Accept is counted entirely as AI.
+- ⬜ **Per-span colour in web text boxes**: the web Writing editors, the idea body and the chat-bar title are plain textareas, so each takes one colour. The iPhone Writing editor already colours per span.
+
 ## Bug fixing
 
 General stability pass — lots of small bugs to track down and fix. (Add specific known bugs here as they're identified.)

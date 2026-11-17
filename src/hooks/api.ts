@@ -1,5 +1,6 @@
 // Typed API client — replaces tRPC hooks
 
+import type { Authorship } from '../lib/authorship';
 import { reportFetchOutcome } from '../offline/onlineManager';
 import {
   recordingFilename,
@@ -69,6 +70,8 @@ export interface JournalEntry {
   content: string;
   rawContent: string | null;
   title: string | null;
+  /** Who wrote which part of `content` and `title`; see src/lib/authorship.ts. */
+  authorship?: Authorship;
   tags: string | null;
   curatedTags: string[];
   ficRefs?: FicRef[];
@@ -474,6 +477,8 @@ export interface CuratedTag {
 
 export interface CalendarEvent {
   id: string;
+  /** Who produced `title` and `description`; see src/lib/authorship.ts. */
+  authorship?: Authorship;
   title: string;
   description: string | null;
   date: string;
@@ -524,6 +529,8 @@ export interface CalendarRepeat {
 
 export interface LearningCard {
   id: string;
+  /** Who produced `question` and `answer`; see src/lib/authorship.ts. */
+  authorship?: Authorship;
   folderId: string | null;
   question: string;
   answer: string;
@@ -755,6 +762,8 @@ export interface ChatAttachment {
 
 export interface Message {
   id: string;
+  /** Who produced `content` (typed, dictated, or the assistant); see src/lib/authorship.ts. */
+  authorship?: Authorship;
   conversationId: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -1376,6 +1385,8 @@ export interface NotebookReviewState {
 
 export interface NoteToSelf {
   id: string;
+  /** Who produced `content`; see src/lib/authorship.ts. */
+  authorship?: Authorship;
   content: string;
   intervalDays: number;
   due: string;
@@ -1422,6 +1433,8 @@ export interface IdeaSummary {
   researchState: string | null;
   /** Which registered repository this idea is about; null for a plain product idea. */
   repoId: string | null;
+  /** Who wrote which part of `title` (and, on the detail, `content`); see src/lib/authorship.ts. */
+  authorship?: Authorship;
   createdAt: string;
   updatedAt: string;
 }
@@ -1656,6 +1669,8 @@ export interface WritingSaveResult {
 
 export interface WritingChapterSummary {
   id: string;
+  /** Who produced `title` (and, with the body, `content`); see src/lib/authorship.ts. */
+  authorship?: Authorship;
   projectId: string;
   title: string;
   position: number;
@@ -1671,6 +1686,8 @@ export interface WritingChapter extends WritingChapterSummary {
 
 export interface WritingNoteSummary {
   id: string;
+  /** Who produced `title` (and, with the body, `content`); see src/lib/authorship.ts. */
+  authorship?: Authorship;
   projectId: string;
   title: string;
   docType: 'character' | 'outline' | 'worldbuilding' | 'note';
@@ -1760,6 +1777,8 @@ export type RepeatUnit = 'day' | 'week' | 'month';
 
 export interface TodoItem {
   id: string;
+  /** Who produced `title` and `notes`; see src/lib/authorship.ts. */
+  authorship?: Authorship;
   title: string;
   done: boolean;
   completedAt: string | null;
@@ -1791,6 +1810,8 @@ export interface TodoPayload {
 // come back as suggestion cards on the morning briefing, never in the bar.
 export interface ChatTodoItem {
   id: string;
+  /** Who produced `title` and `notes`; see src/lib/authorship.ts. */
+  authorship?: Authorship;
   dayKey: string;
   title: string;
   notes: string | null;
@@ -2769,6 +2790,8 @@ export interface FoodMedia {
 
 export interface FoodEntry {
   id: string;
+  /** Who wrote which part of `notes`; see src/lib/authorship.ts. */
+  authorship?: Authorship;
   polishing?: boolean;
   rawContent: string | null;
   dish: string | null;
@@ -2790,6 +2813,8 @@ export interface FoodEntry {
 // A food entry shaped for the Journal feed.
 export interface FoodJournalItem {
   id: string;
+  /** Who wrote which part of `notes`; see src/lib/authorship.ts. */
+  authorship?: Authorship;
   dish: string | null;
   place: string | null;
   rating: number | null;
@@ -2808,6 +2833,8 @@ export type SpendingMedia = FoodMedia;
 
 export interface SpendingEntry {
   id: string;
+  /** Who wrote which part of `notes`; see src/lib/authorship.ts. */
+  authorship?: Authorship;
   /** 4am day key the purchase is filed under. */
   date: string;
   category: string | null;

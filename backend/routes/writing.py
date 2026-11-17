@@ -2,6 +2,7 @@ import re
 import time
 from flask import Blueprint, jsonify, request
 from ulid import ULID
+from backend import authorship
 from backend.ai.provider import is_ai_configured
 from backend.ai.writing import summarize_discussion
 from backend.day_boundary import day_key_for
@@ -108,8 +109,8 @@ def project_bundle(project_id):
     ).fetchall()
     return jsonify({
         'project': row_to_dict(project),
-        'chapters': [row_to_dict(r) for r in chapters],
-        'notes': [row_to_dict(r) for r in notes],
+        'chapters': authorship.attach(db, 'writing_chapters', [row_to_dict(r) for r in chapters]),
+        'notes': authorship.attach(db, 'writing_context_docs', [row_to_dict(r) for r in notes]),
     })
 
 
@@ -149,11 +150,12 @@ def delete_project(project_id):
 
 @bp.get('/projects/<project_id>/chapters')
 def list_chapters(project_id):
-    rows = get_db().execute(
+    db = get_db()
+    rows = db.execute(
         'SELECT id, project_id, title, position, revision, created_at, updated_at FROM writing_chapters WHERE project_id=? ORDER BY position ASC',
         (project_id,),
     ).fetchall()
-    return jsonify([row_to_dict(r) for r in rows])
+    return jsonify(authorship.attach(db, 'writing_chapters', [row_to_dict(r) for r in rows]))
 
 
 @bp.post('/projects/<project_id>/chapters')
@@ -207,10 +209,11 @@ def order_chapters(project_id):
 
 @bp.get('/chapters/<chapter_id>')
 def get_chapter(chapter_id):
-    row = get_db().execute('SELECT * FROM writing_chapters WHERE id=?', (chapter_id,)).fetchone()
+    db = get_db()
+    row = db.execute('SELECT * FROM writing_chapters WHERE id=?', (chapter_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(row_to_dict(row))
+    return jsonify(authorship.attach(db, 'writing_chapters', [row_to_dict(row)])[0])
 
 
 def _conflict_response(conflict: revisioned.DocumentConflict):
@@ -247,7 +250,8 @@ def update_chapter(chapter_id):
                                           _captured_at(body, now))
         _touch_project(db, row['project_id'], now)
         db.commit()
-    return jsonify({'success': True, 'revision': revision})
+    return jsonify({'success': True, 'revision': revision,
+                    'authorship': authorship.attach(get_db(), 'writing_chapters', [{'id': chapter_id}])[0].get('authorship')})
 
 
 @bp.get('/chapters/<chapter_id>/revisions')
@@ -268,7 +272,7 @@ def restore_chapter_revision(chapter_id, rev_id):
         return jsonify({'error': 'Not found'}), 404
     db.commit()
     row = db.execute('SELECT * FROM writing_chapters WHERE id=?', (chapter_id,)).fetchone()
-    return jsonify(row_to_dict(row))
+    return jsonify(authorship.attach(db, 'writing_chapters', [row_to_dict(row)])[0])
 
 
 @bp.delete('/chapters/<chapter_id>')
@@ -285,11 +289,12 @@ def delete_chapter(chapter_id):
 
 @bp.get('/projects/<project_id>/notes')
 def list_notes(project_id):
-    rows = get_db().execute(
+    db = get_db()
+    rows = db.execute(
         'SELECT id, project_id, title, doc_type, pinned, revision, created_at, updated_at FROM writing_context_docs WHERE project_id=? ORDER BY created_at ASC',
         (project_id,),
     ).fetchall()
-    return jsonify([row_to_dict(r) for r in rows])
+    return jsonify(authorship.attach(db, 'writing_context_docs', [row_to_dict(r) for r in rows]))
 
 
 @bp.post('/projects/<project_id>/notes')
@@ -317,10 +322,11 @@ def create_note(project_id):
 
 @bp.get('/notes/<doc_id>')
 def get_note(doc_id):
-    row = get_db().execute('SELECT * FROM writing_context_docs WHERE id=?', (doc_id,)).fetchone()
+    db = get_db()
+    row = db.execute('SELECT * FROM writing_context_docs WHERE id=?', (doc_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(row_to_dict(row))
+    return jsonify(authorship.attach(db, 'writing_context_docs', [row_to_dict(row)])[0])
 
 
 @bp.patch('/notes/<doc_id>')
@@ -356,7 +362,8 @@ def update_note(doc_id):
             return _conflict_response(e)
         _touch_project(db, row['project_id'], now)
         db.commit()
-    return jsonify({'success': True, 'revision': revision})
+    return jsonify({'success': True, 'revision': revision,
+                    'authorship': authorship.attach(get_db(), 'writing_context_docs', [{'id': doc_id}])[0].get('authorship')})
 
 
 @bp.get('/notes/<doc_id>/revisions')
@@ -377,7 +384,7 @@ def restore_note_revision(doc_id, rev_id):
         return jsonify({'error': 'Not found'}), 404
     db.commit()
     row = db.execute('SELECT * FROM writing_context_docs WHERE id=?', (doc_id,)).fetchone()
-    return jsonify(row_to_dict(row))
+    return jsonify(authorship.attach(db, 'writing_context_docs', [row_to_dict(row)])[0])
 
 
 @bp.delete('/notes/<doc_id>')
@@ -474,6 +481,9 @@ def summarize_conversation(conv_id):
         'INSERT INTO writing_context_docs(id, project_id, title, content, doc_type, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
         (note_id, conv['writing_project_id'], result['title'], result['content'], 'note', now, now),
     )
+    # A summary of the discussion, written by the model.
+    authorship.mark_ai(db, 'writing_context_docs', note_id, 'title', result['title'])
+    authorship.mark_ai(db, 'writing_context_docs', note_id, 'content', result['content'])
     db.commit()
     row = db.execute('SELECT * FROM writing_context_docs WHERE id=?', (note_id,)).fetchone()
     return jsonify(row_to_dict(row)), 201

@@ -25,6 +25,10 @@ public struct SpendingEntryRecord: Identifiable, Equatable {
     public let amountCents: Int?
     public let notes: String?
     public let rawContent: String?
+    /// `notes` cut by author (see `AuthoredText`), trimmed as `notes` is.
+    public let authoredNotes: AuthoredText?
+    /// `rawContent` cut by author: typed, or speech-to-text by recording.
+    public let authoredRaw: AuthoredText?
     public let createdAt: Date?
 
     public init?(record: SyncChange) {
@@ -39,6 +43,8 @@ public struct SpendingEntryRecord: Identifiable, Equatable {
         self.day = day
         merchant = text("merchant"); category = text("category")
         notes = text("notes"); rawContent = text("rawContent")
+        authoredNotes = record.authored("notes", fallback: .user)?.trimmed()
+        authoredRaw = record.authored("rawContent", fallback: .user)?.trimmed()
         amountCents = data["amountCents"]?.number.map { Int($0) }
         createdAt = JournalTimestamp.parse(data["createdAt"]?.string)
     }
@@ -52,6 +58,12 @@ public struct SpendingEntryRecord: Identifiable, Equatable {
     /// The words under the heading: the cleaned notes, or what was said while
     /// the structuring pass has not run.
     public var body: String? { notes ?? rawContent }
+
+    /// `body` cut by author: the notes, or the raw words, as the server
+    /// attributes them.
+    public var authoredBody: AuthoredText? {
+        notes != nil ? authoredNotes : authoredRaw
+    }
 }
 
 extension JournalAttachmentItem {

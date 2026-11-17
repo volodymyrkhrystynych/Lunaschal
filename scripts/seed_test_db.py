@@ -2862,6 +2862,41 @@ def seed_merged_prs(db):
                 entry_id, pr['merged_at'], pr['merged_at']))
 
 
+def seed_authorship(db):
+    """Text in the states the clients colour: typed, speech-to-text, AI, and AI
+    text the user then edited — written through backend/authorship.py exactly
+    as dictation, the polish pass and an edit would, so the demo shows real spans."""
+    from backend import authorship
+
+    walk = db.execute("SELECT id FROM journal_entries WHERE title='Long walk'").fetchone()['id']
+    raw = ('took the long way home along the river cold enough to see my breath '
+           'which always makes a walk feel like an event')
+    polished = ('Took the long way home along the river. Cold enough to see my breath, '
+                'which always makes a walk feel like an event rather than a chore.')
+    edited = polished.replace('along the river', 'along the Don river')
+    db.execute('UPDATE journal_entries SET raw_content=?, content=? WHERE id=?', (raw, polished, walk))
+    # Dictated, so the raw text is speech-to-text: teal, and what a better
+    # speech model would redo.
+    authorship.mark(db, 'journal_entries', walk, 'raw_content', raw, authorship.SPEECH)
+    authorship.mark_ai(db, 'journal_entries', walk, 'content', polished)
+    authorship.mark_ai(db, 'journal_entries', walk, 'title', 'Long walk')
+    authorship.record_edit(db, 'journal_entries', walk, 'content', edited)
+    db.execute('UPDATE journal_entries SET content=? WHERE id=?', (edited, walk))
+
+    # The pad thai: structured by the model, then one word corrected by hand.
+    meal = db.execute("SELECT id, notes FROM food_entries WHERE notes='Ordered the pad thai again.'").fetchone()
+    if meal:
+        authorship.mark_ai(db, 'food_entries', meal['id'], 'notes', meal['notes'])
+        fixed = 'Ordered the pad thai again, extra lime.'
+        authorship.record_edit(db, 'food_entries', meal['id'], 'notes', fixed)
+        db.execute('UPDATE food_entries SET notes=?, generated_notes=NULL WHERE id=?', (fixed, meal['id']))
+
+    idea = db.execute("SELECT id, content FROM ideas WHERE content != '' AND raw_content != content"
+                      ' ORDER BY created_at LIMIT 1').fetchone()
+    if idea:
+        authorship.mark_ai(db, 'ideas', idea['id'], 'content', idea['content'])
+
+
 def seed_coach(db):
     """Yesterday's final review and today's draft, a habit cue, and three
     excuses naming the same obstacle — so the review shows an excused item
@@ -2960,6 +2995,7 @@ def main() -> None:
     seed_notes(db)
     seed_goals(db)
     seed_merged_prs(db)
+    seed_authorship(db)
     seed_coach(db)
     seed_notebook(db, journal_ids)
     # After seed_notebook: a study source is bound to a note under the same

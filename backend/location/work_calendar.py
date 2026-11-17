@@ -152,9 +152,12 @@ def sync_day(db, day: str, fixes, *, now: float | None = None) -> dict | None:
     else:
         date = datetime.fromtimestamp(seen['arrived']).date().isoformat()
         title = f"At {seen['place']}"
+        from backend import authorship
         if event_id:
             db.execute('UPDATE calendar_events SET title=?, date=?, time=?, end_time=? WHERE id=?',
                        (title, date, start, end, event_id))
+            # Written by the app from the trail, not typed.
+            authorship.mark_ai(db, 'calendar_events', event_id, 'title', title)
         else:
             event_id = str(ULID())
             # Pre-classified as work, so the background classifier never
@@ -164,6 +167,9 @@ def sync_day(db, day: str, fixes, *, now: float | None = None) -> dict | None:
                 ' category_tags, classified_at) VALUES (?,?,?,?,?,?,?,?,?)',
                 (event_id, title, 'Recorded from your location trail.', date, start, end, stamp,
                  json.dumps(['work']), stamp))
+            authorship.mark_ai(db, 'calendar_events', event_id, 'title', title)
+            authorship.mark_ai(db, 'calendar_events', event_id, 'description',
+                               'Recorded from your location trail.')
         created = 1
     db.execute(
         '''INSERT INTO work_attendance (day_key, event_id, occurrence_date, created_event, place_name,

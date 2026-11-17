@@ -216,6 +216,11 @@ def _sync_repo(db, repo: str, token: str) -> tuple[int, bool]:
         )
         create_journal_entry(entry_text(pr, days), None, pr['merged_at'],
                              title=entry_title(pr), tags=TAGS, entry_id=entry_id)
+        # Composed by the app from GitHub, not typed: never the user's words.
+        from backend import authorship
+        authorship.mark_ai(db, 'journal_entries', entry_id, 'content', entry_text(pr, days))
+        authorship.mark_ai(db, 'journal_entries', entry_id, 'title', entry_title(pr))
+        db.commit()
         if pr['body'].strip():
             jobs.enqueue(SUMMARY_JOB, entry_id, {'repo': repo, 'number': pr['number']})
         added += 1
@@ -236,8 +241,11 @@ def summarize(entry_id: str, repo: str, number: int) -> None:
     days = json.loads(row['commit_days'] or '[]')
     summary = summarize_pr(row['title'], row['body'])
     if summary:
-        db.execute('UPDATE journal_entries SET content=?, updated_at=? WHERE id=? AND content=?',
-                   (entry_text(pr, days, summary), int(time.time()), entry_id, entry_text(pr, days)))
+        done = db.execute('UPDATE journal_entries SET content=?, updated_at=? WHERE id=? AND content=?',
+                          (entry_text(pr, days, summary), int(time.time()), entry_id, entry_text(pr, days)))
+        if done.rowcount:
+            from backend import authorship
+            authorship.mark_ai(db, 'journal_entries', entry_id, 'content', entry_text(pr, days, summary))
     db.execute('UPDATE merged_prs SET summarized_at=? WHERE repo=? AND number=?',
                (int(time.time()), repo, number))
     db.commit()
