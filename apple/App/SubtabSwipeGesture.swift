@@ -6,10 +6,13 @@ extension View {
     /// A sideways swipe anywhere on the page moves to the page beside it, in
     /// the order of the switch at the top (see `SubtabSwipe`). Off where the
     /// page has a sideways swipe of its own, as the calendar does for days.
+    ///
+    /// Animated like a tap on the switch, so its selection slides across
+    /// rather than jumping: the pages stay built for exactly that slide.
     func subtabSwipe<Page: Equatable>(_ page: Binding<Page>, pages: [Page], enabled: Bool = true) -> some View {
         gesture(SubtabSwipeGesture(enabled: enabled) { dx, dy in
             if let next = SubtabSwipe.destination(from: page.wrappedValue, in: pages, dx: dx, dy: dy) {
-                page.wrappedValue = next
+                withAnimation { page.wrappedValue = next }
             }
         })
     }
@@ -20,6 +23,15 @@ extension View {
 /// actions (a Daily log's Remove) and anything that scrolls sideways (the
 /// composer's photo strip). A DragGesture fired alongside both, so deleting a
 /// log also turned the page.
+///
+/// Known limitation: a row's swipe actions always win, so a left swipe that
+/// starts on a Daily row reveals its Remove and does not turn the page. Daily
+/// is the first page, so that left swipe is the only one it has (Daily → Entry);
+/// it works when started between or outside the rows, and the switch always
+/// works. Neither obvious way round it is safe: velocity cannot tell a page turn
+/// from a full swipe to delete (both are fast, and losing that one to a page
+/// turn is worse than the page not turning), and an edge region would sit
+/// exactly where a trailing swipe begins.
 struct SubtabSwipeGesture: UIGestureRecognizerRepresentable {
     let enabled: Bool
     let onSwipe: (Double, Double) -> Void
@@ -29,10 +41,11 @@ struct SubtabSwipeGesture: UIGestureRecognizerRepresentable {
     func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
         let pan = UIPanGestureRecognizer()
         pan.delegate = context.coordinator
-        // Left at UIKit's default on purpose: once a swipe is recognised the
-        // touch is taken from the row under it, which would otherwise read the
-        // lift as a tap and open the journal entry the swipe began on. A tap
-        // never moves far enough sideways to begin this pan, so it still lands.
+        // Set explicitly, although true is also UIKit's default, because this
+        // must hold: once a swipe is recognised the touch is taken from the row
+        // under it, which would otherwise read the lift as a tap and open the
+        // journal entry the swipe began on. A tap never moves far enough
+        // sideways to begin this pan, so it still lands.
         pan.cancelsTouchesInView = true
         pan.isEnabled = enabled
         return pan
@@ -67,8 +80,12 @@ struct SubtabSwipeGesture: UIGestureRecognizerRepresentable {
 
         /// A row's swipe actions win: this waits for that recognizer to give
         /// up, which it does when the row has nothing on that side. UIKit's
-        /// class for it is private, so it is found by name; if the name ever
-        /// changes, the page simply turns alongside the row again.
+        /// class for it is private, so it is matched by a "SwipeAction"
+        /// substring of its name. Failure mode: if a UIKit release renames that
+        /// class, nothing here fails to compile or warns; the page just turns
+        /// alongside the row's actions again, so swiping to delete a Daily log
+        /// also moves to Entry. `testDailySpendingSavesOfflineAndSwipesToDelete`
+        /// is the test that would notice.
         func gestureRecognizer(_ recognizer: UIGestureRecognizer,
                                shouldRequireFailureOf other: UIGestureRecognizer) -> Bool {
             String(describing: type(of: other)).contains("SwipeAction")

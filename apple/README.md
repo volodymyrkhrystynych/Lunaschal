@@ -122,7 +122,8 @@ what each device can currently do and which work remains device-only.
   tab), is the composer below. A sideways swipe moves to the page beside it, as
   it does between the Journal tab's **Calendar | Journal | Context**, where
   Journal is the middle default. The swipe stands aside for a row's swipe
-  actions and for anything that scrolls sideways, and on the Calendar page it
+  actions (so on Daily, a left swipe that starts on a log reveals Remove rather
+  than turning to Entry) and for anything that scrolls sideways, and on the Calendar page it
   still turns the day, so the switch is the way off it (`SubtabSwipe`,
   `SubtabSwipeGesture`; passed in the iPhone simulator).
   Capture and Daily show the same remaining count: one each for fewer than

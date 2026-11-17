@@ -206,7 +206,9 @@ struct CalendarPage: View {
         }
         .simultaneousGesture(DragGesture(minimumDistance: 40).onEnded { drag in
             // A sideways swipe pages the day, as a calendar's does.
-            guard dragging == nil, abs(drag.translation.width) > 80, abs(drag.translation.width) > 2 * abs(drag.translation.height) else { return }
+            // The same threshold as Capture's and Journal's page swipe.
+            guard dragging == nil,
+                  SubtabSwipe.isSideways(dx: drag.translation.width, dy: drag.translation.height) else { return }
             day = CalendarTimeline.addingDays(drag.translation.width < 0 ? 1 : -1, to: day)
         })
     }

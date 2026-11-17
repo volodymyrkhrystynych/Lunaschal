@@ -762,6 +762,9 @@ final class OfflineCaptureTests: XCTestCase {
         for _ in 0..<10 where !entry.exists || !entry.isHittable { app.swipeUp() }
         XCTAssertTrue(entry.exists, "The purchase survives a restart without a server")
         entry.swipeLeft()
+        // A row's swipe actions win over the page swipe; were the page to turn
+        // instead, the row would also vanish, so check the page directly.
+        XCTAssertTrue(app.segmentedControls.buttons["Daily"].isSelected, "the row's swipe, not the page's")
         if app.buttons["Delete"].exists { app.buttons["Delete"].tap() }
         XCTAssertTrue(entry.waitForNonExistence(timeout: settle))
     }
