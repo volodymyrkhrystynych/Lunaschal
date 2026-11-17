@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useDraftState } from '@/hooks/useDraftState';
 
@@ -28,6 +29,9 @@ export interface InlineEditableTextProps {
   /** Extra classes appended after the shared display classes (e.g. a
    *  line-through + muted color for a completed row). */
   displayClassName?: string;
+  /** What to show in place of `value` while not editing, e.g. the text
+   *  coloured by who wrote it. Editing always starts from `value`. */
+  display?: ReactNode;
   /** Overrides the shared input classes entirely, for a call site that needs
    *  different styling. Defaults to the classes both current sites share. */
   inputClassName?: string;
@@ -66,6 +70,7 @@ export function InlineEditableText({
   onStopEdit,
   onSave,
   displayClassName = '',
+  display,
   inputClassName = BASE_INPUT_CLASSES,
   stopClickPropagation = false,
   draftKey,
@@ -117,7 +122,7 @@ export function InlineEditableText({
       }}
       className={`${BASE_DISPLAY_CLASSES} ${displayClassName}`.trim()}
     >
-      {value}
+      {display ?? value}
     </span>
   );
 }

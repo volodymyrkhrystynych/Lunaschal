@@ -14,6 +14,7 @@ import time
 
 from ulid import ULID
 
+from backend import authorship
 from backend.day_boundary import day_key_for
 from backend.writing import revisioned
 
@@ -50,9 +51,10 @@ def snapshot(db, chapter_id: str, *, source: str, message_id: str | None = None,
     revision_id = str(ULID())
     db.execute(
         'INSERT INTO writing_chapter_revisions'
-        '(id, chapter_id, title, content, source, message_id, created_at)'
-        ' VALUES (?,?,?,?,?,?,?)',
-        (revision_id, chapter_id, row['title'], row['content'], source, message_id, now),
+        '(id, chapter_id, title, content, source, message_id, created_at, spans)'
+        ' VALUES (?,?,?,?,?,?,?,?)',
+        (revision_id, chapter_id, row['title'], row['content'], source, message_id, now,
+         authorship.snapshot(db, 'writing_chapters', chapter_id)),
     )
     return revision_id
 
@@ -62,7 +64,7 @@ def restore(db, chapter_id: str, revision_id: str) -> bool:
     itself undoable. False when either does not exist."""
     with revisioned.LOCK:
         revision = db.execute(
-            'SELECT title, content FROM writing_chapter_revisions WHERE id=? AND chapter_id=?',
+            'SELECT title, content, spans FROM writing_chapter_revisions WHERE id=? AND chapter_id=?',
             (revision_id, chapter_id),
         ).fetchone()
         if revision is None:
@@ -70,6 +72,8 @@ def restore(db, chapter_id: str, revision_id: str) -> bool:
         now = int(time.time())
         if snapshot(db, chapter_id, source='restore', now=now) is None:
             return False
+        authorship.restore(db, 'writing_chapters', chapter_id, revision['spans'],
+                           {'title': revision['title'], 'content': revision['content']})
         db.execute(
             'UPDATE writing_chapters SET title=?, content=?, revision=revision+1, updated_at=?'
             ' WHERE id=?',
@@ -131,6 +135,9 @@ def apply_update(db, project_id: str, *, chapter_id: str, mode: str, content: st
             new = current.replace(passage, content, 1)
         now = int(time.time())
         revision_id = snapshot(db, chapter_id, source='accept', message_id=message_id, now=now)
+        # Only what the proposal added or replaced is the model's.
+        authorship.record_change(db, 'writing_chapters', chapter_id, 'content', new,
+                                 author=authorship.AI)
         db.execute(
             'UPDATE writing_chapters SET content=?, revision=revision+1, updated_at=? WHERE id=?',
             (new, now, chapter_id),

@@ -149,20 +149,21 @@ INSERT INTO agent_task_events (id, task_id, seq, kind, created_at) VALUES ('e1',
 """
 
 
-def test_an_older_table_is_rebuilt_to_accept_questions(tmp_path):
+def test_an_older_table_is_rebuilt_to_accept_questions_and_finishing(tmp_path):
     import sqlite3
     db = sqlite3.connect(tmp_path / 'old.db', isolation_level=None)
     db.execute('PRAGMA foreign_keys=ON')
     db.executescript(OLD_AGENT_TASKS)
 
-    connection._ensure_agent_task_ask(db)
-    connection._ensure_agent_task_ask(db)  # idempotent
+    connection._ensure_agent_task_checks(db)
+    connection._ensure_agent_task_checks(db)  # idempotent
 
     # The rows survived, and the cascade did not take the event log with the DROP.
     assert db.execute("SELECT status, phase, plan FROM agent_tasks").fetchall() == [
         ('done', 'build', '1. fix')]
     assert db.execute('SELECT COUNT(*) FROM agent_task_events').fetchone()[0] == 1
     db.execute("UPDATE agent_tasks SET status='answered', phase='ask'")
+    db.execute("UPDATE agent_tasks SET status='finished', phase='finish'")
     cols = {r[1] for r in db.execute('PRAGMA table_info(agent_tasks)')}
     assert {'summary', 'session_id', 'pending_input'} <= cols
     indexes = {r[1] for r in db.execute("PRAGMA index_list('agent_tasks')")}

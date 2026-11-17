@@ -29,6 +29,10 @@ public struct CalendarEvent: Hashable {
     public var repeatInterval: Int
     public var repeatByweekday: String?
     public var repeatUntil: String?
+    /// Who produced the title and description: typed, the assistant, the
+    /// app itself, or a spoken sentence kept as it was heard.
+    public var authoredTitle: AuthoredText?
+    public var authoredDescription: AuthoredText?
 
     public init(id: String, title: String, description: String? = nil, date: String, time: String? = nil,
                 endTime: String? = nil, allDay: Bool = false, tags: [String] = [], categoryTags: [String] = [],
@@ -50,6 +54,8 @@ public struct CalendarEvent: Hashable {
                   repeatFreq: data["repeatFreq"]?.string,
                   repeatInterval: max(1, Int(data["repeatInterval"]?.number ?? 1)),
                   repeatByweekday: data["repeatByweekday"]?.string, repeatUntil: data["repeatUntil"]?.string)
+        authoredTitle = record.authored("title", fallback: .user)
+        authoredDescription = record.authored("description", fallback: .user)
     }
 
     public var isSeries: Bool { CalendarExpansion.frequencies.contains(repeatFreq ?? "") }

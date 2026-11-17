@@ -54,6 +54,7 @@ extension JournalAPI {
     }
 
     public func continueCodeTask(_ id: String) async throws -> CodeTask { try await codeAction(id, "continue") }
+    public func finishCodeTask(_ id: String) async throws -> CodeTask { try await codeAction(id, "finish") }
     public func cancelCodeTask(_ id: String) async throws -> CodeTask { try await codeAction(id, "cancel") }
     public func discardCodeTask(_ id: String) async throws -> CodeTask { try await codeAction(id, "discard") }
     /// Pushes `agent/<id>` as the machine account and opens the pull request.

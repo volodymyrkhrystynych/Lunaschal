@@ -158,6 +158,7 @@ struct CalendarPage: View {
                 ForEach(plan.allDay) { occurrence in
                     Button { opened = occurrence } label: {
                         Text(occurrence.event.title.isEmpty ? "Untitled" : occurrence.event.title)
+                            .foregroundStyle(occurrence.event.titleColor)
                             .font(.caption).padding(.horizontal, 10).padding(.vertical, 5)
                             .background(Capsule().fill(Color.accentColor.opacity(0.15)))
                     }
@@ -395,7 +396,7 @@ private struct EventLine: View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(alignment: .lastTextBaseline, spacing: 3) {
                 Text(event.title.isEmpty ? "Untitled" : event.title)
-                    .font(Font(eventTitleFont)).foregroundStyle(.primary).lineLimit(2)
+                    .font(Font(eventTitleFont)).foregroundStyle(event.titleColor).lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 if item.occurrence.isRecurring { Image(systemName: "repeat").font(.system(size: 9)).foregroundStyle(.secondary) }
                 if pending { Image(systemName: "icloud.slash").font(.system(size: 9)).foregroundStyle(.secondary) }
@@ -963,8 +964,8 @@ private struct CalendarEventDetail: View {
                     Label("Saved on device · Waiting to sync", systemImage: "icloud.slash").foregroundStyle(.secondary)
                 }
             }
-            if let description = event.description, !description.isEmpty {
-                Section("Description") { Text(description).textSelection(.enabled) }
+            if let description = event.authoredDescriptionText {
+                Section("Description") { AuthoredTextView(text: description).textSelection(.enabled) }
             }
             if !event.tags.isEmpty {
                 Section("Tags") { Text(event.tags.joined(separator: ", ")) }

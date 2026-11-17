@@ -236,6 +236,7 @@ struct WritingTextEditor: UIViewRepresentable {
         view.accessibilityIdentifier = "writing-editor"
         view.onSave = { [weak model] in Task { await model?.sync() } }
         view.text = model.text
+        Self.paint(view, model)
         view.inputAccessoryView = context.coordinator.makeBar(for: view)
         model.textView = view
         let cursor = min(model.cursor, view.text.utf16.count)
@@ -250,9 +251,34 @@ struct WritingTextEditor: UIViewRepresentable {
             // Only a change that came from elsewhere: a sync, or a restore.
             let selection = view.selectedRange
             view.text = model.text
+            Self.paint(view, model)
             view.selectedRange = NSRange(location: min(selection.location, view.text.utf16.count), length: 0)
         }
         context.coordinator.update(words: model.words, isRecording: isRecording)
+    }
+
+    /// Colours the text by who produced it (Theme.swift). While the editor
+    /// shows exactly the server's text, its spans say: an accepted proposal in
+    /// the normal colour, typing in blue. A draft not yet saved back has no
+    /// spans for it here and starts as typed. Either way, whatever is typed
+    /// from now on is blue, because `typingAttributes` says so and UIKit keeps
+    /// each character's colour through later edits around it.
+    static func paint(_ view: UITextView, _ model: WritingEditorModel) {
+        let font = view.font ?? .preferredFont(forTextStyle: .body)
+        let typed = UIColor(Color.userText)
+        let painted = NSMutableAttributedString(string: view.text ?? "",
+                                                attributes: [.font: font, .foregroundColor: typed])
+        if let authored = model.document?.authoredServerContent, authored.text == view.text {
+            var location = 0
+            for run in authored.runs {
+                let length = run.text.utf16.count
+                painted.addAttribute(.foregroundColor, value: UIColor(run.author.color),
+                                     range: NSRange(location: location, length: length))
+                location += length
+            }
+        }
+        view.attributedText = painted
+        view.typingAttributes = [.font: font, .foregroundColor: typed]
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {

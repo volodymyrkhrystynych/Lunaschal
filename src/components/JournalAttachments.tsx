@@ -431,7 +431,9 @@ function WebPageCard({ a }: { a: JournalAttachment }) {
                 : 'text-[var(--color-error,#f87171)]'
             }
           >
-            {login ? 'Needs login — not archived' : 'Could not archive this page.'}
+            {login
+              ? 'Needs login — not archived'
+              : 'Could not archive this page.'}
           </span>
           <RetryButton id={a.id} />
         </div>
@@ -450,7 +452,9 @@ function WebPageCard({ a }: { a: JournalAttachment }) {
         onClick={() => setReading(true)}
         disabled={!a.url}
         className="relative block w-full rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors disabled:cursor-not-allowed text-left"
-        title={a.url ? 'Read the archived copy' : 'The archived file is missing'}
+        title={
+          a.url ? 'Read the archived copy' : 'The archived file is missing'
+        }
       >
         {a.thumbnailUrl ? (
           <img
@@ -460,7 +464,10 @@ function WebPageCard({ a }: { a: JournalAttachment }) {
             className="w-full max-h-72 object-cover object-top bg-black"
           />
         ) : (
-          <div className="w-full py-10 bg-black/40 text-center text-2xl" aria-hidden="true">
+          <div
+            className="w-full py-10 bg-black/40 text-center text-2xl"
+            aria-hidden="true"
+          >
             📄
           </div>
         )}
@@ -498,7 +505,9 @@ function WebPageCard({ a }: { a: JournalAttachment }) {
           </div>
           <div className="flex-1 min-h-0">
             <Suspense
-              fallback={<div className="p-4 text-sm text-white/70">Opening…</div>}
+              fallback={
+                <div className="p-4 text-sm text-white/70">Opening…</div>
+              }
             >
               <PdfViewer fileUrl={a.url} />
             </Suspense>
@@ -685,16 +694,19 @@ function AttachmentDescription({
   descriptionKind,
   label,
   children,
+  textClassName,
 }: {
   attachmentId: string;
   descriptionKind: 'image' | 'recording' | 'transcript';
   label: string;
   children: string;
+  textClassName?: string;
 }) {
   return (
     <CollapsibleText
       storageKey={`${DESCRIPTION_SEEN_KEY_PREFIX}${attachmentId}:${descriptionKind}`}
       label={label}
+      textClassName={textClassName}
     >
       {children}
     </CollapsibleText>
@@ -992,6 +1004,11 @@ function AttachmentRow({
           attachmentId={a.id}
           descriptionKind="transcript"
           label={a.kind === 'webpage' ? 'Page text' : 'Transcript'}
+          // Speech-to-text of the user's recording; a page or a YouTube
+          // video's words are not theirs.
+          textClassName={
+            a.kind === 'webpage' || a.kind === 'youtube' ? '' : 'text-speech'
+          }
         >
           {a.transcript}
         </AttachmentDescription>

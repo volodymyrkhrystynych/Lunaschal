@@ -144,6 +144,7 @@ final class CodeModel: ObservableObject {
         await act(id, "message") { try await $0.sendCodeMessage(id, text: text) }
     }
     func resume(_ id: String) async { await act(id, "continue") { try await $0.continueCodeTask(id) } }
+    func finish(_ id: String) async { await act(id, "finish") { try await $0.finishCodeTask(id) } }
     func cancel(_ id: String) async { await act(id, "cancel") { try await $0.cancelCodeTask(id) } }
     func discard(_ id: String) async { await act(id, "discard") { try await $0.discardCodeTask(id) } }
     func push(_ id: String) async { await act(id, "push") { try await $0.pushCodeTask(id) } }

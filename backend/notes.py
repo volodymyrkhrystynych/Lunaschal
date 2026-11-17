@@ -44,19 +44,25 @@ def create_note(content: str, now: int | None = None) -> str:
 
 
 def get_note(note_id: str) -> dict | None:
-    row = get_db().execute(
+    db = get_db()
+    row = db.execute(
         'SELECT * FROM notes_to_self WHERE id=?', (note_id,)
     ).fetchone()
-    return row_to_dict(row) if row else None
+    if not row:
+        return None
+    from backend import authorship
+    return authorship.attach(db, 'notes_to_self', [row_to_dict(row)])[0]
 
 
 def list_due(now: int | None = None, limit: int = 20) -> list[dict]:
     now = now if now is not None else int(time.time())
-    rows = get_db().execute(
+    db = get_db()
+    rows = db.execute(
         'SELECT * FROM notes_to_self WHERE due<=? ORDER BY due LIMIT ?',
         (now, limit),
     ).fetchall()
-    return [row_to_dict(r) for r in rows]
+    from backend import authorship
+    return authorship.attach(db, 'notes_to_self', [row_to_dict(r) for r in rows])
 
 
 def dismiss_note(note_id: str, now: int | None = None) -> dict | None:
@@ -99,6 +105,8 @@ def edit_note(note_id: str, content: str, now: int | None = None) -> dict | None
             ' VALUES (?,?,?,?)',
             (str(ULID()), note_id, row['content'], now),
         )
+        from backend import authorship
+        authorship.record_edit(db, 'notes_to_self', note_id, 'content', content)
         db.execute(
             'UPDATE notes_to_self SET content=?, updated_at=? WHERE id=?',
             (content, now, note_id),

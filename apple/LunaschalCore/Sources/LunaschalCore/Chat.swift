@@ -36,13 +36,20 @@ public struct ChatMessage: Codable, Equatable, Identifiable {
     public let attachments: [ChatAttachment]?
     public let createdAt: String
     public let finishedAt: String?
+    /// Who produced `content` (typed, dictated, or the assistant); see `AuthoredText`.
+    public let authorship: [String: JSONValue]?
 
     public init(id: String, role: String, content: String, metadata: String? = nil, status: String? = nil,
                 error: String? = nil, rawContent: String? = nil, attachments: [ChatAttachment]? = nil,
-                createdAt: String, finishedAt: String? = nil) {
+                createdAt: String, finishedAt: String? = nil, authorship: [String: JSONValue]? = nil) {
         self.id = id; self.role = role; self.content = content; self.metadata = metadata; self.status = status
         self.error = error; self.rawContent = rawContent; self.attachments = attachments
-        self.createdAt = createdAt; self.finishedAt = finishedAt
+        self.createdAt = createdAt; self.finishedAt = finishedAt; self.authorship = authorship
+    }
+
+    /// `content` cut by author: a dictated message's transcript is speech-to-text.
+    public var authoredContent: AuthoredText? {
+        AuthoredText.field(content, authorship, "content", fallback: role == "user" ? .user : .ai)
     }
 
     public var meta: ChatMeta { ChatMeta(metadata) }
@@ -470,11 +477,19 @@ public struct ChatTodo: Codable, Equatable, Identifiable {
     public let sourceId: String?
     /// One line on why it is on today's plan.
     public let reason: String?
+    public let authorship: [String: JSONValue]?
 
     public init(id: String, title: String, notes: String?, due: String?, priority: Int, done: Bool,
-                sourceType: String? = nil, sourceId: String? = nil, reason: String? = nil) {
+                sourceType: String? = nil, sourceId: String? = nil, reason: String? = nil,
+                authorship: [String: JSONValue]? = nil) {
         self.id = id; self.title = title; self.notes = notes; self.due = due; self.priority = priority; self.done = done
-        self.sourceType = sourceType; self.sourceId = sourceId; self.reason = reason
+        self.sourceType = sourceType; self.sourceId = sourceId; self.reason = reason; self.authorship = authorship
+    }
+
+    /// The bar is mostly the assistant's; a row restating your own to-do is yours.
+    public var authoredTitle: AuthoredText? {
+        let restated = ["todo", "daily", "goal"].contains(sourceType ?? "")
+        return AuthoredText.field(title, authorship, "title", fallback: restated ? .user : .ai)
     }
 
     /// Tied to a to-do or habit: there is nothing to send to the permanent

@@ -1,3 +1,4 @@
+import { cardAuthored } from '@/lib/authorship';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type LearningCard } from '../../hooks/api';
@@ -165,13 +166,19 @@ export function Browse({ folderId, tag, onSelectTag }: Props) {
                     Question
                   </div>
                   <div className="text-[var(--color-text)] mb-4 line-clamp-3">
-                    <MessageMarkdown content={card.question} />
+                    <MessageMarkdown
+                      content={card.question}
+                      authored={cardAuthored(card, 'question')}
+                    />
                   </div>
                   <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
                     Answer
                   </div>
                   <div className="text-[var(--color-text)] mb-4 line-clamp-3">
-                    <MessageMarkdown content={card.answer} />
+                    <MessageMarkdown
+                      content={card.answer}
+                      authored={cardAuthored(card, 'answer')}
+                    />
                   </div>
                 </>
               )}

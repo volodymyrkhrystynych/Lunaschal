@@ -152,8 +152,32 @@ final class CodeAgentTests: XCTestCase {
                         "planning": "Planning", "awaiting_plan": "Plan ready",
                         "running": "Working", "needs_input": "Has a question", "testing": "Running tests",
                         "done": "Ready to review", "interrupted": "Interrupted", "error": "Failed",
-                        "cancelled": "Cancelled", "pushed": "Pushed", "discarded": "Discarded"]
+                        "cancelled": "Cancelled", "pushed": "Pushed", "discarded": "Discarded",
+                        "finished": "Finished"]
         for (status, label) in expected { XCTAssertEqual(CodeTaskStatus.label(status), label, status) }
+    }
+
+    func testOnlyAStoppedTaskCanBeFinishedAndAFinishedOneIsClosed() {
+        func task(_ status: String, _ phase: String = "build", baseSha: String? = "b") -> CodeTask {
+            CodeTask(id: "T", repoId: "R", title: "t", prompt: "p", harness: "pi", status: status, phase: phase,
+                     summary: "In y.py.", baseSha: baseSha)
+        }
+        XCTAssertTrue(task("interrupted").canFinish)
+        XCTAssertTrue(task("error", "ask").canFinish)
+        for status in ["done", "answered", "needs_input", "running", "queued", "finished"] {
+            XCTAssertFalse(task(status).canFinish, status)
+        }
+        let finished = task("finished", "ask")
+        XCTAssertTrue(finished.isClosed)
+        XCTAssertFalse(CodeTaskStatus.needsYou.contains(finished.status))
+        XCTAssertFalse(finished.canMessage || finished.canDiscard || finished.canPlanFromAnswer)
+        XCTAssertTrue(task("error").finishExplanation.contains("committed and tested"))
+        XCTAssertTrue(task("error", "ask").finishExplanation.hasPrefix("Close this task"))
+        // The server closes a build with no clone at once, testing nothing.
+        XCTAssertTrue(task("error", baseSha: nil).finishExplanation.hasPrefix("Close this task"))
+        for status in ["interrupted", "error", "done", "running", "finished"] {
+            XCTAssertEqual(task(status).canFinish, task(status).canContinue, status)
+        }
     }
 
     func testUnifiedDiffParsesFilesHunksAndLineNumbers() {
