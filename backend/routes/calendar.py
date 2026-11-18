@@ -4,7 +4,7 @@ import time
 from datetime import date as dt, datetime, timedelta
 from flask import Blueprint, jsonify, request
 from ulid import ULID
-from backend import authorship, calendar_media, sleep
+from backend import activity_state, authorship, calendar_media, sleep
 from backend.ai import jobs
 from backend.ai.calendar import EVENT_CATEGORIES
 from backend.calendar_query import events_in_range
@@ -225,6 +225,15 @@ def get_reading(date):
         'startedAt': max(start, row['started_at']),
         'endedAt': min(end, row['ended_at']),
     } for row in rows])
+
+
+@bp.get('/activity/<date>')
+def get_activity(date):
+    """Work / leisure / mix across the waking day, the rail beside reading's.
+    Work that overlaps reading comes back as mix."""
+    if not _valid_date(date):
+        return jsonify({'error': 'invalid date'}), 400
+    return jsonify(activity_state.day_spans(get_db(), date))
 
 
 @bp.put('/sleep/<date>')

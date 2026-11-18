@@ -2,48 +2,6 @@ import AppIntents
 import Foundation
 import LunaschalCore
 
-/// The two timers a button can start. A break only ever follows focus.
-enum TimerChoice: String, AppEnum {
-    case focus, timeout
-
-    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Timer"
-    static let caseDisplayRepresentations: [TimerChoice: DisplayRepresentation] = [
-        .focus: "Focus 25", .timeout: "Timeout 10",
-    ]
-
-    var kind: PomodoroKind { self == .focus ? .work : .timeout }
-    var title: String { self == .focus ? "Focus" : "Timeout" }
-
-    /// The run this button owns: focus owns its breaks, since pressing Focus
-    /// during one should show the timer, not start another.
-    func owns(_ kind: PomodoroKind) -> Bool {
-        self == .focus ? kind != .timeout : kind == .timeout
-    }
-    func owns(_ run: PomodoroTimer.Run) -> Bool { owns(run.kind) }
-}
-
-/// Focus or Timeout from Control Center, the Smart Stack or the Action
-/// button. Starts at once with the app left asleep; pressed again while a
-/// run is going (or waiting for Continue / Break), it opens the timer.
-struct StartTimerIntent: AppIntent {
-    static let title: LocalizedStringResource = "Start timer"
-    static let supportedModes: IntentModes = [.background, .foreground(.dynamic)]
-
-    @Parameter(title: "Timer") var timer: TimerChoice
-
-    init() {}
-    init(_ timer: TimerChoice) { self.timer = timer }
-
-    func perform() async throws -> some IntentResult {
-        let (_, press, _) = try PomodoroEngine.standard().apply { $0.press(timer.kind) }
-        if press == .alreadyGoing {
-            PomodoroEngine.requestOpen(.timer)
-            try await continueInForeground(alwaysConfirm: false)
-        }
-        return .result()
-    }
-}
-
 /// What a recording button makes.
 enum RecordingChoice: String, AppEnum {
     case record, transcribe, todo

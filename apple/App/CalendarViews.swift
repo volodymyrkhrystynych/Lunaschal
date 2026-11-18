@@ -84,12 +84,21 @@ struct CalendarPage: View {
         }
         .task(id: day) {
             await model.refreshReading(day)
+            await model.refreshActivity(day)
             await model.refreshSleep(day)
         }
         .onDisappear { dragMode = .off; dragging = nil }
     }
 
     private var bands: [SleepBand] { model.sleepDays[day].map { CalendarSleep.bands($0) } ?? [] }
+    private var activity: ActivityRail? {
+        guard let spans = model.activityDays[day], !spans.isEmpty else { return nil }
+        return CalendarActivity.rail(day: day, sleep: model.sleepDays[day], spans: spans)
+    }
+    /// How far the reading rail stands in from the edge: the activity rail's
+    /// width when there is one, since that rail holds the edge.
+    private var readingInset: CGFloat { activity == nil ? 0 : activityRailWidth + 2 }
+
     private var reading: ReadingRail? {
         guard let spans = model.readingDays[day], !spans.isEmpty else { return nil }
         return CalendarReading.rail(day: day, sleep: model.sleepDays[day], spans: spans,
@@ -103,7 +112,7 @@ struct CalendarPage: View {
         let width = Double(timelineWidth)
         guard width > 0 else { return ([:], [:]) }
         let railed = reading?.spans ?? []
-        let right = railed.isEmpty ? width : width - Double(readingRailWidth + 2)
+        let right = width - Double(readingInset) - (railed.isEmpty ? 0 : Double(readingRailWidth + 2))
         let lineBoxes = plan.timed.map { item -> (top: Double, bottom: Double) in
             let top = Double(CGFloat(item.startMinutes) * scale)
             return (top, top + Double(max(minLineLength, CGFloat(item.endMinutes - item.startMinutes) * scale)))
@@ -192,7 +201,12 @@ struct CalendarPage: View {
                         ReadingRailView(rail: reading, scale: scale, labels: readingLabels, widths: widths.readings) {
                             readingLabels.toggle()
                         }
+                        .padding(.trailing, readingInset)
                         .allowsHitTesting(dragging == nil)
+                    }
+                    if let activity {
+                        ActivityRailView(rail: activity, scale: scale)
+                            .allowsHitTesting(false)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -422,6 +436,57 @@ private struct EventLine: View {
 }
 
 private let readingRailWidth: CGFloat = 22
+private let activityRailWidth: CGFloat = 16
+
+/// Work, leisure or mix, as switched on the Watch or from Capture: a rail on
+/// the far right edge, beside the reading rail and bounded like it. Work that
+/// overlapped reading arrives from the server as mix, striped in both colours.
+private struct ActivityRailView: View {
+    let rail: ActivityRail
+    let scale: CGFloat
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Capsule().fill(Color.primary.opacity(0.12)).frame(width: 4)
+            ForEach(rail.segments) { segment in
+                stripes(segment.state)
+                    .frame(width: 8, height: max(2, CGFloat(segment.minutes.upperBound - segment.minutes.lowerBound) * scale))
+                    .clipShape(Capsule())
+                    .offset(y: CGFloat(segment.minutes.lowerBound - rail.startMinutes) * scale)
+            }
+        }
+        .frame(width: activityRailWidth, height: CGFloat(rail.endMinutes - rail.startMinutes) * scale, alignment: .top)
+        .offset(y: CGFloat(rail.startMinutes) * scale)
+        .frame(maxWidth: .infinity, alignment: .topTrailing)
+        .accessibilityElement()
+        .accessibilityLabel("Work and leisure")
+        .accessibilityValue(summary)
+        .accessibilityIdentifier("calendar-activity-rail")
+    }
+
+    /// One colour, or for mix alternating bands of both, like an event's
+    /// category stripes turned on their side.
+    @ViewBuilder private func stripes(_ state: ActivityState) -> some View {
+        let colors = state.colors.map { Color(hex: $0) }
+        if colors.count == 1 {
+            Rectangle().fill(colors[0])
+        } else {
+            Canvas { context, size in
+                var y: CGFloat = 0, index = 0
+                while y < size.height {
+                    context.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 4)), with: .color(colors[index % 2]))
+                    y += 4; index += 1
+                }
+            }
+        }
+    }
+
+    private var summary: String {
+        rail.segments.map {
+            "\($0.state.title) from \(CalendarTimeline.time(CalendarTimeline.wall(fromOffset: $0.minutes.lowerBound)))"
+        }.joined(separator: ", ")
+    }
+}
 /// One reading label's height, two title lines and the detail: labels
 /// closer than this are pushed apart.
 private let readingLabelHeight: CGFloat = 46

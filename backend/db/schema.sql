@@ -1837,6 +1837,21 @@ CREATE TABLE IF NOT EXISTS pomodoro_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_pomodoro_sessions_date ON pomodoro_sessions(date);
 
+-- Work / leisure / mix, switched from the Watch or the phone's Capture tab.
+-- One row per switch under the id the device minted, so a replay is a no-op;
+-- a state lasts until the next switch. Spans are derived on read
+-- (backend/activity_state.py), never stored: work that overlaps fic reading
+-- is drawn and counted as mix.
+CREATE TABLE IF NOT EXISTS activity_states (
+    id TEXT PRIMARY KEY,
+    state TEXT NOT NULL CHECK (state IN ('work', 'leisure', 'mix')),
+    at INTEGER NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('watch', 'phone')),
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_states_at ON activity_states(at);
+
 -- Hourly weather, one row per (day_key, hour_ts). day_key is the 4am-anchored
 -- day from backend/day_boundary.py, not the raw calendar date Open-Meteo
 -- returns — see backend/weather/sync.py. Rows are upserted in place as the day

@@ -43,6 +43,13 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var sleepDays: [String: SleepDay] = [:]
     /// Each day's in-app reading, for the day view's reading rail.
     @Published private(set) var readingDays: [String: [CalendarReadingSpan]] = [:]
+    /// Each day's work / leisure / mix, for the activity rail beside the reading one.
+    @Published private(set) var activityDays: [String: [CalendarActivitySpan]] = [:]
+    /// The latest switch from this phone, the Watch or the server, whichever
+    /// was made last. Nil until the first.
+    @Published private(set) var activitySwitch: ActivitySwitch?
+    /// The habit counts the Todo model last published, for the Watch's glance.
+    private var watchHabits: (day: String, rows: [HabitWidgetRow])?
     private var journalLimit = 200
     private var journalQuery = ""
     @Published private(set) var pendingEdits: [PendingEdit] = []
@@ -81,9 +88,10 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var recentWorkouts: [WorkoutSession] = []
     let workouts: WorkoutStore
     private let workoutSyncer: WorkoutSync
-    /// Watch pomodoro runs the phone has acknowledged but the server hasn't had.
-    private let pomodoros: PomodoroStore
-    private let pomodoroSyncer: PomodoroSync
+    /// Work / leisure / mix switches from this phone and the Watch that the
+    /// server hasn't had yet.
+    private let activityOutbox: ActivityStore
+    private let activitySyncer: ActivitySync
     /// Chat voice messages not yet on the server, and whatever the last pass said about them.
     @Published private(set) var chatRecordingQueue: [ChatRecording] = []
     let chatRecordings: ChatRecordingStore
@@ -211,8 +219,8 @@ final class CaptureModel: ObservableObject {
         trailSyncer = TrailSync(outbox: trailOutbox)
         workouts = try WorkoutStore(root: store.root.appendingPathComponent("workouts", isDirectory: true))
         workoutSyncer = WorkoutSync(store: workouts)
-        pomodoros = try PomodoroStore(root: store.root.appendingPathComponent("pomodoro-outbox", isDirectory: true))
-        pomodoroSyncer = PomodoroSync(store: pomodoros)
+        activityOutbox = try ActivityStore(root: store.root.appendingPathComponent("activity-outbox", isDirectory: true))
+        activitySyncer = ActivitySync(store: activityOutbox)
         chatRecordings = try ChatRecordingStore(root: store.root.appendingPathComponent("chat-recordings", isDirectory: true))
         chatRecordingSyncer = ChatRecordingSync(store: chatRecordings)
         todoRecordings = try TodoRecordingStore(root: store.root.appendingPathComponent("todo-recordings", isDirectory: true))
@@ -242,7 +250,7 @@ final class CaptureModel: ObservableObject {
             ?? store.root.appendingPathComponent("journal-screenshots", isDirectory: true))
         try chatRecordings.recoverInterrupted()
         recorder = Recorder(store: store)
-        watchReceiver = try WatchReceiver(store: store, pomodoros: pomodoros)
+        watchReceiver = try WatchReceiver(store: store, activity: activityOutbox)
         syncer = CaptureSync(store: store, uploads: uploads, transfers: transfers)
         syncer.backgroundUploads = backgroundUploads
         replicaSyncer = ReplicaSync(url: store.root.appendingPathComponent("replica.sqlite"))
@@ -282,6 +290,9 @@ final class CaptureModel: ObservableObject {
         recorder.onError = { [weak self] in self?.message = $0.localizedDescription }
         watchReceiver.onChange = { [weak self] in self?.reloadCaptures(); self?.reloadQueues(); self?.requestSync() }
         watchReceiver.onError = { [weak self] in self?.message = $0.localizedDescription }
+        activitySwitch = ActivitySwitch.latest([ActivitySwitch.load(from: activityStateURL)] + ((try? activityOutbox.list()) ?? []))
+        watchReceiver.onActivity = { [weak self] in self?.adoptActivity($0) }
+        watchReceiver.onActivated = { [weak self] in self?.sendWatchGlance() }
         watchReceiver.activate()
         // A screenshot from the Shortcuts action lands here even with no editor open.
         NotebookSession.shared.store = notebooks
@@ -517,6 +528,77 @@ final class CaptureModel: ObservableObject {
         for stale in cache.keys.sorted().dropLast(60) { cache[stale] = nil }
         readingDays = cache
         try? JSONEncoder().encode(cache).write(to: readingCacheURL, options: .atomic)
+    }
+
+    // MARK: Work / leisure / mix
+
+    /// The last known state, kept on disk so the Capture button and the
+    /// Watch's glance survive a relaunch with no server. Beside the outbox,
+    /// never in the capture store's own folder: every .json there is read as
+    /// a capture, and one that isn't stops the app opening.
+    private var activityStateURL: URL {
+        activityOutbox.root.deletingLastPathComponent().appendingPathComponent("activity-state", isDirectory: true)
+            .appendingPathComponent("current.json")
+    }
+
+    /// Switches to `state` from the Capture tab: queued for the server and
+    /// told to the Watch. Choosing the state already on is not a switch.
+    func switchActivity(_ state: ActivityState) {
+        guard state != activitySwitch?.state else { return }
+        let change = ActivitySwitch(state: state, source: .phone)
+        do { try activityOutbox.save(change) } catch { message = error.localizedDescription; return }
+        adoptActivity(change)
+        requestSync()
+    }
+
+    /// A switch from here, the Watch or the server: shown if it is the newest.
+    func adoptActivity(_ change: ActivitySwitch) {
+        guard let latest = ActivitySwitch.latest([activitySwitch, change]), latest != activitySwitch else { return }
+        activitySwitch = latest
+        try? FileManager.default.createDirectory(at: activityStateURL.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? latest.save(to: activityStateURL)
+        sendWatchGlance()
+        // Today's rail moves with the switch; the next fetch replaces this.
+        Task { await refreshActivity(DayKey.of(Date())) }
+    }
+
+    private func refreshActivityState(using api: JournalAPI) async {
+        if let server = try? await api.currentActivity() { adoptActivity(server) }
+    }
+
+    /// The Todo model's habit rows for today, whenever it publishes them to
+    /// the Home Screen widgets; the Watch's glance carries their count.
+    func publishHabitsToWatch(_ rows: [HabitWidgetRow], day: String) {
+        if let current = watchHabits, current.day == day, current.rows == rows { return }
+        watchHabits = (day, rows)
+        sendWatchGlance()
+    }
+
+    /// The state and habit counts, as the Watch's complications read them.
+    func sendWatchGlance() {
+        var glance = WatchGlance(state: activitySwitch)
+        if let habits = watchHabits { glance = .habits(habits.rows, day: habits.day, state: activitySwitch) }
+        watchReceiver.send(glance)
+    }
+
+    private var activityCacheURL: URL { calendarOutbox.root.appendingPathComponent("activity.json") }
+
+    /// Asks the server for a day's activity rail; offline, the cached answer stands.
+    func refreshActivity(_ day: String) async {
+        if activityDays.isEmpty {
+            activityDays = (try? JSONDecoder().decode([String: [CalendarActivitySpan]].self,
+                                                      from: Data(contentsOf: activityCacheURL))) ?? [:]
+        }
+        #if DEBUG
+        if let seeded = CalendarReadingFixture.activity(day: day) { activityDays[day] = seeded; return }
+        #endif
+        guard let api = chatAPI(), let fetched = try? await api.activity(day: day) else { return }
+        var cache = activityDays
+        cache[day] = fetched
+        for stale in cache.keys.sorted().dropLast(60) { cache[stale] = nil }
+        activityDays = cache
+        try? JSONEncoder().encode(cache).write(to: activityCacheURL, options: .atomic)
     }
 
     private func refreshLibraryBytes() {
@@ -1417,7 +1499,7 @@ final class CaptureModel: ObservableObject {
             hasEdits: replica.edits().contains { $0.state == "pending" }
                 || daily.list().contains { $0.state == .pending }
                 || workouts.list().contains { $0.state == .pending }
-                || !pomodoros.list().isEmpty
+                || !activityOutbox.list().isEmpty
                 || drawingPublications.all().contains { $0.state == "pending" }
                 || !ficActivity.list().isEmpty
                 || !todoOutbox.list().isEmpty
@@ -1522,7 +1604,8 @@ final class CaptureModel: ObservableObject {
             try await timed("screenshots") { try await screenshots.run(using: api) }
             try await timed("daily") { try await dailySyncer.run(using: api) }
             try await timed("workouts") { try await workoutSyncer.run(using: api) }
-            try await timed("pomodoro") { try await pomodoroSyncer.run(using: api) }
+            try await timed("activity state") { try await activitySyncer.run(using: api) }
+            if full { await timed("current state") { await refreshActivityState(using: api) } }
             try await timed("reading activity") { try await ficActivitySyncer.run(using: api) }
             // What the server works out rather than replicates: after this
             // device sent something it changes, or on a full pass.

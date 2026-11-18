@@ -116,6 +116,9 @@ final class TodoModel: ObservableObject {
     /// Hands the Home Screen widgets this view of the lists, and redraws
     /// them if it changed what they show.
     func publishToWidgets(pending: [TodoOp]? = nil) {
+        // The Watch is told whether or not the App Group is there.
+        let now = Date()
+        capture.publishHabitsToWatch(TodoWidgetContent.habits(lists, at: now), day: DayKey.of(now))
         guard let container = SharedSignIn.container() else { return }
         let (fetched, asOf, sentOps, pending) = (server, fetchedAt, sent.map(\.op), pending ?? capture.todoQueue)
         let changed = (try? TodoWidgetSnapshot.update(at: TodoWidgetFiles.snapshot(in: container)) {

@@ -23,5 +23,18 @@ enum CalendarReadingFixture {
                                 startedAt: first + 45 * 60, endedAt: first + 70 * 60),
         ]
     }
+
+    /// The activity rail beside it: work up to the reading, mix while the
+    /// first fic was read (the server's work-during-reading rule), then leisure.
+    static func activity(day: String) -> [CalendarActivitySpan]? {
+        guard let reading = spans(day: day) else { return nil }
+        let start = reading[0].startedAt, mixEnd = reading[1].endedAt
+        return [
+            CalendarActivitySpan(id: "fixture-work", state: .work, startedAt: start - 90 * 60, endedAt: start),
+            CalendarActivitySpan(id: "fixture-mix", state: .mix, startedAt: start, endedAt: mixEnd),
+            CalendarActivitySpan(id: "fixture-leisure", state: .leisure, startedAt: mixEnd,
+                                 endedAt: reading[2].endedAt + 30 * 60),
+        ]
+    }
 }
 #endif

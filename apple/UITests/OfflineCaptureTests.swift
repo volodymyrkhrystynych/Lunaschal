@@ -960,6 +960,31 @@ final class OfflineCaptureTests: XCTestCase {
             .matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch.exists)
     }
 
+    /// The state switch beside the Capture pages: a menu, so brushing it
+    /// changes nothing, and the glyph follows the choice.
+    func testCaptureStateMenuSwitchesWorkLeisureAndMix() {
+        let app = XCUIApplication()
+        app.launch()
+        let state = app.buttons["capture-activity-state"]
+        // The app reopens on the tab it was left on; Capture's composer can
+        // hold the keyboard, which hides the tab bar.
+        if !state.waitForExistence(timeout: 5) { selectTab(app, "Capture") }
+        XCTAssertTrue(state.waitForExistence(timeout: 5))
+        for (id, title) in [("activity-leisure", "Leisure"), ("activity-mix", "Mix"), ("activity-work", "Work")] {
+            state.tap()
+            let option = app.buttons[id]
+            XCTAssertTrue(option.waitForExistence(timeout: 5), id)
+            option.tap()
+            XCTAssertTrue(option.waitForNonExistence(timeout: 5))
+            XCTAssertEqual(state.value as? String, title)
+        }
+        // Kept across a relaunch with no server: the switch is on disk.
+        app.terminate()
+        app.launch() // opens on Capture again
+        XCTAssertTrue(state.waitForExistence(timeout: 10))
+        XCTAssertEqual(state.value as? String, "Work")
+    }
+
     func testCalendarReadingRailMergesChaptersAndFitsTitles() {
         let app = XCUIApplication()
         app.launchArguments += ["-calendarReadingFixture"]
@@ -985,6 +1010,11 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertLessThanOrEqual(first.maxX, rail.frame.minX + 1)
         // Wider than the old fixed 130pt, now that nothing shares its row.
         XCTAssertGreaterThan(second.width, 140)
+        // Work / leisure / mix holds the edge; reading steps in beside it.
+        let activity = app.descendants(matching: .any)["calendar-activity-rail"]
+        XCTAssertTrue(activity.exists)
+        XCTAssertGreaterThanOrEqual(activity.frame.minX, rail.frame.maxX - 1)
+        XCTAssertTrue((activity.value as? String)?.contains("Mix from") == true, "\(activity.value ?? "")")
         // A forum-length title is shown whole when its label is tapped.
         labels.element(boundBy: 1).tap()
         let detail = app.descendants(matching: .any)["calendar-reading-detail"]

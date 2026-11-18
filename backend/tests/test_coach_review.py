@@ -391,3 +391,24 @@ def test_sunday_brings_the_week(monkeypatch):
     assert "It's Sunday." in build_briefing_prompt(seen)
     weekday, _ = _briefing(monkeypatch, {'briefing': 'Hi', 'todos': [], 'events': []}, NOW)
     assert 'week' not in weekday
+
+
+def test_the_summary_model_sees_the_days_activity_minutes_but_the_rating_ignores_them(model):
+    from backend import sleep
+    from backend.day_boundary import day_bounds
+    start = day_bounds(DAY)[0]
+    sleep.set_day(DAY, wake=start + 3 * 3600, sleep=start + 15 * 3600)
+    for state, hour in (('work', 4), ('leisure', 12)):
+        get_db().execute('INSERT INTO activity_states (id,state,at,source,created_at) VALUES (?,?,?,?,?)',
+                         (str(ULID()), state, start + hour * 3600, 'watch', start))
+    get_db().commit()
+    habit('Stretch')
+    r = review.finalize(DAY, NOW)
+    assert model.calls[-1]['activity'] == {'work': 480, 'leisure': 180, 'mix': 0}
+    assert r['rating'] == review.draft(DAY, NOW)['rating']
+
+
+def test_a_day_with_no_switches_sends_no_activity(model):
+    habit('Stretch')
+    review.finalize(DAY, NOW)
+    assert 'activity' not in model.calls[-1]
