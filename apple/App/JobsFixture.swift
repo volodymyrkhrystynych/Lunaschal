@@ -17,9 +17,30 @@ enum JobsFixture {
         let iso = ISO8601DateFormatter()
         let daysAgo = { (days: Double) in iso.string(from: Date().addingTimeInterval(-days * 86_400)) }
         let reasons = { (matched: [String], missing: [String]) in FeedJob.MatchReasons(matched: matched, missing: missing) }
-        try JobStore(root: folder).saveFeed([
+        let store = try JobStore(root: folder)
+        // The top card's body as the server formats it, already on the phone.
+        try store.savePosting("01K7ZZZZZZZZZZZZZZZZZZZZJ1", """
+            ### About the role
+
+            You will own the **sync engine** that keeps technicians working through dead zones.
+
+            ### What you'll do
+
+            - Design the SQLite schema and its migrations
+            - Write the conflict rules
+              - per field, not per row
+            - Ship *weekly*
+
+            ### How to apply
+
+            1. Send a resume
+            2. Talk to the team
+            """ + String(repeating: "\n\nWe care about offline-first software that never loses a technician's work.", count: 6))
+        try store.saveFeed([
             FeedJob(id: "01K7ZZZZZZZZZZZZZZZZZZZZJ1", title: "Senior iOS Engineer", company: "Northwind Labs",
                     location: "Toronto, ON", salaryMin: 140_000, salaryMax: 170_000, salaryCurrency: "CAD",
+                    description: String(repeating: "You will own the sync engine that keeps technicians working "
+                        + "through dead zones, from the SQLite schema to the conflict rules. ", count: 6),
                     url: "https://example.com/jobs/ios", matchReasons: reasons(["swift", "swiftui", "sqlite"], ["kotlin"]),
                     postedAt: daysAgo(1), createdAt: daysAgo(1), triageFit: "strong",
                     triageSummary: "Own the offline sync layer of a field-service app. Small team, SwiftUI throughout.",

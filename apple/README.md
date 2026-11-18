@@ -449,16 +449,27 @@ push` are in `tools/push-fixtures/`.
   builds in simulator, but an unsigned build has no App Group, so the widgets
   there only say to open the app. Not yet verified on device.
 - More → Jobs is the desktop Jobs tab's triage feed: the same postings in the
-  same order, grouped Worth a look / The rest, sortable Best match or Nearest,
-  each card showing the model's two-sentence summary (or the start of the
-  description before it has one), its flags and the commute. Queue (build a
-  tailored resume in the background) and Dismiss are buttons on the card and
-  swipes on the row. A decision takes the card away at once and waits in a
-  sync outbox, sent in order on the next pass; a later decision on the same
-  posting replaces an unsent one, and one the server turns down is said on
-  the screen. The last feed loaded is kept, so it still reads offline.
-  Passed in simulator offline; not yet run against a server or verified on
-  device.
+  same order, sortable Best match or Nearest. **On iPhone it is a deck**, one
+  posting to the screen, "Worth a look" first: swipe right (or tap Queue) to
+  build a tailored resume in the background, left (or Dismiss) to drop it. The
+  card scrolls, and only a mostly-sideways drag past a third of its width, or
+  a flick, decides — so reading a long card never throws it away. Each card
+  shows the fit, salary, commute, keyword match, the model's summary, every
+  flag with its detail and the matched and missing keywords, and then, below
+  the summary, the whole posting formatted as the board wrote it: headings,
+  lists, bold and links. The server rebuilds that as Markdown from the board's
+  stored HTML (`descriptionMarkdown` on `GET /api/jobs/<id>`, see
+  `backend/jobs/posting_text.py`), and the phone keeps each one it loads so it
+  reads offline afterwards; until then the feed's 600-character excerpt shows. **Undo** brings the last
+  card back by queuing the opposite decision (`unqueue`, or dismiss with
+  `dismissed: false`), which replaces an unsent decision in the outbox or
+  follows a sent one; the server refuses to unqueue an application that has
+  already gone out. On iPad the feed stays a list grouped Worth a look / The
+  rest, with Queue and Dismiss as buttons and row swipes. A decision takes the
+  card away at once and waits in a sync outbox, sent in order on the next
+  pass; one the server turns down is said on the screen. The last feed loaded
+  is kept, so it still reads offline. Passed in simulator offline (iPhone deck
+  and iPad list); not yet run against a server or verified on device.
 - More → Writing (its own tab on iPad) is the desktop Writing tab's chapters,
   notes and discussions, over `/api/writing` and the Chat tab's routes. Whole
   books are kept on the phone by `WritingStore`, one file per document, and

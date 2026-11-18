@@ -126,4 +126,94 @@ final class JobFeedTests: XCTestCase {
         XCTAssertEqual(refused, ["The server didn't queue “Deleted”: Not found"])
         XCTAssertEqual(try store.pending(), [])
     }
+
+    // MARK: The swipe deck
+
+    func testOnlyAFarOrFastSidewaysDragDecides() {
+        let width = 400.0
+        XCTAssertEqual(JobDeck.decision(dx: 160, dy: 10, width: width), .queue)
+        XCTAssertEqual(JobDeck.decision(dx: -160, dy: -10, width: width), .dismiss)
+        // Short and slow: snaps back.
+        XCTAssertNil(JobDeck.decision(dx: 100, dy: 0, velocityX: 200, width: width))
+        // Short but flicked.
+        XCTAssertEqual(JobDeck.decision(dx: 60, dy: 0, velocityX: 1200, width: width), .queue)
+        // A flick back against the drag is a change of mind, not a decision.
+        XCTAssertNil(JobDeck.decision(dx: 60, dy: 0, velocityX: -1200, width: width))
+        // Scrolling the card: mostly vertical never decides, however far.
+        XCTAssertNil(JobDeck.decision(dx: 180, dy: 300, velocityX: 1500, width: width))
+    }
+
+    func testTheDeckPutsWorthALookFirstAndSkipsDecided() throws {
+        let jobs = [
+            FeedJob(id: "weak", title: "", company: "", triageFit: "stretch"),
+            FeedJob(id: "strong", title: "S", company: "", triageFit: "strong"),
+            FeedJob(id: "possible", title: "", company: "", triageFit: "possible"),
+        ]
+        try store.decide(jobs[1], .queue)
+        let deck = JobDeck.cards(jobs, try store.pending())
+        XCTAssertEqual(deck.cards.map(\.id), ["possible", "weak"])
+        XCTAssertEqual(deck.promising, 1)
+    }
+
+    func testUndoIsTheOppositeAndReplacesAnUnsentDecision() throws {
+        let job = FeedJob(id: "a", title: "A", company: "")
+        let queued = try store.decide(job, .queue)
+        XCTAssertEqual(JobDeck.undo(queued), .unqueue)
+        try store.decide(job, JobDeck.undo(queued)!)
+        // The queue never leaves the phone; the server is asked to undo nothing.
+        XCTAssertEqual(try store.pending().map(\.decision), [.unqueue])
+        XCTAssertEqual(JobDeck.undo(JobDecisionOp(jobID: "a", decision: .dismiss, title: "A")), .undismiss)
+        // An undo is not itself undone.
+        XCTAssertNil(JobDeck.undo(JobDecisionOp(jobID: "a", decision: .undismiss, title: "A")))
+    }
+
+    func testAPendingUndoShowsTheCardAgain() throws {
+        let jobs = [FeedJob(id: "a", title: "A", company: "")]
+        try store.decide(jobs[0], .undismiss)
+        XCTAssertEqual(JobFeed.hidingDecided(jobs, try store.pending()).map(\.id), ["a"])
+    }
+
+    func testUndoRoutesAndBodies() {
+        XCTAssertEqual(JobDecision.undismiss.route, "dismiss")
+        XCTAssertEqual(JournalAPI.jobBody(.undismiss) as? [String: Bool], ["dismissed": false])
+        XCTAssertEqual(JobDecision.unqueue.route, "unqueue")
+        XCTAssertTrue(JournalAPI.jobBody(.unqueue).isEmpty)
+    }
+
+    func testARefusedUndoIsWordedAsOne() async throws {
+        try store.decide(FeedJob(id: "a", title: "Applied", company: ""), .unqueue)
+        let transport = Transport()
+        transport.failures["a"] = JobRefusal(status: 409, message: "Already applied")
+        let refused = try await JobSync(store: store).run(using: transport)
+        XCTAssertEqual(refused, ["The server didn't take back the queue of “Applied”: Already applied"])
+    }
+
+    // MARK: The posting body
+
+    // The shapes backend/jobs/posting_text.py writes.
+    func testParsesThePostingIntoBlocks() {
+        let markdown = "### About the role\n\nWe use **Swift**\ndaily.\n\n- Own sync\n  - SQLite\n- Ship\n\n1. Apply\n2. Chat"
+        XCTAssertEqual(PostingBlock.parse(markdown), [
+            .heading("About the role"),
+            .paragraph("We use **Swift** daily."),
+            .item("Own sync", marker: "•", depth: 0),
+            .item("SQLite", marker: "•", depth: 1),
+            .item("Ship", marker: "•", depth: 0),
+            .item("Apply", marker: "1.", depth: 0),
+            .item("Chat", marker: "2.", depth: 0),
+        ])
+        // A sentence that merely starts with a year is not a numbered item.
+        XCTAssertEqual(PostingBlock.parse("2026.Plans ahead"), [.paragraph("2026.Plans ahead")])
+        XCTAssertEqual(PostingBlock.parse(""), [])
+    }
+
+    func testAPostingIsKeptForOfflineAndPrunedWithTheFeed() throws {
+        try store.savePosting("01JA", "### Hi")
+        try store.savePosting("01JB", "Bye")
+        XCTAssertEqual(try JobStore(root: root).cachedPosting("01JA"), "### Hi")
+        store.prunePostings(keeping: ["01JA"])
+        XCTAssertNil(store.cachedPosting("01JB"))
+        XCTAssertEqual(store.cachedPosting("01JA"), "### Hi")
+        XCTAssertThrowsError(try store.savePosting("../x", "no"))
+    }
 }

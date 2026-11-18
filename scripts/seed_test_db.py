@@ -1052,6 +1052,121 @@ def seed_torrents(db):
         )
 
 
+def seed_feed_postings(db):
+    """The phone's swipe deck: postings in each board's real raw shape.
+
+    The card's body is rebuilt from `jobs.raw` (backend/jobs/posting_text.py),
+    so each posting carries the payload its adapter would have stored —
+    Greenhouse's entity-escaped `content`, Lever's `lists`, Ashby's
+    `descriptionHtml`, Workday's `detail.jobPostingInfo` — and `description`
+    is what `strip_html` made of it. Three are already judged (one per fit
+    bucket, flags and keyword gaps included); two are left `pending` so a
+    local model can triage them on demand (`POST /api/jobs/<id>/triage`).
+    """
+    import html as html_mod
+    from backend.htmltext import strip_html
+
+    greenhouse_html = (
+        '<h3><strong>About the team</strong></h3>'
+        '<p>Northwind builds the app field technicians use to <strong>close work orders offline</strong>, '
+        'in basements and on rooftops where the network never reaches.</p>'
+        '<h3><strong>What you will do</strong></h3>'
+        '<ul><li>Own the sync engine: the SQLite schema, its migrations and the conflict rules</li>'
+        '<li>Ship the SwiftUI screens technicians live in all day</li>'
+        '<li>Pair with the backend team on the <em>replication protocol</em></li></ul>'
+        '<h3><strong>What you bring</strong></h3>'
+        '<ul><li>5+ years of iOS, most of it in Swift</li><li>Production experience with SQLite or Core Data</li>'
+        '<li>Some Python is a plus: our sync server is Flask</li></ul>'
+        '<p><strong>Compensation:</strong> $140,000–$170,000 CAD, plus equity. Hybrid, two days a week at '
+        'our King West office. <a href="https://example.com/northwind/benefits">See our benefits</a>.</p>'
+    )
+    lever_raw = {
+        'id': 'lv-fable-backend', 'text': 'Backend Developer (Python)',
+        'descriptionPlain': 'Fable & Finch schedules home-care visits for 40,000 clients.',
+        'description': '<div>Fable &amp; Finch schedules home-care visits for <b>40,000 clients</b>. '
+                       'The scheduler is a Flask service over PostgreSQL, and it is yours.</div>',
+        'lists': [
+            {'text': 'What you will work on', 'content': '<li>The visit-optimizer API</li>'
+                                                        '<li>Moving batch jobs onto a queue</li>'},
+            {'text': 'Requirements', 'content': '<li>Python and Flask or Django</li><li>PostgreSQL</li>'
+                                               '<li>Comfortable on call one week in six</li>'},
+        ],
+        'additional': '<div>Fully remote within Canada. <i>We do not sponsor visas.</i></div>',
+        'categories': {'location': 'Remote - Canada', 'allLocations': ['Remote - Canada']},
+    }
+    ashby_raw = {
+        'id': 'ab-meridian-principal', 'title': 'Principal Platform Architect',
+        'descriptionHtml': '<p>Meridian Bank is rebuilding its core platform.</p>'
+                           '<h2>Responsibilities</h2><ol><li>Set the architecture for 40 teams</li>'
+                           '<li>Run the design review board</li></ol>'
+                           '<h2>Requirements</h2><ul><li><strong>15+ years</strong> in platform engineering</li>'
+                           '<li>Java, Kubernetes, Terraform</li><li>Reliability clearance</li></ul>',
+        'descriptionPlain': 'Meridian Bank is rebuilding its core platform.',
+    }
+    workday_raw = {
+        'listing': {'title': 'Full-Stack Engineer', 'locationsText': 'Mississauga, ON'},
+        'detail': {'jobPostingInfo': {
+            'title': 'Full-Stack Engineer', 'location': 'Mississauga, ON',
+            'jobDescription': '<p><b>Harbourfront Health</b> is looking for a full-stack engineer for the '
+                              'patient portal team.</p><p><b>You will:</b></p><ul><li>Work across a React front '
+                              'end and Python services</li><li>Help us move to a modern CI setup</li></ul>'
+                              '<p><b>Nice to have:</b></p><ul><li>TypeScript</li><li>HL7 / FHIR</li></ul>',
+        }},
+    }
+    contract_raw = {
+        'id': 'lv-lakeshore-contract', 'text': 'Mobile Developer, 6-month contract',
+        'descriptionPlain': 'Lakeshore Studio is rebuilding a retail app in Flutter.',
+        'description': '<div>Lakeshore Studio is rebuilding a retail app in <b>Flutter</b>.</div>',
+        'lists': [{'text': 'You have', 'content': '<li>Flutter and Dart</li><li>Firebase</li>'}],
+        'additional': '<div>Six months, on site in Hamilton.</div>',
+    }
+
+    postings = [
+        # (source, source_id, url, company, title, location, remote, salary, raw, html for description,
+        #  triage: (state, fit, summary, flags, work_location), match (matched, missing), distance, days_ago)
+        ('greenhouse', 'gh-northwind-ios', 'https://example.com/jobs/northwind-ios', 'Northwind Labs',
+         'Senior iOS Engineer', 'Toronto, ON', 0, (140000.0, 170000.0, 'CAD'),
+         {'id': 9001, 'title': 'Senior iOS Engineer', 'content': html_mod.escape(greenhouse_html)},
+         greenhouse_html,
+         ('kept', 'strong', 'Own the offline sync layer of a field-service app. Small team, SwiftUI throughout.',
+          [], 'hybrid'), (['swift', 'swiftui', 'sqlite', 'python'], ['kotlin']), (2.4, 'exact'), 1),
+        ('lever', 'lv-fable-backend', 'https://example.com/jobs/fable-backend', 'Fable & Finch',
+         'Backend Developer (Python)', 'Remote - Canada', 1, (110000.0, None, 'CAD'), lever_raw, None,
+         ('kept', 'possible', 'Flask services behind a home-care scheduler. Fully remote within Canada.',
+          [], 'remote'), (['python', 'flask', 'postgresql'], ['django']),
+         (None, ''), 2),
+        ('ashby', 'ab-meridian-principal', 'https://example.com/jobs/meridian', 'Meridian Bank',
+         'Principal Platform Architect', 'Toronto, ON', 0, (210000.0, 250000.0, 'CAD'), ashby_raw, None,
+         ('kept', 'stretch', 'Lead platform architecture for a retail bank. Fifteen years expected.',
+          [{'kind': 'seniority_mismatch', 'detail': 'Asks for 15+ years'},
+           {'kind': 'security_clearance', 'detail': 'Reliability clearance'}], 'onsite'),
+         (['python'], ['java', 'kubernetes', 'terraform']), (0.8, 'district'), 5),
+        ('manual', 'wd-harbourfront-fullstack', 'https://example.com/jobs/harbourfront', 'Harbourfront Health',
+         'Full-Stack Engineer', 'Mississauga, ON', 0, (None, None, ''), workday_raw, None,
+         ('pending', '', '', [], ''), (['react', 'python'], ['typescript']), (27.0, 'city'), 0),
+        ('lever', 'lv-lakeshore-contract', 'https://example.com/jobs/lakeshore', 'Lakeshore Studio',
+         'Mobile Developer, 6-month contract', 'Hamilton, ON', 0, (None, None, ''), contract_raw, None,
+         ('pending', '', '', [], ''), (['swift'], ['flutter', 'dart', 'firebase']), (58.0, 'city'), 0),
+    ]
+    for (source, source_id, url, company, title, location, remote, (smin, smax, cur), raw, html,
+         (state, fit, summary, flags, work_location), (matched, missing), (km, precision), days) in postings:
+        if html is None:
+            from backend.jobs.posting_text import source_html
+            html = source_html(raw) or ''
+        db.execute(
+            'INSERT INTO jobs (id, source, source_id, url, company, title, location, remote, salary_min, '
+            'salary_max, salary_currency, description, raw, match_score, match_reasons, triage_state, '
+            'triage_fit, triage_summary, triage_flags, triage_at, work_location, distance_km, '
+            'distance_precision, posted_at, fetched_at, created_at, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (new_id(), source, source_id, url, company, title, location, remote, smin, smax, cur,
+             strip_html(html), json.dumps(raw), len(matched) / (len(matched) + len(missing)),
+             json.dumps({'matched': matched, 'missing': missing}), state, fit, summary,
+             json.dumps(flags) if flags else None, ts(days) if state == 'kept' else None, work_location,
+             km, precision, ts(days + 1), ts(days), ts(days), ts(days)),
+        )
+
+
 def seed_jobs(db, email_ids):
     from backend.jobs.storage import fill_run_screenshot_path, resume_path
 
@@ -1126,6 +1241,7 @@ def seed_jobs(db, email_ids):
          'kept', 'strong', 'Payments-focused backend role, remote, salary above the stated floor.',
          ts(5), 'remote', 0.0, 'exact', ts(6), ts(5), ts(5), ts(5)),
     )
+    seed_feed_postings(db)
     # A second posting still in the triage feed, so the phone's triage view has
     # something pending to swipe.
     pending_job_id = new_id()

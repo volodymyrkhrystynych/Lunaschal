@@ -131,7 +131,8 @@ public enum JobFeed {
         "seniority_mismatch": "Seniority mismatch", "unpaid": "Unpaid", "commission_only": "Commission only",
         "unclear_role": "Vague role", "contract_only": "Contract only", "onsite_required": "On-site required",
         "security_clearance": "Clearance required", "heavy_travel": "Heavy travel",
-        "stack_mismatch": "Different stack",
+        "stack_mismatch": "Different stack", "salary_below_preference": "Below your salary floor",
+        "soft_preference_missing": "Misses a preference",
     ]
 
     /// The web feed's two groups (`splitFeed`): what the model called strong
@@ -148,9 +149,82 @@ public enum JobFeed {
     }
 
     /// The feed as it will be once the queued decisions reach the server.
+    /// An undo waiting to be sent brings its card back rather than hiding it.
     public static func hidingDecided(_ jobs: [FeedJob], _ ops: [JobDecisionOp]) -> [FeedJob] {
-        let decided = Set(ops.map(\.jobID))
+        let decided = Set(ops.filter { !$0.decision.isUndo }.map(\.jobID))
         return jobs.filter { !decided.contains($0.id) }
+    }
+}
+
+/// The phone's one-card-at-a-time feed: a drag decides, the last decision can
+/// be taken back. Kept here, away from SwiftUI, so the rules are tested on Linux.
+public enum JobDeck {
+    /// Share of the card's width a drag must travel to decide on release.
+    public static let threshold = 0.35
+    /// Points per second sideways that decide however short the drag.
+    public static let flickSpeed = 900.0
+
+    /// Right queues, left dismisses. Only a mostly-sideways drag decides, so
+    /// scrolling a long card up and down can never throw it away.
+    public static func decision(dx: Double, dy: Double, velocityX: Double = 0, width: Double) -> JobDecision? {
+        guard abs(dx) > abs(dy) * 1.5, abs(dx) > 20 else { return nil }
+        let far = abs(dx) >= width * threshold
+        let flicked = abs(velocityX) >= flickSpeed && (velocityX > 0) == (dx > 0)
+        guard far || flicked else { return nil }
+        return dx > 0 ? .queue : .dismiss
+    }
+
+    /// The deck in order, "Worth a look" first, as the list groups it.
+    public static func cards(_ jobs: [FeedJob], _ ops: [JobDecisionOp]) -> (cards: [FeedJob], promising: Int) {
+        let groups = JobFeed.split(JobFeed.hidingDecided(jobs, ops))
+        return (groups.promising + groups.rest, groups.promising.count)
+    }
+
+    /// What takes `op` back. Always the opposite decision, even when `op` has
+    /// not left the phone: queued through `JobStore.decide` it replaces an
+    /// unsent op (and the server finds nothing to undo), or follows one the
+    /// sync pass is already sending — dropping the op instead would lose that race.
+    public static func undo(_ op: JobDecisionOp) -> JobDecision? { op.decision.inverse }
+}
+
+/// The posting body's Markdown cut into the blocks the card draws: headings,
+/// list items and paragraphs. Inline emphasis and links stay in the text for
+/// `AttributedString(markdown:)`, which handles those but not blocks.
+public enum PostingBlock: Equatable {
+    case heading(String)
+    /// `marker` is "•" or "3."; `depth` 0 for a top-level item.
+    case item(String, marker: String, depth: Int)
+    case paragraph(String)
+
+    public static func parse(_ markdown: String) -> [PostingBlock] {
+        var blocks: [PostingBlock] = []
+        var paragraph: [String] = []
+        func flush() {
+            if !paragraph.isEmpty { blocks.append(.paragraph(paragraph.joined(separator: " "))) }
+            paragraph = []
+        }
+        for raw in markdown.components(separatedBy: "\n") {
+            let indent = raw.prefix(while: { $0 == " " }).count
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { flush(); continue }
+            if line.hasPrefix("#") {
+                let text = line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
+                flush()
+                if !text.isEmpty { blocks.append(.heading(text)) }
+            } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+                flush()
+                blocks.append(.item(String(line.dropFirst(2)), marker: "•", depth: indent / 2))
+            } else if let dot = line.firstIndex(of: "."), dot != line.startIndex,
+                      line[..<dot].allSatisfy(\.isNumber), line[line.index(after: dot)...].hasPrefix(" ") {
+                flush()
+                blocks.append(.item(String(line[line.index(dot, offsetBy: 2)...]), marker: String(line[...dot]),
+                                    depth: indent / 2))
+            } else {
+                paragraph.append(line)
+            }
+        }
+        flush()
+        return blocks
     }
 }
 
@@ -164,6 +238,28 @@ public enum JobDecision: String, Codable {
     /// Build a tailored resume in the background.
     case queue
     case dismiss
+    /// Taking back a queue the server already has: drops the draft application.
+    case unqueue
+    /// Taking back a dismiss the server already has.
+    case undismiss
+
+    public var isUndo: Bool { self == .unqueue || self == .undismiss }
+
+    public var inverse: JobDecision? {
+        switch self {
+        case .queue: return .unqueue
+        case .dismiss: return .undismiss
+        case .unqueue, .undismiss: return nil
+        }
+    }
+
+    /// `POST /api/jobs/<id>/<route>`
+    var route: String { self == .undismiss ? "dismiss" : rawValue }
+
+    var verb: String {
+        ["queue": "queue", "dismiss": "dismiss", "unqueue": "take back the queue of",
+         "undismiss": "bring back"][rawValue]!
+    }
 }
 
 public struct JobDecisionOp: Codable, Equatable, Identifiable {
@@ -218,6 +314,34 @@ public final class JobStore {
         try JSONEncoder().encode(jobs).write(to: feedFile, options: .atomic)
     }
 
+    /// A posting body once fetched, so the card still reads it offline.
+    public func cachedPosting(_ id: String) -> String? {
+        guard let url = try? postingFile(id) else { return nil }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    public func savePosting(_ id: String, _ markdown: String) throws {
+        let url = try postingFile(id)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try markdown.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    /// Drops the bodies of postings no longer on the feed, so the folder
+    /// doesn't grow by one file per posting ever looked at.
+    public func prunePostings(keeping ids: Set<String>) {
+        let folder = root.appendingPathComponent("postings", isDirectory: true)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        for name in names where !ids.contains((name as NSString).deletingPathExtension) {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+        }
+    }
+
+    private func postingFile(_ id: String) throws -> URL {
+        // Ids are ULIDs; anything else must not become a path.
+        guard !id.isEmpty, id.allSatisfy({ $0.isLetter || $0.isNumber }) else { throw CaptureError.invalidResponse }
+        return root.appendingPathComponent("postings", isDirectory: true).appendingPathComponent("\(id).md")
+    }
+
     private func writeOutbox(_ ops: [JobDecisionOp]) throws {
         try JSONEncoder().encode(ops).write(to: outboxFile, options: .atomic)
     }
@@ -253,8 +377,7 @@ public final class JobSync {
             } catch let refusal as JobRefusal {
                 // Dismissing a posting that's already gone is what was wanted.
                 if !(refusal.status == 404 && op.decision == .dismiss) {
-                    let verb = op.decision == .queue ? "queue" : "dismiss"
-                    refused.append("The server didn't \(verb) “\(op.title)”: \(refusal.message)")
+                    refused.append("The server didn't \(op.decision.verb) “\(op.title)”: \(refusal.message)")
                 }
             }
             try store.remove(op)
@@ -272,12 +395,28 @@ extension JournalAPI: JobTransport {
         return try JSONDecoder().decode([FeedJob].self, from: await get("api/jobs/feed", query))
     }
 
-    /// Both routes are safe to repeat: a second queue re-queues the same
+    static func jobBody(_ decision: JobDecision) -> [String: Any] {
+        switch decision {
+        case .dismiss: return ["dismissed": true]
+        case .undismiss: return ["dismissed": false]
+        case .queue, .unqueue: return [:]
+        }
+    }
+
+    /// The whole posting as Markdown (`descriptionMarkdown`, rebuilt from the
+    /// board's HTML); the feed sends only the first 600 plain characters.
+    public func jobPosting(id: String) async throws -> String {
+        let data = try await get("api/jobs/\(try Self.pathID(id))", [:])
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return object?["descriptionMarkdown"] as? String ?? object?["description"] as? String ?? ""
+    }
+
+    /// Every route is safe to repeat: a second queue re-queues the same
     /// application, and a second dismiss changes nothing.
     public func send(_ decision: JobDecision, jobID: String) async throws {
-        var req = request("api/jobs/\(try Self.pathID(jobID))/\(decision.rawValue)", method: "POST")
+        var req = request("api/jobs/\(try Self.pathID(jobID))/\(decision.route)", method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: decision == .dismiss ? ["dismissed": true] : [:])
+        req.httpBody = try JSONSerialization.data(withJSONObject: Self.jobBody(decision))
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw CaptureError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {

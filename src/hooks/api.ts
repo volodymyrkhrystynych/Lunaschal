@@ -2213,7 +2213,9 @@ export interface TriageFlag {
     | 'onsite_required'
     | 'security_clearance'
     | 'heavy_travel'
-    | 'stack_mismatch';
+    | 'stack_mismatch'
+    | 'salary_below_preference'
+    | 'soft_preference_missing';
   detail: string;
 }
 

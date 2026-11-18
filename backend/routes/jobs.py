@@ -17,7 +17,7 @@ from ulid import ULID
 from backend.ai import job_match
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.jobs import (
-    analytics, archive, build, career_watch, company_research, cover_letter, distance, ingest, interview, linker, outcomes, profile as profile_mod, queue as queue_mod, render, report, resume_review,
+    analytics, archive, build, career_watch, company_research, cover_letter, distance, ingest, interview, linker, outcomes, posting_text, profile as profile_mod, queue as queue_mod, render, report, resume_review,
     resolve, resume_import, retention, sources, storage, sync, tailor,
     triager, upskill, urlmatch, workday_watch, status as application_status,
     scheduler as jobs_scheduler,
@@ -464,7 +464,11 @@ def get_job(job_id):
     row = get_db().execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
     if row is None:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(row_to_dict(row))
+    item = row_to_dict(row)
+    # The phone's swipe card shows this rather than `description`, whose
+    # formatting `strip_html` threw away; see backend/jobs/posting_text.py.
+    item['descriptionMarkdown'] = posting_text.posting_markdown(row['raw'], row['description'])
+    return jsonify(item)
 
 
 @bp.patch('/<job_id>')
@@ -1880,6 +1884,35 @@ def queue_job(job_id):
 
     row = db.execute('SELECT * FROM applications WHERE id=?', (application_id,)).fetchone()
     return jsonify(row_to_dict(row)), 201
+
+
+@bp.post('/<job_id>/unqueue')
+def unqueue_job(job_id):
+    """Take back a Queue: the phone's Undo after the decision already landed.
+
+    Only one that has not gone out is removed (`draft`, or `ready` with its
+    resume built) — once it is submitted it is a record of something the user
+    did, and Undo on a swipe is the wrong place to erase it. With no application at all this is a
+    success, so a replayed undo is harmless. While the worker is tailoring this
+    very application it refuses rather than pull the row out from under it.
+    """
+    db = get_db()
+    if db.execute('SELECT 1 FROM jobs WHERE id=?', (job_id,)).fetchone() is None:
+        return jsonify({'error': 'Not found'}), 404
+    application = db.execute(
+        'SELECT id, status FROM applications WHERE job_id=?', (job_id,)
+    ).fetchone()
+    if application is None:
+        return jsonify({'ok': True})
+    if application['status'] in _SUBMITTED_STATUSES:
+        return jsonify({'error': 'Already sent; change it from the Jobs tab.'}), 409
+    current = queue_mod.status()['current'] or {}
+    if current.get('applicationId') == application['id']:
+        return jsonify({'error': 'Its resume is being written right now.'}), 409
+    db.execute('DELETE FROM applications WHERE id=?', (application['id'],))
+    db.commit()
+    storage.delete_application_dir(application['id'])
+    return jsonify({'ok': True})
 
 
 @bp.get('/queue/status')

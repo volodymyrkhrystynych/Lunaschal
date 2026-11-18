@@ -120,6 +120,62 @@ def test_queueing_an_unknown_job_is_a_404(client):
 
 
 # --------------------------------------------------------------------------
+# Undo from the phone's swipe deck
+# --------------------------------------------------------------------------
+
+def feed_ids(client):
+    return [job['id'] for job in client.get('/api/jobs/feed').get_json()]
+
+
+def test_unqueue_puts_the_posting_back_on_the_feed(client, profile):
+    job_id = make_job(client)
+    application = queue_job(client, job_id)
+    assert job_id not in feed_ids(client)
+
+    assert client.post(f'/api/jobs/{job_id}/unqueue', json={}).status_code == 200
+    assert job_id in feed_ids(client)
+    assert get_db().execute(
+        'SELECT 1 FROM applications WHERE id=?', (application['id'],)
+    ).fetchone() is None
+
+
+def test_unqueue_with_nothing_queued_is_harmless(client, profile):
+    """A replayed undo from the phone's outbox must not be refused."""
+    job_id = make_job(client)
+    assert client.post(f'/api/jobs/{job_id}/unqueue', json={}).status_code == 200
+    assert client.post('/api/jobs/nope/unqueue', json={}).status_code == 404
+
+
+def test_unqueue_never_erases_a_sent_application(client, profile):
+    job_id = make_job(client)
+    application = queue_job(client, job_id)
+    get_db().execute("UPDATE applications SET status='submitted' WHERE id=?", (application['id'],))
+    get_db().commit()
+    response = client.post(f'/api/jobs/{job_id}/unqueue', json={})
+    assert response.status_code == 409
+    assert get_db().execute(
+        'SELECT 1 FROM applications WHERE id=?', (application['id'],)
+    ).fetchone() is not None
+
+
+def test_unqueue_refuses_while_its_resume_is_being_written(client, profile, monkeypatch):
+    job_id = make_job(client)
+    application = queue_job(client, job_id)
+    monkeypatch.setattr(queue, 'status', lambda: {
+        'running': True, 'current': {'applicationId': application['id']}, 'last': None,
+    })
+    assert client.post(f'/api/jobs/{job_id}/unqueue', json={}).status_code == 409
+
+
+def test_undismiss_puts_a_dismissed_posting_back(client):
+    job_id = make_job(client)
+    client.post(f'/api/jobs/{job_id}/dismiss', json={'dismissed': True})
+    assert job_id not in feed_ids(client)
+    client.post(f'/api/jobs/{job_id}/dismiss', json={'dismissed': False})
+    assert job_id in feed_ids(client)
+
+
+# --------------------------------------------------------------------------
 # Selection order
 # --------------------------------------------------------------------------
 
