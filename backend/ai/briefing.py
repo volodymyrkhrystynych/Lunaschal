@@ -8,6 +8,7 @@ import time
 import json
 from datetime import datetime, date, timedelta
 
+from backend import activity_state
 from backend.ai.chat import get_recent_journal_entries, format_journal_context
 from backend.ai.llm import chat_json
 from backend.day_boundary import day_key_for
@@ -158,6 +159,8 @@ def gather_briefing_context(now: int | None = None) -> dict:
         'learning_due': learning_due_count(db, now),
         'life_wiki': life_wiki_index(),
         'yesterday': gather_day(db, today),
+        'activity': activity_state.day_minutes(
+            db, (date.fromisoformat(today) - timedelta(days=1)).isoformat(), now),
     }
 
 
@@ -255,6 +258,13 @@ def build_briefing_prompt(context: dict) -> str:
         for article in articles:
             summary = (article.get('summary') or '').strip()
             lines.append(f'- {article["title"]}' + (f': {summary}' if summary else ''))
+        lines.append('')
+
+    activity = context.get('activity')
+    if activity:
+        lines.append('Yesterday by the state they switched on their watch, in minutes of the waking day '
+                     '(mix is work and leisure at once; context, not a target): '
+                     + ', '.join(f'{state} {minutes}' for state, minutes in activity.items()) + '.')
         lines.append('')
 
     if not any((context['journal'], context.get('earlier_journal'), context['daily_tasks'], context['todos'],

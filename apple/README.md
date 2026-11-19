@@ -875,51 +875,45 @@ publicly to make CI work: simulator capture tests never contact it.
   the notification and a real call interruption need a device.
   WatchConnectivity transfer validation requires paired devices
   ([Apple's transferFile documentation](<https://developer.apple.com/documentation/watchconnectivity/wcsession/transferfile(_:metadata:)>)).
-- The Watch has a pomodoro timer: Focus (25 minutes, then Continue, a 5-minute
-  Break, or Cancel) and Timeout (10 minutes, then Continue or Cancel). Rules are
-  `PomodoroTimer` in LunaschalCore; the state is saved, so a relaunch resumes from
-  the end time. At the end the Watch buzzes until Continue, Break or Cancel, by
-  the same alarm as Workout (below); a local notification just after the end
-  carries the same buttons, as the fallback for a run a Control started while
-  the app was asleep, which gets no alarm until the app next comes forward. Each finished or cancelled run goes to the phone
-  by `transferUserInfo` and is deleted from the Watch only after the phone replies
-  `pomodoroStored`; the phone's `pomodoro-outbox` uploads it to
-  `POST /api/lifestyle/pomodoro/sessions`, and Lifestyle shows it on the Focus card.
-  A cancel within the first minute is not logged. Debug builds take
-  `-PomodoroSeconds 10` and `-PomodoroStart work|timeout` launch arguments for
-  checking the simulator without tapping. The countdown, end-of-timer choices and
-  relaunch passed in the watchOS simulator; notification buttons and the
-  Watch-to-phone transfer need paired devices.
-- The Watch opens on full-screen pages swiped horizontally: Focus, Timeout,
-  Workout, Record, Transcribe, then the recordings log. Each complication (and
-  each launcher button) opens its own page and acts at once; the app opens on
-  whichever timer is already going.
-- Workout is a 90-second rest timer (`RestTimer` in LunaschalCore), separate
-  from the pomodoro and never logged. When it ends the Watch buzzes every 1.5 s
-  until Stop or Restart, using a smart-alarm `WKExtendedRuntimeSession`
-  (`WKBackgroundModes: alarm`), with a notification as fallback. An app gets
-  one such session at a time, so `WatchAlarm` keeps one for every timer,
-  scheduled for the earliest end, buzzing while any timer that rang is
-  unanswered; dismissing it from the system's alarm screen stops Workout and
-  only silences a finished pomodoro. Debug builds take `-RestSeconds 5`. The pages, the
-  countdown, the ringing screen and the repeating haptic (in the system log)
-  passed in the watchOS simulator, **but only with an ad-hoc (`-`) signature**:
-  an unsigned `CODE_SIGNING_ALLOWED=NO` build gets "client is not entitled"
-  from the alarm service and shows "Couldn't set the alarm". The buzz with the
-  wrist down, and Stop/Restart ending it, need the device. A 6-second Focus run
-  (`-PomodoroSeconds 6`) scheduled the same session and repeated the haptic in
-  the simulator too.
-- A running timer (Focus, Break, Timeout, Workout) shows on every timer
-  complication as the system Timer draws one: a ring round the whole edge that
-  empties, with the time left centred inside it, the time with a gauge in a corner. A recording turns its launcher
-  button and Control red, and its Record or Transcribe complication into the
-  elapsed time (a full ring round it on the circular one, "Recording" or
-  "Transcribing" along a corner) — red alone vanished on faces drawn tinted or
-  accented, where an active mic looked exactly like an idle one. The launcher
-  row is Focus, Timeout, Record and Transcribe; Workout has its own complication. Every change reloads all complications and Controls, and the app reloads
-  them again as the face comes back; before this, timer changes never reloaded
-  the launcher row. Builds in the watchOS simulator; how it looks on the face
-  needs the device.
+- The Watch has no timers. The pomodoro (Focus 25 / Timeout 10) and the
+  Workout 90-second rest timer were removed, along with their alarm
+  (`WKBackgroundModes: alarm`), their complications and their Controls. Past
+  pomodoro runs stay on the server and on the web Lifestyle Focus card as
+  history; nothing new arrives, and the phone no longer relays any.
+- The Watch opens on one grid of six tiles: **Work, Leisure, Mix** over
+  **Record, Transcribe, To-do**, then the status page. The state that is on is
+  filled; tapping another switches to it (tapping the one already on does
+  nothing). A switch is written to the App Group for the complications at once,
+  then sent to the phone by `transferUserInfo` and deleted from the Watch only
+  after the phone replies `activityStored`. The phone's `activity-outbox`
+  uploads it to `POST /api/activity-state/switches` under the Watch's ULID, so a
+  replay is a no-op. The phone's Capture tab has the same switch, a glyph to the
+  right of Daily / Entry / Workout that opens a menu (a menu, not a tap that
+  cycles, so brushing it changes nothing). Glyphs (`App/ActivityGlyph.swift`,
+  compiled into the app, the Watch and the complications): a briefcase for
+  work, a cup for leisure, and for mix a briefcase filled half in each colour on
+  a half-and-half disc. The state lasts until the next switch; whichever switch
+  was *made* last wins, wherever it was made, because the Watch's queue can
+  deliver an older one late. The Capture menu, and its state surviving a
+  relaunch with no server, passed in the iPhone simulator; the grid builds in
+  the watchOS simulator; the Watch-to-phone transfer needs paired devices.
+- The phone sends the Watch a **glance** (`WatchGlance` in LunaschalCore) as
+  WatchConnectivity application context: the current state and how many habits
+  are left today, from the same rows the Home Screen habits widget shows. The
+  Watch keeps it in the App Group for the complications, and past the 4am
+  rollover counts every habit as open again without waiting for the phone.
+  Ticks made in the Home Screen widget reach the Watch only when the phone app
+  next runs. The application context itself needs paired devices.
+- Complications: **State** and **Habits left** (circular, corner, inline) open
+  the app on its grid and change nothing. Record, Transcribe and To-do are
+  unchanged. The rectangular **launcher** row is To-do · Habits · Record · State ·
+  Transcribe, so the three microphones never touch and a tap that lands a button
+  off opens something harmless. On a tinted face mix keeps a half-filled disc
+  behind its briefcase so it doesn't read as work. Controls are Record,
+  Transcribe and To-do. A recording turns its launcher button and Control red,
+  and its complication into the elapsed time. Every change reloads all
+  complications and Controls. Builds in the watchOS simulator; how it looks on
+  the face needs the device.
 - Settings checks the actual Foundation Models text-model and locale availability,
   including disabled/ineligible/not-ready states. Generation and local speech
   recognition remain optional later layers. Server transcription is the only

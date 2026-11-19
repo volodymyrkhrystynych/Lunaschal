@@ -20,6 +20,7 @@ import { DEFAULT_DAY_ZOOM, type DayZoom } from '@/lib/calendarZoom';
 import { addDays, localDayKey } from '@/lib/dates';
 import { sleepBands } from '@/lib/sleep';
 import { DayEventLayer, type LaidOutEvent } from './DayEventLayer';
+import { ActivityTimeline } from './ActivityTimeline';
 import { ReadingTimeline } from './ReadingTimeline';
 
 /** Where the "+" button drops a new event on a day that isn't today, and where
@@ -96,6 +97,12 @@ export function DayView({
   const { data: reading = [] } = useQuery({
     queryKey: ['calendar', 'reading', date],
     queryFn: () => api.calendar.reading(date),
+    refetchInterval: 60_000,
+  });
+
+  const { data: activity = [] } = useQuery({
+    queryKey: ['calendar', 'activity', date],
+    queryFn: () => api.calendar.activity(date),
     refetchInterval: 60_000,
   });
 
@@ -344,10 +351,25 @@ export function DayView({
               sleep={sleep}
               spans={reading}
               zoom={zoom}
+              besideActivity={activity.length > 0}
+            />
+          )}
+          {sleep && (
+            <ActivityTimeline
+              date={date}
+              sleep={sleep}
+              spans={activity}
+              zoom={zoom}
             />
           )}
           <div
-            className={`absolute left-20 ${reading.length ? 'right-8' : 'right-2'} top-0 bottom-0 pointer-events-none`}
+            className={`absolute left-20 ${
+              reading.length && activity.length
+                ? 'right-14'
+                : reading.length || activity.length
+                  ? 'right-8'
+                  : 'right-2'
+            } top-0 bottom-0 pointer-events-none`}
           >
             <DayEventLayer
               events={laidOut}

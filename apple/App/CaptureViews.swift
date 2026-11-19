@@ -183,6 +183,30 @@ struct CaptureRoot: View {
     }
 }
 
+/// Work, leisure or mix, beside the Capture switch: the current state's glyph,
+/// opening a menu to pick another. A menu rather than a tap that cycles, so
+/// brushing it never changes the state; the Watch's grid is the other switch.
+private struct ActivityStateMenu: View {
+    @ObservedObject var model: CaptureModel
+
+    var body: some View {
+        let current = model.activitySwitch?.state
+        Menu {
+            ForEach(ActivityState.allCases) { state in
+                Button { model.switchActivity(state) } label: {
+                    if state == current { Label(state.title, systemImage: "checkmark") } else { Text(state.title) }
+                }
+                .accessibilityIdentifier("activity-\(state.rawValue)")
+            }
+        } label: {
+            ActivityGlyph(state: current).frame(width: 28, height: 28)
+        }
+        .accessibilityLabel("State")
+        .accessibilityValue(current?.title ?? "Not set")
+        .accessibilityIdentifier("capture-activity-state")
+    }
+}
+
 /// The Capture tab: a switch in place of its title between the Daily log, the
 /// entry composer it opens on, in the middle, and the workout log. A sideways
 /// swipe moves to the page beside.
@@ -239,6 +263,7 @@ private struct CaptureTab: View {
             // The notes canvas wants a Pencil and room, so it is the iPad's.
             if UIDevice.current.userInterfaceIdiom == .pad {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    ActivityStateMenu(model: model)
                     Button { Task { await openNewspaper() } } label: {
                         if fetchingPaper { ProgressView() } else { Label("Newspaper", systemImage: "newspaper") }
                     }
@@ -247,6 +272,8 @@ private struct CaptureTab: View {
                     Button { openNotes() } label: { Label("Notes", systemImage: "pencil.and.scribble") }
                         .accessibilityIdentifier("capture-notes")
                 }
+            } else {
+                ToolbarItem(placement: .topBarTrailing) { ActivityStateMenu(model: model) }
             }
         }
         .navigationDestination(item: $notebook) { NotebookEditor(owner: model, notebook: $0) }

@@ -109,6 +109,8 @@ def create_app():
     code_tasks.add_listener(push_notify.task_changed)
     from backend.routes import coach, gaming
     app.register_blueprint(coach.bp)
+    from backend.routes import activity_state as activity_state_routes
+    app.register_blueprint(activity_state_routes.bp)
     app.register_blueprint(gaming.bp)
     for bp in (auth_routes.bp, journal.bp, calendar.bp, learning.bp, settings.bp, chat.bp, files.bp, writing.bp, stt.bp, tasks.bp, curated_tags.bp, shortcuts.bp, transcriptions.bp, cookbook.bp, food.bp, spending.bp, fanfic.bp, newspapers.bp, meetings.bp, notebook.files_bp, notebook.bp, paper.bp, lifestyle.bp, ideas.bp, practice.bp, memory.bp, email.bp, notes.bp, weather.bp, jobs.bp, backup.bp, logs.bp, repos.bp, life_wiki.bp, piano.bp, torrent.bp, knowledge.bp, study.bp, apple_health.bp, location.bp):
         app.register_blueprint(bp)

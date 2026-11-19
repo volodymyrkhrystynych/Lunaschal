@@ -7,11 +7,15 @@ export function ReadingTimeline({
   sleep,
   spans,
   zoom,
+  besideActivity = false,
 }: {
   date: string;
   sleep: SleepDay;
   spans: CalendarReadingSpan[];
   zoom: number;
+  /** The activity rail holds the right edge; this one steps in beside it,
+   *  titles and all. */
+  besideActivity?: boolean;
 }) {
   // Titles show by default; clicking the rail (or a title) hides them for
   // when they cover an event.
@@ -27,7 +31,9 @@ export function ReadingTimeline({
   });
   if (layout.end <= layout.start) return null;
   return (
-    <div className="absolute right-0 top-0 bottom-0 w-6 z-20 pointer-events-none">
+    <div
+      className={`absolute ${besideActivity ? 'right-7' : 'right-0'} top-0 bottom-0 w-6 z-20 pointer-events-none`}
+    >
       <button
         type="button"
         aria-label="Leisure reading timeline"

@@ -28,12 +28,10 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     }
     let store: CaptureStore
     nonisolated private let receiptRoot: URL
-    nonisolated private let pomodoroOutbox: URL
+    /// Switches made here, kept until the phone says it has them.
+    nonisolated private let activityOutbox: URL
     let recorder: Recorder
-    let pomodoro: PomodoroModel
-    let workout: WorkoutModel
-    /// The buzz at the end of Focus, Timeout and Workout.
-    let alarm = WatchAlarm()
+    let activity: ActivityStore
     @Published var captures: [Capture] = []
     @Published var received: Set<String> = []
     @Published var uploaded: Set<String> = []
@@ -46,6 +44,11 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     /// Whether the phone can be reached right now, for the status screen.
     /// Transfers queue regardless; this only says whether they can move.
     @Published private(set) var phoneReachable = false
+    /// Work, leisure or mix: the newer of the last switch made here and the
+    /// one the phone last told us about. Nil until either has happened.
+    @Published private(set) var activityState: ActivityState?
+    /// Switches not yet acknowledged by the phone.
+    @Published private(set) var pendingSwitches = 0
     /// The warning over the pages after a stray clip was thrown away.
     @Published private(set) var notice: String?
     private var noticeExpiry: Task<Void, Never>?
@@ -54,46 +57,58 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         self.store = store
         receiptRoot = store.root
         recorder = Recorder(store: store)
-        pomodoro = PomodoroModel(engine: try PomodoroEngine(fallback: store.root.deletingLastPathComponent()
-            .appendingPathComponent("Pomodoro", isDirectory: true)))
-        pomodoroOutbox = pomodoro.outbox.root
-        workout = WorkoutModel(fallback: store.root.deletingLastPathComponent())
+        activity = try ActivityStore(root: store.root.deletingLastPathComponent()
+            .appendingPathComponent("Activity", isDirectory: true))
+        activityOutbox = activity.root
         super.init()
         try store.recoverInterruptedRecordings()
         recorder.onChange = { [weak self] in self?.reload(); self?.sendPending(); self?.publishRecording() }
         recorder.onError = { [weak self] in self?.message = $0.localizedDescription }
         recorder.minimumLength = ShortRecording.minimum
         recorder.onDiscarded = { [weak self] in self?.warnDiscarded() }
-        pomodoro.onChange = { [weak self] in self?.syncAlarm() }
-        workout.onChange = { [weak self] in self?.syncAlarm() }
-        alarm.onRing = { [weak self] in self?.pomodoro.refresh(); self?.workout.refresh() }
-        alarm.onDismiss = { [weak self] in
-            // Dismissing Workout's buzz is its Stop; a finished pomodoro still
-            // waits on the page for Continue, Break or Cancel.
-            if self?.workout.timer.isRinging == true { self?.workout.stop() }
-        }
-        alarm.onError = { [weak self] text in
-            guard let self else { return }
-            if let rest = self.workout.timer.endsAt, rest <= self.pomodoro.timer.run?.endsAt ?? .distantFuture {
-                self.workout.message = text
-            } else {
-                self.pomodoro.message = text
-            }
-        }
-        syncAlarm()
         reload()
+        refreshActivity()
         publishRecording() // clears a status left behind by a crash mid-clip
         WCSession.default.delegate = self
         WCSession.default.activate()
     }
 
-    /// Hands the alarm both timers' next end and whichever of them is up.
-    func syncAlarm() {
-        let ends = [pomodoro.timer.run?.endsAt, workout.timer.endsAt].compactMap { $0 }
-        var ringing: Set<String> = []
-        if workout.timer.isRinging { ringing.insert(WatchAlarm.rest) }
-        if case .finished = pomodoro.timer.state { ringing.insert(WatchAlarm.pomodoro) }
-        alarm.update(WatchAlarm.Plan(nextEnd: ends.min(), ringing: ringing))
+    /// Every complication and Control reads one shared entry, so they are
+    /// all redrawn together: reloading only the kinds a change "belongs" to
+    /// is how the launcher row once went on showing a stale button.
+    static func redraw() {
+        WidgetCenter.shared.reloadAllTimelines()
+        ControlCenter.shared.reloadAllControls()
+    }
+
+    /// For the banner a too-short clip leaves when the app is out of sight.
+    static func requestNotificationAuthorization() {
+        Task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) }
+    }
+
+    /// Switches to `state` now: written for the complications at once, then
+    /// queued for the phone. A tile for the state already on does nothing,
+    /// so a second tap is not a second switch.
+    func switchActivity(_ state: ActivityState) {
+        guard state != activityState else { return }
+        let change = ActivitySwitch(state: state, source: .watch)
+        do {
+            try activity.save(change)
+            if let url = WatchComplication.stateURL { try change.save(to: url) }
+        } catch { message = error.localizedDescription; return }
+        activityState = state
+        WKInterfaceDevice.current().play(.click)
+        Self.redraw()
+        sendPending()
+    }
+
+    /// The state to show: this Watch's last switch or the phone's word,
+    /// whichever was made later.
+    func refreshActivity() {
+        let local = WatchComplication.stateURL.flatMap(ActivitySwitch.load(from:))
+        let phone = WatchComplication.glanceURL.flatMap(WatchGlance.load(from:))?.state
+        activityState = ActivitySwitch.latest([local, phone])?.state
+        pendingSwitches = (try? activity.list().count) ?? 0
     }
 
     /// Starts a clip for `choice`, or stops and saves the one going, unless
@@ -102,7 +117,7 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     func toggleRecording(_ choice: RecordingChoice) async {
         if recorder.activeID != nil { recorder.stop(); return }
         guard !recorder.isStarting else { return }
-        PomodoroModel.requestAuthorization() // for the too-short warning
+        Self.requestNotificationAuthorization() // for the too-short warning
         recordingChoice = choice
         await recorder.start(mode: choice.mode, asTodo: choice.asTodo)
     }
@@ -153,7 +168,7 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         }
         if recorder.activeID == nil { recordingChoice = nil; recordingSince = nil }
         else if recordingSince == nil { recordingSince = Date() }
-        PomodoroEngine.redraw()
+        Self.redraw()
     }
 
     func reload() {
@@ -178,6 +193,14 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
                                           "serverReceiptRequest": try JSONEncoder().encode(receipt)])
             } catch { message = error.localizedDescription }
         }
+        let switchesInFlight = Set(session.outstandingUserInfoTransfers.compactMap { $0.userInfo["activitySwitchID"] as? String })
+        for change in (try? activity.list()) ?? [] where !switchesInFlight.contains(change.id) {
+            do {
+                session.transferUserInfo(["activitySwitchID": change.id,
+                                          "activitySwitch": try JSONEncoder().encode(change)])
+            } catch { message = error.localizedDescription }
+        }
+        pendingSwitches = (try? activity.list().count) ?? 0
         for capture in captures where capture.state == .pending && !received.contains(capture.id) && !uploaded.contains(capture.id) && !pending.contains(capture.id) {
             do {
                 let url = try store.audioURL(capture)
@@ -210,7 +233,11 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         Task { @MainActor in
             if let error { self.message = error.localizedDescription }
             self.phoneReachable = reachable
-            if state == .activated { self.sendPending(); self.pomodoro.sendPending() }
+            if state == .activated {
+                // A context the phone sent while this app was not running.
+                self.accept(WatchGlance(context: session.receivedApplicationContext))
+                self.sendPending()
+            }
         }
     }
 
@@ -220,10 +247,11 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
-        if let id = userInfo["pomodoroStored"] as? String {
+        if let id = userInfo["activityStored"] as? String {
             // The phone has it on disk; the Watch's copy can go.
-            do { try PomodoroStore(root: pomodoroOutbox).remove(id) }
+            do { try ActivityStore(root: activityOutbox).remove(id) }
             catch { Task { @MainActor in self.message = error.localizedDescription } }
+            Task { @MainActor in self.refreshActivity() }
             return
         }
         if let bytes = userInfo["serverStored"] as? Data {
@@ -246,6 +274,21 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         } catch { Task { @MainActor in self.message = error.localizedDescription } }
     }
 
+    nonisolated func session(_ session: WCSession, didReceiveApplicationContext context: [String: Any]) {
+        let glance = WatchGlance(context: context)
+        Task { @MainActor in self.accept(glance) }
+    }
+
+    /// Keeps the phone's latest glance for the complications, which read it
+    /// from the App Group, and shows its state if it is the newer one.
+    private func accept(_ glance: WatchGlance?) {
+        guard let glance, let url = WatchComplication.glanceURL else { return }
+        if WatchGlance.load(from: url) == glance { return }
+        do { try glance.save(to: url) } catch { message = error.localizedDescription; return }
+        refreshActivity()
+        Self.redraw()
+    }
+
     nonisolated func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
         if let error { Task { @MainActor in self.message = error.localizedDescription } }
         // Transport completion is not durable phone acknowledgement. Keep audio.
@@ -258,44 +301,20 @@ enum WatchPage: Hashable {
     case grid, status
 }
 
-/// What a busy timer tile opens: its own controls, which do not fit in a tile.
-enum WatchSheet: String, Identifiable {
-    case focus, timeout, workout
-
-    var id: String { rawValue }
-    init(_ choice: TimerChoice) { self = choice == .focus ? .focus : .timeout }
-}
-
 private struct WatchCaptureView: View {
     @ObservedObject var model: WatchModel
     @ObservedObject var recorder: Recorder
     @Environment(\.scenePhase) private var phase
     @State private var page: WatchPage = .grid
-    @State private var sheet: WatchSheet?
 
     var body: some View {
         TabView(selection: $page) {
-            WatchGrid(model: model, pomodoro: model.pomodoro, workout: model.workout, recorder: recorder) {
-                sheet = $0
-            }
-            .tag(WatchPage.grid)
+            WatchGrid(model: model, recorder: recorder)
+                .tag(WatchPage.grid)
             WatchStatus(model: model, recorder: recorder)
                 .tag(WatchPage.status)
         }
         .tabViewStyle(.page)
-        .sheet(item: $sheet) { which in
-            Group {
-                switch which {
-                case .focus, .timeout:
-                    TimerPage(choice: which == .focus ? .focus : .timeout, model: model.pomodoro) {
-                        sheet = WatchSheet($0)
-                    }
-                case .workout:
-                    WorkoutPage(model: model.workout)
-                }
-            }
-            .accessibilityIdentifier("sheet.\(which.rawValue)")
-        }
         .overlay(alignment: .top) {
             if let notice = model.notice {
                 Text(notice)
@@ -309,14 +328,6 @@ private struct WatchCaptureView: View {
             }
         }
         .onAppear {
-            // Open on whatever is waiting for a choice.
-            if model.workout.timer.isRinging { sheet = .workout }
-            if case .finished = model.pomodoro.timer.state, let owner = model.pomodoro.timer.owner {
-                sheet = WatchSheet(owner)
-            }
-            if let kind = PomodoroModel.launchStart, model.pomodoro.timer.run == nil {
-                model.pomodoro.start(kind)
-            }
             #if DEBUG
             // `-WatchLink lunaschal-watch://record,lunaschal-watch://record`:
             // complication taps, three seconds apart, since the watchOS
@@ -331,85 +342,53 @@ private struct WatchCaptureView: View {
                 }
             }
             #endif
-            if let link = PomodoroEngine.takePendingLink() { open(link) }
-        }
-        .onChange(of: model.workout.timer.isRinging) { _, ringing in
-            if ringing { page = .grid; sheet = .workout }
-        }
-        .onChange(of: model.workout.timer.state) { _, state in
-            // Stopped from its sheet: nothing left to show there.
-            if state == .idle, sheet == .workout { sheet = nil }
-        }
-        .onChange(of: model.pomodoro.timer.state) { _, state in
-            switch state {
-            case .finished:
-                // The alarm brings the app forward; show the timer's choices.
-                if let owner = model.pomodoro.timer.owner { page = .grid; sheet = WatchSheet(owner) }
-            case .idle:
-                if sheet == .focus || sheet == .timeout { sheet = nil }
-            case .running:
-                break
-            }
         }
         .onOpenURL { url in
             if let link = WatchLink(url: url) { open(link) }
         }
         .onChange(of: phase) { _, value in
             if value == .active {
-                model.reload(); model.sendPending(); model.pomodoro.refresh(); model.pomodoro.sendPending()
-                model.workout.refresh()
-                model.syncAlarm() // schedules for a run a Control started while asleep
-                if let link = PomodoroEngine.takePendingLink() { open(link) }
+                model.reload(); model.sendPending(); model.refreshActivity()
             } else if value == .inactive {
                 // The face is coming back: draw it from the latest state, in
                 // case a reload made mid-change was dropped.
-                PomodoroEngine.redraw()
+                WatchModel.redraw()
             }
         }
     }
 
-    /// A tap on a complication, or a screen a Control asked for: shows the
-    /// grid and, since the face cannot act without opening the app, does the
-    /// thing at once. Focus, Timeout and Workout start unless already going
-    /// (and then open their controls); Record, Transcribe and To-do start or
-    /// stop a clip, whose tile shows it.
+    /// A tap on a complication: shows the grid and, since the face cannot act
+    /// without opening the app, does the thing at once. Record, Transcribe and
+    /// To-do start or stop a clip, whose tile shows it; Habits and State only
+    /// open the grid, where the state tiles are.
     private func open(_ link: WatchLink) {
         page = .grid
         switch link {
-        case .timer:
-            sheet = model.pomodoro.timer.owner.map(WatchSheet.init)
-        case .start(let kind):
-            if model.pomodoro.press(kind) == .alreadyGoing {
-                sheet = model.pomodoro.timer.owner.map(WatchSheet.init)
-            }
+        case .home:
+            break
         case .record, .transcribe, .todo:
             let choice: RecordingChoice = link == .record ? .record : link == .todo ? .todo : .transcribe
-            sheet = nil
             Task { await model.toggleRecording(choice) }
-        case .workout:
-            if model.workout.isIdle { model.workout.start() } else { sheet = .workout }
         }
     }
 }
 
-/// Every action on one screen: the three timers over the three kinds of clip.
-/// A tile shows its own state, so the grid is also the glance at what is going.
+/// Every action on one screen: work, leisure and mix over the three kinds of
+/// clip. A tile shows its own state, so the grid is also the glance at what
+/// is going.
 private struct WatchGrid: View {
     @ObservedObject var model: WatchModel
-    @ObservedObject var pomodoro: PomodoroModel
-    @ObservedObject var workout: WorkoutModel
     @ObservedObject var recorder: Recorder
-    let show: (WatchSheet) -> Void
 
-    private let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)
 
     var body: some View {
         GeometryReader { box in
-            let height = max(44, (box.size.height - 12) / 3)
+            let height = max(44, (box.size.height - 6) / 2)
             LazyVGrid(columns: columns, spacing: 6) {
-                timer(.focus).frame(height: height)
-                timer(.timeout).frame(height: height)
-                workoutTile.frame(height: height)
+                ForEach(ActivityState.allCases) { state in
+                    activity(state).frame(height: height)
+                }
                 recording(.record).frame(height: height)
                 recording(.transcribe).frame(height: height)
                 recording(.todo).frame(height: height)
@@ -418,43 +397,24 @@ private struct WatchGrid: View {
         .accessibilityIdentifier("page.grid")
     }
 
-    @ViewBuilder private func timer(_ choice: TimerChoice) -> some View {
-        let tint: Color = choice == .focus ? .indigo : .teal
-        switch pomodoro.timer.state {
-        case .running(let run) where choice.owns(run):
-            Tile(symbol: run.kind.symbol, tint: tint, active: true, id: choice.rawValue) {
-                show(WatchSheet(choice))
-            } caption: {
-                Text(timerInterval: run.startedAt...run.endsAt, countsDown: true)
+    /// The state that is on is filled; tapping another switches to it.
+    private func activity(_ state: ActivityState) -> some View {
+        let on = model.activityState == state
+        return Button { model.switchActivity(state) } label: {
+            VStack(spacing: 2) {
+                ActivityGlyph(state: state, active: on).frame(maxHeight: 30)
+                Text(state.title)
+                    .font(.footnote.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
             }
-        case .finished(let kind) where choice.owns(kind):
-            Tile(symbol: "bell.fill", tint: tint, active: true, id: choice.rawValue) {
-                show(WatchSheet(choice))
-            } caption: { Text("Done") }
-        default:
-            Tile(symbol: choice.kind.symbol, tint: tint, id: choice.rawValue) {
-                if pomodoro.press(choice.kind) == .alreadyGoing, let other = pomodoro.timer.owner, other != choice {
-                    show(WatchSheet(other))
-                }
-            } caption: { Text("\(choice.title) \(choice.kind.minutes)") }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.white.opacity(on ? 0.18 : 0.06), in: RoundedRectangle(cornerRadius: 14))
         }
-    }
-
-    @ViewBuilder private var workoutTile: some View {
-        switch workout.timer.state {
-        case .idle:
-            Tile(symbol: "dumbbell", tint: .orange, id: "workout") { workout.start() } caption: {
-                Text("Workout \(Int(RestTimer.seconds))s")
-            }
-        case .running(let startedAt, let endsAt):
-            Tile(symbol: "dumbbell", tint: .orange, active: true, id: "workout") { show(.workout) } caption: {
-                Text(timerInterval: startedAt...endsAt, countsDown: true)
-            }
-        case .ringing:
-            Tile(symbol: "bell.fill", tint: .orange, active: true, id: "workout") { show(.workout) } caption: {
-                Text("Rest's over")
-            }
-        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(state.title)
+        .accessibilityAddTraits(on ? .isSelected : [])
+        .accessibilityIdentifier("tile.\(state.rawValue)")
     }
 
     /// One tap starts the clip and the next stops and saves it. While one
@@ -514,7 +474,7 @@ private struct Tile<Caption: View>: View {
 }
 
 /// What the Watch is set to and what it is holding: the phone link, the clips
-/// still on their way, the timers' lengths, and the recordings themselves.
+/// and switches still on their way, and the recordings themselves.
 private struct WatchStatus: View {
     @ObservedObject var model: WatchModel
     @ObservedObject var recorder: Recorder
@@ -529,11 +489,12 @@ private struct WatchStatus: View {
                 LabeledContent("Waiting", value: waiting == 0 ? "None" : "\(waiting) clip\(waiting == 1 ? "" : "s")")
                 Button("Retry phone transfer") { model.sendPending() }
             }
-            Section("Timers") {
-                LabeledContent("Focus", value: "\(PomodoroKind.work.minutes) min")
-                LabeledContent("Break", value: "\(PomodoroKind.break.minutes) min")
-                LabeledContent("Timeout", value: "\(PomodoroKind.timeout.minutes) min")
-                LabeledContent("Workout", value: "\(Int(RestTimer.seconds)) s")
+            Section("State") {
+                LabeledContent("Now", value: model.activityState?.title ?? "Not set")
+                LabeledContent("Waiting", value: model.pendingSwitches == 0 ? "None" :
+                               "\(model.pendingSwitches) switch\(model.pendingSwitches == 1 ? "" : "es")")
+            }
+            Section("Recording") {
                 LabeledContent("Shortest clip", value: "\(Int(ShortRecording.minimum)) s")
             }
             if let message = model.message {
@@ -585,7 +546,6 @@ final class WatchLifecycle: NSObject, WKApplicationDelegate, UNUserNotificationC
 
     func applicationDidFinishLaunching() {
         _ = WatchModel.startup
-        PomodoroModel.registerCategories()
         UNUserNotificationCenter.current().delegate = self
         observer = WCSession.default.observe(\.hasContentPending, options: [.initial, .new]) { [weak self] _, _ in
             Task { @MainActor in self?.completeIfIdle() }
@@ -601,31 +561,11 @@ final class WatchLifecycle: NSObject, WKApplicationDelegate, UNUserNotificationC
         }
         completeIfIdle()
     }
-    /// The timers' alarm, when the app was not running at an end.
-    func handle(_ extendedRuntimeSession: WKExtendedRuntimeSession) {
-        guard case .success(let model) = WatchModel.startup else { extendedRuntimeSession.invalidate(); return }
-        model.alarm.adopt(extendedRuntimeSession)
-    }
-
-    /// A button on the timer's notification: Continue, Break or Cancel.
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            didReceive response: UNNotificationResponse) async {
-        let action = PomodoroModel.Action(rawValue: response.actionIdentifier)
-        await MainActor.run {
-            guard case .success(let model) = WatchModel.startup else { return }
-            if let action { model.pomodoro.perform(action) } else { model.pomodoro.refresh() }
-            model.workout.refresh()
-        }
-    }
-
-    /// The app is open when the time is up: the screen already shows the
-    /// choices, so a haptic is enough and no banner covers them.
+    /// The app is open when a notification arrives (a discarded clip's): the
+    /// banner over the pages already says it, so nothing more is shown.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        await MainActor.run {
-            if case .success(let model) = WatchModel.startup { model.pomodoro.refresh(); model.workout.refresh() }
-        }
-        return []
+        []
     }
 
     private func completeIfIdle() {

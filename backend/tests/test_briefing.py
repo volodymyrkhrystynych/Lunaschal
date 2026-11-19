@@ -582,3 +582,12 @@ def test_a_broken_oddities_report_does_not_cost_the_briefing(client, monkeypatch
     row = _content(_run(monkeypatch))
     assert row['content'].startswith(_FAKE['briefing'])
     assert "didn't run" in row['content']
+
+
+def test_yesterdays_activity_minutes_reach_the_prompt_only_when_there_were_any(client):
+    ctx = {'now': NOW, 'today': TODAY, 'goals': '', 'journal': [], 'daily_tasks': [],
+           'todos': [], 'calendar': [], 'learning_due': 0}
+    assert 'switched on their watch' not in briefing_mod.build_briefing_prompt(ctx)
+    ctx['activity'] = {'work': 300, 'leisure': 120, 'mix': 45}
+    assert 'work 300, leisure 120, mix 45' in briefing_mod.build_briefing_prompt(ctx)
+    assert briefing_mod.gather_briefing_context(NOW)['activity'] is None

@@ -1770,6 +1770,23 @@ def seed_pomodoro(db):
     run('work', day_bounds(today_key(3))[0] + 10 * 3600, 12, 25, completed=False)
 
 
+
+def seed_activity_states(db):
+    """Work / leisure / mix switches for the calendar's activity rail: a work
+    morning, a mixed afternoon, a leisure evening, yesterday and today. The
+    reading seeded in the evening overlaps the leisure, so it stays leisure;
+    nothing today is later than now, which would be a switch from the future."""
+    now = int(time.time())
+    for days_ago in (1, 0):
+        start = day_bounds(today_key(days_ago))[0]
+        for hours, state, source in ((5, 'work', 'watch'), (9, 'mix', 'phone'),
+                                     (14, 'leisure', 'watch')):
+            at = start + hours * 3600
+            if at <= now:
+                db.execute(
+                    'INSERT INTO activity_states (id, state, at, source, created_at)'
+                    ' VALUES (?, ?, ?, ?, ?)', (new_id(), state, at, source, at))
+
 def seed_lifestyle(db):
     today = today_key()
     # Days ago each habit was ticked, so the streaks and history grid have
@@ -3137,6 +3154,7 @@ def main() -> None:
     seed_meetings(db)
     seed_lifestyle(db)
     seed_pomodoro(db)
+    seed_activity_states(db)
     seed_apple_health(db)
     seed_location(db)
     seed_piano(db)

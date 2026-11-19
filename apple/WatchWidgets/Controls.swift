@@ -7,41 +7,6 @@ import LunaschalCore
 /// one place on the Watch where a press acts without opening the app. (A
 /// complication on the face always opens it.)
 
-struct TimerValue: ControlValueProvider {
-    let choice: TimerChoice
-    var previewValue: PomodoroTimer.Run? { nil }
-
-    /// The run this button owns, if one is going.
-    func currentValue() async throws -> PomodoroTimer.Run? {
-        let timer = WatchComplication.timerURL.flatMap(PomodoroTimer.load(from:)) ?? PomodoroTimer()
-        guard let run = timer.run, run.endsAt > Date(), choice.owns(run) else { return nil }
-        return run
-    }
-}
-
-/// Focus or Timeout: the first press starts it with the app left asleep, a
-/// press while it runs opens the timer.
-struct TimerControl {
-    let choice: TimerChoice
-
-    var body: some ControlWidgetConfiguration {
-        StaticControlConfiguration(kind: choice.controlKind, provider: TimerValue(choice: choice)) { run in
-            ControlWidgetButton(action: StartTimerIntent(choice)) {
-                if let run {
-                    Label {
-                        Text(run.kind.label)
-                        Text("Until \(run.endsAt, style: .time)")
-                    } icon: { Image(systemName: run.kind.symbol) }
-                } else {
-                    Label("\(choice.title) \(choice.kind.minutes)", systemImage: choice.symbol)
-                }
-            }
-        }
-        .displayName(choice == .focus ? "Focus 25" : "Timeout 10")
-        .description(choice == .focus ? "Starts 25 minutes of focus." : "Starts a 10-minute timeout.")
-    }
-}
-
 struct RecordingValue: ControlValueProvider {
     let choice: RecordingChoice
     var previewValue: Bool { false }
@@ -70,8 +35,6 @@ struct RecordingControl {
 }
 
 // WidgetKit makes each control with `init()`, so every choice is its own type.
-struct FocusControl: ControlWidget { var body: some ControlWidgetConfiguration { TimerControl(choice: .focus).body } }
-struct TimeoutControl: ControlWidget { var body: some ControlWidgetConfiguration { TimerControl(choice: .timeout).body } }
 struct RecordControl: ControlWidget { var body: some ControlWidgetConfiguration { RecordingControl(choice: .record).body } }
 struct TranscribeControl: ControlWidget { var body: some ControlWidgetConfiguration { RecordingControl(choice: .transcribe).body } }
 struct TodoControl: ControlWidget { var body: some ControlWidgetConfiguration { RecordingControl(choice: .todo).body } }

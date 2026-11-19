@@ -96,12 +96,14 @@ targets:
       - Watch
       - WatchShared
       - App/Recorder.swift
+      - App/ActivityGlyph.swift
     dependencies:
       - package: LunaschalCore
       - target: LunaschalWatchWidgets
         embed: true
-    # The App Group carries the timer's state to the complications, which run
-    # in their own process. Release profiles for both bundles must include it.
+    # The App Group carries the recording, the work/leisure/mix state and the
+    # phone's habit counts to the complications, which run in their own
+    # process. Release profiles for both bundles must include it.
     entitlements:
       path: Generated/Watch.entitlements
       properties:
@@ -137,13 +139,10 @@ targets:
         WKRunsIndependentlyOfCompanionApp: false
         NSMicrophoneUsageDescription: Record thoughts for your journal, even while your phone is unavailable.
         UIBackgroundModes: [audio]
-        # The Workout timer's end buzzes until stopped: a smart-alarm
-        # WKExtendedRuntimeSession, the only thing that can do that asleep.
-        WKBackgroundModes: [alarm]
   LunaschalWatchWidgets:
     type: app-extension
     platform: watchOS
-    sources: [WatchWidgets, WatchShared]
+    sources: [WatchWidgets, WatchShared, App/ActivityGlyph.swift]
     dependencies:
       - package: LunaschalCore
     entitlements:

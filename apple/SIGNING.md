@@ -47,8 +47,9 @@ Two App Groups are registered in the team (confirmed by the user on
 | Lunaschal       | `group.com.lunaschal.mobile`       | `Lunaschal`, `LunaschalShare` and `LunaschalWidgets` |
 
 The Watch app and its complications extension share
-`group.com.lunaschal.mobile.watch`: the pomodoro timer and the recording status
-live there, so the complications and Controls can read and start them. Enable
+`group.com.lunaschal.mobile.watch`: the recording status, the work / leisure /
+mix state and the phone's habit counts live there, so the complications and
+Controls can read them. Enable
 App Groups on both App IDs with that group selected, and only then create their
 profiles, because a profile records the capabilities its App ID had when it was
 made. A Watch profile made before the complications lacks the group and must be

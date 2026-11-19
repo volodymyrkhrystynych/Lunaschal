@@ -11,6 +11,7 @@ vi.mock('../../hooks/api', () => ({
     calendar: {
       listByDate: vi.fn(),
       reading: vi.fn().mockResolvedValue([]),
+      activity: vi.fn().mockResolvedValue([]),
       sleep: { get: vi.fn() },
       update: vi.fn(),
       moveOccurrence: vi.fn(),
@@ -75,6 +76,46 @@ function renderDay(
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.calendar.reading).mockResolvedValue([]);
+  vi.mocked(api.calendar.activity).mockResolvedValue([]);
+});
+
+it('draws the activity rail on the right edge and steps the reading rail in beside it', async () => {
+  vi.mocked(api.calendar.reading).mockResolvedValue([
+    {
+      id: 'span1',
+      title: 'Lighthouse',
+      chapterNumber: 4,
+      startedAt: at(DATE, '09:00'),
+      endedAt: at(DATE, '09:30'),
+    },
+  ]);
+  vi.mocked(api.calendar.activity).mockResolvedValue([
+    {
+      id: 'w',
+      state: 'work',
+      startedAt: at(DATE, '08:00'),
+      endedAt: at(DATE, '09:00'),
+    },
+    {
+      id: 'm',
+      state: 'mix',
+      startedAt: at(DATE, '09:00'),
+      endedAt: at(DATE, '09:30'),
+    },
+  ]);
+  renderDay(
+    sleepDay({ wakeAt: at(DATE, '08:00'), sleepAt: at(DATE, '23:00') })
+  );
+  const fills = await screen.findAllByTestId('activity-fill');
+  expect(api.calendar.activity).toHaveBeenCalledWith(DATE);
+  expect(fills.map(el => el.dataset.state)).toEqual(['work', 'mix']);
+  const rail = screen.getByRole('img', { name: 'Work and leisure timeline' });
+  expect(rail.className).toContain('right-0');
+  await screen.findByTestId('reading-fill');
+  const readingLane = screen.getByRole('button', {
+    name: 'Leisure reading timeline',
+  }).parentElement as HTMLElement;
+  expect(readingLane.className).toContain('right-7');
 });
 
 it('loads reading automatically alongside events, titles shown until the rail is clicked', async () => {
