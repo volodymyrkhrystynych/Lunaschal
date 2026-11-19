@@ -192,6 +192,10 @@ final class CaptureModel: ObservableObject {
     private static let libraryStaleKey = "libraryNeedsBootstrap"
     /// The bulk download yielded to an opened fic and picks up once the queue empties.
     private var resumeLibraryAfterFics = false
+    /// Fics queued to fetch only the chapters after the ones on the device.
+    /// If that leaves one short (a chapter came in earlier in the order), it
+    /// goes once more from the start.
+    private var ficTailOnly: Set<String> = []
     private var ficEstimate = TransferEstimate(started: Date())
 
     init(store: CaptureStore) throws {
@@ -1439,7 +1443,7 @@ final class CaptureModel: ObservableObject {
         cancelSync()
         pauseLibrary()
         pauseFicDownloads()
-        ficQueue.removeAll()
+        ficQueue.removeAll(); ficTailOnly.removeAll()
         do {
             if let server { try SessionToken.remove(server: server) }
             SharedSignIn.remove()
@@ -1832,12 +1836,31 @@ final class CaptureModel: ObservableObject {
     }
 
     /// Asks the server to read the forums' alerts and queue whatever they
-    /// mention. The chapters it fetches arrive through the next sync.
+    /// mention. The server answers at once and reads them on its own time;
+    /// this waits for its summary in short polls, so leaving the screen or
+    /// the app no longer times it out. The chapters it fetches arrive through
+    /// the following syncs; one is asked for now for what it queued.
     func refreshFicsOnServer() async {
+        guard !refreshingFics else { return }
         guard let api = chatAPI() else { message = "Sign in to refresh the library on the server."; return }
         refreshingFics = true
         defer { refreshingFics = false }
-        do { message = try await api.refreshFicAlerts().summary } catch { message = error.localizedDescription }
+        do {
+            message = try await api.refreshFicAlerts().summary
+            requestSync()
+        } catch { message = error.localizedDescription }
+    }
+
+    /// A pull to refresh: a pass now, waited out, including one that was
+    /// already running and anything queued behind it.
+    func syncNow() async {
+        startSync(.changes)
+        let deadline = Date().addingTimeInterval(120)
+        while (syncing || queuedMode != nil), Date() < deadline, !Task.isCancelled {
+            if let task = syncingTask { _ = await task.value }
+            // A background pass has no task here to wait on.
+            if syncing || queuedMode != nil { try? await Task.sleep(for: .milliseconds(250)) }
+        }
     }
 
     /// Queues one fic for an update on the server, or takes it back out if it
@@ -1905,7 +1928,11 @@ final class CaptureModel: ObservableObject {
     func ensureFicOnDevice(_ book: SyncChange) {
         guard canDownloadFics, !isFicOnDevice(book) else { return }
         ficErrors[book.id] = nil
-        let headChanged = ficQueue.prioritize(book.id, title: book.title)
+        // Past the chapters already here: a fic with one new chapter fetches one.
+        let outline = ficQueue.contains(book.id) ? [] : (try? replica.chapterOutline(bookID: book.id)) ?? []
+        let start = FicResume.key(after: outline)
+        if !start.isEmpty { ficTailOnly.insert(book.id) }
+        let headChanged = ficQueue.prioritize(book.id, title: book.title, after: start)
         guard headChanged || ficTask == nil else { return }
         if downloadingLibrary {
             resumeLibraryAfterFics = true
@@ -1977,10 +2004,14 @@ final class CaptureModel: ObservableObject {
                     await self?.showFicProgress(entry, progress)
                 }
                 ficQueue.remove(entry.id)
+                if ficTailOnly.remove(entry.id) != nil,
+                   let book = try? replica.record(collection: "fics", id: entry.id), !isFicOnDevice(book) {
+                    ficQueue.prioritize(entry.id, title: entry.title)
+                }
             } catch {
                 if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
                 ficErrors[entry.id] = error.localizedDescription
-                ficQueue.remove(entry.id)
+                ficQueue.remove(entry.id); ficTailOnly.remove(entry.id)
             }
             ficDownloadRevision += 1
         }

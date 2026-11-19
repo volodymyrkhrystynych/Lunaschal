@@ -851,17 +851,56 @@ def start_collection_scan():
     return jsonify({'id': scan_id}), 202
 
 
+# Reading every forum's alerts is several slow requests in a row, longer than
+# a phone keeps a request alive once it leaves the app. So the POST only starts
+# it, and the result waits here for whoever asks next. In memory: a refresh
+# lost to a restart is simply asked for again.
+_alert_refresh_lock = threading.Lock()
+_alert_refresh: dict = {'state': 'idle', 'result': None, 'error': None,
+                        'startedAt': None, 'finishedAt': None}
+
+
+def _start_alerts_bg(run) -> None:
+    threading.Thread(target=run, daemon=True).start()
+
+
 @bp.post('/refresh-alerts')
 def refresh_alerts():
-    """Queue only forum activity not covered by a successful download."""
-    from backend.fanfic import alerts
+    """Queue only forum activity not covered by a successful download.
+    Answers at once; `GET /refresh-alerts/status` has the summary."""
     if not any(r['domain'] in KNOWN_SITES for r in
                get_db().execute('SELECT domain FROM site_cookies')):
         return jsonify({'error': 'No site cookies configured — paste your forum'
                         ' session cookies in Settings → Fanfic site cookies first'}), 400
-    result = alerts.refresh()
+    with _alert_refresh_lock:
+        if _alert_refresh['state'] == 'running':
+            return jsonify({**_alert_refresh, 'started': False}), 202
+        _alert_refresh.update(state='running', result=None, error=None,
+                              startedAt=int(time.time()), finishedAt=None)
+    _start_alerts_bg(_run_alert_refresh)
+    with _alert_refresh_lock:
+        return jsonify({**_alert_refresh, 'started': True}), 202
+
+
+@bp.get('/refresh-alerts/status')
+def refresh_alerts_status():
+    """The last alerts refresh: `idle` before the first since startup,
+    `running`, `done` with its summary in `result`, or `error`."""
+    with _alert_refresh_lock:
+        return jsonify(dict(_alert_refresh))
+
+
+def _run_alert_refresh() -> None:
+    from backend.fanfic import alerts
+    try:
+        result, error = alerts.refresh(), None
+    except Exception as exc:  # a crashed refresh must not stay "running" forever
+        result, error = None, str(exc) or type(exc).__name__
+    with _alert_refresh_lock:
+        _alert_refresh.update(state='error' if error else 'done', result=result, error=error,
+                              finishedAt=int(time.time()))
+    # Even after a failure: a restart can leave fics queued with no worker.
     _start_drain_bg()
-    return jsonify(result)
 
 
 @bp.post('/scan-watched/<domain>')

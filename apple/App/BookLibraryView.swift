@@ -138,7 +138,9 @@ struct BookListView: View {
         // it, the pills' scroll view got a refresh control too, and on a second
         // visit it bounced vertically: UIKit then inset it by the navigation
         // bar's height and drew the pills that far below their row, clipped away.
-        .refreshable { await refresh() }
+        // A pull asks the server what changed first: new chapters and books
+        // only reach this list through a sync.
+        .refreshable { await model.syncNow(); await refresh() }
         .overlay {
             if books.isEmpty {
                 ContentUnavailableView(folder == nil ? "No matching books" : "No books in this folder",
@@ -426,7 +428,7 @@ struct FolderListView: View {
                     description: Text("Folders made in the desktop library appear here after a sync."))
             }
         }
-        .refreshable { await refresh() }
+        .refreshable { await model.syncNow(); await refresh() }
         .task(id: model.downloadingLibrary) { await refresh() }
         .onChange(of: model.syncChanges) { _, changes in
             if changes.touches(["fics", "fic_folders"]) { Task { await refresh() } }

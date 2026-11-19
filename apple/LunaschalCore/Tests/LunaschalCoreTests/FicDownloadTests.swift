@@ -175,6 +175,46 @@ final class FicDownloadTests: XCTestCase {
         XCTAssertEqual(queue.head?.id, "b")
     }
 
+    func testANewQueueEntryStartsWhereItWasToldAndAQueuedOneKeepsItsPlace() {
+        var queue = FicQueue()
+        queue.prioritize("a", title: "A", after: "7:z")
+        XCTAssertEqual(queue.head?.after, "7:z")
+        queue.record("a", after: "9:y")
+        queue.prioritize("b", title: "B")
+        queue.prioritize("a", title: "A", after: "7:z")
+        XCTAssertEqual(queue.head?.after, "9:y", "progress made beats the starting point")
+    }
+
+    // MARK: Resume key
+
+    private func outlined(_ id: String, _ position: Double?) -> SyncChange {
+        var data: [String: JSONValue] = ["id": .string(id)]
+        if let position { data["position"] = .number(position) }
+        return SyncChange(revision: 1, collection: "fic_chapters", id: id, deleted: false, data: data)
+    }
+
+    func testResumeKeyIsPastTheLastChapterOnTheDevice() {
+        XCTAssertEqual(FicResume.key(after: []), "")
+        XCTAssertEqual(FicResume.key(after: [outlined("a", 0), outlined("c", 2), outlined("b", 1)]), "2:c")
+        // The server orders by (position, id), so a tie goes to the larger id.
+        XCTAssertEqual(FicResume.key(after: [outlined("q", 3), outlined("r", 3), outlined("p", 3)]), "3:r")
+        // Without a position there is nothing to key on: from the start.
+        XCTAssertEqual(FicResume.key(after: [outlined("a", 0), outlined("b", nil)]), "")
+    }
+
+    func testDownloadingFromTheResumeKeyAsksOnlyForLaterChapters() async throws {
+        let (store, worker, _) = try setup()
+        let have = [outlined(ULID.make(), 0), outlined(ULID.make(), 1)]
+        let key = FicResume.key(after: have)
+        let api = FicFixture(pages: [key: page([chapter(ULID.make())], after: "2:n", more: false, before: 20, bytes: 10)])
+        let progress = Progress()
+        try await worker.downloadFic(fic, after: key, using: api) { progress.add($0) }
+        let requested = await api.requested
+        XCTAssertEqual(requested, [key])
+        XCTAssertEqual(try store.relatedCount(collection: "fic_chapters", field: "ficId", value: fic), 1)
+        XCTAssertEqual(progress.all.last?.fraction, 1)
+    }
+
     // MARK: Estimate
 
     func testEstimateUsesOnlyBytesMovedThisSession() {

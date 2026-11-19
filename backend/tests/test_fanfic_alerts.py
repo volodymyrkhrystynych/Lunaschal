@@ -45,6 +45,10 @@ def fake_net(monkeypatch, tmp_path):
     monkeypatch.setattr(download, 'REQUEST_DELAY', 0)
     monkeypatch.setattr(fanfic_routes, '_start_import_bg', download.run_import)
     monkeypatch.setattr(fanfic_routes, '_start_drain_bg', download.run_drain_pending)
+    # The alerts read runs in a thread in production; inline here, so the
+    # POST's reply already carries the finished summary.
+    monkeypatch.setattr(fanfic_routes, '_start_alerts_bg', lambda run: run())
+    monkeypatch.setitem(fanfic_routes._alert_refresh, 'state', 'idle')
 
     pages = {**_thread_pages(THREAD), ALERTS_URL: (FIXTURES / 'alerts.html').read_text()}
     binaries = {'https://example.com/art.png': (b'\x89PNG-fake-bytes', 'image/png')}
@@ -64,6 +68,14 @@ def fake_net(monkeypatch, tmp_path):
     monkeypatch.setattr(download, '_fetch', fetch)
     monkeypatch.setattr(download, '_fetch_binary', fetch_binary)
     return {'pages': pages, 'binaries': binaries, 'log': log}
+
+
+def _refresh(client) -> dict:
+    resp = client.post('/api/fanfic/refresh-alerts')
+    assert resp.status_code == 202, resp.get_json()
+    body = resp.get_json()
+    assert body['started'] is True and body['state'] == 'done', body
+    return body['result']
 
 
 def _put_cookie(client, domain=SITE):
@@ -96,9 +108,7 @@ def test_refresh_updates_stale_and_imports_unknown(client, fake_net):
     fake_net['pages'].update(_thread_pages(OTHER))
     _put_cookie(client)
 
-    resp = client.post('/api/fanfic/refresh-alerts')
-    assert resp.status_code == 200
-    body = resp.get_json()
+    body = _refresh(client)
     assert body['flagged'] == 1
     assert body['newImports'] == 1
     assert body['errors'] == {}
@@ -123,7 +133,7 @@ def test_refresh_skips_fic_fetched_after_its_alert(client, fake_net):
     _put_cookie(client)
 
     before = len(fake_net['log'])
-    body = client.post('/api/fanfic/refresh-alerts').get_json()
+    body = _refresh(client)
     assert body['flagged'] == 0
     assert body['newImports'] == 1
     assert body['skippedFresh'] == 1
@@ -139,11 +149,11 @@ def test_refresh_skips_already_queued_fic(client, fake_net, monkeypatch):
     fake_net['pages'].update(_thread_pages(OTHER))
     _put_cookie(client)
 
-    first = client.post('/api/fanfic/refresh-alerts').get_json()
+    first = _refresh(client)
     assert first['flagged'] == 1 and first['newImports'] == 1
     # drain never ran: both the flagged fic and the pending placeholder are
     # already queued, so a second refresh flags nothing new
-    body = client.post('/api/fanfic/refresh-alerts').get_json()
+    body = _refresh(client)
     assert body['flagged'] == 0
     assert body['newImports'] == 0
     assert body['skippedActive'] == 2
@@ -224,9 +234,9 @@ def test_partial_reader_walk_does_not_mark_fic_current(client, fake_net):
 def test_second_refresh_only_fetches_alerts(client, fake_net):
     _put_cookie(client)
     fake_net['pages'].update(_thread_pages(OTHER))
-    client.post('/api/fanfic/refresh-alerts')
+    _refresh(client)
     before = len(fake_net['log'])
-    result = client.post('/api/fanfic/refresh-alerts').get_json()
+    result = _refresh(client)
     assert result['skippedFresh'] == 2
     assert result['flagged'] == result['newImports'] == 0
     assert fake_net['log'][before:] == [ALERTS_URL]
@@ -265,7 +275,7 @@ def test_refresh_still_drains_when_nothing_newly_flagged(client, fake_net):
     db.execute('UPDATE fics SET update_pending=1 WHERE id IN (?, ?)', (fic_a, fic_b))
     db.commit()
 
-    body = client.post('/api/fanfic/refresh-alerts').get_json()
+    body = _refresh(client)
     assert body['flagged'] == 0
     assert body['newImports'] == 0
     assert body['skippedActive'] == 2
@@ -282,7 +292,7 @@ def test_refresh_reports_per_site_errors(client, fake_net):
     _put_cookie(client, SITE)
     _put_cookie(client, SV)  # no SV alerts page registered → fetch fails
 
-    body = client.post('/api/fanfic/refresh-alerts').get_json()
+    body = _refresh(client)
     assert SV in body['errors']
     assert body['flagged'] == 1  # the healthy site was still processed
 
@@ -297,7 +307,7 @@ def test_refresh_detects_login_redirect(client, fake_net, monkeypatch):
         return fixture_fetch(url)
 
     monkeypatch.setattr(download, '_fetch', fetch)
-    body = client.post('/api/fanfic/refresh-alerts').get_json()
+    body = _refresh(client)
     assert 'not logged in' in body['errors'][SITE]
 
 
@@ -370,3 +380,42 @@ def test_drain_survives_one_fic_failing(client, fake_net):
     assert a['updatePending'] is False
     assert b['downloadStatus'] == 'complete'
     assert b['updatePending'] is False
+
+
+def test_refresh_answers_before_the_alerts_are_read(client, fake_net, monkeypatch):
+    """The phone leaves the app; the read must not depend on it waiting."""
+    from backend.routes import fanfic as fanfic_routes
+    started = []
+    monkeypatch.setattr(fanfic_routes, '_start_alerts_bg', started.append)
+    _put_cookie(client)
+
+    first = client.post('/api/fanfic/refresh-alerts')
+    assert first.status_code == 202
+    assert first.get_json()['started'] is True
+    assert client.get('/api/fanfic/refresh-alerts/status').get_json()['state'] == 'running'
+
+    # Asking again while it runs starts nothing new.
+    again = client.post('/api/fanfic/refresh-alerts').get_json()
+    assert again['started'] is False and again['state'] == 'running'
+    assert len(started) == 1
+
+    started[0]()
+    status = client.get('/api/fanfic/refresh-alerts/status').get_json()
+    assert status['state'] == 'done'
+    assert status['result']['alertsSeen'] == 4
+    assert status['finishedAt'] is not None
+
+
+def test_refresh_that_crashes_reports_error_and_still_drains(client, fake_net, monkeypatch):
+    from backend.fanfic import alerts
+    from backend.routes import fanfic as fanfic_routes
+    drained = []
+    monkeypatch.setattr(fanfic_routes, '_start_drain_bg', lambda: drained.append(1))
+    monkeypatch.setattr(alerts, 'refresh', lambda: (_ for _ in ()).throw(RuntimeError('forum down')))
+    _put_cookie(client)
+
+    body = client.post('/api/fanfic/refresh-alerts').get_json()
+    assert body['state'] == 'error' and body['error'] == 'forum down'
+    assert drained == [1]
+    # Not stuck at running: the next press starts a fresh one.
+    assert client.post('/api/fanfic/refresh-alerts').get_json()['started'] is True
