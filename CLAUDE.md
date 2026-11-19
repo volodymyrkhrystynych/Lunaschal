@@ -78,6 +78,12 @@ npm run test             # vitest run (src/**/*.{test,spec}.{ts,tsx})
 npm run test:all         # both suites
 npm run test:watch       # vitest in watch mode
 
+# Live chat evals: the real chat path against a running llama-server (qwen36
+# alias), on a seeded scratch DB per run; pass rates + transcripts under
+# data/chat-eval/reports/. Opt-in and slow — never part of the suites above.
+# On a Mac: LLAMA_BIN=/opt/homebrew/bin/llama-server LLAMA_PRESETS=llama/presets.mac.ini ./llama/start-llama.sh
+.venv/bin/python scripts/chat_eval.py --runs 5 --only gaming   # or tools, or scenario names
+
 # Demo instance: throwaway DB + media under data/test-run/, every table seeded,
 # schedulers off, tiny local model if :8080 is free. Never touches the real
 # ./data/lunaschal.db — scripts/seed_test_db.py refuses to run without the

@@ -128,6 +128,52 @@ def test_todo_receipts_match_items_visible_through_the_api(monkeypatch, answered
     assert any(m['role'] == 'tool' and 'already saved' in m['content'] for m in prompt)
 
 
+def test_a_staged_unlock_card_is_named_in_the_answer_instruction(monkeypatch, answered):
+    from backend.gaming import lock
+    from backend.db.connection import get_db
+    lock.update_settings(get_db(), {'enabled': True, 'days': [0, 1, 2, 3, 4, 5, 6]})
+    _decides(monkeypatch, [_call('end_workday', {})])
+    events = _drain([{'role': 'user', 'content': "I'm done with work"}])
+    assert [p['kind'] for p in events[-1][1]['proposals']] == ['unlock_gaming']
+    assert 'tap Unlock gaming' in answered['messages'][-1]['content']
+
+
+def _reply_after_lock_message(client, monkeypatch, announce=True):
+    from backend.gaming import enforcer, lock
+    from backend.db.connection import get_db
+    monkeypatch.setattr('backend.coach.deliver.push', lambda *a, **k: {'pushed': 0})
+    lock.update_settings(get_db(), {'enabled': True, 'days': [0, 1, 2, 3, 4, 5, 6]})
+    conv = client.post('/api/chat/conversations', json={}).get_json()['id']
+    if announce:
+        enforcer.announce(['steam'])
+    client.post(f'/api/chat/conversations/{conv}/messages',
+                json={'role': 'user', 'content': 'Yeah, go over it with me'})
+    _no_tools(monkeypatch)
+    return list(delegate_chat.stream_reply(
+        [{'role': 'user', 'content': 'Yeah, go over it with me'}], conversation_id=conv))
+
+
+def test_a_reply_to_the_lock_message_stages_the_card_even_when_the_model_skips_it(
+        monkeypatch, answered, client):
+    events = _reply_after_lock_message(client, monkeypatch)
+    done = events[-1][1]
+    assert [s['tool'] for s in done['steps']] == ['end_workday']
+    assert [p['kind'] for p in done['proposals']] == ['unlock_gaming']
+    assert 'tap Unlock gaming' in answered['messages'][-1]['content']
+
+
+def test_an_ordinary_message_on_a_locked_day_stages_nothing(monkeypatch, answered, client):
+    events = _reply_after_lock_message(client, monkeypatch, announce=False)
+    assert events[-1][1]['proposals'] == []
+    assert 'still locked' in answered['messages'][-1]['content']
+
+
+def test_no_unlock_note_without_a_card(monkeypatch, answered):
+    _no_tools(monkeypatch)
+    _drain()
+    assert 'Unlock gaming' not in answered['messages'][-1]['content']
+
+
 def test_refused_todos_are_not_reported_as_saved(monkeypatch, answered):
     _decides(monkeypatch, [_call('add_todos', {'items': []})])
     events = _drain()

@@ -44,10 +44,12 @@ TOOLS = [
         'habit': {'type': 'string'}, 'cue': {'type': 'string'},
     }, ['habit', 'cue']),
     _tool('end_workday', 'Call when the user says they are done with work for the day ("done for the '
-          'day", "finished work", "logging off"). Drafts today\'s review and returns the rating today will '
-          'get if nothing else changes, with what is still open. When games are locked it also puts an '
-          'Unlock gaming card in front of them; nothing unlocks until they accept it. Tell them the rating '
-          'and the open items plainly, then point at the card.', {}),
+          'day", "finished work", "logging off"), asks to play or unlock games, or answers the message '
+          'saying games were closed. Call it again on every such message, even when an earlier card is '
+          'still showing: it re-reads the day, so habits done since then count. Drafts today\'s review and '
+          'returns the rating today will get if nothing else changes, with what is still open. When games '
+          'are locked it also puts an Unlock gaming card in front of them; nothing unlocks until they '
+          'accept it.', {}),
 ]
 TOOL_NAMES = {t['function']['name'] for t in TOOLS}
 
@@ -56,7 +58,87 @@ DECISION_NOTE = (
     'call record_excuse before answering, so the review and their streaks reflect it. Be kind about '
     'it: an excuse is context, not a confession. Use get_day_review for how a day went, '
     'adjust_day_rating only with a reason they gave, and set_habit_cue when they agree to an if-then plan. '
-    'When they say they are done with work for the day, call end_workday before answering.')
+    'When they say they are done with work for the day, ask to play or unlock games, or reply to the '
+    'message saying games were closed, call end_workday before answering — every time, even if you '
+    'called it earlier today.')
+
+
+def replies_to_lock_message(conversation_id: str | None, now: int | None = None) -> bool:
+    """Whether the newest user message answers today's "I closed Steam"
+    message: the assistant message just before it is the enforcer's
+    announcement for this 4am day. Structural, not a reading of the words —
+    that message asks for exactly one thing, to be told when work is done.
+
+    Ordered by id, not `created_at`: a whole exchange fits inside a second,
+    and the ULID is the tie-break that reflects the real order.
+    """
+    if not conversation_id:
+        return False
+    db = get_db()
+    user = db.execute("SELECT id FROM messages WHERE conversation_id=? AND role='user'"
+                      ' ORDER BY id DESC LIMIT 1', (conversation_id,)).fetchone()
+    if user is None:
+        return False
+    before = db.execute("SELECT metadata FROM messages WHERE conversation_id=? AND role='assistant'"
+                        ' AND id < ? ORDER BY id DESC LIMIT 1', (conversation_id, user['id'])).fetchone()
+    try:
+        coach = json.loads(before['metadata'] or '{}').get('coach') or {} if before else {}
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return coach.get('kind') == 'gaming_lock' and coach.get('day') == day_key_for(now)
+
+
+def _waiting_unlock_card(db, conversation_id: str | None, day: str) -> bool:
+    """Whether an unlock card for `day` is still pending in this chat."""
+    if not conversation_id:
+        return False
+    for row in db.execute("SELECT metadata FROM messages WHERE conversation_id=? AND role='assistant'"
+                          " AND metadata LIKE '%unlock_gaming%'", (conversation_id,)):
+        try:
+            proposals = json.loads(row['metadata']).get('proposals') or []
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if any(isinstance(p, dict) and p.get('kind') == 'unlock_gaming' and p.get('status') == 'pending'
+               and (p.get('data') or {}).get('day') == day for p in proposals):
+            return True
+    return False
+
+
+def answer_note(proposals: list[dict], conversation_id: str | None = None,
+                now: int | None = None) -> str:
+    """What the reply has to say about the gaming lock this turn.
+
+    Measured against the live model (scripts/chat_eval.py), two things went
+    wrong. With a card staged, the reply reviewed the day and never said the
+    card was there — the tool description's "point at the card" was the one
+    instruction it reliably dropped. And on a follow-up ("did the habits, now
+    unlock"), the decision turn sometimes skipped end_workday and the reply
+    said "Games unlocked." with nothing unlocked. No prompt makes the tool call
+    certain, so the reply turn — the one writing the text — is told the truth
+    either way, from the lock's own state.
+    """
+    card = next((p for p in proposals if p.get('kind') == 'unlock_gaming'), None)
+    if card is None:
+        from backend.gaming import lock
+        db = get_db()
+        state = lock.status(db, now)
+        if not state['locked']:
+            return ''
+        note = ('\n\nGames are still locked: nothing unlocked them this turn, so never say or imply '
+                'that games are unlocked. ')
+        if _waiting_unlock_card(db, conversation_id, state['day']):
+            return note + ('An Unlock gaming card from earlier in this chat is still waiting; if they '
+                           'want to play, tell them to tap Unlock gaming on it.')
+        return note + 'If they want to play, ask them to tell you when work is done.'
+    data = card.get('data') or {}
+    rating = f"{data['rating']}/5" if data.get('rating') else 'no rating yet'
+    still_open = ', '.join(data.get('open') or []) or 'nothing'
+    return ('\n\nAn Unlock gaming card is showing under this reply. Today stands at '
+            f'{rating}; still open: {still_open}. Say the rating and what is open in a sentence or '
+            'two, then tell them to tap Unlock gaming on the card when they are ready. Games stay locked '
+            'until they tap it, so do not call them unlocked. You may nudge '
+            'toward an easy open item, but the card is theirs to tap now: do not question them about '
+            'their day or make unlocking wait on anything, and never say you cannot unlock games.')
 
 
 def _day(value: str) -> str:

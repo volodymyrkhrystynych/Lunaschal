@@ -157,6 +157,57 @@ def test_end_workday_stages_nothing_when_unlocked_or_off():
     assert 'proposal' not in event and 'already unlocked' in json.loads(text)['gaming']
 
 
+def test_end_workday_restages_a_card_after_earlier_turns():
+    # The real failure: the coach asked for habits first, the user did them and
+    # asked again. A second call must stage a fresh card with the new rating.
+    enable(ALL_DAYS)
+    stretch = habit('Stretch')
+    _, first = tools.run_tool('end_workday', {})
+    tick_habit(stretch, day=day_key_for())
+    _, second = tools.run_tool('end_workday', {})
+    assert first['proposal']['data']['open'] == ['Stretch']
+    assert second['proposal']['data']['open'] == []
+    assert second['proposal']['data']['rating'] > first['proposal']['data']['rating']
+
+
+def test_chat_prompt_says_games_are_locked_and_that_chat_unlocks_them():
+    from backend.ai.chat import format_plate_context
+    assert 'Games:' not in format_plate_context()
+    enable(ALL_DAYS)
+    plate = format_plate_context()
+    assert 'Games: locked' in plate and 'end_workday' in plate
+    lock.lift(get_db(), 'review')
+    assert 'Games: already unlocked today (review)' in format_plate_context()
+
+
+def test_answer_note_without_a_card_says_games_are_still_locked(client):
+    # Off, or already unlocked: nothing to say.
+    assert tools.answer_note([]) == ''
+    enable(ALL_DAYS)
+    conv = client.post('/api/chat/conversations', json={}).get_json()['id']
+    note = tools.answer_note([], conv)
+    assert 'still locked' in note and 'never say' in note and 'tell you when work is done' in note
+    # A card from an earlier turn today is what the reply should point at.
+    get_db().execute(
+        "INSERT INTO messages (id, conversation_id, role, content, metadata, created_at)"
+        " VALUES (?,?,'assistant','',?,?)",
+        (str(ULID()), conv, json.dumps({'proposals': [
+            {'id': 'p1', 'kind': 'unlock_gaming', 'status': 'pending', 'data': {'day': day_key_for()}}]}),
+         NOW))
+    get_db().commit()
+    assert 'tap Unlock gaming on it' in tools.answer_note([], conv)
+    lock.lift(get_db(), 'review')
+    assert tools.answer_note([], conv) == ''
+
+
+def test_answer_note_names_the_card_only_when_one_was_staged():
+    assert tools.answer_note([]) == ''
+    assert tools.answer_note([{'kind': 'calendar', 'data': {}}]) == ''
+    note = tools.answer_note([{'kind': 'unlock_gaming', 'data': {'rating': 3, 'open': ['Stretch']}}])
+    assert 'Unlock gaming' in note and '3/5' in note and 'Stretch' in note
+    assert 'never say you cannot unlock' in note
+
+
 def _card_message(data):
     db = get_db()
     conv, msg, pid = str(ULID()), str(ULID()), str(ULID())

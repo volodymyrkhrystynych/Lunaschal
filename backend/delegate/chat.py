@@ -440,6 +440,17 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
         ]
         sources = gathered.get('sources', [])
         evidence = gathered.get('evidence', [])
+        # The lock's own message asks them to say when work is done, so a
+        # reply to it is that answer whatever the model decided — measured,
+        # it skipped end_workday two runs in five and then told the user games
+        # were unlocked. The tool is model-free and only stages a card.
+        if (toolset == 'chat' and not any(s.get('tool') == 'end_workday' for s in steps)
+                and coach_tools.replies_to_lock_message(conversation_id)):
+            _, event = coach_tools.run_tool('end_workday', {})
+            steps.append(event)
+            if event.get('proposal'):
+                proposals.append(event['proposal'])
+            yield ('step', event)
 
     answer_instruction = ANSWER_INSTRUCTION
     if toolset == 'chat' and box:
@@ -452,6 +463,7 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
             'If the user asked for them, explain that they were not added; never claim success. '
             'Saved items appear in Chat → Today\'s to-dos.'
         )
+        answer_instruction += coach_tools.answer_note(proposals, conversation_id)
     conversation.append({'role': 'user', 'content': answer_instruction})
     truncated = False
     for kind, delta in chat_stream_events(conversation):

@@ -303,7 +303,28 @@ def _coach_lines(db, today: str, now: int) -> list[str]:
             if item.get('excuse'):
                 lines.append(f"- {item['title']}: they said “{item['excuse']}”")
         lines.append('')
+    lines += _gaming_lines(db, now)
     return lines
+
+
+def _gaming_lines(db, now: int) -> list[str]:
+    """Whether games are locked, and that unlocking is the agent's to offer.
+
+    Without this the model only learned the lock existed from end_workday's
+    result, so on any turn where it had not called it — a follow-up after
+    asking for habits first — it told the user unlocking games was outside its
+    control, and they had to override it by hand.
+    """
+    from backend.gaming import lock
+    state = lock.status(db, now)
+    if not state['applies']:
+        return []
+    if not state['locked']:
+        return [f"Games: already unlocked today ({state['method']}).", '']
+    return ['Games: locked until work is closed out. You can unlock them: call end_workday whenever '
+            'they say work is done or ask to play or unlock games, even if an earlier card is still '
+            'showing, and it puts an Unlock gaming card in front of them. Encourage what is still open, '
+            'but never make the card conditional on it.', '']
 
 
 def build_chat_system_prompt(now: int | None = None) -> str:
