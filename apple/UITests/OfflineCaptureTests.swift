@@ -1236,26 +1236,64 @@ final class OfflineCaptureTests: XCTestCase {
     }
 
     // The fixture's five postings: strong, possible and an untriaged one that
-    // scores well above the line; two stretches below it, out of sight. Queue
-    // takes a card away at once, and with no server it waits in the outbox.
+    // scores well above the line; two stretches below it. On iPad they are a
+    // list; on iPhone a deck where right queues, left dismisses and Undo brings
+    // the last card back. With no server, decisions wait in the outbox.
     func testJobsFeedGroupsCardsAndQueuesOffline() {
         let app = XCUIApplication()
         app.launchArguments.append("-jobsFeedFixture")
         app.launch()
         openMore(app, "Jobs")
         XCTAssertTrue(app.staticTexts["Senior iOS Engineer"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Worth a look (3)"].exists)
         XCTAssertTrue(app.staticTexts["Worth applying"].exists)
         XCTAssertTrue(app.staticTexts["2.4 km from Union Station"].exists)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            XCTAssertTrue(app.staticTexts["Worth a look (3)"].exists)
+            app.buttons["job-queue-01K7ZZZZZZZZZZZZZZZZZZZZJ1"].tap()
+            XCTAssertTrue(app.staticTexts["Senior iOS Engineer"].waitForNonExistence(timeout: 5))
+            XCTAssertTrue(app.staticTexts["Worth a look (2)"].waitForExistence(timeout: 5))
+            let waiting = app.staticTexts["1 decision waiting to reach the server."]
+            for _ in 0..<4 where !waiting.exists { app.swipeUp() }
+            XCTAssertTrue(waiting.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.staticTexts["The rest (2)"].exists)
+            return
+        }
 
-        app.buttons["job-queue-01K7ZZZZZZZZZZZZZZZZZZZZJ1"].tap()
-        XCTAssertTrue(app.staticTexts["Senior iOS Engineer"].waitForNonExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Worth a look (2)"].waitForExistence(timeout: 5))
-        // The footer sits under the last card, so it is drawn only once scrolled to.
-        let waiting = app.staticTexts["1 decision waiting to reach the server."]
-        for _ in 0..<4 where !waiting.exists { app.swipeUp() }
-        XCTAssertTrue(waiting.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["The rest (2)"].exists)
+        let progress = app.staticTexts["jobs-progress"]
+        XCTAssertEqual(progress.label, "Worth a look: 3 left · then 2 more")
+        // The card has room for what the list never showed, and under the
+        // summary the posting itself, formatted, from the copy on the phone.
+        XCTAssertTrue(app.staticTexts["swift, swiftui, sqlite"].exists)
+        XCTAssertTrue(app.staticTexts["About the role"].waitForExistence(timeout: 5))
+        let title = app.staticTexts["Senior iOS Engineer"]
+
+        // Scrolling a long card up and down never decides it.
+        app.staticTexts["About the role"].swipeUp()
+        XCTAssertTrue(app.staticTexts["Design the SQLite schema and its migrations"].waitForExistence(timeout: 5))
+        app.swipeDown()
+        XCTAssertTrue(title.waitForExistence(timeout: 2))
+        XCTAssertEqual(progress.label, "Worth a look: 3 left · then 2 more")
+
+        // Right queues.
+        title.swipeRight()
+        XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Backend Developer (Python)"].waitForExistence(timeout: 5))
+        XCTAssertEqual(progress.label, "Worth a look: 2 left · then 2 more")
+        XCTAssertTrue(app.staticTexts["1 decision waiting to reach the server."].exists)
+
+        // Undo puts it back, and the queue never leaves the phone.
+        app.buttons["jobs-undo"].tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(progress.label, "Worth a look: 3 left · then 2 more")
+        XCTAssertFalse(app.staticTexts["1 decision waiting to reach the server."].exists)
+
+        // Left dismisses; the buttons do the same as the swipes.
+        title.swipeLeft()
+        XCTAssertTrue(title.waitForNonExistence(timeout: 5))
+        app.buttons["job-queue-01K7ZZZZZZZZZZZZZZZZZZZZJ2"].tap()
+        XCTAssertTrue(app.staticTexts["Full-Stack Engineer"].waitForExistence(timeout: 5))
+        XCTAssertEqual(progress.label, "Worth a look: 1 left · then 2 more")
+        XCTAssertTrue(app.staticTexts["2 decisions waiting to reach the server."].exists)
     }
 
     // The fixture's one project: a pinned character note, and a discussion

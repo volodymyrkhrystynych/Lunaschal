@@ -284,6 +284,8 @@ export const FLAG_LABELS: Record<TriageFlag['kind'], string> = {
   security_clearance: 'Clearance required',
   heavy_travel: 'Heavy travel',
   stack_mismatch: 'Different stack',
+  salary_below_preference: 'Below your salary floor',
+  soft_preference_missing: 'Misses a preference',
 };
 
 /** Labels for the fit bucket, said the way a person would say it. */

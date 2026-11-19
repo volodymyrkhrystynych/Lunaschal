@@ -1073,12 +1073,15 @@ final class CaptureModel: ObservableObject {
     }
 
     /// Queues a Queue or Dismiss from the jobs feed and starts sending it.
-    func decideJob(_ job: FeedJob, _ decision: JobDecision) {
+    @discardableResult
+    func decideJob(_ job: FeedJob, _ decision: JobDecision) -> JobDecisionOp? {
+        let op: JobDecisionOp
         do {
-            try jobStore.decide(job, decision)
+            op = try jobStore.decide(job, decision)
             jobQueue = try jobStore.pending()
-        } catch { message = error.localizedDescription; return }
+        } catch { message = error.localizedDescription; return nil }
         requestSync()
+        return op
     }
 
     /// Like a to-do change, a decision the server can't take right now waits

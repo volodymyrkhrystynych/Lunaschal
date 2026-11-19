@@ -566,6 +566,7 @@ touches only `resume_versions` and `applications`, and a test pins that.
 | `answers.py`       | form filling: profile → bank → model, in that order                      |
 | `render.py`        | one HTML template → preview, WeasyPrint PDF, python-docx                 |
 | `ingest.py`        | one user-supplied URL → structured job                                   |
+| `posting_text.py`  | pure: the board's raw HTML → Markdown for the phone's card, at read time |
 | `sources/`         | one adapter per board → normalized dicts. No DB, no model                |
 | `resolve.py`       | careers page URL → which ATS + slug, verified against the API            |
 | `sync.py`          | saved searches → `jobs` rows, scored inline                              |
