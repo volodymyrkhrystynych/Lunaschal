@@ -205,3 +205,69 @@ extension FicDownloadTests {
         XCTAssertEqual(try store.relatedCount(collection: "fic_chapters", field: "ficId", value: ULID.make()), 0)
     }
 }
+
+/// Starting a fic's download past what the device has. Its own class, not
+/// FicDownloadTests: Linux's generated test list for that @MainActor class
+/// stops type-checking as tests are added to it.
+final class FicResumeTests: XCTestCase {
+    private let epoch = ULID.make()
+    private let fic = ULID.make()
+
+    private func setup() throws -> (ReplicaStore, LibraryDownload) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let url = root.appendingPathComponent("replica.sqlite")
+        let store = try ReplicaStore(url: url)
+        try store.apply(SyncPage(protocolVersion: 1, epoch: epoch, mode: "bootstrap", changes: [],
+                                 hasMore: false, cursor: "fics", collections: ["fics"]), startingBootstrap: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return (store, LibraryDownload(replicaURL: url, mediaURL: root.appendingPathComponent("media")))
+    }
+
+    private func chapter(_ id: String) -> SyncChange {
+        SyncChange(revision: 5, collection: "fic_chapters", id: id, deleted: false,
+                   data: ["id": .string(id), "ficId": .string(fic), "title": .string("Chapter")])
+    }
+
+    private func page(_ chapters: [SyncChange], after: String, more: Bool, before: Int64, bytes: Int64) -> FicDownloadPage {
+        FicDownloadPage(epoch: epoch, fic: nil, chapters: chapters, hasMore: more, after: after,
+                        totalChapters: 3, textBytes: 30, bytesBefore: before, pageBytes: bytes, media: nil)
+    }
+
+    func testANewQueueEntryStartsWhereItWasToldAndAQueuedOneKeepsItsPlace() {
+        var queue = FicQueue()
+        queue.prioritize("a", title: "A", after: "7:z")
+        XCTAssertEqual(queue.head?.after, "7:z")
+        queue.record("a", after: "9:y")
+        queue.prioritize("b", title: "B")
+        queue.prioritize("a", title: "A", after: "7:z")
+        XCTAssertEqual(queue.head?.after, "9:y", "progress made beats the starting point")
+    }
+
+    private func outlined(_ id: String, _ position: Double?) -> SyncChange {
+        var data: [String: JSONValue] = ["id": .string(id)]
+        if let position { data["position"] = .number(position) }
+        return SyncChange(revision: 1, collection: "fic_chapters", id: id, deleted: false, data: data)
+    }
+
+    func testResumeKeyIsPastTheLastChapterOnTheDevice() {
+        XCTAssertEqual(FicResume.key(after: []), "")
+        XCTAssertEqual(FicResume.key(after: [outlined("a", 0), outlined("c", 2), outlined("b", 1)]), "2:c")
+        // The server orders by (position, id), so a tie goes to the larger id.
+        XCTAssertEqual(FicResume.key(after: [outlined("q", 3), outlined("r", 3), outlined("p", 3)]), "3:r")
+        // Without a position there is nothing to key on: from the start.
+        XCTAssertEqual(FicResume.key(after: [outlined("a", 0), outlined("b", nil)]), "")
+    }
+
+    func testDownloadingFromTheResumeKeyAsksOnlyForLaterChapters() async throws {
+        let (store, worker) = try setup()
+        let have = [outlined(ULID.make(), 0), outlined(ULID.make(), 1)]
+        let key = FicResume.key(after: have)
+        let api = FicFixture(pages: [key: page([chapter(ULID.make())], after: "2:n", more: false, before: 20, bytes: 10)])
+        let progress = Progress()
+        try await worker.downloadFic(fic, after: key, using: api) { progress.add($0) }
+        let requested = await api.requested
+        XCTAssertEqual(requested, [key])
+        XCTAssertEqual(try store.relatedCount(collection: "fic_chapters", field: "ficId", value: fic), 1)
+        XCTAssertEqual(progress.all.last?.fraction, 1)
+    }
+}

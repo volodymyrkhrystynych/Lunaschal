@@ -7,6 +7,7 @@ import {
   uploadFilenameFor,
 } from '../lib/journalAttachments';
 import { uploadBatches } from '../lib/uploadBatches';
+import { runAlertRefresh } from '../lib/alertRefresh';
 // The shape is defined next to the geometry that consumes it, so the payload
 // and the band math can't drift apart.
 import type { SleepDay } from '../lib/sleep';
@@ -320,6 +321,17 @@ export interface RefreshAlertsResult {
   skippedFresh: number;
   alertsSeen: number;
   errors: Record<string, string>;
+}
+
+/** `GET /api/fanfic/refresh-alerts/status`; the POST returns the same shape
+ * plus whether it started a new refresh. */
+export interface AlertRefreshStatus {
+  state: 'idle' | 'running' | 'done' | 'error';
+  result: RefreshAlertsResult | null;
+  error: string | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  started?: boolean;
 }
 
 export interface FicChapterSummary {
@@ -4304,7 +4316,10 @@ export const api = {
         deep ? { deep: true } : undefined
       ),
     refreshAlerts: () =>
-      post<RefreshAlertsResult>('/api/fanfic/refresh-alerts'),
+      runAlertRefresh(
+        () => post<AlertRefreshStatus>('/api/fanfic/refresh-alerts'),
+        () => get<AlertRefreshStatus>('/api/fanfic/refresh-alerts/status')
+      ),
     uploadFile: (file: File) => {
       const form = new FormData();
       form.append('file', file);

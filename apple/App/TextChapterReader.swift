@@ -43,6 +43,9 @@ struct TextChapterReader: View {
     @State private var travel = ReaderTravel()
     /// What the forum shows (or will) as the user's reaction on this chapter.
     @State private var reaction: ChapterReaction?
+    /// The chapter the bottom Next was pressed for while this one had no
+    /// like yet: asked about before going on.
+    @State private var unlikedNext: SyncChange?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
@@ -63,8 +66,21 @@ struct TextChapterReader: View {
     /// The scroll id of the Next/Previous row above the text. The start of a
     /// chapter lands here rather than on its first paragraph, so the row shows.
     private static let topRow = -1
-    /// That row is only there when the chapter has a neighbor to go to.
-    private var firstRow: Int { neighbors.previous != nil || neighbors.next != nil ? Self.topRow : 0 }
+    /// That row is only there when the chapter has a neighbor to go to, or
+    /// the next one is still on its way to the device.
+    private var firstRow: Int {
+        neighbors.previous != nil || neighbors.next != nil || awaitingNext ? Self.topRow : 0
+    }
+
+    /// No next chapter here yet, but the book has more than the device does,
+    /// or is downloading: opening a book that just updated lands in the last
+    /// chapter read while the new one is still arriving.
+    private var awaitingNext: Bool {
+        guard neighbors.next == nil, let ficID else { return false }
+        if owner.ficDownload?.id == ficID || owner.ficQueue.contains(ficID) { return true }
+        let expected = book?.data?["chapterCount"]?.number.map(Int.init) ?? 0
+        return expected > chapters.count
+    }
 
     var body: some View { lifecycle(chrome) }
 
@@ -74,6 +90,19 @@ struct TextChapterReader: View {
         .overlay(alignment: .bottomLeading) { floatingControls }
         .overlay(alignment: .bottomTrailing) { topJumpButton }
         .navigationTitle(current.title).navigationBarTitleDisplayMode(.inline)
+        .alert("You haven't liked this chapter", isPresented: Binding(
+            get: { unlikedNext != nil }, set: { if !$0 { unlikedNext = nil } }), presenting: unlikedNext) { next in
+            Button("Like and continue") {
+                setLike(true, assumed: false)
+                goNext(to: next)
+            }
+            .accessibilityIdentifier("unliked-like-continue")
+            Button("Continue without liking") { goNext(to: next) }
+                .accessibilityIdentifier("unliked-continue")
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Reached the end without a like on the forum.")
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { textSizeMenu }
             if FicLibrary.isLikeable(book: book, chapter: current) {
@@ -207,6 +236,15 @@ struct TextChapterReader: View {
             }
         }
         .task(id: current.id) { load() }
+        // Chapters arriving while this one is open: the download that opening
+        // the book started, or a sync. Next appears when the chapter lands.
+        .onChange(of: owner.ficDownloadRevision) { _, _ in reloadOutline() }
+        .onChange(of: owner.syncChanges) { _, changes in
+            guard changes.touches(["fics", "fic_chapters"]) else { return }
+            reloadOutline()
+            // The sync said the book has more chapters than the device: fetch them.
+            if let book, !owner.isFicOnDevice(book) { owner.ensureFicOnDevice(book) }
+        }
         .onDisappear { savePosition(); closeSpan(sync: true) }
         .onChange(of: scenePhase) { _, phase in
             guard phase != .active else { return }
@@ -325,7 +363,7 @@ struct TextChapterReader: View {
     @ViewBuilder
     private func chapterButtons(edge: String) -> some View {
         let (previous, next) = neighbors
-        if previous != nil || next != nil {
+        if previous != nil || next != nil || awaitingNext {
             HStack {
                 if let previous {
                     Button("Previous", systemImage: "chevron.left") { move(to: previous) }
@@ -333,14 +371,38 @@ struct TextChapterReader: View {
                 }
                 Spacer()
                 if let next {
-                    Button { goNext(to: next) } label: {
+                    Button {
+                        // Only at the bottom: that is finishing the chapter, where
+                        // the top one is skipping it.
+                        if edge == "bottom", FicLibrary.isLikeable(book: book, chapter: current),
+                           reaction?.isLiked != true {
+                            unlikedNext = next
+                        } else { goNext(to: next) }
+                    } label: {
                         Label("Next chapter", systemImage: "chevron.right").labelStyle(.titleAndIcon)
                     }
                     .buttonStyle(.borderedProminent)
                     .accessibilityIdentifier("chapter-next-\(edge)")
+                } else if awaitingNext {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                        Text(owner.ficDownload?.id == ficID ? "Downloading new chapters…" : "New chapters on the way…")
+                    }
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("chapter-awaiting-\(edge)")
                 }
             }
         }
+    }
+
+    /// The book's chapters again, kept as they were when nothing changed so
+    /// the text isn't redrawn for every download progress tick.
+    private func reloadOutline() {
+        guard let ficID else { return }
+        if let fresh = try? store.chapterOutline(bookID: ficID),
+           fresh.map(\.id) != chapters.map(\.id) { chapters = fresh }
+        if let latest = try? store.record(collection: "fics", id: ficID),
+           latest.revision != book?.revision { book = latest }
     }
 
     private func load() {

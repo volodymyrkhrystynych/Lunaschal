@@ -583,8 +583,14 @@ push` are in `tools/push-fixtures/`.
   books with a Back button; Sort is in the filter menu there. Both have title/tag search and
   Favorite/Continue-reading filters; there is no tag filter, since
   fics carry hundreds of user tags. The toolbar's refresh calls `POST /api/fanfic/refresh-alerts`,
-  and long-pressing a site's fic calls `POST /api/fanfic/<id>/check-updates` (shallow or deep);
-  both only queue work for the server, and new chapters arrive by sync. A book's rating, review,
+  which only starts the forums' alerts read and answers at once; the phone polls
+  `GET …/refresh-alerts/status` for the summary, so leaving the screen or the app no longer times
+  it out (`FicAlertRefresh.wait`). Long-pressing a site's fic calls
+  `POST /api/fanfic/<id>/check-updates` (shallow or deep). Both only queue work for the server,
+  and new chapters arrive by sync; pull to refresh runs one (`CaptureModel.syncNow`). Opening a
+  book that is short of chapters fetches only those after the last one on the device
+  (`FicResume.key`), once more from the start if that still leaves it short, and the reader
+  picks chapters up as they land, so Next appears in what was the last chapter. A book's rating, review,
   shelf (`fics.shelf`; finished/dropped are the archive, hidden by default) and folders are
   edited through the outbox as `fics` operations, and chapter read marks as
   `fic_chapter_reads` create/delete. Both are last-write-wins
@@ -592,7 +598,8 @@ push` are in `tools/push-fixtures/`.
   (`ReplicaStore.queueFicEdit` merges). `fic_chapter_reads` and `fic_chapter_reactions` sync
   as their own scope, keyed by chapter id, only when the server advertises them. A like is a
   `fic_chapter_reactions` update (`{ficId, liked, assumed}`); the server pushes it to the forum,
-  except an `assumed` one (Open on site). Re-get chapter calls
+  except an `assumed` one (Open on site). The bottom Next on a forum chapter with no like asks first
+  (Like and continue / Continue without liking / Cancel); the top Next, which skips ahead, never does. Re-get chapter calls
   `POST /api/fanfic/chapters/<id>/refetch`, and the Backlog folder reads each book's `backlog` flag. Importing goes through
   `POST /api/fanfic/import` from two places: the share extension (`Share/`, a link shared from
   any app) and Settings → Library downloads → Import a fic. A link sent while the server is

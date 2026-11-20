@@ -58,4 +58,56 @@ final class FicServerActionsTests: XCTestCase {
             XCTFail("expected invalid id")
         } catch CaptureError.invalidID {}
     }
+
+    // MARK: Alerts refresh, started then polled
+
+    private let summary = FicRefreshSummary(flagged: 1, newImports: 0, skippedActive: 0, alertsSeen: 3)
+
+    func testRefreshStatusDecodesEachState() throws {
+        let running = try JSONDecoder().decode(FicAlertRefreshStatus.self,
+            from: Data(#"{"state":"running","result":null,"error":null,"startedAt":1,"finishedAt":null,"started":true}"#.utf8))
+        XCTAssertEqual(running, FicAlertRefreshStatus(state: "running"))
+        let done = try JSONDecoder().decode(FicAlertRefreshStatus.self, from: Data(
+            #"{"state":"done","result":{"flagged":1,"newImports":0,"skippedActive":0,"skippedFresh":2,"alertsSeen":3,"errors":{}},"error":null}"#.utf8))
+        XCTAssertEqual(done, FicAlertRefreshStatus(state: "done", result: summary))
+    }
+
+    func testWaitPollsUntilDoneAndOutlastsFailedPolls() async throws {
+        var replies: [Result<FicAlertRefreshStatus, Error>] = [
+            .success(.init(state: "running")),
+            .failure(URLError(.timedOut)),   // the app was in the background
+            .failure(URLError(.networkConnectionLost)),
+            .success(.init(state: "done", result: summary)),
+        ]
+        var sleeps = 0
+        let got = try await FicAlertRefresh.wait(
+            start: { .init(state: "running") },
+            status: { try replies.removeFirst().get() },
+            sleep: { _ in sleeps += 1 })
+        XCTAssertEqual(got, summary)
+        XCTAssertEqual(sleeps, 4)
+        XCTAssertTrue(replies.isEmpty)
+    }
+
+    func testWaitGivesUpAfterTooManyFailedPollsInARow() async {
+        do {
+            _ = try await FicAlertRefresh.wait(start: { .init(state: "running") },
+                                               status: { throw URLError(.notConnectedToInternet) },
+                                               tolerated: 2, sleep: { _ in })
+            XCTFail("expected the poll's error")
+        } catch { XCTAssertEqual((error as? URLError)?.code, .notConnectedToInternet) }
+    }
+
+    func testWaitReportsTheServersFailureAndALostRefresh() async {
+        do {
+            _ = try await FicAlertRefresh.wait(start: { .init(state: "error", error: "forum down") },
+                                               status: { .init(state: "idle") }, sleep: { _ in })
+            XCTFail("expected failure")
+        } catch { XCTAssertEqual(error as? FicAlertRefreshError, .failed("forum down")) }
+        do {
+            _ = try await FicAlertRefresh.wait(start: { .init(state: "running") },
+                                               status: { .init(state: "idle") }, sleep: { _ in })
+            XCTFail("expected lost")
+        } catch { XCTAssertEqual(error as? FicAlertRefreshError, .lost) }
+    }
 }

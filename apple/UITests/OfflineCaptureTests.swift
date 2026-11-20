@@ -1877,6 +1877,78 @@ final class OfflineCaptureTests: XCTestCase {
                       "the queued removal doesn't read as a save")
     }
 
+    /// A book with chapters still to come opens on the device's copy and
+    /// fetches the rest behind it. Its last chapter here must not be a dead
+    /// end: the reader picks up chapters as they land and Next appears.
+    func testTheReaderOffersNextOnceTheRestOfTheBookArrives() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["Field Notes on Dragons"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        // Opens at its first chapter; three of ten are on the device.
+        XCTAssertTrue(app.navigationBars["Chapter 1"].waitForExistence(timeout: 10))
+        let next = app.buttons["chapter-next-top"]
+        for title in ["Chapter 2", "Chapter 3"] {
+            for _ in 0..<5 { app.swipeDown() }
+            XCTAssertTrue(next.waitForExistence(timeout: 5))
+            next.tap()
+            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
+        }
+        // The last chapter on the device when the book was opened: Next
+        // arrives with the download rather than never.
+        for _ in 0..<5 { app.swipeDown() }
+        XCTAssertTrue(next.waitForExistence(timeout: 20), "no Next once chapter 4 downloaded")
+        next.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 4"].waitForExistence(timeout: 5))
+    }
+
+    /// Finishing a forum chapter with the bottom Next and no like asks first:
+    /// Cancel stays, Like and continue likes it on the way out. The top Next
+    /// is skipping ahead, and never asks (testNextChapterRemovesTheContinuePoint).
+    func testBottomNextOnAnUnlikedChapterAsksToLikeIt() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        // The continue point is in chapter 4, which has no like.
+        XCTAssertTrue(app.navigationBars["Chapter 4"].waitForExistence(timeout: 10))
+        let like = app.buttons["reader-like"]
+        XCTAssertEqual(like.value as? String, "Not liked")
+
+        let next = app.buttons["chapter-next-bottom"]
+        for _ in 0..<40 where !(next.exists && next.isHittable) { app.swipeUp() }
+        app.swipeUp()
+        next.tap()
+        let alert = app.alerts["You haven't liked this chapter"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Chapter 4"].exists, "Cancel stays in the chapter")
+
+        next.tap()
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["Like and continue"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 5"].waitForExistence(timeout: 5))
+
+        let previous = app.buttons["chapter-previous-top"]
+        for _ in 0..<5 { app.swipeDown() }
+        XCTAssertTrue(previous.waitForExistence(timeout: 5))
+        previous.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 4"].waitForExistence(timeout: 5))
+        XCTAssertTrue((like.value as? String)?.hasPrefix("Liked") == true, "liked on the way out")
+        // Liked now: the bottom Next goes straight on.
+        for _ in 0..<40 where !(next.exists && next.isHittable) { app.swipeUp() }
+        app.swipeUp()
+        next.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 5"].waitForExistence(timeout: 5))
+        XCTAssertFalse(alert.exists)
+    }
+
     /// Reading to the end of the chapter removes it too.
     func testFinishingAChapterRemovesTheContinuePoint() {
         let app = XCUIApplication()

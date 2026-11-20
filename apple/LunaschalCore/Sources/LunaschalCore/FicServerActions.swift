@@ -3,7 +3,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Asking the server to fetch new chapters. Nothing is downloaded here: both
+/// Asking the server to fetch new chapters. Nothing is downloaded here: these
 /// routes only queue work for the server's serial drain worker, which stays
 /// polite to the forums, and the new chapters arrive through the next sync.
 
@@ -73,6 +73,61 @@ public struct FicRefreshSummary: Decodable, Equatable {
     }
 }
 
+/// `POST /api/fanfic/refresh-alerts` only starts the read now, and
+/// `GET …/refresh-alerts/status` has its outcome: reading every forum's
+/// alerts outlasted the request a phone keeps open once it leaves the app.
+public struct FicAlertRefreshStatus: Decodable, Equatable {
+    public let state: String
+    public let result: FicRefreshSummary?
+    public let error: String?
+
+    public init(state: String, result: FicRefreshSummary? = nil, error: String? = nil) {
+        self.state = state
+        self.result = result
+        self.error = error
+    }
+}
+
+public enum FicAlertRefreshError: LocalizedError, Equatable {
+    case failed(String)
+    /// The server restarted mid-read and has nothing to report.
+    case lost
+
+    public var errorDescription: String? {
+        switch self {
+        case .failed(let reason): return "Refreshing the forums failed: \(reason)"
+        case .lost: return "The server restarted before the forums were read. Try again."
+        }
+    }
+}
+
+public enum FicAlertRefresh {
+    /// Waits out a refresh `start` began. A poll that fails (the app was in
+    /// the background, the network changed) is tried again, up to
+    /// `tolerated` in a row; only the server's own answer ends it.
+    public static func wait(start: () async throws -> FicAlertRefreshStatus,
+                            status: () async throws -> FicAlertRefreshStatus,
+                            interval: Duration = .seconds(2), tolerated: Int = 10,
+                            sleep: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) async throws -> FicRefreshSummary {
+        var current = try await start()
+        var failures = 0
+        while current.state == "running" {
+            try await sleep(interval)
+            do {
+                current = try await status()
+                failures = 0
+            } catch {
+                if error is CancellationError { throw error }
+                failures += 1
+                if failures > tolerated { throw error }
+            }
+        }
+        if current.state == "error" { throw FicAlertRefreshError.failed(current.error ?? "unknown error") }
+        guard current.state == "done", let result = current.result else { throw FicAlertRefreshError.lost }
+        return result
+    }
+}
+
 /// A refusal the fanfic routes explain in their `{"error": …}` body, such as
 /// "A download is already running for this fic". `HTTPFailure`'s wording is
 /// about captures waiting on the device, which says nothing true here.
@@ -106,8 +161,24 @@ extension JournalAPI {
     }
 
     public func refreshFicAlerts() async throws -> FicRefreshSummary {
-        try JSONDecoder().decode(FicRefreshSummary.self,
-                                 from: await postFanfic("api/fanfic/refresh-alerts", [String: Bool]()))
+        try await FicAlertRefresh.wait(start: startFicAlertRefresh, status: ficAlertRefreshStatus)
+    }
+
+    /// Starts the read. A server from before the status route answers with
+    /// the summary itself, which counts as already done.
+    public func startFicAlertRefresh() async throws -> FicAlertRefreshStatus {
+        let data = try await postFanfic("api/fanfic/refresh-alerts", [String: Bool](), timeout: 30)
+        if let status = try? JSONDecoder().decode(FicAlertRefreshStatus.self, from: data) { return status }
+        return FicAlertRefreshStatus(state: "done", result: try JSONDecoder().decode(FicRefreshSummary.self, from: data))
+    }
+
+    public func ficAlertRefreshStatus() async throws -> FicAlertRefreshStatus {
+        var req = request("api/fanfic/refresh-alerts/status")
+        req.timeoutInterval = 30
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw CaptureError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else { throw FicServerFailure(status: http.statusCode, body: data) }
+        return try JSONDecoder().decode(FicAlertRefreshStatus.self, from: data)
     }
 
     /// Re-get one forum chapter from its post, in case the author edited it.
@@ -117,12 +188,11 @@ extension JournalAPI {
         _ = try await postFanfic("api/fanfic/chapters/\(chapterID)/refetch", [String: Bool]())
     }
 
-    func postFanfic<Body: Encodable>(_ path: String, _ body: Body) async throws -> Data {
+    func postFanfic<Body: Encodable>(_ path: String, _ body: Body, timeout: TimeInterval = 120) async throws -> Data {
         var req = request(path, method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONEncoder().encode(body)
-        // Reading every forum's alerts page is several slow requests in a row.
-        req.timeoutInterval = 120
+        req.timeoutInterval = timeout
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw CaptureError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw FicServerFailure(status: http.statusCode, body: data) }

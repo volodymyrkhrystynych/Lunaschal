@@ -387,6 +387,7 @@ struct BookView: View {
             }
             chapterList
         }
+        .refreshable { await model.syncNow(); await refreshChapters() }
         .navigationTitle(book.title)
         .ficSheets($sheet, model: model)
         .alert("Are you sure?", isPresented: $confirmingMarkAllRead) {

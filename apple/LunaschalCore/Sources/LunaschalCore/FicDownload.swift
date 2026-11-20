@@ -131,6 +131,22 @@ extension LibraryDownload {
 
 // MARK: Queue and estimate (pure, so they are tested without a network)
 
+public enum FicResume {
+    /// The page key just past the last chapter on the device, in the server's
+    /// `(position, id)` order, so a download asks only for what came after
+    /// it. Empty, meaning from the start, when there is nothing to go past or
+    /// a chapter carries no position to key on.
+    public static func key(after outline: [SyncChange]) -> String {
+        var last: (position: Int, id: String)?
+        for chapter in outline {
+            guard let number = chapter.data?["position"]?.number, number.isFinite else { return "" }
+            let key = (Int(number), chapter.id)
+            if last.map({ key.0 > $0.position || (key.0 == $0.position && key.1 > $0.id) }) ?? true { last = key }
+        }
+        return last.map { "\($0.position):\($0.id)" } ?? ""
+    }
+}
+
 /// The fics waiting to download, most recently opened first: whatever was
 /// opened last is what someone is looking at.
 public struct FicQueue: Equatable, Sendable {
@@ -150,10 +166,12 @@ public struct FicQueue: Equatable, Sendable {
 
     /// Moves `id` to the front, keeping how far it had got. Returns whether
     /// the head changed — that is when the running download must yield.
+    /// `after` is where a fic new to the queue starts: past the chapters the
+    /// device already has, so one new chapter is not the whole fic again.
     @discardableResult
-    public mutating func prioritize(_ id: String, title: String) -> Bool {
+    public mutating func prioritize(_ id: String, title: String, after start: String = "") -> Bool {
         let previous = head?.id
-        var entry = entries.first { $0.id == id } ?? Entry(id: id, title: title, after: "")
+        var entry = entries.first { $0.id == id } ?? Entry(id: id, title: title, after: start)
         entry.title = title
         entries.removeAll { $0.id == id }
         entries.insert(entry, at: 0)
