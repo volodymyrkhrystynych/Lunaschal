@@ -63,14 +63,18 @@ struct WatchProvider: TimelineProvider {
 }
 
 /// A glyph on the face's own background, for the circular families.
+/// `side` is set only by the launcher, whose buttons are far smaller than a
+/// circular slot.
 struct Glyph: View {
     let symbol: String
     var tint: Color?
+    var side: CGFloat?
 
     var body: some View {
         ZStack {
             AccessoryWidgetBackground()
-            Image(systemName: symbol).font(.title2).foregroundStyle(tint ?? .primary)
+            Image(systemName: symbol).font(side.map { .system(size: $0 * 0.45, weight: .semibold) } ?? .title2)
+                .foregroundStyle(tint ?? .primary)
         }
     }
 }
@@ -82,13 +86,14 @@ struct Glyph: View {
 /// keeps a half-filled disc behind its briefcase to stay unlike work.
 struct StateFace: View {
     let state: ActivityState?
+    var side: CGFloat?
     @Environment(\.widgetRenderingMode) private var mode
 
     var body: some View {
         if mode == .fullColor {
             ZStack {
                 AccessoryWidgetBackground()
-                ActivityGlyph(state: state).padding(3)
+                ActivityGlyph(state: state).padding(side.map { $0 * 0.06 } ?? 3)
             }
         } else {
             ZStack {
@@ -98,7 +103,8 @@ struct StateFace: View {
                         .mask(HStack(spacing: 0) { Rectangle(); Color.clear })
                         .widgetAccentable()
                 }
-                Image(systemName: state?.symbol ?? "circle.dashed").font(.title3.weight(.semibold))
+                Image(systemName: state?.symbol ?? "circle.dashed")
+                    .font(side.map { .system(size: $0 * 0.42, weight: .semibold) } ?? .title3.weight(.semibold))
                     .widgetAccentable()
             }
         }
@@ -185,9 +191,12 @@ struct HabitsView: View {
 struct HabitsRing: View {
     let left: Int?
     let total: Int
+    var side: CGFloat?
 
     var body: some View {
-        if let left, total > 0 {
+        if let side {
+            compact(side)
+        } else if let left, total > 0 {
             Gauge(value: Double(total - left), in: 0...Double(total)) {
                 Text("Habits")
             } currentValueLabel: {
@@ -198,6 +207,33 @@ struct HabitsRing: View {
             .accessibilityLabel(left == 0 ? "Habits done" : "\(left) habits left")
         } else {
             Glyph(symbol: "checkmark.circle")
+        }
+    }
+
+    /// The launcher's version. A capacity Gauge is laid out at a circular
+    /// slot's size and will not shrink into a launcher button, so the ring is
+    /// drawn by hand at whatever side it is given.
+    @ViewBuilder private func compact(_ side: CGFloat) -> some View {
+        if let left, total > 0 {
+            let line = max(2, side * 0.1)
+            ZStack {
+                AccessoryWidgetBackground()
+                Circle().stroke(.white.opacity(0.25), lineWidth: line).padding(line / 2)
+                Circle().trim(from: 0, to: Double(total - left) / Double(total))
+                    .stroke(style: StrokeStyle(lineWidth: line, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .padding(line / 2)
+                    .widgetAccentable()
+                Group {
+                    if left == 0 { Image(systemName: "checkmark") } else { Text("\(left)") }
+                }
+                .font(.system(size: side * 0.42, weight: .semibold, design: .rounded))
+                .minimumScaleFactor(0.5)
+            }
+            .accessibilityElement()
+            .accessibilityLabel(left == 0 ? "Habits done" : "\(left) habits left")
+        } else {
+            Glyph(symbol: "checkmark.circle", side: side)
         }
     }
 }
@@ -226,11 +262,11 @@ struct LauncherView: View {
     var body: some View {
         HStack(spacing: 3) {
             recording(.todo)
-            button(.home, caption: entry.habitsLeft.map { $0 == 0 ? "Done" : "\($0) left" } ?? "Habits") {
-                HabitsRing(left: entry.habitsLeft, total: entry.habitsTotal)
+            button(.home, caption: entry.habitsLeft.map { $0 == 0 ? "Done" : "\($0) left" } ?? "Habits") { side in
+                HabitsRing(left: entry.habitsLeft, total: entry.habitsTotal, side: side)
             }
             recording(.record)
-            button(.home, caption: entry.state?.title ?? "State") { StateFace(state: entry.state) }
+            button(.home, caption: entry.state?.title ?? "State") { side in StateFace(state: entry.state, side: side) }
             recording(.transcribe)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -238,21 +274,30 @@ struct LauncherView: View {
 
     @ViewBuilder private func recording(_ choice: RecordingChoice) -> some View {
         if let status = entry.recording, choice.matches(status) {
-            button(choice.link, caption: nil, timer: status.startedAt) {
-                Glyph(symbol: "stop.fill", tint: .red)
+            button(choice.link, caption: nil, timer: status.startedAt) { side in
+                Glyph(symbol: "stop.fill", tint: .red, side: side)
             }
         } else {
-            button(choice.link, caption: choice == .transcribe ? "Text" : choice.title) {
-                Glyph(symbol: choice.symbol)
+            button(choice.link, caption: choice == .transcribe ? "Text" : choice.title) { side in
+                Glyph(symbol: choice.symbol, side: side)
             }
         }
     }
 
+    /// Five of these share the slot, so each icon gets about 30pt. It is
+    /// handed its side rather than left to size itself: anything with a fixed
+    /// size (a capacity Gauge, a .title2 glyph) is drawn for a 50pt circular
+    /// slot, overflows the row, and WidgetKit crops and scales the lot.
     private func button<Icon: View>(_ link: WatchLink, caption: String?, timer: Date? = nil,
-                                    @ViewBuilder icon: () -> Icon) -> some View {
+                                    @ViewBuilder icon: @escaping (CGFloat) -> Icon) -> some View {
         Link(destination: link.url) {
             VStack(spacing: 2) {
-                icon().clipShape(Circle()).aspectRatio(1, contentMode: .fit)
+                GeometryReader { box in
+                    let side = min(box.size.width, box.size.height)
+                    icon(side).frame(width: side, height: side).clipShape(Circle())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .aspectRatio(1, contentMode: .fit)
                 Group {
                     if let timer { Text(timer, style: .timer).monospacedDigit() } else { Text(caption ?? "") }
                 }
