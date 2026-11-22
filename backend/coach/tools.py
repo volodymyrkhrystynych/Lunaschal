@@ -5,6 +5,7 @@ and give a habit its cue.
 model never does date arithmetic across the 4am boundary.
 """
 import json
+import re
 
 from backend.coach import review
 from backend.day_boundary import day_key_for
@@ -86,6 +87,52 @@ def replies_to_lock_message(conversation_id: str | None, now: int | None = None)
     except (TypeError, ValueError, AttributeError):
         return False
     return coach.get('kind') == 'gaming_lock' and coach.get('day') == day_key_for(now)
+
+
+_WORK_DONE = re.compile(
+    r"\b(?:"
+    r"(?:done|finished|through)\s+(?:with\s+)?(?:work|working|the\s+work\s*day|my\s+work\s*day|for\s+(?:the\s+)?(?:day|today|tonight))"
+    r"|work(?:\s*day)?(?:\s+is\s+|'s\s+|\s+)(?:done|over|finished)"
+    r"|(?:logging|signing|clocking)\s+off|off\s+work|end(?:ing)?\s+(?:the\s+|my\s+)?work\s*day"
+    r"|unlock\s+(?:the\s+|my\s+)?(?:games?|gaming|steam)"
+    r"|(?:can|may|let)\s+(?:i|me)\s+(?:play|game)\b"
+    r")",
+    re.IGNORECASE)
+_NEGATED = re.compile(r"(?:\b(?:not|never|almost|nearly|before|until|after|when|if)\b|n't\b)[^.?!]{0,20}$",
+                      re.IGNORECASE)
+
+
+def asks_to_end_workday(text: str | None) -> bool:
+    """Whether a message plainly says work is over or asks for games.
+
+    A floor under the model, never a gate on it: the model may still call
+    end_workday on any wording, and this only runs when it did not. Replayed
+    against production, a history the model had already answered wrongly
+    ("I've unlocked your games", "I cannot run tools") kept it from calling the
+    tool on the fifth "i'm done with work" in a row. A false match costs a card
+    nobody taps — end_workday stages one and unlocks nothing — so this leans
+    toward matching, and only refuses when the phrase is negated or hedged just
+    before it ("not done with work yet", "almost done for the day").
+    """
+    if not isinstance(text, str):
+        return False
+    for match in _WORK_DONE.finditer(text):
+        if not _NEGATED.search(text[:match.start()]):
+            return True
+    return False
+
+
+def should_stage_unlock(conversation_id: str | None, user_text: str | None,
+                        now: int | None = None) -> bool:
+    """Whether the server runs end_workday itself because the model didn't:
+    the message answers today's lock announcement, or games are locked and
+    the message asks for them in so many words."""
+    if replies_to_lock_message(conversation_id, now):
+        return True
+    if not asks_to_end_workday(user_text):
+        return False
+    from backend.gaming import lock
+    return bool(lock.status(get_db(), now)['locked'])
 
 
 def _waiting_unlock_card(db, conversation_id: str | None, day: str) -> bool:

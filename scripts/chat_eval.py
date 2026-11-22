@@ -174,6 +174,27 @@ def announce_lock():
     return step
 
 
+def coach_messages():
+    """The briefing and two coach reminders, posted before the user says a
+    word — the morning a production chat never called end_workday, because
+    three assistant turns in a row taught the model to answer in text."""
+    def step(ctx: Ctx):
+        from backend.db.connection import get_db
+        from ulid import ULID
+        db = get_db()
+        for content in ('**Yesterday ★★☆☆☆** — 4 of 16 done. You kept work and weigh-ins on track.',
+                        '**Daily learning note** — This step supports your goal of a steady job.',
+                        '**15-Day Weigh-In Streak** — You have completed 15 weigh-ins in a row.'):
+            db.execute("INSERT INTO messages(id, conversation_id, role, content, metadata, status, created_at)"
+                       " VALUES (?,?,'assistant',?,?,'done',?)",
+                       (str(ULID()), ctx.conversation_id, content,
+                        json.dumps({'coach': {'kind': 'habit'}}), int(time.time())))
+            time.sleep(0.002)  # distinct ULIDs in order
+        db.commit()
+    step.label = 'briefing + two coach messages'
+    return step
+
+
 def unlock_today(method='review'):
     def step(ctx: Ctx):
         from backend.gaming import lock
@@ -258,6 +279,10 @@ SCENARIOS = [
     Scenario('reply_to_enforcer', 'gaming',
              [announce_lock(), say("Yeah I'm done for today, go over it with me."), accept('unlock_gaming')],
              gaming_checks()),
+    Scenario('coach_run_then_done_work', 'gaming',
+             [coach_messages(), say("i'm done with work"), accept('unlock_gaming')],
+             gaming_checks(),
+             note='Three assistant messages before the first user message (2026-11-21).'),
     Scenario('already_unlocked', 'gaming',
              [unlock_today(), say("I'm done with work, unlock games.")],
              [('end_workday called', lambda c: c.last.called('end_workday')),

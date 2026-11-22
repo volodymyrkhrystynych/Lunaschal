@@ -168,6 +168,76 @@ def test_an_ordinary_message_on_a_locked_day_stages_nothing(monkeypatch, answere
     assert 'still locked' in answered['messages'][-1]['content']
 
 
+def _lock_on():
+    from backend.gaming import lock
+    from backend.db.connection import get_db
+    lock.update_settings(get_db(), {'enabled': True, 'days': [0, 1, 2, 3, 4, 5, 6]})
+
+
+# The morning a production chat failed: the briefing and two coach messages,
+# then the user's first message of the day.
+COACH_RUN = [
+    {'role': 'assistant', 'content': '**Yesterday ★★☆☆☆** — 4 of 16 done',
+     'createdAt': '2026-11-21T09:27:47Z'},
+    {'role': 'assistant', 'content': '**Daily learning note** — supports your goal',
+     'createdAt': '2026-11-21T13:00:29Z'},
+    {'role': 'assistant', 'content': '**15-Day Weigh-In Streak**', 'createdAt': '2026-11-21T14:00:33Z'},
+]
+
+
+def test_done_with_work_stages_the_card_when_the_model_skips_it(monkeypatch, answered):
+    """The production failure: no lock announcement to reply to, a plain
+    "i'm done with work", and a decision turn with no tool call — the reply
+    then promised an unlocked game and no card ever appeared."""
+    _lock_on()
+    _no_tools(monkeypatch)
+    events = _drain(COACH_RUN + [{'role': 'user', 'content': "i'm done with work",
+                                  'createdAt': '2026-11-21T17:06:23Z'}])
+    done = events[-1][1]
+    assert [s['tool'] for s in done['steps']] == ['end_workday']
+    assert [p['kind'] for p in done['proposals']] == ['unlock_gaming']
+    assert 'tap Unlock gaming' in answered['messages'][-1]['content']
+
+
+def test_saying_work_is_not_done_stages_nothing(monkeypatch, answered):
+    _lock_on()
+    _no_tools(monkeypatch)
+    events = _drain([{'role': 'user', 'content': "I'm not done with work yet, what's left?"}])
+    assert events[-1][1]['proposals'] == []
+    assert 'still locked' in answered['messages'][-1]['content']
+
+
+def test_done_with_work_on_an_unlocked_day_is_left_to_the_model(monkeypatch, answered):
+    _no_tools(monkeypatch)  # the lock is off by default
+    events = _drain([{'role': 'user', 'content': "i'm done with work"}])
+    assert events[-1][1]['steps'] == []
+
+
+def test_a_tool_name_written_as_text_runs_as_the_call(monkeypatch, answered):
+    """What the decision turn actually returned, four runs in five: the call
+    as prose, with the history's timestamp copied onto it. The message is not
+    one the backstop matches, so the step can only have come from the repair."""
+    _lock_on()
+    seen = _main_script(monkeypatch, [
+        SimpleNamespace(content='[today 12:06] end_workday', tool_calls=None),
+        SimpleNamespace(content='', tool_calls=None),
+    ])
+    events = _drain([{'role': 'user', 'content': 'Yeah, go over it with me'}])
+    assert [p['kind'] for p in events[-1][1]['proposals']] == ['unlock_gaming']
+    assert len(seen) == 2  # the repaired call got a tool result and a follow-up turn
+    assert seen[1][-2]['tool_calls'][0]['function']['name'] == 'end_workday'
+
+
+def test_a_run_of_assistant_messages_reaches_the_model_as_one_turn(monkeypatch, answered):
+    seen = _main_script(monkeypatch, [SimpleNamespace(content='', tool_calls=None)])
+    _drain(COACH_RUN + [{'role': 'user', 'content': 'hi', 'createdAt': '2026-11-21T17:06:23Z'}])
+    roles = [m['role'] for m in seen[0]]
+    assert roles[:3] == ['system', 'assistant', 'user']
+    merged = seen[0][1]['content']
+    assert 'Yesterday' in merged and 'Daily learning note' in merged and 'Weigh-In' in merged
+    assert merged.count('] ') == 3  # each part keeps its own time stamp
+
+
 def test_no_unlock_note_without_a_card(monkeypatch, answered):
     _no_tools(monkeypatch)
     _drain()

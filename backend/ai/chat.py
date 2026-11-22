@@ -414,6 +414,29 @@ def stamp_messages(messages: list[dict], now: int | None = None) -> list[dict]:
     return out
 
 
+def merge_assistant_runs(messages: list[dict]) -> list[dict]:
+    """Fold consecutive plain assistant messages into one turn.
+
+    The coach and the briefing post into the chat on their own, so a morning
+    reads assistant, assistant, assistant, then the user's first message — a
+    turn order the chat model was never trained on. Replayed against
+    production (scripts/chat_eval.py's `coach_run_then_done_work`), Qwen then
+    wrote `end_workday` as text instead of calling it, 0 runs in 5; with the
+    run folded into one turn it called it 12 times in 15. Only text turns
+    merge: one carrying tool_calls is half of an exchange and keeps its shape.
+    """
+    out: list[dict] = []
+    for message in messages:
+        if (out and message.get('role') == 'assistant' and out[-1].get('role') == 'assistant'
+                and not message.get('tool_calls') and not out[-1].get('tool_calls')
+                and isinstance(message.get('content'), str)
+                and isinstance(out[-1].get('content'), str)):
+            out[-1] = dict(out[-1], content=f"{out[-1]['content']}\n\n{message['content']}")
+        else:
+            out.append(dict(message))
+    return out
+
+
 def chat_stream(
     messages: list[dict],
     system_prompt: str = '',

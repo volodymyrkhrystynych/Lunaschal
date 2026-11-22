@@ -334,3 +334,29 @@ def test_tick_closes_only_while_locked_and_announces_once_a_day(tmp_path, monkey
     assert len(messages) == 1 and 'closed steam' in messages[0]['content']
     lock.unlock(get_db(), DAY, 'review', now=NOW)
     assert enforcer.tick(NOW + 120, proc=root, close=close) == []
+
+
+@pytest.mark.parametrize('text', [
+    "i'm done with work", "I'm done for the day!", 'finished work', 'work is done',
+    "workday's over", 'logging off', 'ok signing off now', 'can I play?', 'let me play',
+    'unlock gaming please', 'please unlock the games', 'Done with work. How did today go?',
+])
+def test_plain_end_of_work_messages_are_recognised(text):
+    assert tools.asks_to_end_workday(text)
+
+
+@pytest.mark.parametrize('text', [
+    "I'm not done with work yet", 'almost done for the day', "isn't done with work",
+    "I'll tell you when I'm done with work", 'what should I work on?', 'play some music',
+    "I'm done with the dishes", 'homework is done', '', None,
+])
+def test_negated_or_unrelated_messages_are_not(text):
+    assert not tools.asks_to_end_workday(text)
+
+
+def test_the_backstop_needs_games_to_be_locked():
+    db = get_db()
+    assert not tools.should_stage_unlock(None, "i'm done with work")  # lock off
+    lock.update_settings(db, {'enabled': True, 'days': [0, 1, 2, 3, 4, 5, 6]})
+    assert tools.should_stage_unlock(None, "i'm done with work")
+    assert not tools.should_stage_unlock(None, 'how was my day?')
