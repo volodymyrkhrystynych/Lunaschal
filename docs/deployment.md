@@ -98,9 +98,14 @@ and leave `lunaschal.service` in a restart loop. Each deploy now:
    for `dist/` only once the build succeeds — Vite empties its output directory
    first, so building in place served a missing page for the length of every
    build, and an empty one for good if the build failed.
-3. **Restarts and polls `/api/health`** for 90 seconds. If it never answers,
-   it resets the checkout to the last sha that did, rebuilds, and restarts
-   that.
+3. **Restarts and polls `/api/health`** (`backend/ops/health_wait.py`) for as
+   long as that same run of `lunaschal.service` stays up, with a 15-minute
+   ceiling. It fails right away if the unit stops or systemd restarts it
+   (`InvocationID` changes). This used to be a flat 90 seconds, but a production
+   boot runs the startup migrations against the live DB and takes anywhere from
+   50 seconds to several minutes, so healthy commits were marked failed and
+   blocked as `skip-failed`. If it never answers, the watcher resets the
+   checkout to the last sha that did, rebuilds, and restarts that.
 
 The watcher keeps two files under `.git/lunaschal-deploy/`: `deployed`, the last
 sha seen healthy, and `failed`, a sha that failed step 1 or 3. `finish` means
