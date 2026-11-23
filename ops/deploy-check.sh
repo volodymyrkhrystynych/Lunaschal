@@ -129,15 +129,13 @@ build_dist() {
   rm -rf dist.prev
 }
 
+# Waits as long as the restarted unit stays up (15 min ceiling) and fails fast
+# if it stops or systemd restarts it. A flat 90 s used to mark healthy commits
+# failed, because a production boot runs the startup migrations against the
+# live DB and takes 50 s to several minutes — see backend/ops/health_wait.py.
 healthy() {
-  for _ in $(seq 1 45); do
-    if curl -skf -m 3 "https://127.0.0.1:$PORT/api/health" >/dev/null \
-      || curl -sf -m 3 "http://127.0.0.1:$PORT/api/health" >/dev/null; then
-      return 0
-    fi
-    sleep 2
-  done
-  return 1
+  echo "Waiting for :$PORT/api/health..."
+  .venv/bin/python -m backend.ops.health_wait --port "$PORT" --unit lunaschal.service
 }
 
 # 1. Boot TARGET before it touches the live checkout. The venv is the live one,
@@ -177,7 +175,7 @@ if healthy; then
   exit 0
 fi
 
-mark_failed "no answer on :$PORT/api/health after restart"
+mark_failed "did not come up healthy on :$PORT after restart (see health_wait verdict above)"
 journalctl --user -u lunaschal.service -n 40 --no-pager >&2 || true
 if [ "$PREV" = "$TARGET" ]; then
   echo "deploy-check: nothing to roll back to" >&2

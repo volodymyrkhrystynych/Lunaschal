@@ -3238,7 +3238,30 @@ def _migrate_websearch_search_to_research(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _fts_missing(db: sqlite3.Connection, table: str, triggers: tuple[str, ...]) -> bool:
+    """True when the FTS table or any of its sync triggers does not exist yet.
+
+    Call before the `CREATE ... IF NOT EXISTS` statements: whatever is missing
+    now is about to be created, and that is the only time the index can be out
+    of step with its content table. A brand-new index has to be backfilled, and
+    a migration that rebuilt the content table (DROP + RENAME, as the wiki's
+    rowid rebuilds do) took the triggers with it, so rows written since may be
+    missing from the index. Otherwise the triggers have kept it current.
+
+    The 'rebuild' used to run unconditionally on every boot. For journal or
+    recipes that is free; for 2.6 GB of fic chapters and 800 MB of email it was
+    ~75 s of every production start and ~750 MB of rewritten index pages in the
+    WAL, which is what made the auto-deploy health check time out.
+    """
+    names = {r[0] for r in db.execute(
+        "SELECT name FROM sqlite_master WHERE name IN (%s)" % ','.join('?' * (1 + len(triggers))),
+        (table, *triggers),
+    ).fetchall()}
+    return len(names) < 1 + len(triggers)
+
+
 def _init_fts(db: sqlite3.Connection) -> None:
+    needs_rebuild = _fts_missing(db, 'journal_fts', ('journal_ai', 'journal_ad', 'journal_au'))
     db.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS journal_fts USING fts5(
             id UNINDEXED,
@@ -3269,11 +3292,13 @@ def _init_fts(db: sqlite3.Connection) -> None:
             VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content, NEW.tags);
         END
     """)
-    db.execute("INSERT INTO journal_fts(journal_fts) VALUES('rebuild')")
+    if needs_rebuild:
+        db.execute("INSERT INTO journal_fts(journal_fts) VALUES('rebuild')")
     db.commit()
 
 
 def _init_recipes_fts(db: sqlite3.Connection) -> None:
+    needs_rebuild = _fts_missing(db, 'recipes_fts', ('recipes_ai', 'recipes_ad', 'recipes_au'))
     db.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS recipes_fts USING fts5(
             id UNINDEXED,
@@ -3304,11 +3329,13 @@ def _init_recipes_fts(db: sqlite3.Connection) -> None:
             VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content, NEW.tags);
         END
     """)
-    db.execute("INSERT INTO recipes_fts(recipes_fts) VALUES('rebuild')")
+    if needs_rebuild:
+        db.execute("INSERT INTO recipes_fts(recipes_fts) VALUES('rebuild')")
     db.commit()
 
 
 def _init_wiki_fts(db: sqlite3.Connection) -> None:
+    needs_rebuild = _fts_missing(db, 'wiki_fts', ('wiki_articles_ai', 'wiki_articles_ad', 'wiki_articles_au'))
     db.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS wiki_fts USING fts5(
             id UNINDEXED,
@@ -3340,7 +3367,8 @@ def _init_wiki_fts(db: sqlite3.Connection) -> None:
             VALUES (NEW.rowid, NEW.id, NEW.title, NEW.summary, NEW.content, NEW.tags);
         END
     """)
-    db.execute("INSERT INTO wiki_fts(wiki_fts) VALUES('rebuild')")
+    if needs_rebuild:
+        db.execute("INSERT INTO wiki_fts(wiki_fts) VALUES('rebuild')")
     db.commit()
 
 
@@ -3381,6 +3409,7 @@ def search_wiki_fts(query: str, limit: int = 20) -> list[dict]:
 
 
 def _init_fanfic_fts(db: sqlite3.Connection) -> None:
+    needs_rebuild = _fts_missing(db, 'fic_chapters_fts', ('fic_chapters_ai', 'fic_chapters_ad', 'fic_chapters_au'))
     db.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS fic_chapters_fts USING fts5(
             id UNINDEXED,
@@ -3410,11 +3439,13 @@ def _init_fanfic_fts(db: sqlite3.Connection) -> None:
             VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content_text);
         END
     """)
-    db.execute("INSERT INTO fic_chapters_fts(fic_chapters_fts) VALUES('rebuild')")
+    if needs_rebuild:
+        db.execute("INSERT INTO fic_chapters_fts(fic_chapters_fts) VALUES('rebuild')")
     db.commit()
 
 
 def _init_emails_fts(db: sqlite3.Connection) -> None:
+    needs_rebuild = _fts_missing(db, 'emails_fts', ('emails_ai', 'emails_ad', 'emails_au'))
     db.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS emails_fts USING fts5(
             id UNINDEXED,
@@ -3445,7 +3476,8 @@ def _init_emails_fts(db: sqlite3.Connection) -> None:
             VALUES (NEW.rowid, NEW.id, NEW.subject, NEW.body_text, NEW.sender);
         END
     """)
-    db.execute("INSERT INTO emails_fts(emails_fts) VALUES('rebuild')")
+    if needs_rebuild:
+        db.execute("INSERT INTO emails_fts(emails_fts) VALUES('rebuild')")
     db.commit()
 
 
@@ -3466,6 +3498,7 @@ def _init_messages_fts(db: sqlite3.Connection) -> None:
     The 'rebuild' at the end is what backfills every conversation that already
     exists -- the triggers alone would only ever see new messages.
     """
+    needs_rebuild = _fts_missing(db, 'messages_fts', ('messages_ai', 'messages_ad', 'messages_au'))
     db.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
             id UNINDEXED,
@@ -3494,7 +3527,8 @@ def _init_messages_fts(db: sqlite3.Connection) -> None:
             VALUES (NEW.rowid, NEW.id, NEW.content);
         END
     """)
-    db.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+    if needs_rebuild:
+        db.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
     db.commit()
 
 
