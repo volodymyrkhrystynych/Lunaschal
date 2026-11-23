@@ -31,7 +31,9 @@ backend/delegate/deep_research.py's salvage synthesis).
 """
 import json
 import logging
+import re
 import time
+from types import SimpleNamespace
 
 from backend.ai.llm import chat_tool_turn
 from backend.ai.mcp_client import serialize_tool_calls
@@ -190,6 +192,38 @@ def gather(
     return result
 
 
+# A tool name written as the turn's whole reply, the way the chat model writes
+# one when the history has taught it that turns are text: `end_workday`,
+# `[end_workday]`, `[today 12:06] end_workday`, `end_workday()`.
+_STAMP = re.compile(r'^\[[^\]\n]*\d{1,2}:\d{2}\]\s*')
+_BARE_NAME = re.compile(r'^[\[`(]*\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(\s*\))?\s*[\]`)]*\.?$')
+
+
+def bare_tool_call(content: str | None, tools: list[dict]):
+    """The call a turn meant, when its entire content is a tool's name.
+
+    Replayed against a production chat (three coach messages, then "i'm done
+    with work"), Qwen answered the decision turn with the text
+    `[today 12:06] end_workday` in four runs of five and no structured call —
+    and the loop read that as closing prose and threw it away, so the reply
+    went on to tell the user games were unlocked with nothing staged. Only a
+    tool with no required arguments qualifies: a bare name says nothing about
+    arguments, and guessing them is a different, worse repair. Returns an
+    object shaped like an SDK tool call, or None.
+    """
+    text = _STAMP.sub('', (content or '').strip())
+    match = _BARE_NAME.match(text)
+    if not match:
+        return None
+    name = match.group(1)
+    for tool in tools:
+        fn = tool.get('function') or {}
+        if fn.get('name') == name and not (fn.get('parameters') or {}).get('required'):
+            return SimpleNamespace(id=f'repaired-{name}', type='function',
+                                   function=SimpleNamespace(name=name, arguments='{}'))
+    return None
+
+
 def _loop(
     system: str | None,
     user: str | None,
@@ -247,6 +281,12 @@ def _loop(
             break
 
         tool_calls = getattr(msg, 'tool_calls', None)
+        if not tool_calls:
+            repaired = bare_tool_call(msg.content, tools)
+            if repaired is not None and repaired.function.name in dispatch:
+                logger.info('Turn wrote %s as text; running it as a call', repaired.function.name)
+                msg = SimpleNamespace(content=None, tool_calls=[repaired])
+                tool_calls = msg.tool_calls
         if tool_calls and ignore_unknown_tools:
             tool_calls = [call for call in tool_calls
                           if call.function.name in dispatch]

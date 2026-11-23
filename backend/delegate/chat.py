@@ -31,7 +31,8 @@ import time
 from types import SimpleNamespace
 
 from backend.ai.chat import (
-    TIME_PREFIX_NOTE, build_chat_system_prompt, format_now_context, stamp_messages,
+    TIME_PREFIX_NOTE, build_chat_system_prompt, format_now_context, merge_assistant_runs,
+    stamp_messages,
 )
 from backend.ai.llm import chat_stream_events
 from backend.chat import compaction
@@ -385,6 +386,10 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     """
     deadline = limits.chat_deadline()
     timed_out = False
+    # Read before compaction can fold anything away: the backstop below asks
+    # what this turn's message says, not what the transcript summarises.
+    latest_user_text = next((m.get('content') for m in reversed(messages)
+                             if m.get('role') == 'user'), None)
     system = _system_prompt(messages, system_prompt)
     messages, rolling_context = compaction.compact_for_prompt(
         _with_saved_todos(messages), conversation_id,
@@ -399,8 +404,8 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     # Photos become text before stamping, not after: stamp_messages flattens a
     # message to `[today 21:58] <content>`, so anything that must reach the model
     # has to already be in `content` by then.
-    conversation = [{'role': 'system', 'content': system}] + stamp_messages(
-        expand_attachments(messages)
+    conversation = [{'role': 'system', 'content': system}] + merge_assistant_runs(
+        stamp_messages(expand_attachments(messages))
     )
 
     steps: list[dict] = []
@@ -443,9 +448,12 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
         # The lock's own message asks them to say when work is done, so a
         # reply to it is that answer whatever the model decided — measured,
         # it skipped end_workday two runs in five and then told the user games
-        # were unlocked. The tool is model-free and only stages a card.
+        # were unlocked. Likewise a plain "done with work" while games are
+        # locked: a history full of the model's earlier wrong answers kept it
+        # from calling the tool five asks running. The tool is model-free and
+        # only stages a card; nothing unlocks until it is tapped.
         if (toolset == 'chat' and not any(s.get('tool') == 'end_workday' for s in steps)
-                and coach_tools.replies_to_lock_message(conversation_id)):
+                and coach_tools.should_stage_unlock(conversation_id, latest_user_text)):
             _, event = coach_tools.run_tool('end_workday', {})
             steps.append(event)
             if event.get('proposal'):

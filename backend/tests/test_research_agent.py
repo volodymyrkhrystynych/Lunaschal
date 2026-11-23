@@ -415,3 +415,50 @@ def test_deadline_from_clamps_an_inner_budget_to_the_outer_one():
     assert agent.deadline_from(None, outer) == outer
     assert agent.deadline_from(None, None) is None
     assert agent.deadline_from(30) == pytest.approx(now + 30, abs=0.5)
+
+
+# --- a tool name written as the turn's text -------------------------------
+
+_NO_ARGS = {'type': 'function', 'function': {'name': 'end_workday',
+            'parameters': {'type': 'object', 'properties': {}, 'required': []}}}
+_WITH_ARGS = {'type': 'function', 'function': {'name': 'get_day_review',
+              'parameters': {'type': 'object', 'properties': {'day': {}}, 'required': ['day']}}}
+
+
+@pytest.mark.parametrize('text', [
+    'end_workday', '[end_workday]', '[today 12:06] end_workday', '`end_workday()`',
+    '  end_workday.\n', '[yesterday 23:59] [end_workday]',
+])
+def test_a_bare_tool_name_is_read_as_its_call(text):
+    call = agent.bare_tool_call(text, [_NO_ARGS, _WITH_ARGS])
+    assert call.function.name == 'end_workday'
+    assert call.function.arguments == '{}'
+
+
+@pytest.mark.parametrize('text', [
+    'get_day_review',                      # needs an argument a bare name cannot supply
+    'Calling end_workday now.',            # prose that mentions it is not the call
+    'end_workday and get_day_review',
+    'unknown_tool', '', None,
+])
+def test_anything_else_is_left_as_prose(text):
+    assert agent.bare_tool_call(text, [_NO_ARGS, _WITH_ARGS]) is None
+
+
+def test_the_loop_runs_a_repaired_call_through_its_dispatch(monkeypatch):
+    replies = iter([
+        (SimpleNamespace(content='[today 12:06] end_workday', tool_calls=None), 'stop'),
+        (SimpleNamespace(content='done', tool_calls=None), 'stop'),
+    ])
+    monkeypatch.setattr(agent, 'chat_tool_turn', lambda *a, **k: next(replies))
+    ran = []
+
+    class Box:
+        def run_tool(self, name, args):
+            ran.append((name, args))
+            return 'staged', {'tool': name, 'ok': True}
+
+    result = agent.gather(initial_messages=[{'role': 'user', 'content': 'x'}],
+                          tools=[_NO_ARGS], dispatch={'end_workday': Box()})
+    assert ran == [('end_workday', {})]
+    assert [s['tool'] for s in result['steps']] == ['end_workday']
