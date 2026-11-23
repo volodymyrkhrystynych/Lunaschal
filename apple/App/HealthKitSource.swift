@@ -1,10 +1,12 @@
+import CoreLocation
 import Foundation
 import HealthKit
 import LunaschalCore
 
 /// `HealthSource` over the phone's HealthKit store. The Watch writes into the
 /// same store (it syncs to the phone on its own), so reading here is how Watch
-/// sleep, workouts and exercise minutes reach the server.
+/// sleep, workouts and exercise minutes reach the server -- and how a Watch
+/// workout's GPS route reaches the location trail (`routeStream`).
 ///
 /// "Everything readable" is a hand list rather than an enumeration: HealthKit
 /// offers no list of its identifiers, and each quantity needs a unit to read
@@ -18,6 +20,11 @@ final class HealthKitSource: HealthSource {
     static var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
 
     static let workoutStream = "HKWorkoutType"
+    static let routeStream = "HKWorkoutRoute"
+    /// How far back routes are read. The trail is a record of days as they
+    /// happen, and every year of runs would be a map card on a day nobody
+    /// scrolls to -- and hundreds of thousands of points through the outbox.
+    static let routeHistory: TimeInterval = 30 * 86400
 
     private let store = HKHealthStore()
     private let quantities: [String: (HKQuantityType, HKUnit)]
@@ -38,11 +45,13 @@ final class HealthKitSource: HealthSource {
     }
 
     var streams: [String] { quantities.keys.sorted() + categories.keys.sorted() + [Self.workoutStream] }
+    var routeStreams: [String] { [Self.routeStream] }
 
     private var readTypes: Set<HKObjectType> {
         var types = Set<HKObjectType>(quantities.values.map(\.0))
         types.formUnion(categories.values.map { $0 as HKObjectType })
         types.insert(HKWorkoutType.workoutType())
+        types.insert(HKSeriesType.workoutRoute())
         return types
     }
 
@@ -53,30 +62,24 @@ final class HealthKitSource: HealthSource {
         try await store.requestAuthorization(toShare: [], read: readTypes)
     }
 
+    /// Some type in `readTypes` has never been asked about: true once for
+    /// every install that turned Health on before workout routes were read.
+    func hasUnaskedTypes() async -> Bool {
+        (try? await store.statusForAuthorizationRequest(toShare: [], read: readTypes)) == .shouldRequest
+    }
+
     // MARK: Anchored pages
 
     func page(stream: String, anchor: Data?, limit: Int) async throws -> HealthPage {
+        if stream == Self.routeStream { return try await routePage(anchor: anchor, limit: limit) }
         let type: HKSampleType
         if stream == Self.workoutStream { type = HKWorkoutType.workoutType() }
         else if let quantity = quantities[stream] { type = quantity.0 }
         else if let category = categories[stream] { type = category }
         else { return HealthPage(anchor: anchor) }
 
-        let previous = try anchor.flatMap {
-            try NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: $0)
-        }
-        let (added, deleted, next) = try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<([HKSample], [HKDeletedObject], HKQueryAnchor?), Error>) in
-            let query = HKAnchoredObjectQuery(type: type, predicate: nil, anchor: previous, limit: limit) {
-                _, added, deleted, next, error in
-                if let error { continuation.resume(throwing: error) }
-                else { continuation.resume(returning: (added ?? [], deleted ?? [], next)) }
-            }
-            store.execute(query)
-        }
-        var page = HealthPage(
-            deleted: deleted.map(\.uuid.uuidString),
-            anchor: try next.map { try NSKeyedArchiver.archivedData(withRootObject: $0, requiringSecureCoding: true) })
+        let (added, deleted, next) = try await anchored(type, predicate: nil, anchor: anchor, limit: limit)
+        var page = HealthPage(deleted: deleted.map(\.uuid.uuidString), anchor: next)
         for sample in added {
             if let workout = sample as? HKWorkout {
                 page.workouts.append(record(workout))
@@ -85,6 +88,87 @@ final class HealthKitSource: HealthSource {
             }
         }
         return page
+    }
+
+    private func anchored(_ type: HKSampleType, predicate: NSPredicate?, anchor: Data?,
+                          limit: Int) async throws -> ([HKSample], [HKDeletedObject], Data?) {
+        let previous = try anchor.flatMap {
+            try NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: $0)
+        }
+        let (added, deleted, next) = try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<([HKSample], [HKDeletedObject], HKQueryAnchor?), Error>) in
+            let query = HKAnchoredObjectQuery(type: type, predicate: predicate, anchor: previous, limit: limit) {
+                _, added, deleted, next, error in
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume(returning: (added ?? [], deleted ?? [], next)) }
+            }
+            store.execute(query)
+        }
+        return (added, deleted, try next.map {
+            try NSKeyedArchiver.archivedData(withRootObject: $0, requiringSecureCoding: true)
+        })
+    }
+
+    // MARK: Workout routes
+
+    /// New routes from the last `routeHistory`, each with all its locations.
+    /// Deletions are ignored: a deleted workout doesn't unmake the walk, and
+    /// the trail has no way to take back points it has already drawn.
+    private func routePage(anchor: Data?, limit: Int) async throws -> HealthPage {
+        let since = HKQuery.predicateForSamples(withStart: Date().addingTimeInterval(-Self.routeHistory), end: nil)
+        let (added, _, next) = try await anchored(HKSeriesType.workoutRoute(), predicate: since,
+                                                  anchor: anchor, limit: limit)
+        var routes: [WorkoutRoute] = []
+        for case let route as HKWorkoutRoute in added {
+            try Task.checkCancellation()
+            let fixes = try await locations(of: route).map {
+                WorkoutRoute.Fix(ts: $0.timestamp.timeIntervalSince1970, latitude: $0.coordinate.latitude,
+                                 longitude: $0.coordinate.longitude,
+                                 accuracy: $0.horizontalAccuracy,
+                                 altitude: $0.verticalAccuracy >= 0 ? $0.altitude : nil,
+                                 speed: $0.speed >= 0 ? $0.speed : nil)
+            }
+            routes.append(WorkoutRoute(uuid: route.uuid.uuidString, fixes: fixes,
+                                       activity: await activity(during: route)))
+        }
+        return HealthPage(routes: routes, anchor: next)
+    }
+
+    /// A route's locations arrive in several batches; `done` marks the last.
+    private func locations(of route: HKWorkoutRoute) async throws -> [CLLocation] {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[CLLocation], Error>) in
+            var all: [CLLocation] = []
+            var finished = false
+            let query = HKWorkoutRouteQuery(route: route) { query, locations, done, error in
+                guard !finished else { return }
+                if let error {
+                    finished = true
+                    self.store.stop(query)
+                    continuation.resume(throwing: error)
+                    return
+                }
+                all += locations ?? []
+                if done {
+                    finished = true
+                    continuation.resume(returning: all)
+                }
+            }
+            store.execute(query)
+        }
+    }
+
+    /// The workout the route was recorded for: a route's link to its workout
+    /// can't be queried from the route's side, but they share a time span.
+    private func activity(during route: HKWorkoutRoute) async -> TrailPolicy.Activity? {
+        let during = HKQuery.predicateForSamples(withStart: route.startDate, end: route.endDate)
+        let workout: HKWorkout? = await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(sampleType: HKWorkoutType.workoutType(), predicate: during, limit: 1,
+                                      sortDescriptors: nil) { _, samples, _ in
+                continuation.resume(returning: samples?.first as? HKWorkout)
+            }
+            store.execute(query)
+        }
+        return workout.flatMap { WorkoutRoute.activity(forWorkout: Self.name(of: $0.workoutActivityType)) }
     }
 
     private func record(_ sample: HKSample, stream: String) -> HealthSampleRecord? {

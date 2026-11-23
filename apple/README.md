@@ -203,7 +203,11 @@ what each device can currently do and which work remains device-only.
   and asks for; the section says what is missing (While Using, denied, Precise
   Location off) and links to iOS Settings. Adaptive: visits and
   significant-change monitoring all day, live GPS only while Core Motion says
-  walking, running or cycling (`TrailPolicy`, `LocationTracker`). Points queue
+  walking, running or cycling (`TrailPolicy`, `LocationTracker`). With Health
+  sync on as well, a workout's recorded route -- the Watch's own GPS, phone or
+  no phone -- joins the trail from the last 30 days on (`WorkoutRoute`,
+  `HealthKitSource.routeStream`), thinned like the phone's GPS and keyed by
+  route UUID so a resend upserts. Points queue
   in a JSON-lines outbox and post to `/api/location/points` in batches, on their
   own when enough piles up and inside every sync pass; the server draws a map of
   each day for the web Journal feed (`backend/location/`). Core logic tested in

@@ -108,24 +108,35 @@ public struct HealthPage {
     public var samples: [HealthSampleRecord]
     public var workouts: [HealthWorkoutRecord]
     public var deleted: [String]
+    /// A route stream's objects. They go to the trail outbox, never the batch.
+    public var routes: [WorkoutRoute]
     public var anchor: Data?
 
     public init(samples: [HealthSampleRecord] = [], workouts: [HealthWorkoutRecord] = [],
-                deleted: [String] = [], anchor: Data?) {
-        self.samples = samples; self.workouts = workouts; self.deleted = deleted; self.anchor = anchor
+                deleted: [String] = [], routes: [WorkoutRoute] = [], anchor: Data?) {
+        self.samples = samples; self.workouts = workouts; self.deleted = deleted; self.routes = routes
+        self.anchor = anchor
     }
 
     var batch: HealthBatch { HealthBatch(samples: samples, workouts: workouts, deleted: deleted) }
-    var count: Int { samples.count + workouts.count + deleted.count }
+    var count: Int { samples.count + workouts.count + deleted.count + routes.count }
 }
 
 public protocol HealthSource {
     /// The anchored streams to read, one per HealthKit type identifier.
     var streams: [String] { get }
+    /// Streams whose pages carry `routes`. Read only when the pass is given a
+    /// trail outbox -- the location trail is switched on -- so that switching
+    /// it on later still finds them unread.
+    var routeStreams: [String] { get }
     /// Up to `limit` objects added or deleted since `anchor` (nil: from the start).
     func page(stream: String, anchor: Data?, limit: Int) async throws -> HealthPage
     /// Daily totals of every cumulative type, for 4am days `first...last`.
     func dailyTotals(first: String, last: String) async throws -> [HealthDailyTotal]
+}
+
+extension HealthSource {
+    public var routeStreams: [String] { [] }
 }
 
 public protocol HealthTransport {
@@ -218,13 +229,17 @@ public final class HealthSync {
         self.store = store; self.now = now; self.calendar = calendar
     }
 
-    public func run(source: HealthSource, transport: HealthTransport) async throws {
+    /// `routes` is the location trail's outbox, or nil while the trail is off.
+    /// A route's points land there before its anchor moves, so they are on
+    /// disk -- and the trail's own upload takes them from there -- before
+    /// Health forgets them; read twice, they upsert on the server.
+    public func run(source: HealthSource, transport: HealthTransport, routes: TrailOutbox? = nil) async throws {
         var status = store.status()
         status.lastAttempt = now()
         try store.save(status)
         do {
-            for stream in source.streams {
-                try await drain(stream, source: source, transport: transport, status: &status)
+            for stream in source.streams + (routes == nil ? [] : source.routeStreams) {
+                try await drain(stream, source: source, transport: transport, routes: routes, status: &status)
             }
             try await sendDaily(source: source, transport: transport, status: &status)
             status.lastSuccess = now()
@@ -240,12 +255,15 @@ public final class HealthSync {
     }
 
     private func drain(_ stream: String, source: HealthSource, transport: HealthTransport,
-                       status: inout HealthStateStore.Status) async throws {
+                       routes: TrailOutbox?, status: inout HealthStateStore.Status) async throws {
         var anchor = store.anchor(stream)
         while true {
             try Task.checkCancellation()
             let page = try await source.page(stream: stream, anchor: anchor, limit: Self.pageLimit)
-            if page.count > 0 {
+            if !page.routes.isEmpty, let routes {
+                try routes.append(page.routes.flatMap(\.points))
+            }
+            if !page.batch.isEmpty {
                 try await send(page.batch, transport: transport, status: &status)
             }
             // A full page that didn't move the anchor would be read again

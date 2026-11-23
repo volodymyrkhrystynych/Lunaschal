@@ -6,12 +6,20 @@ import XCTest
 /// simply how many of them have been handed out.
 private final class FakeSource: HealthSource {
     var objects: [String: [HealthSampleRecord]] = [:]
+    var routes: [String: [WorkoutRoute]] = [:]
     var totals: [HealthDailyTotal] = []
     var dailyRequests: [(String, String)] = []
+    var read: [String] = []
     var streams: [String] { objects.keys.sorted() }
+    var routeStreams: [String] { routes.keys.sorted() }
 
     func page(stream: String, anchor: Data?, limit: Int) async throws -> HealthPage {
+        read.append(stream)
         let offset = anchor.flatMap { Int(String(decoding: $0, as: UTF8.self)) } ?? 0
+        if let all = routes[stream] {
+            let slice = Array(all[min(offset, all.count)..<min(offset + limit, all.count)])
+            return HealthPage(routes: slice, anchor: Data(String(offset + slice.count).utf8))
+        }
         let all = objects[stream] ?? []
         let slice = Array(all[min(offset, all.count)..<min(offset + limit, all.count)])
         return HealthPage(samples: slice, anchor: Data(String(offset + slice.count).utf8))
@@ -110,6 +118,40 @@ final class HealthSyncTests: XCTestCase {
             XCTFail("expected unaccounted")
         } catch { XCTAssertEqual(error as? HealthSyncError, .unaccounted) }
         XCTAssertNil(store.anchor("HKQuantityTypeIdentifierStepCount"))
+    }
+
+    private func run(_ fixes: Int, uuid: String = UUID().uuidString) -> WorkoutRoute {
+        // ~20 m apart, a fix every five seconds.
+        WorkoutRoute(uuid: uuid, fixes: (0..<fixes).map {
+            .init(ts: 1_790_000_000 + Double($0) * 5, latitude: 43.65 + Double($0) * 0.00018, longitude: -79.38, accuracy: 5)
+        }, activity: .running)
+    }
+
+    func testWorkoutRoutesGoToTheTrailOutboxNotTheHealthBatch() async throws {
+        let source = FakeSource()
+        source.routes["HKWorkoutRoute"] = [run(10), run(4)]
+        let outbox = try TrailOutbox(root: root.appendingPathComponent("trail"))
+        let transport = FakeTransport()
+        try await sync().run(source: source, transport: transport, routes: outbox)
+        XCTAssertEqual(outbox.count, 14)
+        XCTAssertTrue(transport.batches.allSatisfy { $0.samples.isEmpty && $0.workouts.isEmpty && $0.deleted.isEmpty })
+        XCTAssertNotNil(store.anchor("HKWorkoutRoute"))
+
+        // Read once: the next pass adds nothing.
+        try await sync().run(source: source, transport: transport, routes: outbox)
+        XCTAssertEqual(outbox.count, 14)
+    }
+
+    func testRoutesWaitUnreadWhileTheTrailIsOff() async throws {
+        let source = FakeSource()
+        source.routes["HKWorkoutRoute"] = [run(3)]
+        try await sync().run(source: source, transport: FakeTransport())
+        XCTAssertFalse(source.read.contains("HKWorkoutRoute"))
+        XCTAssertNil(store.anchor("HKWorkoutRoute"))
+
+        let outbox = try TrailOutbox(root: root.appendingPathComponent("trail"))
+        try await sync().run(source: source, transport: FakeTransport(), routes: outbox)
+        XCTAssertEqual(outbox.count, 3)
     }
 
     func testDailyTotalsReachBackOnceThenOnlyTheLastFewDays() async throws {

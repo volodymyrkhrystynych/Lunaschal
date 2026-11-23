@@ -384,8 +384,18 @@ final class CaptureModel: ObservableObject {
         guard healthSyncEnabled, let healthSource,
               force || HealthSync.isDue(healthState.status(), now: Date()) else { return }
         defer { healthStatus = healthState.status() }
+        // Workout routes are a Health type added after many installs turned
+        // Health on, so they need one more question -- asked only with the
+        // app on screen, and only once the trail is on to put them in.
+        if trail.enabled, UIApplication.shared.applicationState == .active, await healthSource.hasUnaskedTypes() {
+            try? await healthSource.requestAuthorization()
+        }
         do {
-            try await healthSyncer.run(source: healthSource, transport: api)
+            // A Watch workout's route joins the location trail while the trail
+            // is on; with it off, routes stay unread for when it is.
+            try await healthSyncer.run(source: healthSource, transport: api, routes: trail.enabled ? trail.outbox : nil)
+            trail.refreshStatus()
+            uploadTrailIfDue()
             await refreshDaily(using: api)
             await refreshWorkouts(using: api)
             await refreshSleep(using: api)

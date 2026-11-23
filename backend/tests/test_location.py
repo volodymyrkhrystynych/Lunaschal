@@ -41,6 +41,15 @@ def test_a_replayed_batch_changes_nothing():
     assert count() == 2
 
 
+def test_a_watch_workout_route_point_is_an_ordinary_fine_fix():
+    # The phone's id for a Health workout route's fix (WorkoutRoute.swift):
+    # the route's HealthKit UUID and the fix's place in it.
+    pid = 'wr-6F9619FF-8B86-D011-B42D-00C04FC964FF-1234'
+    result = ingest.ingest({'points': [point(pid, at(DAY, '07:00'), activity='running')]})
+    assert result['points'] == 1 and result['rejectedCount'] == 0
+    assert count() == 1
+
+
 def test_a_visit_departure_overwrites_its_arrival():
     arrive = at(DAY, '10:00')
     ingest.ingest({'points': [point('visit-1783000000', arrive, kind='visit')]})
