@@ -438,7 +438,7 @@ CREATE TABLE IF NOT EXISTS location_points (
     accuracy_m REAL,
     altitude_m REAL,
     speed_mps REAL,
-    kind TEXT NOT NULL,                   -- 'fine' | 'coarse' | 'visit'
+    kind TEXT NOT NULL,                   -- 'fine' | 'transit' | 'coarse' | 'visit' | 'region'
     departed_ts REAL,                     -- a visit's departure; NULL while still there
     received_at INTEGER NOT NULL
 );

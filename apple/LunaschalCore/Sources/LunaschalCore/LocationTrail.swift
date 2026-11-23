@@ -6,19 +6,23 @@ import Foundation
 // switch the GPS on, and *when a point counts as sent* lives here, where it can
 // be tested on Linux. Server side: backend/location/.
 //
-// Two recording modes, chosen by `TrailPolicy`:
+// Three recording modes, chosen by `TrailPolicy`:
 // - **coarse**: iOS visits and significant-change wakes. Close to free, runs
 //   all day, and relaunches the app after it was killed. A point every few
-//   hundred metres at best.
+//   hundred metres at best -- and on a train, in practice, one every twenty
+//   minutes, which is why vehicles got a mode of their own.
 // - **fine**: live GPS, switched on only while walking, running or cycling, and
 //   off again when that stops. That is where the battery goes, and where the
 //   real routes come from.
+// - **transit**: live updates at about a hundred metres while in a vehicle --
+//   train, bus or car, which Core Motion does not tell apart. A point every
+//   `TrailFilter.transitStep`, so a ride is a route rather than two dots.
 
 public struct TrailPoint: Codable, Equatable {
     /// `region` is a geofence stay at one of the user's saved places (Home or
     /// a Work, RegionPlan in Places.swift): like a visit, its exit arrives
     /// later as the same id with `departed` set.
-    public enum Kind: String, Codable { case fine, coarse, visit, region }
+    public enum Kind: String, Codable { case fine, coarse, visit, region, transit }
     /// Minted here; the server upserts on it, so a resend stores nothing twice.
     public let id: String
     /// Unix seconds of the fix (a visit's arrival).
@@ -57,13 +61,19 @@ public struct TrailPoint: Codable, Equatable {
 /// every one of them would otherwise be drawn as a scribble.
 public struct TrailFilter {
     /// Past these, a fix says less than the map's own detail.
-    public static let maxAccuracy: [TrailPoint.Kind: Double] = [.fine: 75, .coarse: 1000, .visit: 1000, .region: 5000]
+    public static let maxAccuracy: [TrailPoint.Kind: Double] = [.fine: 75, .transit: 200, .coarse: 1000,
+                                                                .visit: 1000, .region: 5000]
     /// A fine fix closer than this to the last one kept adds nothing.
     public static let minStep: Double = 10
+    /// The same for a transit fix: at train speed, one every ten to twenty
+    /// seconds, which draws the line the train took without a fix per sleeper.
+    public static let transitStep: Double = 150
     /// ...unless this long has passed, so a long pause still leaves a mark.
     public static let keepAliveInterval: Double = 120
 
-    private var lastFine: TrailPoint?
+    /// The last fix kept of each live kind. Separate, so stepping off a train
+    /// and walking isn't measured against the last point the train left.
+    private var last: [TrailPoint.Kind: TrailPoint] = [:]
 
     public init() {}
 
@@ -72,12 +82,17 @@ public struct TrailFilter {
             // CoreLocation's negative accuracy means "invalid fix".
             guard accuracy >= 0, accuracy <= Self.maxAccuracy[point.kind] ?? 0 else { return false }
         }
-        guard point.kind == .fine else { return true }
-        if let last = lastFine, point.ts - last.ts < Self.keepAliveInterval {
-            let step = max(Self.minStep, (point.accuracy ?? 0) / 2)
+        let floor: Double
+        switch point.kind {
+        case .fine: floor = Self.minStep
+        case .transit: floor = Self.transitStep
+        default: return true
+        }
+        if let last = last[point.kind], point.ts - last.ts < Self.keepAliveInterval {
+            let step = max(floor, (point.accuracy ?? 0) / 2)
             guard Self.distance(last, point) >= step else { return false }
         }
-        lastFine = point
+        last[point.kind] = point
         return true
     }
 
@@ -94,7 +109,7 @@ public struct TrailFilter {
 /// When to have the GPS on. Pure: the tracker feeds it what Core Motion and
 /// CoreLocation said, and applies the answer.
 public enum TrailPolicy {
-    public enum Mode: String, Codable { case coarse, fine }
+    public enum Mode: String, Codable { case coarse, fine, transit }
     public enum Activity: String, Codable { case stationary, walking, running, cycling, automotive, unknown }
 
     public struct Motion: Equatable {
@@ -110,6 +125,9 @@ public enum TrailPolicy {
     /// Stationary this long ends a fine stretch. Short enough that a coffee
     /// stop doesn't burn GPS, long enough that a traffic light doesn't end a walk.
     public static let settle: TimeInterval = 3 * 60
+    /// The same for a ride. Longer: a train held outside a station, or a bus
+    /// in traffic, can read as still for a few minutes and is not the end of it.
+    public static let transitSettle: TimeInterval = 6 * 60
     /// With no motion data at all, the speeds that are someone on foot or a bike.
     public static let selfPropelled: ClosedRange<Double> = 0.7...8
 
@@ -117,25 +135,40 @@ public enum TrailPolicy {
     /// activity once, when it *starts*, so the newest confident sample is the
     /// current activity however old it is: a walk that began half an hour ago
     /// has one sample, half an hour old, and is still a walk.
-    public static func next(current: Mode, motion: [Motion], speed: Double?, now: Date) -> Mode {
+    ///
+    /// `pausedAt` is when iOS last auto-paused a ride (didPauseLocationUpdates
+    /// in transit), cleared by the tracker on the next significant-change wake.
+    /// The ride's automotive sample is older than the pause, and Core Motion
+    /// won't send another while the activity hasn't changed, so without this
+    /// the very next motion update would switch the GPS straight back on for a
+    /// phone iOS has just judged to be going nowhere.
+    public static func next(current: Mode, motion: [Motion], speed: Double?, pausedAt: Date? = nil,
+                            now: Date) -> Mode {
         let confident = motion.filter(\.confident).sorted { $0.at < $1.at }
         guard let latest = confident.last else {
             // No Core Motion (denied, or nothing yet): judge by speed, and only
             // to switch on. Switching off is iOS's auto-pause, which the
             // tracker hears as didPauseLocationUpdates.
             if let speed, selfPropelled.contains(speed) { return .fine }
+            if let speed, speed > selfPropelled.upperBound, pausedAt == nil { return .transit }
             return current
         }
         switch latest.activity {
         case .walking, .running, .cycling:
             return .fine
         case .automotive:
-            return .coarse
+            if let pausedAt, latest.at <= pausedAt { return .coarse }
+            return .transit
         case .stationary:
-            guard current == .fine else { return .coarse }
+            let window: TimeInterval
+            switch current {
+            case .fine: window = settle
+            case .transit: window = transitSettle
+            case .coarse: return .coarse
+            }
             // Stationary since the start of the unbroken stationary run.
             let since = confident.reversed().prefix { $0.activity == .stationary }.last?.at ?? latest.at
-            return now.timeIntervalSince(since) < settle ? .fine : .coarse
+            return now.timeIntervalSince(since) < window ? current : .coarse
         case .unknown:
             return current
         }

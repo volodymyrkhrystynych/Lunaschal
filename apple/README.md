@@ -203,7 +203,10 @@ what each device can currently do and which work remains device-only.
   and asks for; the section says what is missing (While Using, denied, Precise
   Location off) and links to iOS Settings. Adaptive: visits and
   significant-change monitoring all day, live GPS only while Core Motion says
-  walking, running or cycling (`TrailPolicy`, `LocationTracker`). Points queue
+  walking, running or cycling, and cheaper live updates (~100 m accuracy, a
+  point every 150 m) while it says automotive -- train, bus or car, which a
+  significant-change wake alone left as one point every twenty minutes
+  (`TrailPolicy`, `LocationTracker`). Points queue
   in a JSON-lines outbox and post to `/api/location/points` in batches, on their
   own when enough piles up and inside every sync pass; the server draws a map of
   each day for the web Journal feed (`backend/location/`). Core logic tested in

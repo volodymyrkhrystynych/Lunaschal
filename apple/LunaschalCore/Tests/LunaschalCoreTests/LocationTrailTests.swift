@@ -35,6 +35,20 @@ final class LocationTrailTests: XCTestCase {
         XCTAssertTrue(filter.admit(fix("d", 0, accuracy: 50, kind: .visit)))
     }
 
+    func testATrainRideKeepsAPointEveryHundredAndFiftyMetres() {
+        var filter = TrailFilter()
+        XCTAssertTrue(filter.admit(fix("a", 0, accuracy: 120, kind: .transit)))
+        // ~100 m on: too close for a ride, though it would do for a walk.
+        XCTAssertFalse(filter.admit(fix("b", 5, lat: 43.6509, accuracy: 30, kind: .transit)))
+        // ~170 m on.
+        XCTAssertTrue(filter.admit(fix("c", 10, lat: 43.6515, accuracy: 30, kind: .transit)))
+        XCTAssertFalse(filter.admit(fix("d", 15, lat: 43.66, accuracy: 300, kind: .transit)))
+        // Stepping off onto the platform is measured from the walk's own last
+        // point, not from the train's.
+        XCTAssertTrue(filter.admit(fix("e", 20, lat: 43.6516)))
+        XCTAssertTrue(filter.admit(fix("f", 25, lat: 43.6517)))
+    }
+
     func testAVisitKeepsOneIDAcrossArrivalAndDeparture() {
         XCTAssertEqual(TrailPoint.visitID(arrival: 1_783_000_000.6), "visit-1783000000")
     }
@@ -51,9 +65,34 @@ final class LocationTrailTests: XCTestCase {
         XCTAssertEqual(TrailPolicy.next(current: .fine, motion: walk, speed: nil, now: now), .fine)
     }
 
-    func testDrivingIsCoarse() {
-        let drive = [TrailPolicy.Motion(.automotive, at: ago(60))]
-        XCTAssertEqual(TrailPolicy.next(current: .fine, motion: drive, speed: 15, now: now), .coarse)
+    func testARideIsTransitHoweverLongAgoItBegan() {
+        // A train or a car: Core Motion said "automotive" once, half an hour ago.
+        let ride = [TrailPolicy.Motion(.walking, at: ago(40 * 60)), .init(.automotive, at: ago(30 * 60))]
+        XCTAssertEqual(TrailPolicy.next(current: .coarse, motion: ride, speed: nil, now: now), .transit)
+        XCTAssertEqual(TrailPolicy.next(current: .fine, motion: ride, speed: 15, now: now), .transit)
+        // Getting off and walking is a walk again.
+        let off = ride + [.init(.walking, at: ago(30))]
+        XCTAssertEqual(TrailPolicy.next(current: .transit, motion: off, speed: nil, now: now), .fine)
+    }
+
+    func testAStopAtAStationDoesntEndARideButArrivingDoes() {
+        let platform = [TrailPolicy.Motion(.automotive, at: ago(1200)), .init(.stationary, at: ago(4 * 60))]
+        XCTAssertEqual(TrailPolicy.next(current: .transit, motion: platform, speed: 0, now: now), .transit)
+        // The same four minutes would end a walk.
+        XCTAssertEqual(TrailPolicy.next(current: .fine, motion: platform, speed: 0, now: now), .coarse)
+        let home = [TrailPolicy.Motion(.automotive, at: ago(1800)), .init(.stationary, at: ago(10 * 60))]
+        XCTAssertEqual(TrailPolicy.next(current: .transit, motion: home, speed: 0, now: now), .coarse)
+    }
+
+    func testARideIOSPausedStaysOffUntilThePhoneMovesOrTheActivityChanges() {
+        let ride = [TrailPolicy.Motion(.automotive, at: ago(1200))]
+        // The only automotive sample predates the pause: stay coarse.
+        XCTAssertEqual(TrailPolicy.next(current: .coarse, motion: ride, speed: nil, pausedAt: ago(60), now: now), .coarse)
+        // The tracker clears the pause on a significant-change wake.
+        XCTAssertEqual(TrailPolicy.next(current: .coarse, motion: ride, speed: 12, pausedAt: nil, now: now), .transit)
+        // A ride Core Motion reports afresh after the pause counts too.
+        let again = ride + [.init(.stationary, at: ago(50)), .init(.automotive, at: ago(10))]
+        XCTAssertEqual(TrailPolicy.next(current: .coarse, motion: again, speed: nil, pausedAt: ago(60), now: now), .transit)
     }
 
     func testABriefStopDoesntEndAWalkButASettledOneDoes() {
@@ -73,10 +112,12 @@ final class LocationTrailTests: XCTestCase {
         XCTAssertEqual(TrailPolicy.next(current: .fine, motion: unknown, speed: nil, now: now), .fine)
     }
 
-    func testWithoutCoreMotionAWalkingSpeedTurnsTheGPSOn() {
+    func testWithoutCoreMotionSpeedPicksTheMode() {
         XCTAssertEqual(TrailPolicy.next(current: .coarse, motion: [], speed: 1.4, now: now), .fine)
-        XCTAssertEqual(TrailPolicy.next(current: .coarse, motion: [], speed: 20, now: now), .coarse)
+        XCTAssertEqual(TrailPolicy.next(current: .coarse, motion: [], speed: 20, now: now), .transit)
+        XCTAssertEqual(TrailPolicy.next(current: .coarse, motion: [], speed: 20, pausedAt: ago(30), now: now), .coarse)
         XCTAssertEqual(TrailPolicy.next(current: .fine, motion: [], speed: 0, now: now), .fine)
+        XCTAssertEqual(TrailPolicy.next(current: .transit, motion: [], speed: nil, now: now), .transit)
     }
 
     // MARK: outbox + sync
