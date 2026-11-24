@@ -9,6 +9,7 @@ from backend.db.connection import get_db, row_to_dict
 from backend.fanfic import download, storage, xenforo
 from backend.fanfic import collections, sites, browser, library, likes, source_lists
 from backend.fanfic.download import FetchBlockedError
+from backend.fanfic.restyle import has_source_sql
 from backend.fanfic.xenforo import KNOWN_SITES, UnsupportedUrlError
 
 bp = Blueprint('fanfic', __name__, url_prefix='/api/fanfic')
@@ -81,7 +82,10 @@ def _attach_library_meta(dicts: list[dict]) -> list[dict]:
     lists = source_lists.lists_for(db, ids)
     backlog = {r[0] for r in db.execute(
         f'SELECT id FROM fics WHERE id IN ({placeholders}) AND {source_lists.backlog_sql("fics")}', ids)}
+    has_source = {r['id']: r['n'] for r in db.execute(
+        f'SELECT id, {has_source_sql("fics")} AS n FROM fics WHERE id IN ({placeholders})', ids)}
     for d in dicts:
+        d['hasSource'] = None if has_source.get(d['id']) is None else bool(has_source[d['id']])
         d['sourceLists'] = lists.get(d['id'], [])
         d['backlog'] = d['id'] in backlog
         d['folderIds'] = folders.get(d['id'], [])

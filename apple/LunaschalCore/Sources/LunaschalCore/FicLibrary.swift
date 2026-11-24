@@ -28,6 +28,13 @@ public enum FicLibrary {
     /// off each book's `backlog` flag, which the server derives.
     public static let backlogFolder = "backlog"
 
+    /// Whether the server holds the original post of every chapter of a forum
+    /// fic, which is what keeps the forum's spoilers and colours. Nil when it
+    /// doesn't apply: not a forum fic, or a server that doesn't report it.
+    public static func hasForumHTML(book: SyncChange) -> Bool? {
+        book.data?["hasSource"]?.int.map { $0 == 1 }
+    }
+
     /// Whether the server can like this chapter on its forum: a forum book,
     /// and a chapter that came from a post.
     public static func isLikeable(book: SyncChange?, chapter: SyncChange) -> Bool {

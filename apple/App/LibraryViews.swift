@@ -339,6 +339,11 @@ struct BookView: View {
                         .accessibilityIdentifier("fic-reread-chapters")
                     Button("Re-download all chapters", systemImage: "arrow.down.circle") { askForUpdate(deep: true, force: true) }
                         .accessibilityIdentifier("fic-redownload-chapters")
+                    if let saved = FicLibrary.hasForumHTML(book: shown) {
+                        Label(saved ? "Forum HTML saved" : "Forum HTML not saved", systemImage: saved ? "checkmark.seal.fill" : "seal")
+                            .foregroundStyle(saved ? Color.green : Color.secondary)
+                            .accessibilityIdentifier("fic-forum-html")
+                    }
                 } footer: {
                     if askingForUpdate { ProgressView() }
                     else {

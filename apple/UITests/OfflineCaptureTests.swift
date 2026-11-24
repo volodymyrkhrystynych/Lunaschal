@@ -2298,6 +2298,39 @@ final class OfflineCaptureTests: XCTestCase {
         attach(app, "picture and styled text")
     }
 
+    /// A forum book whose original posts are all on the server has a
+    /// checkmark; one without doesn't.
+    func testForumHTMLCheckmark() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        XCTAssertTrue(app.staticTexts["The Long Way Round"].waitForExistence(timeout: 10))
+        let checks = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", "Forum HTML saved"))
+        XCTAssertTrue(checks.firstMatch.waitForExistence(timeout: 5))
+        attach(app, "library checkmark")
+        app.staticTexts["The Long Way Round"].tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        let saved = app.staticTexts["Forum HTML saved"]
+        for _ in 0..<6 where !saved.exists { app.swipeDown() }
+        for _ in 0..<4 where !saved.exists { app.swipeUp() }
+        XCTAssertTrue(saved.exists)
+        attach(app, "book checkmark")
+
+        app.terminate()
+        app.launch()
+        openMore(app, "Library")
+        let other = app.staticTexts["Ashes of the Old Guard"]
+        XCTAssertTrue(other.waitForExistence(timeout: 10))
+        other.tap()
+        let missing = app.staticTexts["Forum HTML not saved"]
+        for _ in 0..<4 where !missing.waitForExistence(timeout: 3) { app.swipeUp() }
+        XCTAssertTrue(missing.exists)
+    }
+
     /// A forum post's [SPOILER] reads as on the forum: its title is a button,
     /// and what it hides isn't drawn until that is tapped.
     func testChapterSpoilerStaysClosedUntilTapped() {

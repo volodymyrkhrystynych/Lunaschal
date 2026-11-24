@@ -117,3 +117,39 @@ def test_restyle_rewrites_only_chapters_whose_output_changed(client):
 def test_source_html_never_reaches_the_phone():
     from backend.mobile_sync import registry
     assert 'source_html' not in registry.COLLECTIONS['fic_chapters']
+
+
+def test_a_fic_has_its_source_only_when_every_chapter_does(client):
+    import json
+    from backend.db.connection import get_db
+    db = get_db()
+    for fid, kind in (('f1', 'xenforo'), ('f2', 'epub')):
+        db.execute('INSERT INTO fics(id, title, source_type, created_at, updated_at)'
+                   " VALUES (?, 'Fic', ?, 1, 1)", (fid, kind))
+        for n in (1, 2):
+            db.execute(
+                'INSERT INTO fic_chapters(id, fic_id, position, title, content_html, content_text,'
+                " source_post_id, created_at, updated_at) VALUES (?,?,?,'C','x','x',?,1,1)",
+                (f'{fid}c{n}', fid, n, str(n)))
+    db.commit()
+
+    def synced(fid):
+        return json.loads(db.execute(
+            "SELECT payload FROM mobile_sync_changes WHERE collection='fics' AND record_id=?"
+            ' ORDER BY sequence DESC LIMIT 1', (fid,)).fetchone()[0])['has_source']
+
+    def rest(fid):
+        return client.get(f'/api/fanfic/{fid}').get_json()['hasSource']
+
+    assert (synced('f1'), rest('f1')) == (0, False)
+    assert (synced('f2'), rest('f2')) == (None, None)
+    # Storing the source alone is enough to reach the phone.
+    for whole, cid in ((0, 'f1c1'), (1, 'f1c2')):
+        db.execute("UPDATE fic_chapters SET source_html='<b>x</b>' WHERE id=?", (cid,))
+        db.commit()
+        assert (synced('f1'), rest('f1')) == (whole, bool(whole))
+
+    # A fic with nothing downloaded has nothing to show for it.
+    db.execute("DELETE FROM fic_chapters WHERE fic_id='f1'")
+    db.commit()
+    assert (synced('f1'), rest('f1')) == (0, False)

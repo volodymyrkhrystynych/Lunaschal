@@ -14,6 +14,15 @@ from backend.fanfic.sanitize import count_words, html_to_text, sanitize_chapter_
 CHAPTER_HTML_VERSION = 1
 
 
+def has_source_sql(prefix: str) -> str:
+    """Whether every chapter of a forum fic has its `source_html` (1 or 0; a fic
+    with no chapters has none); NULL for any other source, which never has one.
+    `typeof` reads the type alone, so the posts themselves are never loaded."""
+    chapters = f'SELECT 1 FROM fic_chapters c WHERE c.fic_id={prefix}.id'
+    return (f"CASE WHEN {prefix}.source_type='xenforo' THEN (EXISTS ({chapters})"
+            f" AND NOT EXISTS ({chapters} AND typeof(c.source_html)='null')) END")
+
+
 def render_forum_post(source_html: str) -> str:
     return sanitize_chapter_html(xenforo.normalize_bbcode_html(source_html))
 

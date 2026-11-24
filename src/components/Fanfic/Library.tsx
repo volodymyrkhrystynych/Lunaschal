@@ -721,6 +721,7 @@ function FicCard({
                   }
                 >
                   {fic.forcePending ? '⏳ All' : '⤓ All'}
+                  {fic.hasSource && <span title="Forum HTML saved"> ✓</span>}
                 </button>
               </>
             )}

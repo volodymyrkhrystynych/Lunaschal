@@ -272,6 +272,8 @@ export interface Fic {
   updatePending?: boolean;
   deepPending?: boolean;
   forcePending?: boolean;
+  /** Every chapter has the forum's original post; null off-forum. */
+  hasSource?: boolean | null;
   lastReadChapterId: string | null;
   lastCheckedAt: string | null;
   rating: number | null;

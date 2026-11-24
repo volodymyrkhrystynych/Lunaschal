@@ -177,7 +177,7 @@ enum LibraryFixture {
     /// bump this whenever a chapter's content changes.
     static let chapterRevision = 4
     /// The same for a book's own fields (its shelf, rating and unread count).
-    static let bookRevision = 3
+    static let bookRevision = 4
 
     private static func change(_ collection: String, _ id: String, _ data: [String: Any],
                                revision: Int = 1) -> [String: Any] {
@@ -200,6 +200,8 @@ enum LibraryFixture {
         if let rating = book.rating { data["rating"] = rating }
         if let review = book.review { data["review"] = review }
         data["backlog"] = book.backlog ? 1 : 0
+        // One forum book with every original post; the rest lack some.
+        if book.sourceType == "xenforo" { data["hasSource"] = book.id == downloaded ? 1 : 0 }
         let read = book.id == books[0].id ? readChapters.count : 0
         data["unreadCount"] = max(0, book.chapters - book.sidestories - read)
         return data

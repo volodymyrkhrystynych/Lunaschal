@@ -463,6 +463,15 @@ describe('Library update buttons', () => {
     );
   });
 
+  it('checks off a fic whose forum HTML is all saved', async () => {
+    const { api } = await import('../../hooks/api');
+    vi.mocked(api.fanfic.list).mockResolvedValueOnce([
+      { ...FIC, hasSource: true },
+    ]);
+    renderFanfic();
+    await screen.findByTitle('Forum HTML saved');
+  });
+
   it('re-downloads every chapter from All', async () => {
     const { api } = await import('../../hooks/api');
     renderFanfic();
