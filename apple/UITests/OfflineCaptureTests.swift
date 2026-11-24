@@ -2298,6 +2298,38 @@ final class OfflineCaptureTests: XCTestCase {
         attach(app, "picture and styled text")
     }
 
+    /// A forum post's [SPOILER] reads as on the forum: its title is a button,
+    /// and what it hides isn't drawn until that is tapped.
+    func testChapterSpoilerStaysClosedUntilTapped() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        let third = app.staticTexts["Chapter 3"]
+        for _ in 0..<6 where !(third.exists && third.isHittable) { app.swipeUp() }
+        third.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 3"].waitForExistence(timeout: 10))
+
+        let toggle = app.buttons.matching(identifier: "chapter-spoiler").firstMatch
+        for _ in 0..<6 where !(toggle.exists && toggle.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(toggle.isHittable)
+        XCTAssertTrue(toggle.label.contains("Status Sheet"))
+        let hidden = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Strength 12")).firstMatch
+        XCTAssertFalse(hidden.exists, "closed, as on the forum")
+
+        toggle.tap()
+        XCTAssertTrue(hidden.waitForExistence(timeout: 5))
+        attach(app, "spoiler open")
+        toggle.tap()
+        XCTAssertFalse(hidden.waitForExistence(timeout: 1))
+    }
+
     /// A forum fic can be asked for its latest chapters from inside it — the
     /// reader's menu and the book page — not only from the library's long
     /// press. With no server, asking says to sign in. An EPUB has no source.
@@ -2315,6 +2347,7 @@ final class OfflineCaptureTests: XCTestCase {
         menu.tap()
         let fromReader = app.buttons["reader-check-updates"]
         XCTAssertTrue(fromReader.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["reader-redownload-chapters"].exists)
         fromReader.tap()
         let signIn = app.staticTexts["Sign in to update fics on the server."]
         XCTAssertTrue(signIn.waitForExistence(timeout: 5))
@@ -2324,6 +2357,7 @@ final class OfflineCaptureTests: XCTestCase {
         let fromBook = app.buttons["fic-check-updates"]
         XCTAssertTrue(fromBook.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["fic-reread-chapters"].exists)
+        XCTAssertTrue(app.buttons["fic-redownload-chapters"].exists)
         attach(app, "book page")
         fromBook.tap()
         XCTAssertTrue(signIn.waitForExistence(timeout: 5))

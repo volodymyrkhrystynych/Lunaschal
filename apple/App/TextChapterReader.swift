@@ -16,6 +16,11 @@ struct TextChapterReader: View {
     @State private var position: Int?
     @State private var version = ""
     @State private var blocks: [ChapterBlock] = []
+    /// The forum's [SPOILER]s opened in this chapter, by id, and the
+    /// paragraphs whose [ISPOILER]s were tapped, by block index. Both start
+    /// closed, as on the forum, and close again on another chapter.
+    @State private var openSpoilers: Set<Int> = []
+    @State private var revealedLines: Set<Int> = []
     /// A moment's confirmation above the menu button ("Continue point saved
     /// here"), gone again after a few seconds; nothing sits there otherwise.
     @State private var status: String?
@@ -125,7 +130,13 @@ struct TextChapterReader: View {
             LazyVStack(alignment: .leading, spacing: textSize * 0.85) {
                 chapterButtons(edge: "top").padding(.bottom, 8).id(Self.topRow)
                 ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                    ChapterBlockView(owner: owner, block: block, size: textSize).id(index)
+                    if block.isShown(revealed: openSpoilers) {
+                        ChapterBlockView(owner: owner, block: block, size: textSize,
+                                         spoilerOpen: isOpen(block), lineRevealed: revealedLines.contains(index)) {
+                            tapped(block, at: index)
+                        }
+                        .id(index)
+                    }
                 }
                 chapterButtons(edge: "bottom").padding(.top, 24)
                     // Clear of the menu button, which floats over the bottom left.
@@ -318,6 +329,10 @@ struct TextChapterReader: View {
                     Task { await owner.checkFicForUpdates(book, deep: false) }
                 }
                 .accessibilityIdentifier("reader-check-updates")
+                Button("Re-download all chapters", systemImage: "arrow.down.circle") {
+                    Task { await owner.checkFicForUpdates(book, deep: true, force: true) }
+                }
+                .accessibilityIdentifier("reader-redownload-chapters")
             }
         } label: {
             Image(systemName: "line.3.horizontal")
@@ -405,6 +420,21 @@ struct TextChapterReader: View {
            latest.revision != book?.revision { book = latest }
     }
 
+    private func isOpen(_ block: ChapterBlock) -> Bool {
+        if case .spoilerToggle(let id) = block.kind { return openSpoilers.contains(id) }
+        return false
+    }
+
+    /// A spoiler's title opens or closes it; a line with an [ISPOILER] in it
+    /// reveals its hidden words.
+    private func tapped(_ block: ChapterBlock, at index: Int) {
+        if case .spoilerToggle(let id) = block.kind {
+            if openSpoilers.contains(id) { openSpoilers.remove(id) } else { openSpoilers.insert(id) }
+        } else {
+            revealedLines.insert(index)
+        }
+    }
+
     private func load() {
         do {
             // A chapter from a list is an outline, without its text.
@@ -414,6 +444,8 @@ struct TextChapterReader: View {
             }
             blocks = ChapterText.blocks(html: current.data?["contentHtml"]?.string,
                                         text: current.data?["contentText"]?.string)
+            openSpoilers = []
+            revealedLines = []
             if let ficID {
                 if book == nil { book = try store.record(collection: "fics", id: ficID) }
                 if chapters.isEmpty { chapters = try store.chapterOutline(bookID: ficID) }
@@ -548,7 +580,14 @@ private struct ChapterBlockView: View {
     let owner: CaptureModel
     let block: ChapterBlock
     let size: Double
+    /// For a spoiler's title: whether its spoiler is open.
+    var spoilerOpen = false
+    /// Whether this line's [ISPOILER]s have been tapped open.
+    var lineRevealed = false
+    var onTap: () -> Void = {}
     @Environment(\.colorScheme) private var scheme
+
+    private var hidesWords: Bool { !lineRevealed && block.runs.contains { $0.style.contains(.spoiler) } }
 
     var body: some View {
         content
@@ -603,6 +642,20 @@ private struct ChapterBlockView: View {
             ChapterImageView(owner: owner, src: src, alt: block.text)
                 .frame(maxWidth: .infinity, alignment: frameAlignment)
                 .padding(.vertical, size * 0.3)
+        case .spoilerToggle:
+            // The forum's spoiler button: closed until tapped.
+            Button(action: onTap) {
+                HStack(spacing: 6) {
+                    Image(systemName: spoilerOpen ? "chevron.down" : "chevron.right")
+                        .font(.system(size: size * 0.75, weight: .semibold))
+                    Text(attributed(base: size)).font(.system(size: size * 0.9, weight: .semibold))
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            .buttonStyle(.bordered)
+            .accessibilityValue(spoilerOpen ? "Open" : "Closed")
+            .accessibilityHint("Shows or hides the spoiler")
+            .accessibilityIdentifier("chapter-spoiler")
         }
     }
 
@@ -610,6 +663,10 @@ private struct ChapterBlockView: View {
         Text(attributed(base: base)).textSelection(.enabled)
             .multilineTextAlignment(textAlignment)
             .frame(maxWidth: .infinity, alignment: frameAlignment)
+            // Only a line hiding words takes the tap, so text selection
+            // everywhere else is left alone.
+            .simultaneousGesture(TapGesture().onEnded(onTap), including: hidesWords ? .all : .subviews)
+            .accessibilityHint(hidesWords ? "Tap to reveal the spoiler" : "")
     }
 
     private func attributed(base: Double) -> AttributedString {
@@ -632,6 +689,13 @@ private struct ChapterBlockView: View {
                 piece.foregroundColor = Color(color.readable(onDark: scheme == .dark))
             }
             if let link = run.link, let url = URL(string: link) { piece.link = url }
+            if run.style.contains(.spoiler) && !lineRevealed {
+                // Blacked out like the forum's, in whatever colour the page is.
+                let bar = Color.primary.opacity(0.85)
+                piece.foregroundColor = .clear
+                piece.backgroundColor = bar
+                piece.link = nil
+            }
             out += piece
         }
         return out

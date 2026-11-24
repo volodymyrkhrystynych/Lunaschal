@@ -13,6 +13,11 @@ final class FicServerActionsTests: XCTestCase {
         XCTAssertEqual(cancelled.summary(title: "Worm"), "Stopped waiting for an update to “Worm”.")
 
         XCTAssertTrue(FicUpdateReply(queued: true, deep: false).summary(title: "Worm").contains("queued for an update"))
+
+        let forced = try JSONDecoder().decode(FicUpdateReply.self,
+                                              from: Data(#"{"id":"x","queued":true,"deep":true,"force":true}"#.utf8))
+        XCTAssertEqual(forced, FicUpdateReply(queued: true, deep: true, force: true))
+        XCTAssertTrue(forced.summary(title: "Worm").contains("Every chapter"))
     }
 
     func testRefreshSummaryDecodesTheRouteAndCountsWhatWasQueued() throws {

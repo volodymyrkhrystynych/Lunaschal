@@ -558,3 +558,74 @@ def rewrite_image_srcs(content_html: str, base_url: str, mapping: dict[str, str]
             if attr in img.attrs:
                 del img[attr]
     return str(soup)
+
+
+_SPOILER_PREFIX = re.compile(r'^\s*spoiler\s*:?\s*', re.I)
+
+
+def _classes(tag) -> list[str]:
+    return tag.get('class') or []
+
+
+def _has_class(name: str):
+    return lambda tag: name in _classes(tag)
+
+
+def normalize_bbcode_html(content_html: str) -> str:
+    """Rewrite XenForo's script-driven BBCode blocks as plain HTML that
+    survives the sanitizer and needs no forum JavaScript to work.
+
+    The sanitizer strips `class` and `<button>`, so left alone a [SPOILER]
+    reads as a stray "Spoiler: Title" line followed by the hidden text in
+    the open, and a quote ends in a dead "Click to expand..." link.
+
+    - `div.bbCodeSpoiler` → `<details><summary>Title</summary>…</details>`
+    - `span.bbCodeInlineSpoiler` ([ISPOILER]) → `<span class="spoiler">`
+    - a quote's "Name said:" title → `<cite>`, its expand link dropped
+
+    Everything else ([B], [COLOR], [FONT]…) is already plain markup."""
+    soup = BeautifulSoup(content_html, 'html.parser')
+
+    for link in soup.find_all(_has_class('bbCodeBlock-expandLink')):
+        link.decompose()
+
+    for quote in soup.find_all('blockquote'):
+        title = next((t for t in quote.find_all(_has_class('bbCodeBlock-title'))
+                      if t.find_parent('blockquote') is quote), None)
+        if title is None:
+            continue
+        text = title.get_text(' ', strip=True)
+        if text:
+            cite = soup.new_tag('cite')
+            cite.string = text
+            title.replace_with(cite)
+        else:
+            title.decompose()
+
+    # Innermost first, so an outer spoiler's content is already rewritten
+    # when it is moved.
+    for spoiler in reversed(soup.find_all(_has_class('bbCodeSpoiler'))):
+        button = spoiler.find(_has_class('bbCodeSpoiler-button')) or spoiler.find('button')
+        title = _SPOILER_PREFIX.sub('', button.get_text(' ', strip=True)) if button else ''
+        if button is not None:
+            button.decompose()
+        # bbCodeSpoiler-content > bbCodeBlock--spoiler > bbCodeBlock-content,
+        # each step taken only among direct children: a quote inside the
+        # spoiler has a bbCodeBlock-content of its own.
+        content = spoiler.find(_has_class('bbCodeSpoiler-content'), recursive=False) or spoiler
+        block = content.find(_has_class('bbCodeBlock--spoiler'), recursive=False)
+        if block is not None:
+            content = block.find(_has_class('bbCodeBlock-content'), recursive=False) or block
+        details = soup.new_tag('details')
+        summary = soup.new_tag('summary')
+        summary.string = title or 'Spoiler'
+        details.append(summary)
+        for child in list(content.contents):
+            details.append(child.extract())
+        spoiler.replace_with(details)
+
+    for inline in soup.find_all(_has_class('bbCodeInlineSpoiler')):
+        inline.attrs = {'class': ['spoiler']}
+        inline.name = 'span'
+
+    return str(soup)

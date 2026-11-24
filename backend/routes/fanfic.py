@@ -51,6 +51,7 @@ def _attach_progress(dicts: list[dict]) -> list[dict]:
         if 'updatePending' in d:
             d['updatePending'] = bool(d['updatePending'])
         if 'deepPending' in d:
+            d['forcePending'] = d['deepPending'] == 2
             d['deepPending'] = bool(d['deepPending'])
     return dicts
 
@@ -519,7 +520,11 @@ def get_chapter(chapter_id):
         'SELECT * FROM fic_chapters WHERE id=?', (chapter_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(row_to_dict(row))
+    chapter = row_to_dict(row)
+    # The unsanitized post is server-side input to a restyle, never content
+    # a client renders.
+    chapter.pop('sourceHtml', None)
+    return jsonify(chapter)
 
 
 @bp.get('/chapters/<chapter_id>/like')
@@ -676,10 +681,18 @@ def check_updates(fic_id):
     clicking again before the worker gets there.
 
     `{"deep": true}` asks for the slow pass that re-reads every saved chapter
-    and rewrites the ones the author edited. Queuing a deep check over a
-    pending shallow one upgrades it rather than cancelling."""
+    and rewrites the ones the author edited. `{"force": true}` ("Re-download
+    all chapters") rewrites every saved chapter whether it was edited or not,
+    which is the only way a chapter stored before a sanitizer change gets its
+    styling back. Queuing a deeper check over a pending shallower one upgrades
+    it rather than cancelling.
+
+    `deep_pending` holds the depth: 0 shallow, 1 deep, 2 forced."""
     # silent: the button posts with no body at all for a shallow check.
-    deep = bool((request.get_json(silent=True) or {}).get('deep'))
+    body = request.get_json(silent=True) or {}
+    force = bool(body.get('force'))
+    deep = force or bool(body.get('deep'))
+    depth = 2 if force else 1 if deep else 0
     db = get_db()
     row = db.execute(
         'SELECT source_type, update_pending, deep_pending, download_status'
@@ -690,16 +703,16 @@ def check_updates(fic_id):
         return jsonify({'error': 'Only online sources can be updated'}), 400
     if download.is_active(fic_id) or row['download_status'] == 'downloading':
         return jsonify({'error': 'A download is already running for this fic'}), 409
-    if row['update_pending'] and not (deep and not row['deep_pending']):
+    if row['update_pending'] and depth <= row['deep_pending']:
         db.execute('UPDATE fics SET update_pending=0, deep_pending=0 WHERE id=?', (fic_id,))
         db.commit()
         browser.clear(fic_id=fic_id)
         return jsonify({'id': fic_id, 'queued': False})
     db.execute('UPDATE fics SET update_pending=1, deep_pending=? WHERE id=?',
-               (1 if deep else 0, fic_id))
+               (depth, fic_id))
     db.commit()
     _start_drain_bg()
-    return jsonify({'id': fic_id, 'queued': True, 'deep': deep}), 202
+    return jsonify({'id': fic_id, 'queued': True, 'deep': deep, 'force': force}), 202
 
 
 @bp.get('/collections')

@@ -172,8 +172,15 @@ export function Library({ onOpen }: LibraryProps) {
   });
 
   const checkUpdates = useMutation({
-    mutationFn: ({ ficId, deep }: { ficId: string; deep?: boolean }) =>
-      api.fanfic.checkUpdates(ficId, deep),
+    mutationFn: ({
+      ficId,
+      deep,
+      force,
+    }: {
+      ficId: string;
+      deep?: boolean;
+      force?: boolean;
+    }) => api.fanfic.checkUpdates(ficId, deep, force),
     onSuccess: invalidate,
     onError: (e: Error) => setImportError(e.message),
   });
@@ -522,8 +529,8 @@ export function Library({ onOpen }: LibraryProps) {
             cardRef={scrollSelectedIntoView(idx)}
             showDelete={showDelete}
             onOpen={() => onOpen(fic.id)}
-            onCheckUpdates={deep =>
-              checkUpdates.mutate({ ficId: fic.id, deep })
+            onCheckUpdates={(deep, force) =>
+              checkUpdates.mutate({ ficId: fic.id, deep, force })
             }
             onTagClick={name => {
               setSearchQuery('');
@@ -594,7 +601,7 @@ function FicCard({
   cardRef: (el: HTMLElement | null) => void;
   showDelete: boolean;
   onOpen: () => void;
-  onCheckUpdates: (deep?: boolean) => void;
+  onCheckUpdates: (deep?: boolean, force?: boolean) => void;
   onTagClick: (name: string) => void;
   onDelete: () => void;
 }) {
@@ -688,17 +695,32 @@ function FicCard({
                 <button
                   onClick={() => onCheckUpdates(true)}
                   className={`text-sm ${
-                    fic.deepPending
+                    fic.deepPending && !fic.forcePending
                       ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
                       : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
                   }`}
                   title={
-                    fic.deepPending
+                    fic.deepPending && !fic.forcePending
                       ? 'Deep check queued — click to un-queue'
                       : 'Re-read every saved chapter and pull in any the author has edited. Slower: it refetches the whole fic.'
                   }
                 >
-                  {fic.deepPending ? '⏳ Deep' : '↻↻ Deep'}
+                  {fic.deepPending && !fic.forcePending ? '⏳ Deep' : '↻↻ Deep'}
+                </button>
+                <button
+                  onClick={() => onCheckUpdates(true, true)}
+                  className={`text-sm ${
+                    fic.forcePending
+                      ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
+                      : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                  }`}
+                  title={
+                    fic.forcePending
+                      ? 'Re-download queued — click to un-queue'
+                      : 'Re-download every chapter, edited or not. Brings back colours and spoilers on chapters saved before the library kept them.'
+                  }
+                >
+                  {fic.forcePending ? '⏳ All' : '⤓ All'}
                 </button>
               </>
             )}

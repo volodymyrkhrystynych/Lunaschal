@@ -1,5 +1,6 @@
 import { RecordingButton } from '../RecordingButton';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
@@ -38,6 +39,7 @@ import { MasterDetailBack } from '@/components/MasterDetailBack';
 import { useClipStage } from '../../hooks/useClipStage';
 import { ClipStrip } from '../ClipRecorder';
 import { useDraftState } from '@/hooks/useDraftState';
+import { pageIsDark, readableChapterHtml } from '@/lib/chapterColors';
 
 interface ReaderProps {
   ficId: string;
@@ -426,6 +428,16 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
     clips.reset();
   };
 
+  // Colours the author picked against the forum's white page, made readable
+  // on this one. The object itself is memoized: React 19 rewrites innerHTML
+  // whenever it is a new one, which would close every open spoiler.
+  const chapterHtml = useMemo(
+    () => ({
+      __html: readableChapterHtml(chapter?.contentHtml ?? '', pageIsDark()),
+    }),
+    [chapter?.contentHtml]
+  );
+
   const groups = useMemo(
     () => groupChaptersByCategory(chapters ?? []),
     [chapters]
@@ -806,9 +818,9 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                       <div
                         className="fanfic-prose"
                         style={{ fontSize: `${fontSize}px` }}
-                        dangerouslySetInnerHTML={{
-                          __html: chapter.contentHtml,
-                        }}
+                        onClick={revealInlineSpoiler}
+                        key={chapter.id}
+                        dangerouslySetInnerHTML={chapterHtml}
                       />
                       {chapterNav('bottom')}
                     </>
@@ -919,6 +931,13 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
       )}
     </>
   );
+}
+
+/** An [ISPOILER] stays blacked out until clicked, as on the forum. A
+ * [SPOILER] needs nothing: it is a native `<details>`. */
+function revealInlineSpoiler(event: MouseEvent<HTMLElement>) {
+  if (event.target instanceof Element)
+    event.target.closest('.spoiler')?.classList.add('revealed');
 }
 
 function formatChapterDate(date: string) {

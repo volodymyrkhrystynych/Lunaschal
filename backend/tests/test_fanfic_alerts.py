@@ -319,7 +319,7 @@ def test_check_updates_toggles_queue_flag(client, fake_net, monkeypatch):
 
     resp = client.post(f'/api/fanfic/{fic_id}/check-updates')
     assert resp.status_code == 202
-    assert resp.get_json() == {'id': fic_id, 'queued': True, 'deep': False}
+    assert resp.get_json() == {'id': fic_id, 'queued': True, 'deep': False, 'force': False}
     assert client.get(f'/api/fanfic/{fic_id}').get_json()['updatePending'] is True
 
     # clicking again un-queues instead of double-flagging

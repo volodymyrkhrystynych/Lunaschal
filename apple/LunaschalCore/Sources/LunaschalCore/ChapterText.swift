@@ -2,7 +2,8 @@ import Foundation
 
 /// A chapter's sanitized HTML (`backend/fanfic/sanitize.py`'s allowlist) as
 /// blocks a native reader can lay out: paragraphs with their italics and bold
-/// kept, headings, quotes, list items, scene breaks and pictures.
+/// kept, headings, quotes, list items, scene breaks, pictures and the
+/// forum's spoilers (`<details>`, from `xenforo.normalize_bbcode_html`).
 ///
 /// The chapter's `contentText` can't be read as written: the server makes it
 /// with BeautifulSoup's `get_text(' ')`, which puts a space around every tag
@@ -23,6 +24,9 @@ public struct ChapterBlock: Equatable, Sendable {
         /// server couldn't download it, the original web address. Its runs
         /// are the alt text.
         case image(String)
+        /// A [SPOILER]'s title (`<summary>`), the button that opens spoiler
+        /// `id`. Its runs are the title.
+        case spoilerToggle(Int)
     }
 
     public var kind: Kind
@@ -31,8 +35,15 @@ public struct ChapterBlock: Equatable, Sendable {
     public var quoteDepth: Int
     /// `text-align`, from [CENTER] and [RIGHT].
     public var alignment: ChapterAlignment = .leading
+    /// The spoilers this block is hidden inside, outermost first: it shows
+    /// only once every one of them is open. A spoiler's own toggle sits in
+    /// its parents, not in itself.
+    public var spoilers: [Int] = []
 
     public var text: String { runs.map(\.text).joined() }
+
+    /// Whether the block shows with these spoilers open.
+    public func isShown(revealed: Set<Int>) -> Bool { spoilers.allSatisfy(revealed.contains) }
 }
 
 public struct ChapterRun: Equatable, Sendable {
@@ -45,6 +56,8 @@ public struct ChapterRun: Equatable, Sendable {
         public static let strikethrough = Style(rawValue: 8)
         public static let code = Style(rawValue: 16)
         public static let small = Style(rawValue: 32)
+        /// An [ISPOILER]: hidden in the line until the reader reveals it.
+        public static let spoiler = Style(rawValue: 64)
     }
 
     public var text: String
@@ -96,6 +109,9 @@ private struct HTMLBlocks {
     private var cellsInRow = 0
     /// The inline styles of the elements we're inside, innermost last.
     private var css: [(tag: String, css: ChapterCSS)] = []
+    /// Open `<details>`, outermost first, and the id the next one gets.
+    private var spoilerStack: [Int] = []
+    private var nextSpoiler = 0
 
     init(_ html: String) { bytes = Array(html.utf8) }
 
@@ -160,7 +176,12 @@ private struct HTMLBlocks {
         if closing {
             if let open = css.lastIndex(where: { $0.tag == name }) { css.remove(at: open) }
         } else {
-            css.append((name, attribute("style", in: body).map { ChapterCSS(Self.decode($0)) } ?? ChapterCSS()))
+            var element = attribute("style", in: body).map { ChapterCSS(Self.decode($0)) } ?? ChapterCSS()
+            if name == "span", let classes = attribute("class", in: body),
+               classes.split(separator: " ").contains("spoiler") {
+                element.style.insert(.spoiler)
+            }
+            css.append((name, element))
         }
     }
 
@@ -169,10 +190,23 @@ private struct HTMLBlocks {
 
     private mutating func handleElement(_ name: String, closing: Bool, body: String) {
         if Self.styleTags[name] != nil {
+            // A quote's "Name said:" is a line of its own.
+            if name == "cite" { flush() }
             styles[name] = max(0, styles[name, default: 0] + (closing ? -1 : 1))
             return
         }
         switch name {
+        case "details":
+            flush()
+            if closing {
+                if !spoilerStack.isEmpty { spoilerStack.removeLast() }
+            } else {
+                spoilerStack.append(nextSpoiler)
+                nextSpoiler += 1
+            }
+        case "summary":
+            flush()
+            if !closing, let id = spoilerStack.last { kind = .spoilerToggle(id) }
         case "br":
             breaks += 1
         case "a":
@@ -180,13 +214,13 @@ private struct HTMLBlocks {
             else { links.append(attribute("href", in: body)) }
         case "hr":
             flush()
-            blocks.append(ChapterBlock(kind: .rule, runs: [], quoteDepth: quoteDepth))
+            blocks.append(ChapterBlock(kind: .rule, runs: [], quoteDepth: quoteDepth, spoilers: spoilerStack))
         case "img":
             let alt = attribute("alt", in: body).map(Self.decode)?.trimmingCharacters(in: .whitespaces) ?? ""
             if let src = attribute("src", in: body).map(Self.decode), Self.isPicture(src) {
                 flush()
                 blocks.append(ChapterBlock(kind: .image(src), runs: alt.isEmpty ? [] : [ChapterRun(text: alt, style: [], link: nil)],
-                                           quoteDepth: quoteDepth, alignment: currentAlignment))
+                                           quoteDepth: quoteDepth, alignment: currentAlignment, spoilers: spoilerStack))
             } else if !alt.isEmpty {
                 // A smilie inlined as `data:`, or no source at all: its words.
                 append("[\(alt)]", extra: .italic)
@@ -311,6 +345,7 @@ private struct HTMLBlocks {
         }
         guard runs.contains(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return }
         var block = ChapterBlock(kind: kind, runs: runs, quoteDepth: quoteDepth, alignment: currentAlignment)
+        if case .spoilerToggle = kind { block.spoilers = Array(spoilerStack.dropLast()) } else { block.spoilers = spoilerStack }
         if block.kind == .paragraph, ChapterText.isSceneBreak(block.text) { block.kind = .sceneBreak }
         blocks.append(block)
     }

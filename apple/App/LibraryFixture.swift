@@ -175,7 +175,7 @@ enum LibraryFixture {
     /// The replica keeps a record it already holds at the same revision, so
     /// a simulator that ran an older fixture would keep its old chapters:
     /// bump this whenever a chapter's content changes.
-    static let chapterRevision = 3
+    static let chapterRevision = 4
     /// The same for a book's own fields (its shelf, rating and unread count).
     static let bookRevision = 3
 
@@ -223,6 +223,12 @@ enum LibraryFixture {
                 html.append("<span style=\"color:#c0392b\">\(styledLine)</span><br>\n<br>")
                 html.append("<span style=\"font-family:'Courier New'\">\(typedLine)</span><br>\n<br>")
             }
+            // Chapter 3 carries a [SPOILER] and an [ISPOILER], as the server
+            // stores them (`xenforo.normalize_bbcode_html`).
+            if book.id == downloaded, index == 2, number == 2 {
+                html.append("<details><summary>\(spoilerTitle)</summary><b>\(spoilerLine)</b><br>\n</details>")
+                html.append("The traitor was <span class=\"spoiler\">the harbourmaster</span>.<br>\n<br>")
+            }
         }
         // What the server's `get_text(' ')` makes of it: single line breaks.
         let text = lines.joined(separator: "\n")
@@ -264,6 +270,8 @@ enum LibraryFixture {
     static let pictureAlt = "A map of the coast"
     static let styledLine = "The bell rang out red across the water."
     static let typedLine = "SYSTEM: Quest accepted."
+    static let spoilerTitle = "Status Sheet"
+    static let spoilerLine = "Strength 12, Luck 3."
 
     // MARK: The stand-in server
 

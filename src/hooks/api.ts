@@ -271,6 +271,7 @@ export interface Fic {
   downloadError: string | null;
   updatePending?: boolean;
   deepPending?: boolean;
+  forcePending?: boolean;
   lastReadChapterId: string | null;
   lastCheckedAt: string | null;
   rating: number | null;
@@ -4309,11 +4310,13 @@ export const api = {
     status: (ficId: string) =>
       get<FicDownloadProgress | { done: true }>(`/api/fanfic/${ficId}/status`),
     // `deep` asks for the slow pass that re-reads every saved chapter and
-    // rewrites the ones the author edited since we downloaded them.
-    checkUpdates: (ficId: string, deep = false) =>
-      post<{ id: string; queued: boolean; deep: boolean }>(
+    // rewrites the ones the author edited since we downloaded them; `force`
+    // rewrites every one, edited or not ("Re-download all chapters"), which
+    // is how a chapter saved before colours and spoilers were kept gets them.
+    checkUpdates: (ficId: string, deep = false, force = false) =>
+      post<{ id: string; queued: boolean; deep: boolean; force?: boolean }>(
         `/api/fanfic/${ficId}/check-updates`,
-        deep ? { deep: true } : undefined
+        force ? { deep: true, force: true } : deep ? { deep: true } : undefined
       ),
     refreshAlerts: () =>
       runAlertRefresh(

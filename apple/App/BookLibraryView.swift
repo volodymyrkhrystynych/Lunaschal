@@ -127,6 +127,9 @@ struct BookListView: View {
                             Button("Re-read edited chapters", systemImage: "arrow.triangle.2.circlepath") {
                                 Task { await model.checkFicForUpdates(book, deep: true) }
                             }
+                            Button("Re-download all chapters", systemImage: "arrow.down.circle") {
+                                Task { await model.checkFicForUpdates(book, deep: true, force: true) }
+                            }
                         }
                     }
             }
