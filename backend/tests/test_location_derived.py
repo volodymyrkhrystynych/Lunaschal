@@ -8,7 +8,7 @@ import pytest
 
 from backend import place_roles
 from backend.db.connection import get_db
-from backend.location import commute, days, ingest, lookup, patterns, whereabouts, work_calendar
+from backend.location import commute, days, ingest, lookup, patterns, trail, whereabouts, work_calendar
 from backend.location.trail import Fix
 from backend.place_roles import RolePlace
 
@@ -159,6 +159,29 @@ def test_a_commute_by_train_is_tracked():
     ]
     [trip] = commute.commutes(whereabouts.stays(fixes, [home, office], at('23:00')), fixes)
     assert trip['tracked'] and trip['mode'] == 'automotive'
+
+
+def route_point(i, ts, lat, lon, activity=None):
+    return {**fine(f'wr-6F9619FF-8B86-D011-B42D-00C04FC964FF-{i}', ts, lat, lon, activity), 'accuracy': 4}
+
+
+def test_a_run_to_work_recorded_by_phone_and_watch_is_measured_once(client, places):
+    workday(client)
+    def meters():
+        roles = place_roles.roles_for_day(place_roles.list_periods(get_db()), DAY)
+        return days.day_summary(DAY, None, roles, at('23:00'))['commutes'][0]['meters']
+    plain = meters()
+    points = []
+    for i in range(101):
+        f, t = i / 100, at('08:30') + 18 * i
+        lat, lon = HOME[0] + (OFFICE[0] - HOME[0]) * f, HOME[1] + (OFFICE[1] - HOME[1]) * f
+        points.append(route_point(i, t, lat, lon, 'running'))
+        points.append(fine(f'fix-run-{i:04d}', t + 7, lat, lon + 0.0004, 'running'))
+    assert client.post('/api/location/points', json={'points': points}).status_code == 200
+    assert meters() == pytest.approx(plain, rel=0.02)
+    # The map reads the same fixes.
+    assert trail.tracked_m(trail.clean([f for f in days.fixes(DAY) if f.ts <= at('09:00') and f.kind == 'fine'])) \
+        == pytest.approx(plain, rel=0.02)
 
 
 def test_a_stop_somewhere_else_on_the_way_is_not_a_commute():
