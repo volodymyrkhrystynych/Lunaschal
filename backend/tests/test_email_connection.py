@@ -56,7 +56,7 @@ def oauth(client):
     (requests.Timeout('slow'), False),
 ])
 def test_only_a_refused_credential_counts(exc, expected):
-    assert connection.is_auth_failure(exc) is expected
+    assert connection.is_auth_failure(exc, 'imap') is expected
 
 
 def test_a_dead_token_is_marked_announced_once_and_left_alone(oauth, monkeypatch):
@@ -107,6 +107,43 @@ def test_a_401_drops_the_access_token_without_claiming_a_disconnect(oauth, monke
     monkeypatch.setattr(sync, '_sync_gmail', stale)
     sync.sync_account(row)
     assert fetch()['access_token'] is None and fetch()['auth_error_at'] is None
+
+
+def test_outlook_refusing_the_login_is_only_a_stale_token(client, monkeypatch):
+    client.patch('/api/settings/ai', json={'microsoftOauthClientId': 'cid', 'microsoftOauthClientSecret': 'sec'})
+    account()
+    get_db().execute("UPDATE email_accounts SET provider='outlook'")
+    get_db().commit()
+
+    def refuse(*a):
+        raise imap_client.ImapError('AUTHENTICATE failed.')
+    monkeypatch.setattr(sync, '_sync_imap', refuse)
+    sync.sync_account(fetch())
+    assert fetch()['access_token'] is None and fetch()['refresh_token'] == 'rt-1'
+    assert fetch()['auth_error_at'] is None and messages() == []
+
+    def dead(*a):
+        raise outlook_client.OutlookApiError('x', status_code=400, reason='invalid_grant')
+    monkeypatch.setattr(sync, '_sync_imap', dead)
+    sync.sync_account(fetch())
+    assert fetch()['auth_error_at'] and len(messages()) == 1
+
+
+def test_a_failed_announcement_does_not_stop_the_sync_and_is_made_later(oauth, monkeypatch):
+    account()
+
+    def refuse(*a):
+        raise google(400, 'invalid_grant')
+    monkeypatch.setattr(sync, '_sync_gmail', refuse)
+
+    def boom(*a):
+        raise RuntimeError('database is locked')
+    with monkeypatch.context() as m:
+        m.setattr(alerts, 'post_message', boom)
+        assert sync.sync_account(fetch())['status'] == 'error'
+    assert fetch()['auth_error_at'] and fetch()['auth_notified_at'] is None and messages() == []
+    sync.sync_account(fetch())
+    assert len(messages()) == 1
 
 
 def test_a_sync_from_before_the_reconnect_cannot_mark_it_dead(client):

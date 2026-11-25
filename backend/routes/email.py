@@ -44,7 +44,7 @@ def _new_state(provider: str, client: str = 'web') -> str:
     now = time.time()
     for s, pending in list(_pending_states.items()):
         if now - pending.created > _STATE_TTL_SECONDS:
-            del _pending_states[s]
+            _pending_states.pop(s, None)  # another request may have swept it
     state = secrets.token_urlsafe(24)
     _pending_states[state] = _Pending(provider, now, client, _redirect_uri())
     return state

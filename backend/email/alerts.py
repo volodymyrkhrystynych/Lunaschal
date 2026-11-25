@@ -41,10 +41,21 @@ def disconnected(account_id: str, now: int, client=None) -> str | None:
         return None
     row = db.execute('SELECT provider, email_address FROM email_accounts WHERE id=?', (account_id,)).fetchone()
     label = PROVIDER_LABELS.get(row['provider'], 'Email')
-    _, message_id = post_message(
-        f"{label} disconnected: {row['email_address']} needs you to sign in again. "
-        'New mail is not arriving until you do; whatever came in meanwhile is fetched when you reconnect.',
-        {'email': {'kind': 'disconnected', 'provider': row['provider'], 'address': row['email_address']}}, now)
+    try:
+        _, message_id = post_message(
+            f"{label} disconnected: {row['email_address']} needs you to sign in again. "
+            'New mail is not arriving until you do; whatever came in meanwhile is fetched when you reconnect.',
+            {'email': {'kind': 'disconnected', 'provider': row['provider'], 'address': row['email_address']}}, now)
+    except Exception:
+        # Raising would take the other accounts' syncs down with it. Give the
+        # claim back, so the next failed sync of this account announces it.
+        logger.exception('Announcing a disconnected email account failed')
+        try:
+            db.execute('UPDATE email_accounts SET auth_notified_at=NULL WHERE id=?', (account_id,))
+            db.commit()
+        except Exception:
+            logger.exception('Could not release the announcement claim')
+        return None
     push(f'{label} disconnected', 'Sign in again to keep receiving mail.', route='reconnect',
          collapse_id=f'email-auth-{account_id}', now=now, client=client)
     return message_id

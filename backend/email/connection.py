@@ -14,18 +14,24 @@ from backend.email import alerts, gmail_client, imap_client, outlook_client
 _IMAP_REFUSALS = ('authenticationfailed', 'authenticate failed', 'login failed', 'invalid credentials')
 
 
-def is_auth_failure(exc: Exception) -> bool:
+def _imap_refused(exc: Exception) -> bool:
+    return isinstance(exc, imap_client.ImapError) and any(p in str(exc).lower() for p in _IMAP_REFUSALS)
+
+
+def is_auth_failure(exc: Exception, provider: str) -> bool:
     if isinstance(exc, (gmail_client.GmailApiError, outlook_client.OutlookApiError)):
         return exc.reason == 'invalid_grant'
-    if isinstance(exc, imap_client.ImapError):
-        text = str(exc).lower()
-        return any(phrase in text for phrase in _IMAP_REFUSALS)
-    return False
+    # Outlook signs in to IMAP with an access token, so a refusal there is
+    # about that token; only the token endpoint can say the sign-in is over.
+    return provider == 'imap' and _imap_refused(exc)
 
 
-def is_stale_access_token(exc: Exception) -> bool:
-    """A 401 from the Gmail API says the hour-long access token is bad, which
-    says nothing yet about the refresh token behind it."""
+def is_stale_access_token(exc: Exception, provider: str) -> bool:
+    """A 401 from the Gmail API, or Outlook's IMAP refusing the login, says the
+    hour-long access token is bad, which says nothing yet about the refresh
+    token behind it."""
+    if provider == 'outlook':
+        return _imap_refused(exc)
     return isinstance(exc, gmail_client.GmailApiError) and exc.status_code == 401
 
 

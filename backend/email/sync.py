@@ -380,9 +380,9 @@ def _sync_account_locked(account_row) -> dict:
         connection.clear_auth_failure(db, account_row)
         return {'status': 'ok', 'newCount': len(new_ids)}
     except Exception as e:
-        if connection.is_auth_failure(e):
+        if connection.is_auth_failure(e, provider):
             connection.record_auth_failure(db, account_row, e)
-        elif connection.is_stale_access_token(e):
+        elif connection.is_stale_access_token(e, provider):
             connection.drop_access_token(db, account_row)
         now = int(time.time())
         db.execute(

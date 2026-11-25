@@ -127,25 +127,35 @@ function OAuthProviderBlock({
             </div>
           </div>
         ) : (
-          <button
-            onClick={() => {
-              // Opens in a new tab rather than navigating the current view: on
-              // desktop this still runs inside the PyWebView shell's embedded
-              // Chromium, which the provider's consent screen may reject as a
-              // "disallowed_useragent". If that happens here, the fix is a
-              // native webview.create_window / js_api bridge in main.py that
-              // hands the URL to the OS's real default browser instead.
-              window.open(
-                `/api/email/oauth/authorize?provider=${provider}`,
-                '_blank',
-                'noopener'
-              );
-            }}
-            disabled={!hasClient}
-            className="px-3 py-1.5 rounded text-sm border border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text)] disabled:opacity-50"
-          >
-            {account?.needsReconnect ? 'Reconnect' : 'Connect'} {label}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                // Opens in a new tab rather than navigating the current view: on
+                // desktop this still runs inside the PyWebView shell's embedded
+                // Chromium, which the provider's consent screen may reject as a
+                // "disallowed_useragent". If that happens here, the fix is a
+                // native webview.create_window / js_api bridge in main.py that
+                // hands the URL to the OS's real default browser instead.
+                window.open(
+                  `/api/email/oauth/authorize?provider=${provider}`,
+                  '_blank',
+                  'noopener'
+                );
+              }}
+              disabled={!hasClient}
+              className="px-3 py-1.5 rounded text-sm border border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text)] disabled:opacity-50"
+            >
+              {account?.needsReconnect ? 'Reconnect' : 'Connect'} {label}
+            </button>
+            {account?.needsReconnect && (
+              <button
+                onClick={() => disconnect.mutate()}
+                className="px-3 py-1.5 rounded text-sm border border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text)]"
+              >
+                Disconnect
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -298,8 +308,16 @@ function ImapBlock({
             }
             className="px-3 py-1.5 rounded text-sm border border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text)] disabled:opacity-50"
           >
-            Connect
+            {account?.needsReconnect ? 'Reconnect' : 'Connect'}
           </button>
+          {account?.needsReconnect && (
+            <button
+              onClick={() => disconnect.mutate()}
+              className="ml-2 px-3 py-1.5 rounded text-sm border border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text)]"
+            >
+              Disconnect
+            </button>
+          )}
         </>
       )}
     </div>
