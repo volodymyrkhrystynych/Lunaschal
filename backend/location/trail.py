@@ -1,19 +1,24 @@
 """What a day's raw fixes mean as a drawing: pure, DB-free, model-free.
 
-The phone records in two modes (apple/LunaschalCore's LocationTrail.swift):
-**fine** -- live GPS while walking, running or cycling -- and **coarse** -- iOS
-visits and significant-change wakes the rest of the time. So a day's trail is a
-few dense, trustworthy stretches joined by sparse points hundreds of metres
-apart, and drawing it honestly means telling the two apart: a fine stretch is
-a route, the line between two coarse points is only "got from here to there".
+The phone records in three modes (apple/LunaschalCore's LocationTrail.swift):
+**fine** -- live GPS while walking, running or cycling -- **transit** -- live
+updates at about 100 m, a point every 150 m, while in a train, bus or car --
+and **coarse** -- iOS visits and significant-change wakes the rest of the time.
+So a day's trail is a few dense, trustworthy stretches joined by sparse points
+hundreds of metres apart, and drawing it honestly means telling the two apart:
+a fine or transit stretch is a route, the line between two coarse points is
+only "got from here to there".
 """
 import math
 from dataclasses import dataclass
 
 # Past these, a fix says less about where you were than the map's own detail.
-MAX_ACCURACY_M = {'fine': 75.0, 'coarse': 1000.0, 'visit': 1000.0, 'region': 5000.0}
-# Two fine fixes further apart in time than this weren't one continuous walk:
-# the phone went coarse, or lost the sky, in between.
+MAX_ACCURACY_M = {'fine': 75.0, 'transit': 200.0, 'coarse': 1000.0, 'visit': 1000.0, 'region': 5000.0}
+# The live kinds: consecutive fixes of these are a recorded route. Mixed, too --
+# stepping off a train and walking on is one journey.
+TRACK_KINDS = ('fine', 'transit')
+# Two live fixes further apart in time than this weren't one continuous trip:
+# the phone went coarse, lost the sky, or went underground in between.
 TRACK_GAP_S = 5 * 60
 # Faster than this between neighbours is a bad fix rather than a journey --
 # 250 km/h is past anything on the ground, and a plane trip is a jump anyway.
@@ -83,7 +88,7 @@ def segments(fixes: list[Fix]) -> list[Segment]:
     """Each consecutive pair of cleaned fixes, labelled track or jump."""
     out = []
     for a, b in zip(fixes, fixes[1:]):
-        track = a.kind == 'fine' and b.kind == 'fine' and b.ts - a.ts <= TRACK_GAP_S
+        track = a.kind in TRACK_KINDS and b.kind in TRACK_KINDS and b.ts - a.ts <= TRACK_GAP_S
         out.append(Segment(a, b, 'track' if track else 'jump'))
     return out
 

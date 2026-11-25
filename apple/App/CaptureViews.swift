@@ -1273,7 +1273,9 @@ private struct LocationTrailSettings: View {
                         if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
                     }
                 } else {
-                    Text(trail.mode == .fine ? "Recording your route now." : "Watching for walks and places, in low-power mode.")
+                    Text(trail.mode == .fine ? "Recording your route now."
+                         : trail.mode == .transit ? "Recording your trip now, at lower accuracy."
+                         : "Watching for walks, trips and places, in low-power mode.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 let status = trail.status

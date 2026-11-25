@@ -61,7 +61,7 @@ def _trip(a: Interval, b: Interval, fixes: list[trail.Fix]) -> dict | None:
         'departed': iso(a.end), 'arrived': iso(b.start),
         'seconds': int(seconds), 'meters': int(meters),
         'mode': mode, 'modeSource': source,
-        'tracked': any(f.kind == 'fine' for f in moving),
+        'tracked': any(f.kind in trail.TRACK_KINDS for f in moving),
     }
 
 

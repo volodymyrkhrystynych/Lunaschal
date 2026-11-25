@@ -203,7 +203,10 @@ what each device can currently do and which work remains device-only.
   and asks for; the section says what is missing (While Using, denied, Precise
   Location off) and links to iOS Settings. Adaptive: visits and
   significant-change monitoring all day, live GPS only while Core Motion says
-  walking, running or cycling (`TrailPolicy`, `LocationTracker`). With Health
+  walking, running or cycling, and cheaper live updates (~100 m accuracy, a
+  point every 150 m) while it says automotive -- train, bus or car, which a
+  significant-change wake alone left as one point every twenty minutes
+  (`TrailPolicy`, `LocationTracker`). With Health
   sync on as well, a workout's recorded route -- the Watch's own GPS, phone or
   no phone -- joins the trail from the last 30 days on (`WorkoutRoute`,
   `HealthKitSource.routeStream`), thinned like the phone's GPS and keyed by

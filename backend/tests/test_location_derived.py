@@ -146,6 +146,21 @@ def test_without_motion_the_mode_comes_from_speed(client, places):
     assert (trip['mode'], trip['modeSource']) == ('walking', 'speed')
 
 
+def test_a_commute_by_train_is_tracked():
+    home = RolePlace('home', 'PLACE-HOME', 'Home', *HOME, 150)
+    office = RolePlace('work', 'PLACE-OFFICE', 'Office', *OFFICE, 150)
+    ride = [Fix(at('08:05') + i * 120, HOME[0] + (OFFICE[0] - HOME[0]) * (i + 1) / 6,
+                HOME[1] + (OFFICE[1] - HOME[1]) * (i + 1) / 6, 'transit', 60, activity='automotive')
+            for i in range(5)]
+    fixes = [
+        Fix(at('04:00'), *HOME, 'region', None, at('08:00'), 'PLACE-HOME'),
+        *ride,
+        Fix(at('08:20'), *OFFICE, 'region', None, at('17:00'), 'PLACE-OFFICE'),
+    ]
+    [trip] = commute.commutes(whereabouts.stays(fixes, [home, office], at('23:00')), fixes)
+    assert trip['tracked'] and trip['mode'] == 'automotive'
+
+
 def test_a_stop_somewhere_else_on_the_way_is_not_a_commute():
     home = RolePlace('home', 'PLACE-HOME', 'Home', *HOME, 150)
     office = RolePlace('work', 'PLACE-OFFICE', 'Office', *OFFICE, 150)
