@@ -1764,6 +1764,7 @@ final class CaptureModel: ObservableObject {
         guard !downloadingLibrary, let api = sharedAPI(cellular: false) else { return }
         downloadingLibrary = true
         libraryMessage = "Downloading reading content over Wi-Fi…"
+        libraryProgressGate.reset()
         let collections = LibraryDownload.collections(
             knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge"))
         let selected = MediaDescriptor.collections.filter {
@@ -1795,7 +1796,14 @@ final class CaptureModel: ObservableObject {
         }
     }
 
-    private func showLibraryProgress(_ status: String) { libraryMessage = status }
+    /// Every screen that shows anything from this model re-renders on each
+    /// message, and a media download reports every megabyte: two a second is
+    /// plenty to read. The final message is set directly, never throttled.
+    private var libraryProgressGate = ProgressThrottle()
+    private func showLibraryProgress(_ status: String) {
+        guard libraryProgressGate.ready(now: ProcessInfo.processInfo.systemUptime) else { return }
+        libraryMessage = status
+    }
 
     func pauseLibrary() {
         libraryTask?.cancel()
@@ -1999,6 +2007,7 @@ final class CaptureModel: ObservableObject {
             ficDownload = FicDownloadStatus(id: entry.id, title: entry.title, fraction: 0, doneBytes: 0, totalBytes: 0,
                                             secondsLeft: nil)
             ficEstimate = TransferEstimate(started: Date())
+            ficProgressGate.reset()
             do {
                 try await libraryWorker.downloadFic(entry.id, after: entry.after, using: try transport()) { [weak self] progress in
                     await self?.showFicProgress(entry, progress)
@@ -2024,9 +2033,14 @@ final class CaptureModel: ObservableObject {
         }
     }
 
+    /// The resume cursor is kept on every page; what the screens show is
+    /// throttled like the library's, and the page count catches up when the
+    /// fic finishes (`runFicQueue` bumps the revision then).
+    private var ficProgressGate = ProgressThrottle()
     private func showFicProgress(_ entry: FicQueue.Entry, _ progress: FicDownloadProgress) {
         guard ficQueue.head?.id == entry.id else { return }
         ficQueue.record(entry.id, after: progress.after)
+        guard ficProgressGate.ready(now: ProcessInfo.processInfo.systemUptime) else { return }
         ficDownload = FicDownloadStatus(id: entry.id, title: entry.title, fraction: progress.fraction,
             doneBytes: progress.doneBytes, totalBytes: progress.totalBytes,
             secondsLeft: ficEstimate.secondsLeft(done: progress.doneBytes, total: progress.totalBytes, now: Date()))
