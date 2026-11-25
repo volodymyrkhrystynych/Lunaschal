@@ -36,7 +36,7 @@ def push(title: str, body: str, *, category: str, data: dict, collapse_id: str |
          now: int | None = None, client=None) -> dict:
     """Send one alert to the phones that turned reminders on."""
     return notify.send(alert(title, body, category=category, data=data), collapse_id=collapse_id,
-                       coach_only=True, now=now, client=client)
+                       audience='coach', now=now, client=client)
 
 
 def deliver(content: str, metadata: dict, *, title: str, body: str, category: str,

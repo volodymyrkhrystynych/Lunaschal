@@ -72,6 +72,18 @@ not a drop-in migration: it creates a separate account row and re-imports the
 mailbox, producing duplicate local messages. Add a migration path before using
 that option for an existing Gmail mirror.
 
+## Connection health and reconnecting (as implemented)
+
+Only the provider refusing the stored credential counts as a lost connection (`backend/email/connection.py`): `invalid_grant`, or an IMAP login refusal. Timeouts and 5xx are retried. A Gmail 401 only drops the cached access token, so the next sync finds out whether the refresh token still works. A lost account is marked (`auth_error_at`), skipped by the scheduler, and announced once per outage: a chat message from a template, then a push to phones with **Email notifications** on. A failure is recorded only if the row still holds the credential that failed, so a sync that began before a reconnect cannot mark it dead.
+
+The phone reconnects through `POST /api/email/oauth/start`, which returns the provider's URL for a browser sheet (`ASWebAuthenticationSession`). That sheet holds no Lunaschal session, so the callback is exempt from auth and guarded by its single-use, 10-minute state; it ends on `lunaschal://email?connected=1` or a fixed error code. The redirect URI is the address the phone uses, so that address must be the one registered with Google. The account row and cursor are kept, and mail from the outage is fetched on return.
+
+## Importance and the agent (as implemented)
+
+Classification also sets `importance`, `importance_reason` and a one-line `summary`. The `email.brief` job (`backend/email/brief.py`) waits for the last pending classification, shows the agent the whole list of new mail with **no tools**, and posts one chat message about what it picked, or nothing. `settings.email_brief_since` keeps the older archive out; old rows are never bulk-marked because that would rewrite the search index.
+
+In chat, `list_emails` and `read_email` reach the mailbox. Once either has run, the web and every writing tool refuse until the user's next message, so text in an email cannot trigger an action.
+
 ## Data model (as implemented)
 
 Simpler than originally proposed below — no separate threads/labels tables; `backend/db/schema.sql`:

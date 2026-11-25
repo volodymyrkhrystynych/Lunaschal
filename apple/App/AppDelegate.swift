@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject, UNUs
             #if DEBUG
             try JournalFixture.seedIfAsked(root: directory)
             try JobsFixture.seedIfAsked(root: directory)
+            try EmailFixture.seedIfAsked(root: directory)
             try LibraryFixture.seedIfAsked(root: directory)
             #endif
             return try CaptureModel(store: CaptureStore(root: directory))
@@ -114,6 +115,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject, UNUs
                                             didReceive response: UNNotificationResponse) async {
         if let id = CodePushPayload.taskID(from: response.notification.request.content.userInfo) {
             await MainActor.run { PushRouter.shared.openTaskID = id }
+        } else if let route = EmailRoute(userInfo: response.notification.request.content.userInfo) {
+            await MainActor.run { PushRouter.shared.emailRoute = route }
         } else {
             await CoachReminders.shared.handle(response)
         }

@@ -12,6 +12,7 @@ struct CaptureRoot: View {
     @StateObject private var learning: LearningModel
     @StateObject private var context: JournalContextModel
     @StateObject private var code: CodeModel
+    @StateObject private var email: EmailModel
     @ObservedObject private var quickPhoto = QuickPhoto.shared
     @ObservedObject private var push = PushRouter.shared
     @State private var chatPage = ChatPage.chat
@@ -33,7 +34,7 @@ struct CaptureRoot: View {
         JournalContextToday.items(prompts: context.prompts, captures: model.captures, day: today)
     }
 
-    enum Tab: Hashable { case capture, journal, chat, todo, more, study, draw, library, jobs, writing, learning, settings }
+    enum Tab: Hashable { case capture, journal, chat, todo, more, study, draw, library, jobs, email, writing, learning, settings }
     @Environment(\.horizontalSizeClass) private var widthClass
 
     /// Every destination gets a tab of its own only on an iPad window wide
@@ -53,6 +54,7 @@ struct CaptureRoot: View {
         _learning = StateObject(wrappedValue: LearningModel(capture: model))
         _context = StateObject(wrappedValue: JournalContextModel(capture: model))
         _code = StateObject(wrappedValue: CodeModel(capture: model))
+        _email = StateObject(wrappedValue: EmailModel(capture: model))
     }
 
     var body: some View {
@@ -86,19 +88,24 @@ struct CaptureRoot: View {
                     .tabItem { Label("Library", systemImage: "books.vertical") }.tag(Tab.library)
                 NavigationStack { JobsFeedView(capture: model) }
                     .tabItem { Label("Jobs", systemImage: "briefcase") }.tag(Tab.jobs)
+                NavigationStack { EmailInboxView(email: email) }
+                    .tabItem { Label("Email", systemImage: "envelope") }.tag(Tab.email)
+                    .badge(email.needsReconnect ? 1 : 0)
                 NavigationStack { WritingRootView(capture: model) }
                     .tabItem { Label("Writing", systemImage: "text.book.closed") }.tag(Tab.writing)
                 NavigationStack { LearningView(learning: learning) }
                     .tabItem { Label("Learning", systemImage: "graduationcap") }.tag(Tab.learning)
                     .badge(learning.stats.due)
-                NavigationStack { ConnectionSettings(model: model) }
+                NavigationStack { ConnectionSettings(model: model, email: email) }
                     .tabItem { Label("Settings", systemImage: "gear") }.tag(Tab.settings)
             } else {
                 NavigationStack {
-                    MoreMenu(model: model, learning: learning,
+                    MoreMenu(model: model, learning: learning, email: email,
                              showsStudyAndDraw: UIDevice.current.userInterfaceIdiom == .pad)
                 }
                     .tabItem { Label("More", systemImage: "line.3.horizontal") }.tag(Tab.more)
+                // The mail connection is down: only signing in again fixes it.
+                .badge(email.needsReconnect ? 1 : 0)
             }
         }
         .onChange(of: tab) { _, selected in
@@ -109,12 +116,17 @@ struct CaptureRoot: View {
         // for a weigh-in or calorie reminder.
         .onOpenURL { url in
             if url == TodoWidgetFiles.openURL { tab = .todo }
+            else if let route = EmailRoute(url: url) { push.emailRoute = route }
             else if url.scheme == "lunaschal" && url.host == "chat" { tab = .chat }
             else if url.scheme == "lunaschal" && url.host == "daily" { tab = .capture; capturePage = .daily }
         }
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
+        // An email notification or chat card, over whatever was open.
+        .sheet(isPresented: Binding(get: { push.emailRoute != nil }, set: { if !$0 { push.emailRoute = nil } })) {
+            if let route = push.emailRoute { EmailRouteSheet(email: email, route: route) }
+        }
         // The Action Button's Take Photo: the camera over everything, the
         // photo into the composer's draft, and the composer under it to land
         // on. Presented here rather than from the composer, because a hidden
@@ -156,12 +168,14 @@ struct CaptureRoot: View {
             chatPath = NavigationPath([CodeRoute.task(id)])
         }
         .onChange(of: push.deviceToken) { _, token in
-            if let token { Task { await code.upload(token: token) } }
+            if let token { Task { await code.upload(token: token); await email.upload(token: token) } }
         }
         .task(id: scenePhase) {
             guard scenePhase == .active else { model.leaveForeground(); return }
             // The Chat tab's badge counts what the coding agent is waiting on.
             Task { await code.refresh() }
+            // The Email badge: whether the mail connection is still up.
+            Task { await email.refreshAccounts() }
             // Daily's and Journal's badges count entries waiting for context.
             Task { await context.refresh() }
             today = DayKey.of(Date())
@@ -1138,6 +1152,7 @@ private struct AudioPreview: View {
 private struct MoreMenu: View {
     @ObservedObject var model: CaptureModel
     @ObservedObject var learning: LearningModel
+    @ObservedObject var email: EmailModel
     var showsStudyAndDraw = false
 
     var body: some View {
@@ -1156,6 +1171,11 @@ private struct MoreMenu: View {
             NavigationLink { JobsFeedView(capture: model) } label: {
                 Label("Jobs", systemImage: "briefcase")
             }.accessibilityIdentifier("more-Jobs")
+            NavigationLink { EmailInboxView(email: email) } label: {
+                Label("Email", systemImage: "envelope")
+            }
+            .badge(email.needsReconnect ? 1 : 0)
+            .accessibilityIdentifier("more-Email")
             NavigationLink { WritingRootView(capture: model) } label: {
                 Label("Writing", systemImage: "text.book.closed")
             }.accessibilityIdentifier("more-Writing")
@@ -1168,7 +1188,7 @@ private struct MoreMenu: View {
             NavigationLink { PlacesScreen(model: model) } label: {
                 Label("Places", systemImage: "mappin.and.ellipse")
             }.accessibilityIdentifier("more-Places")
-            NavigationLink { ConnectionSettings(model: model) } label: {
+            NavigationLink { ConnectionSettings(model: model, email: email) } label: {
                 Label("Settings", systemImage: "gear")
             }.accessibilityIdentifier("more-Settings")
         }
@@ -1178,6 +1198,7 @@ private struct MoreMenu: View {
 
 private struct ConnectionSettings: View {
     @ObservedObject var model: CaptureModel
+    @ObservedObject var email: EmailModel
     @AppStorage("allowCellularSync") private var allowCellular = true
     @AppStorage("backgroundSyncEnabled") private var backgroundSyncEnabled = true
     @AppStorage(LearningModel.speechModeKey) private var learningSpeechMode = false
@@ -1243,6 +1264,7 @@ private struct ConnectionSettings: View {
                 Text("Your Home and Works are watched as geofences while the trail is on, so the calendar's workday follows when you actually arrive and leave.")
             }
             if model.healthAvailable { HealthSettings(model: model) }
+            EmailNotificationSettings(email: email)
             CoachReminderSettings()
             IntelligenceAvailabilityView()
         }

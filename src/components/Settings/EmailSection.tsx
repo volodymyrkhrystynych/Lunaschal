@@ -144,7 +144,7 @@ function OAuthProviderBlock({
             disabled={!hasClient}
             className="px-3 py-1.5 rounded text-sm border border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text)] disabled:opacity-50"
           >
-            Connect {label}
+            {account?.needsReconnect ? 'Reconnect' : 'Connect'} {label}
           </button>
         )}
       </div>

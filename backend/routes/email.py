@@ -1,12 +1,19 @@
+import logging
+import os
 import secrets
+import threading
 import time
+from datetime import datetime, timezone
+from typing import NamedTuple
 
 from flask import Blueprint, current_app, jsonify, redirect, request
 from markupsafe import escape
 from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict, search_emails_fts
-from backend.email import gmail_client, imap_client, outlook_client
+from backend.email import connection, gmail_client, imap_client, outlook_client
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint('email', __name__, url_prefix='/api/email')
 
@@ -15,37 +22,45 @@ _OAUTH_PROVIDERS = ('gmail', 'outlook')
 
 # Single-user local app: an in-memory, TTL'd state dict is enough CSRF
 # protection for the OAuth dance — no need for a signed cookie or DB row.
-# Each entry maps state -> (provider, timestamp): a single shared callback
+# Each entry maps state -> its provider, client and redirect URI: a single shared callback
 # route serves both OAuth providers, and it must derive which one a code
 # belongs to from this server-trusted state, never from a callback query
 # param — otherwise a state minted for one provider could be replayed
 # against the other's token-exchange path.
-_pending_states: dict[str, tuple[str, float]] = {}
+class _Pending(NamedTuple):
+    provider: str
+    created: float
+    # 'ios' ends in the app instead of on a page.
+    client: str
+    # The code must be exchanged with the URI it was requested with.
+    redirect_uri: str
+
+
+_pending_states: dict[str, _Pending] = {}
 _STATE_TTL_SECONDS = 600
 
 
-def _new_state(provider: str) -> str:
+def _new_state(provider: str, client: str = 'web') -> str:
     now = time.time()
-    for s, (_, ts) in list(_pending_states.items()):
-        if now - ts > _STATE_TTL_SECONDS:
+    for s, pending in list(_pending_states.items()):
+        if now - pending.created > _STATE_TTL_SECONDS:
             del _pending_states[s]
     state = secrets.token_urlsafe(24)
-    _pending_states[state] = (provider, now)
+    _pending_states[state] = _Pending(provider, now, client, _redirect_uri())
     return state
 
 
-def _consume_state(state: str | None) -> str | None:
-    """Returns the provider this state was minted for, or None if the state
+def _consume_state(state: str | None) -> _Pending | None:
+    """Returns what this state was minted for, or None if the state
     is missing, unknown, already used, or expired."""
     if not state:
         return None
     entry = _pending_states.pop(state, None)
     if entry is None:
         return None
-    provider, ts = entry
-    if (time.time() - ts) > _STATE_TTL_SECONDS:
+    if (time.time() - entry.created) > _STATE_TTL_SECONDS:
         return None
-    return provider
+    return entry
 
 
 def _redirect_uri() -> str:
@@ -89,6 +104,25 @@ def _has_credentials(account) -> bool:
     return bool(account['refresh_token'])
 
 
+def _iso(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else None
+
+
+def _account_state(account) -> dict:
+    lost = connection.needs_reconnect(account)
+    return {
+        'connected': _has_credentials(account) and bool(account['sync_enabled']) and not lost,
+        'emailAddress': account['email_address'],
+        'lastSyncedAt': account['last_synced_at'],
+        'lastSyncError': account['last_sync_error'],
+        'syncEnabled': bool(account['sync_enabled']),
+        'needsReconnect': lost,
+        'authErrorAt': _iso(account['auth_error_at']),
+        'connectedAt': _iso(account['connected_at']),
+        'refreshExpiresAt': _iso(account['refresh_expires_at']),
+    }
+
+
 def _reject_second_account(db, provider: str, email_address: str):
     """One connected account per provider slot (see docs/email-view.md):
     reconnecting with a *different* address while one is already active is
@@ -118,14 +152,52 @@ def oauth_authorize():
             'error': f'{_provider_label(provider)} OAuth client not configured — '
                      'add a client ID and secret in Settings first.'
         }), 400
-    state = _new_state(provider)
+    return redirect(_auth_url(provider, client_id))
+
+
+def _auth_url(provider: str, client_id: str, client: str = 'web') -> str:
+    state = _new_state(provider, client)
     build_auth_url = gmail_client.build_auth_url if provider == 'gmail' else outlook_client.build_auth_url
-    auth_url = build_auth_url(client_id, _redirect_uri(), state)
-    return redirect(auth_url)
+    return build_auth_url(client_id, _redirect_uri(), state)
+
+
+@bp.post('/oauth/start')
+def oauth_start():
+    """The phone's way in: it is signed in here, but the browser sheet it opens
+    is not, so it asks for the provider's URL instead of being redirected."""
+    body = request.get_json(silent=True) or {}
+    provider = body.get('provider', 'gmail')
+    if provider not in _OAUTH_PROVIDERS:
+        return jsonify({'error': 'Unknown provider'}), 400
+    client_id, client_secret = _get_oauth_client(provider)
+    if not client_id or not client_secret:
+        return jsonify({'error': f'{_provider_label(provider)} sign-in is not set up. Add its OAuth client ID '
+                                 'and secret in Settings on the desktop.'}), 400
+    return jsonify({'url': _auth_url(provider, client_id, 'ios')})
 
 
 @bp.get('/oauth/callback')
 def oauth_callback():
+    pending = _consume_state(request.args.get('state'))
+    if pending and pending.client == 'ios':
+        # Fixed codes only: nothing the provider or a crafted link said, and
+        # no token, goes into a URL another app could be handed.
+        code = _finish_for_app(pending)
+        return redirect('lunaschal://email?' + ('connected=1' if code is None else f'error={code}'))
+    return _finish_for_web(pending)
+
+
+def _finish_for_app(pending: _Pending) -> str | None:
+    if request.args.get('error'):
+        return 'declined' if request.args['error'] == 'access_denied' else 'provider'
+    try:
+        return _connect(pending, request.args.get('code'))[0]
+    except Exception:
+        logger.exception('Email sign-in from the app failed')
+        return 'failed'
+
+
+def _finish_for_web(pending: _Pending | None):
     # Both branches escape: `error` is a query parameter, so it is whatever a
     # crafted link put there, and the provider's own message goes into the
     # same HTML further down. Neither is trusted enough to interpolate raw.
@@ -136,51 +208,70 @@ def oauth_callback():
             'You can close this tab and try again.</p>'
         ), 400
 
-    provider = _consume_state(request.args.get('state'))
-    if not provider:
+    if not pending:
         return '<p>This connection link expired or was already used. Close this tab and try again.</p>', 400
 
     code = request.args.get('code')
     if not code:
         return '<p>Missing authorization code.</p>', 400
 
+    provider = pending.provider
     client_id, client_secret = _get_oauth_client(provider)
     if not client_id or not client_secret:
         return f'<p>{_provider_label(provider)} OAuth client not configured.</p>', 400
-
     try:
-        if provider == 'gmail':
-            token_data = gmail_client.exchange_code(client_id, client_secret, _redirect_uri(), code)
-            email_address = gmail_client.get_profile(token_data['access_token'])['emailAddress']
-        else:
-            token_data = outlook_client.exchange_code(client_id, client_secret, _redirect_uri(), code)
-            email_address = outlook_client.decode_id_token_email(token_data.get('id_token') or '')
-            if not email_address:
-                return '<p>Outlook connection failed: could not determine the account email address.</p>', 502
+        failure, detail = _connect(pending, code)
     except Exception as e:
         return (
             f'<p>{_provider_label(provider)} connection failed: {escape(str(e))}. '
             'You can close this tab and try again.</p>'
         ), 502
+    if failure:
+        return f'<p>{escape(detail)}</p>', 409 if failure == 'other_account' else 502
+    return redirect('/')
+
+
+def _connect(pending: _Pending, code: str | None) -> tuple[str | None, str]:
+    """Exchange the code and store the account. (None, '') when connected, else
+    a fixed failure code and a sentence about it. Raises what the provider raised."""
+    provider = pending.provider
+    client_id, client_secret = _get_oauth_client(provider)
+    if not code or not client_id or not client_secret:
+        return 'failed', 'Missing authorization code or OAuth client.'
+    if provider == 'gmail':
+        token_data = gmail_client.exchange_code(client_id, client_secret, pending.redirect_uri, code)
+        email_address = gmail_client.get_profile(token_data['access_token'])['emailAddress']
+    else:
+        token_data = outlook_client.exchange_code(client_id, client_secret, pending.redirect_uri, code)
+        email_address = outlook_client.decode_id_token_email(token_data.get('id_token') or '')
+        if not email_address:
+            return 'failed', 'Outlook connection failed: could not determine the account email address.'
 
     db = get_db()
     guard_error = _reject_second_account(db, provider, email_address)
     if guard_error:
-        return f'<p>{escape(guard_error)}</p>', 409
+        return 'other_account', guard_error
 
     now = int(time.time())
     expires_at = now + int(token_data.get('expires_in', 3600))
+    try:
+        refresh_expires_at = now + int(token_data['refresh_token_expires_in'])
+    except (KeyError, TypeError, ValueError):
+        refresh_expires_at = None
     db.execute(
         """
         INSERT INTO email_accounts
             (id, provider, email_address, access_token, refresh_token, token_expires_at,
-             scope, sync_enabled, last_sync_error, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)
+             scope, connected_at, refresh_expires_at, sync_enabled, last_sync_error, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)
         ON CONFLICT(provider, email_address) DO UPDATE SET
             access_token=excluded.access_token,
             refresh_token=COALESCE(excluded.refresh_token, email_accounts.refresh_token),
             token_expires_at=excluded.token_expires_at,
             scope=excluded.scope,
+            connected_at=excluded.connected_at,
+            refresh_expires_at=excluded.refresh_expires_at,
+            auth_error=NULL, auth_error_at=NULL, auth_notified_at=NULL,
             sync_enabled=1,
             last_sync_error=NULL,
             updated_at=excluded.updated_at
@@ -188,11 +279,21 @@ def oauth_callback():
         (
             str(ULID()), provider, email_address, token_data['access_token'],
             token_data.get('refresh_token'), expires_at, token_data.get('scope'),
-            now, now,
+            now, refresh_expires_at, now, now,
         ),
     )
     db.commit()
-    return redirect('/')
+    _sync_soon(provider)
+    return None, ''
+
+
+def _sync_soon(provider: str) -> None:
+    """Fetch what arrived while disconnected now, not at the next poll."""
+    if os.environ.get('LUNASCHAL_NO_SCHEDULERS'):
+        return
+    from backend.email import sync
+    account = _get_account(provider)
+    threading.Thread(target=sync.sync_account, args=(account,), daemon=True, name='email-reconnect').start()
 
 
 @bp.get('/oauth/status')
@@ -201,13 +302,7 @@ def oauth_status():
     account = _get_account(provider)
     if not account:
         return jsonify({'connected': False})
-    return jsonify({
-        'connected': _has_credentials(account) and bool(account['sync_enabled']),
-        'emailAddress': account['email_address'],
-        'lastSyncedAt': account['last_synced_at'],
-        'lastSyncError': account['last_sync_error'],
-        'syncEnabled': bool(account['sync_enabled']),
-    })
+    return jsonify(_account_state(account))
 
 
 @bp.get('/accounts')
@@ -217,14 +312,7 @@ def list_accounts():
         account = _get_account(provider)
         if not account:
             continue
-        accounts.append({
-            'provider': provider,
-            'emailAddress': account['email_address'],
-            'connected': _has_credentials(account) and bool(account['sync_enabled']),
-            'lastSyncedAt': account['last_synced_at'],
-            'lastSyncError': account['last_sync_error'],
-            'syncEnabled': bool(account['sync_enabled']),
-        })
+        accounts.append({'provider': provider, **_account_state(account)})
     return jsonify(accounts)
 
 
@@ -244,14 +332,16 @@ def oauth_disconnect():
     # stops future polling, it doesn't delete local mail.
     if provider == 'imap':
         db.execute(
-            'UPDATE email_accounts SET imap_password=NULL, sync_enabled=0, updated_at=? WHERE id=?',
+            'UPDATE email_accounts SET imap_password=NULL, sync_enabled=0, auth_error=NULL, '
+            'auth_error_at=NULL, auth_notified_at=NULL, updated_at=? WHERE id=?',
             (now, account['id']),
         )
     else:
         db.execute(
             """
             UPDATE email_accounts
-            SET access_token=NULL, refresh_token=NULL, scope=NULL, sync_enabled=0, updated_at=?
+            SET access_token=NULL, refresh_token=NULL, scope=NULL, sync_enabled=0,
+                auth_error=NULL, auth_error_at=NULL, auth_notified_at=NULL, refresh_expires_at=NULL, updated_at=?
             WHERE id=?
             """,
             (now, account['id']),
@@ -299,20 +389,23 @@ def imap_connect():
         """
         INSERT INTO email_accounts
             (id, provider, email_address, imap_host, imap_port, imap_username, imap_password,
-             sync_enabled, last_sync_error, created_at, updated_at)
-        VALUES (?, 'imap', ?, ?, ?, ?, ?, 1, NULL, ?, ?)
+             connected_at, sync_enabled, last_sync_error, created_at, updated_at)
+        VALUES (?, 'imap', ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)
         ON CONFLICT(provider, email_address) DO UPDATE SET
             imap_host=excluded.imap_host,
             imap_port=excluded.imap_port,
             imap_username=excluded.imap_username,
             imap_password=excluded.imap_password,
+            connected_at=excluded.connected_at,
+            auth_error=NULL, auth_error_at=NULL, auth_notified_at=NULL,
             sync_enabled=1,
             last_sync_error=NULL,
             updated_at=excluded.updated_at
         """,
-        (str(ULID()), email_address, host, port, username, password, now, now),
+        (str(ULID()), email_address, host, port, username, password, now, now, now),
     )
     db.commit()
+    _sync_soon('imap')
     return jsonify({'success': True})
 
 
@@ -339,6 +432,10 @@ def sync_now():
     return jsonify(results)
 
 
+_SUMMARY_COLUMNS = ('id, account_id, thread_id, subject, sender, sender_email, snippet, received_at, category, '
+                    'job_status, importance, importance_reason, summary, classified_at, created_at')
+
+
 @bp.get('')
 def list_emails():
     db = get_db()
@@ -349,6 +446,8 @@ def list_emails():
     offset = max(int(request.args.get('offset', 0)), 0)
 
     where, params = [], []
+    if request.args.get('importance') == 'high':
+        where.append("importance='high'")
     if category:
         where.append('category=?')
         params.append(category)
@@ -362,9 +461,11 @@ def list_emails():
         where.append(f"id IN ({','.join('?' * len(ids))})")
         params.extend(ids)
 
+    # A phone's list needs no bodies, which are most of what a row weighs.
+    columns = _SUMMARY_COLUMNS if request.args.get('summary') == '1' else '*'
     where_clause = f"WHERE {' AND '.join(where)}" if where else ''
     rows = db.execute(
-        f'SELECT * FROM emails {where_clause} ORDER BY received_at DESC LIMIT ? OFFSET ?',
+        f'SELECT {columns} FROM emails {where_clause} ORDER BY received_at DESC LIMIT ? OFFSET ?',
         (*params, limit, offset),
     ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])

@@ -4,6 +4,7 @@ import { api } from '../../hooks/api';
 import type { EmailCategory, EmailMessage } from '../../hooks/api';
 import {
   EMAIL_CATEGORY_LABELS,
+  EMAIL_REASON_LABELS,
   JOB_STATUS_LABELS,
   formatEmailDate,
 } from '../../lib/email';
@@ -18,7 +19,9 @@ export function EmailList({
   onSelect: (email: EmailMessage) => void;
   selectedId: string | null;
 }) {
-  const [category, setCategory] = useState<EmailCategory | ''>('');
+  const [category, setCategory] = useState<EmailCategory | 'important' | ''>(
+    ''
+  );
   const [query, setQuery] = useState('');
   const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -26,7 +29,8 @@ export function EmailList({
     queryKey: ['email', 'list', category, query],
     queryFn: ({ pageParam }) =>
       api.email.list({
-        category: category || undefined,
+        category: category === 'important' ? undefined : category || undefined,
+        importance: category === 'important' ? 'high' : undefined,
         query: query || undefined,
         limit: PAGE_SIZE,
         offset: pageParam,
@@ -74,6 +78,16 @@ export function EmailList({
           }`}
         >
           All
+        </button>
+        <button
+          onClick={() => setCategory('important')}
+          className={`px-3 py-1 rounded-full text-xs border transition-colors ${
+            category === 'important'
+              ? 'border-[var(--color-primary)] text-[var(--color-primary)]'
+              : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+          }`}
+        >
+          Important
         </button>
         {(Object.keys(EMAIL_CATEGORY_LABELS) as EmailCategory[]).map(c => (
           <button
@@ -130,13 +144,20 @@ export function EmailList({
                   <p className="text-sm text-[var(--color-text)] truncate">
                     {email.subject || '(no subject)'}
                   </p>
-                  {email.snippet && (
+                  {(email.summary || email.snippet) && (
                     <p className="text-xs text-[var(--color-text-muted)] truncate">
-                      {email.snippet}
+                      {email.summary || email.snippet}
                     </p>
                   )}
                   {(email.category || email.jobStatus) && (
                     <div className="flex gap-1 mt-1">
+                      {email.importance === 'high' && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300">
+                          {email.importanceReason
+                            ? EMAIL_REASON_LABELS[email.importanceReason]
+                            : 'Important'}
+                        </span>
+                      )}
                       {email.category && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-[var(--color-text-muted)]">
                           {EMAIL_CATEGORY_LABELS[email.category]}

@@ -448,6 +448,13 @@ push` are in `tools/push-fixtures/`.
   once, the shared queue's locks) are covered by Core tests; the extension
   builds in simulator, but an unsigned build has no App Group, so the widgets
   there only say to open the app. Not yet verified on device.
+- More → Email (a tab on iPad) is the server's mirrored mailbox: filters,
+  search, paging, and messages in a script-free, network-free web view whose
+  images load only when asked, from the server's copies. The last page and the
+  messages opened are kept for offline reading; the mailbox is not replicated.
+  When a provider refuses the sign-in (Google's test apps do after 7 days) a
+  banner and a badge appear, and Reconnect signs in again in a browser sheet.
+  Settings → Email notifications is this phone's own switch.
 - More → Jobs is the desktop Jobs tab's triage feed: the same postings in the
   same order, sortable Best match or Nearest. **On iPhone it is a deck**, one
   posting to the screen, "Worth a look" first: swipe right (or tap Queue) to
@@ -555,7 +562,7 @@ push` are in `tools/push-fixtures/`.
   simulator; the feed's UI test is not yet confirmed (its only run was on an
   overloaded simulator) and nothing here is verified on device.
 - Native Capture / Journal / Chat / Todo / More tabs on iPhone. iPad has
-  Capture, Journal, Chat, Todo, Study, Draw, Library, Jobs, Learning and Settings
+  Capture, Journal, Chat, Todo, Study, Draw, Library, Jobs, Email, Learning and Settings
   as individual tabs when the window is wide. A compact window (Split View,
   Slide Over) gets the iPhone's five tabs, with Study and Draw at the top of More:
   left to iPadOS, the overflow nested every tab inside its own More list and
