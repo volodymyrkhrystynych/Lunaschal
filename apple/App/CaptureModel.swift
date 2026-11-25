@@ -392,8 +392,10 @@ final class CaptureModel: ObservableObject {
         }
         do {
             // A Watch workout's route joins the location trail while the trail
-            // is on; with it off, routes stay unread for when it is.
-            try await healthSyncer.run(source: healthSource, transport: api, routes: trail.enabled ? trail.outbox : nil)
+            // is on; with it off, or routes not asked about yet, they stay
+            // unread for when it is.
+            let readsRoutes = trail.enabled ? await healthSource.routesAsked() : false
+            try await healthSyncer.run(source: healthSource, transport: api, routes: readsRoutes ? trail.outbox : nil)
             trail.refreshStatus()
             uploadTrailIfDue()
             await refreshDaily(using: api)

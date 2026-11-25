@@ -68,6 +68,13 @@ final class HealthKitSource: HealthSource {
         (try? await store.statusForAuthorizationRequest(toShare: [], read: readTypes)) == .shouldRequest
     }
 
+    /// Workout routes have been asked about, whatever the answer: reading them
+    /// before that is an error rather than an empty page.
+    func routesAsked() async -> Bool {
+        (try? await store.statusForAuthorizationRequest(
+            toShare: [], read: [HKWorkoutType.workoutType(), HKSeriesType.workoutRoute()])) == .unnecessary
+    }
+
     // MARK: Anchored pages
 
     func page(stream: String, anchor: Data?, limit: Int) async throws -> HealthPage {
@@ -121,7 +128,15 @@ final class HealthKitSource: HealthSource {
         var routes: [WorkoutRoute] = []
         for case let route as HKWorkoutRoute in added {
             try Task.checkCancellation()
-            let fixes = try await locations(of: route).map {
+            let found: [CLLocation]
+            do {
+                found = try await locations(of: route)
+            } catch let error as HKError where !Self.storeUnreadable.contains(error.code) {
+                // This one route can't be read, now or later; the ones after
+                // it shouldn't wait for it forever.
+                continue
+            }
+            let fixes = found.map {
                 WorkoutRoute.Fix(ts: $0.timestamp.timeIntervalSince1970, latitude: $0.coordinate.latitude,
                                  longitude: $0.coordinate.longitude,
                                  accuracy: $0.horizontalAccuracy,
@@ -133,6 +148,11 @@ final class HealthKitSource: HealthSource {
         }
         return HealthPage(routes: routes, anchor: next)
     }
+
+    /// Health as a whole can't be read yet -- a locked phone, a question not
+    /// asked -- as opposed to something being wrong with one route.
+    private static let storeUnreadable: Set<HKError.Code> = [.errorDatabaseInaccessible,
+                                                              .errorAuthorizationNotDetermined]
 
     /// A route's locations arrive in several batches; `done` marks the last.
     private func locations(of route: HKWorkoutRoute) async throws -> [CLLocation] {

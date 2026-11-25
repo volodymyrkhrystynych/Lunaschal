@@ -10,6 +10,7 @@ private final class FakeSource: HealthSource {
     var totals: [HealthDailyTotal] = []
     var dailyRequests: [(String, String)] = []
     var read: [String] = []
+    var routeError: Error?
     var streams: [String] { objects.keys.sorted() }
     var routeStreams: [String] { routes.keys.sorted() }
 
@@ -17,6 +18,7 @@ private final class FakeSource: HealthSource {
         read.append(stream)
         let offset = anchor.flatMap { Int(String(decoding: $0, as: UTF8.self)) } ?? 0
         if let all = routes[stream] {
+            if let routeError { throw routeError }
             let slice = Array(all[min(offset, all.count)..<min(offset + limit, all.count)])
             return HealthPage(routes: slice, anchor: Data(String(offset + slice.count).utf8))
         }
@@ -152,6 +154,40 @@ final class HealthSyncTests: XCTestCase {
         let outbox = try TrailOutbox(root: root.appendingPathComponent("trail"))
         try await sync().run(source: source, transport: FakeTransport(), routes: outbox)
         XCTAssertEqual(outbox.count, 3)
+    }
+
+    func testARouteReadErrorDoesntHoldUpTheRest() async throws {
+        let source = FakeSource()
+        source.objects["HKQuantityTypeIdentifierHeartRate"] = samples(3)
+        source.routes["HKWorkoutRoute"] = [run(3)]
+        source.routeError = URLError(.unknown)
+        source.totals = [HealthDailyTotal(date: "2026-10-05", type: "HKQuantityTypeIdentifierStepCount",
+                                          value: 8000, unit: "count")]
+        let outbox = try TrailOutbox(root: root.appendingPathComponent("trail"))
+        let transport = FakeTransport()
+        try await sync().run(source: source, transport: transport, routes: outbox)
+        XCTAssertEqual(transport.batches.flatMap(\.daily).count, 1)
+        XCTAssertEqual(store.status().lastSuccess, now)
+        XCTAssertEqual(store.status().lastError, URLError(.unknown).localizedDescription)
+        XCTAssertNil(store.anchor("HKWorkoutRoute"))
+
+        // Readable again: the route was never passed over.
+        source.routeError = nil
+        try await sync().run(source: source, transport: transport, routes: outbox)
+        XCTAssertEqual(outbox.count, 3)
+        XCTAssertNil(store.status().lastError)
+    }
+
+    func testACancelledRouteReadIsStillACancellation() async throws {
+        let source = FakeSource()
+        source.routes["HKWorkoutRoute"] = [run(3)]
+        source.routeError = CancellationError()
+        let outbox = try TrailOutbox(root: root.appendingPathComponent("trail"))
+        do {
+            try await sync().run(source: source, transport: FakeTransport(), routes: outbox)
+            XCTFail("expected the cancellation")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertNil(store.status().lastError)
     }
 
     func testDailyTotalsReachBackOnceThenOnlyTheLastFewDays() async throws {
