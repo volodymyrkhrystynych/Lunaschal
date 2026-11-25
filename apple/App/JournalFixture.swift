@@ -44,6 +44,17 @@ enum JournalFixture {
         return try JSONDecoder().decode(SyncPage.self, from: JSONSerialization.data(withJSONObject: page))
     }
 
+    /// A store of the fixture's own, emptied at every launch. In the shared one,
+    /// captures earlier tests left waiting to sync are newer than these rows,
+    /// and enough of them push the rows past what the lazy feed has drawn.
+    static func freshRootIfAsked(instead root: URL) throws -> URL {
+        guard ProcessInfo.processInfo.arguments.contains(argument) else { return root }
+        let fresh = root.deletingLastPathComponent()
+            .appendingPathComponent("JournalFixtureCaptures", isDirectory: true)
+        if FileManager.default.fileExists(atPath: fresh.path) { try FileManager.default.removeItem(at: fresh) }
+        return fresh
+    }
+
     static func seedIfAsked(root: URL) throws {
         guard ProcessInfo.processInfo.arguments.contains(argument) else { return }
         let now = Date()

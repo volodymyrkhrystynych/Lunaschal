@@ -1,5 +1,6 @@
 """Route tests for /api/meetings with ffmpeg and the pipeline mocked out."""
 import io
+import shutil
 import subprocess
 import time
 
@@ -257,6 +258,8 @@ def test_upload_bad_audio_rolls_back(client, rec, monkeypatch, tmp_path):
     assert list((tmp_path / 'meetings').iterdir()) == []
 
 
+@pytest.mark.skipif(not (shutil.which('ffmpeg') and shutil.which('ffprobe')),
+                    reason='ffmpeg not installed')
 def test_transcode_to_system_track_real_ffmpeg(tmp_path):
     """Exercises the real ffmpeg/ffprobe calls (no test hits the network or
     an AI provider here, so this is worth running for real rather than mocking)."""
