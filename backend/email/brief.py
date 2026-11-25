@@ -9,12 +9,15 @@ an email that talks to the model can do is get itself mentioned.
 """
 import json
 import logging
+import re
 import time
+import unicodedata
 
 from backend.ai.llm import chat_json
 from backend.ai.provider import is_ai_configured
 from backend.db.connection import get_db
 from backend.email import alerts
+from backend.email.notices import REASONS
 from backend.recall import clip
 
 logger = logging.getLogger(__name__)
@@ -24,8 +27,6 @@ MAX_PER_PASS = 40
 # enough that a first connect's backfill of old mail stays out of the chat.
 WINDOW = 14 * 86400
 _SKIP_LABELS = {'SENT', 'DRAFT', 'SPAM', 'TRASH'}
-REASONS = {'job_next_step': 'Job next step', 'personal': 'Personal',
-           'security': 'Security', 'deadline': 'Deadline'}
 
 _SYSTEM = (
     "You are Lunaschal, the user's chief of staff, looking over the mail that just arrived. "
@@ -48,6 +49,37 @@ _SCHEMA = {
 }
 
 
+# A renderer fetches an image on sight and turns an address into something to
+# tap, so text that came out of an email keeps neither.
+_LINK_OR_IMAGE = re.compile(r'!?\[([^\[\]]*)\](?:\([^()]*(?:\([^()]*\)[^()]*)*\)|\[[^\[\]]*\])')
+_DEFINITION = re.compile(r'\[[^\[\]]*\]:\s*\S+')
+_TAG = re.compile(r'<[^<>]*>')
+_ADDRESS = re.compile(
+    r'\b[a-z][a-z0-9+.\-]*:[/\\]{1,2}\S*'            # any scheme
+    r'|\b(?:mailto|tel|sms|data|javascript|file):\S+'
+    r'|[/\\]{2,}[\w.\-]+\S*'                          # //host, \\host
+    r'|\bwww\.\S+'
+    r'|(?<![@\w])(?:[a-z0-9\-]+\.)+[a-z]{2,}(?::\d+)?[/\\?#]\S*',  # host/path
+    re.IGNORECASE)
+
+
+def plain(text) -> str:
+    """One line with no Markdown image or link, tag, or web address in it."""
+    text = ''.join(' ' if unicodedata.category(c) == 'Cc' else c
+                   for c in str(text or '')[:4000] if unicodedata.category(c) != 'Cf')
+    for _ in range(5):  # a link's label may hold an image
+        stripped = _LINK_OR_IMAGE.sub(r'\1', text)
+        if stripped == text:
+            break
+        text = stripped
+    text = _TAG.sub(' ', _DEFINITION.sub(' ', text))
+    text = _ADDRESS.sub('(link removed)', text)
+    # Whatever the patterns missed can no longer open an image, link or tag.
+    text = text.translate({ord('['): '(', ord(']'): ')', ord('<'): None, ord('>'): None,
+                           ord('\\'): None, ord('`'): "'"})
+    return ' '.join(text.split()).lstrip('#-+* ')
+
+
 def candidates(db, now: int) -> list:
     since = db.execute('SELECT email_brief_since FROM settings LIMIT 1').fetchone()
     cutoff = (since['email_brief_since'] if since else None) or now
@@ -55,7 +87,9 @@ def candidates(db, now: int) -> list:
         'SELECT e.id, e.subject, e.sender, e.sender_email, e.snippet, e.category, e.importance, '
         'e.importance_reason, e.summary, e.label_ids, e.received_at, a.email_address AS own_address '
         'FROM emails e JOIN email_accounts a ON a.id=e.account_id '
-        'WHERE e.received_at>=? AND e.created_at>=? AND e.briefed_at IS NULL '
+        # created_at on the account survives a reconnect, so mail from an outage
+        # still counts while a first connect's backfill does not.
+        'WHERE e.received_at>=? AND e.received_at>=a.created_at AND e.created_at>=? AND e.briefed_at IS NULL '
         'ORDER BY e.received_at DESC', (now - WINDOW, cutoff)).fetchall()
     return [r for r in rows if not _is_own_or_discarded(r)]
 
@@ -89,8 +123,8 @@ def _fallback(rows: list) -> tuple[list, str]:
     if not high:
         return [], ''
     return high, 'Mail that looks important:\n' + '\n'.join(
-        f"- {clip(r['sender'] or r['sender_email'] or 'Unknown sender', 80)}: "
-        f"{clip(r['summary'] or r['subject'] or '(no subject)', 200)}" for r in high)
+        f"- {clip(plain(r['sender'] or r['sender_email']) or 'Unknown sender', 80)}: "
+        f"{clip(plain(r['summary'] or r['subject']) or '(no subject)', 200)}" for r in high)
 
 
 def choose(rows: list) -> tuple[list, str]:
@@ -112,7 +146,7 @@ def choose(rows: list) -> tuple[list, str]:
     if not picked:
         # An empty list is an answer; a list of numbers that aren't there isn't.
         return _fallback(rows) if answer['mention'] else ([], '')
-    message = str(answer.get('message') or '').strip()
+    message = plain(answer.get('message'))
     chosen = [rows[i - 1] for i in picked]
     if not message:
         message = 'New mail worth a look.'

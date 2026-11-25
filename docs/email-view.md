@@ -74,7 +74,7 @@ that option for an existing Gmail mirror.
 
 ## Connection health and reconnecting (as implemented)
 
-Only the provider refusing the stored credential counts as a lost connection (`backend/email/connection.py`): `invalid_grant`, or an IMAP login refusal. Timeouts and 5xx are retried. A Gmail 401 only drops the cached access token, so the next sync finds out whether the refresh token still works. A lost account is marked (`auth_error_at`), skipped by the scheduler, and announced once per outage: a chat message from a template, then a push to phones with **Email notifications** on. A failure is recorded only if the row still holds the credential that failed, so a sync that began before a reconnect cannot mark it dead.
+Only the provider refusing the stored credential counts as a lost connection (`backend/email/connection.py`): `invalid_grant`, or a password IMAP login refusal. Timeouts and 5xx are retried. A Gmail 401, or Outlook's IMAP refusing the login, only drops the cached access token, so the next sync finds out whether the refresh token still works. A lost account is marked (`auth_error_at`), skipped by the scheduler, and announced once per outage: a chat message from a template, then a push to phones with **Email notifications** on. A failure is recorded only if the row still holds the credential that failed, so a sync that began before a reconnect cannot mark it dead.
 
 The phone reconnects through `POST /api/email/oauth/start`, which returns the provider's URL for a browser sheet (`ASWebAuthenticationSession`). That sheet holds no Lunaschal session, so the callback is exempt from auth and guarded by its single-use, 10-minute state; it ends on `lunaschal://email?connected=1` or a fixed error code. The redirect URI is the address the phone uses, so that address must be the one registered with Google. The account row and cursor are kept, and mail from the outage is fetched on return.
 
@@ -83,6 +83,20 @@ The phone reconnects through `POST /api/email/oauth/start`, which returns the pr
 Classification also sets `importance`, `importance_reason` and a one-line `summary`. The `email.brief` job (`backend/email/brief.py`) waits for the last pending classification, shows the agent the whole list of new mail with **no tools**, and posts one chat message about what it picked, or nothing. `settings.email_brief_since` keeps the older archive out; old rows are never bulk-marked because that would rewrite the search index.
 
 In chat, `list_emails` and `read_email` reach the mailbox. Once either has run, the web and every writing tool refuse until the user's next message, so text in an email cannot trigger an action.
+
+Nothing a sender wrote is meant to reach a turn before that guard is armed:
+
+- The system prompt carries only counts, closed-list reasons and the user's own disconnected address.
+- The "important mail" chat messages are shown to the user in full, but a model sees a stub naming reasons and ids (`backend/email/notices.py`): in chat history (decided from the stored row, whatever the client sent), in compaction, in title generation and in `search_conversations`.
+- The messages themselves hold no Markdown images, links or web addresses, and the web client renders no image from Markdown at all.
+
+What remains:
+
+- **The agent's own replies about email.** After a turn that read mail, its reply is ordinary history with the guard open again on the next message, and it also reaches compaction, titles and `search_conversations`. It is the model's paraphrase, but a hostile email can shape a paraphrase. This is the cost of letting the user say "yes, do that".
+- **Text the user carries over**: pasting or quoting mail, or saving it to a to-do or the journal, makes it their own words.
+- **Summaries and titles made before the stubs existed** are not rewritten.
+- **Links in other chat messages** still render and need a tap. The guard ends with the turn, so it does not stop a reply from containing one.
+- **The brief's wording** is still the model's, from untrusted text, and can mislead the user, including in the push notification.
 
 ## Data model (as implemented)
 

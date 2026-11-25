@@ -33,6 +33,7 @@ from datetime import datetime
 
 from backend.db.connection import fts_match_query, get_db, search_journal_fts
 from backend.day_boundary import day_bounds, day_key_for
+from backend.email import notices as email_notices
 from backend.journal import screenshot_titles
 # The caps and the clipping live in backend/recall.py: two more surfaces (a
 # writing project's chapters and notes, a repository's other ideas) recall
@@ -165,7 +166,7 @@ class LifeTools:
             return ('No search terms in that query.', event)
 
         sql = (
-            'SELECT m.id, m.role, m.created_at, m.content, c.title, c.day_key'
+            'SELECT m.id, m.role, m.created_at, m.content, m.metadata, c.title, c.day_key'
             ' FROM messages_fts'
             ' JOIN messages m ON m.rowid = messages_fts.rowid'
             ' JOIN conversations c ON c.id = m.conversation_id'
@@ -194,7 +195,8 @@ class LifeTools:
             who = 'The user said' if r['role'] == 'user' else 'You replied'
             title = f' — {r["title"]}' if r['title'] else ''
             blocks.append(
-                f'[{_when(r["created_at"])}{title}]\n{who}: {_clip(r["content"])}'
+                f'[{_when(r["created_at"])}{title}]\n{who}: '
+                f'{email_notices.stub(r["metadata"]) or _clip(r["content"])}'
             )
         return (
             'From past conversations (most relevant first):\n\n' + _join(blocks),

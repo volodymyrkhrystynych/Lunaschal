@@ -38,6 +38,25 @@ describe('MessageMarkdown font scaling', () => {
   });
 });
 
+describe('MessageMarkdown images', () => {
+  it.each([
+    '![seen](https://evil.example/p?q=1)',
+    '![seen](//evil.example/p)',
+    '![seen](/\\evil.example/p)',
+    '![seen](\\\\evil.example/p)',
+    '![seen](data:image/png;base64,AAAA)',
+    '![seen](blob:https://evil.example/1)',
+    '![seen](/api/chat/attachments/1/file)',
+    '![seen][r]\n\n[r]: https://evil.example/p',
+    '[![seen](https://evil.example/p)](https://ok.example)',
+  ])('shows the alt text and loads nothing: %s', content => {
+    const { container } = render(<MessageMarkdown content={content} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.innerHTML).not.toContain('src=');
+    expect(container.textContent).toContain('seen');
+  });
+});
+
 describe('MessageMarkdown authorship', () => {
   it('paints mixed authors through the markdown syntax', () => {
     // "**Buy** milk" typed, ", said aloud" speech-to-text of a recording.

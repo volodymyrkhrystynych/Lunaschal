@@ -42,6 +42,7 @@ from backend.lifewiki import tools as life_tools
 from backend.lifewiki.tools import LifeTools
 from backend.goals import tools as goal_tools
 from backend.coach import tools as coach_tools
+from backend.email import notices as email_notices
 from backend.email import tools as email_tools
 from backend.research import agent as tool_loop
 from backend.research import wiki as wiki_tools
@@ -399,6 +400,8 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     # what this turn's message says, not what the transcript summarises.
     latest_user_text = next((m.get('content') for m in reversed(messages)
                              if m.get('role') == 'user'), None)
+    # Every caller's history passes here, before compaction can summarise it.
+    messages = email_notices.neutralize(messages)
     system = _system_prompt(messages, system_prompt)
     messages, rolling_context = compaction.compact_for_prompt(
         _with_saved_todos(messages), conversation_id,

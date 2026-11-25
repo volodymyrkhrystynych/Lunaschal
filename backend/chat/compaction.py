@@ -14,6 +14,7 @@ from ulid import ULID
 
 from backend.ai.llm import COMPACT_AT, CONTEXT_WINDOW_TOKENS, chat_json
 from backend.db.connection import get_db
+from backend.email import notices as email_notices
 
 logger = logging.getLogger(__name__)
 
@@ -355,7 +356,8 @@ def run_pending(compaction_id: str) -> None:
             f'SELECT id, role, content, metadata FROM messages WHERE id IN ({placeholders}) '
             'ORDER BY created_at, id', unread_ids,
         ).fetchall()]
-        data = summarize(messages, previous)
+        # The summary is carried into the next chat's system prompt.
+        data = summarize(email_notices.neutralize(messages), previous)
         now = int(time.time())
         db.execute(
             "UPDATE chat_compactions SET content=?, status='done', error=NULL, updated_at=? "

@@ -141,6 +141,10 @@ export function MessageMarkdown({ content, authored }: Props) {
               {children}
             </a>
           ),
+          // Alt text only. Loading an image is a request to whatever address
+          // the text names, and this text can come from a model that has read
+          // an email. Nothing in the app writes images into Markdown.
+          img: ({ alt }) => <span>{alt}</span>,
           hr: () => <hr className="border-white/10 my-2" />,
           table: ({ children }) => (
             <div className="overflow-x-auto mb-2 last:mb-0">
