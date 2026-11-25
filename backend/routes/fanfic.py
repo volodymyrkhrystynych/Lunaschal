@@ -591,7 +591,8 @@ def recheck_reactions():
     is the deep walk, which also picks up silent edits on the way."""
     db = get_db()
     cur = db.execute(
-        "UPDATE fics SET update_pending=1, deep_pending=1 WHERE source_type='xenforo'"
+        "UPDATE fics SET update_pending=1, deep_pending=MAX(deep_pending, 1)"
+        " WHERE source_type='xenforo'"
         " AND download_status != 'downloading'"
         " AND EXISTS (SELECT 1 FROM site_cookies s WHERE fics.site IN (s.domain, 'www.' || s.domain))")
     db.commit()
