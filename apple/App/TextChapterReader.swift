@@ -458,9 +458,13 @@ struct TextChapterReader: View {
             version = "\(try store.epoch ?? "unknown"):\(current.revision):b"
             let saved = try store.readingPosition(collection: "fic_chapters", id: current.id, version: version) ?? 0
             if let fraction = pendingFraction, fraction.isFinite {
-                let row = Int((min(1, max(0, fraction)) * Double(max(0, blocks.count - 1))).rounded())
+                let row = ChapterRows.row(at: fraction, in: blocks)
                 position = row > 0 ? row : Self.topRow
-            } else { position = blocks.indices.contains(saved) && saved > 0 ? saved : Self.topRow }
+            } else {
+                let (row, open) = ChapterRows.restore(saved: saved, in: blocks)
+                openSpoilers = open
+                position = row > 0 ? row : Self.topRow
+            }
             pendingFraction = nil
         } catch { show("Could not restore reading position: \(error.localizedDescription)") }
     }
@@ -539,7 +543,10 @@ struct TextChapterReader: View {
 
     private func bookmark(_ type: String) {
         do {
-            try store.queueBookmark(chapter: current, type: type, fraction: min(1, max(0, fraction)))
+            // The chapter reopens with its spoilers closed, so with one open
+            // the scroll fraction would land somewhere else.
+            let place = openSpoilers.isEmpty ? fraction : ChapterRows.fraction(of: position ?? 0, in: blocks)
+            try store.queueBookmark(chapter: current, type: type, fraction: min(1, max(0, place)))
             // This point has yet to be read past, even if an earlier one was.
             if type == "continue" {
                 continueChecked.remove(current.id)
@@ -639,9 +646,18 @@ private struct ChapterBlockView: View {
         case .paragraph:
             text(base: size).font(.system(size: size, design: .serif)).lineSpacing(size * 0.3)
         case .image(let src):
-            ChapterImageView(owner: owner, src: src, alt: block.text)
-                .frame(maxWidth: .infinity, alignment: frameAlignment)
-                .padding(.vertical, size * 0.3)
+            Group {
+                if hidesWords {
+                    Button(action: onTap) { Label("Hidden picture", systemImage: "eye.slash") }
+                        .buttonStyle(.bordered).font(.footnote)
+                        .accessibilityHint("Tap to reveal the spoiler")
+                        .accessibilityIdentifier("chapter-hidden-image")
+                } else {
+                    ChapterImageView(owner: owner, src: src, alt: block.text)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: frameAlignment)
+            .padding(.vertical, size * 0.3)
         case .spoilerToggle:
             // The forum's spoiler button: closed until tapped.
             Button(action: onTap) {
