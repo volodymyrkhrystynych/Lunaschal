@@ -184,6 +184,25 @@ def test_a_run_to_work_recorded_by_phone_and_watch_is_measured_once(client, plac
         == pytest.approx(plain, rel=0.02)
 
 
+@pytest.mark.parametrize('kind', ['transit', 'coarse'])
+def test_a_train_ride_with_a_workout_left_running_stays_automotive(client, places, kind):
+    workday(client)
+    get_db().execute("DELETE FROM location_points WHERE id LIKE 'fix-am-%'")
+    points = []
+    for i in range(61):
+        f, t = i / 60, at('08:30') + 30 * i
+        lat, lon = HOME[0] + (OFFICE[0] - HOME[0]) * f, HOME[1] + (OFFICE[1] - HOME[1]) * f
+        # The phone drops the tag at train speed; pulling in and out of
+        # stations is slow enough to keep it.
+        points.append(route_point(i, t, lat, lon, 'walking' if i % 4 == 0 else None))
+        if i % 8 == 4:
+            points.append({**fine(f'fix-ride-{i:04d}', t + 3, lat, lon, 'automotive'), 'kind': kind})
+    assert client.post('/api/location/points', json={'points': points}).status_code == 200
+    roles = place_roles.roles_for_day(place_roles.list_periods(get_db()), DAY)
+    trip = days.day_summary(DAY, None, roles, at('23:00'))['commutes'][0]
+    assert (trip['mode'], trip['modeSource'], trip['tracked']) == ('automotive', 'motion', True)
+
+
 def test_a_stop_somewhere_else_on_the_way_is_not_a_commute():
     home = RolePlace('home', 'PLACE-HOME', 'Home', *HOME, 150)
     office = RolePlace('work', 'PLACE-OFFICE', 'Office', *OFFICE, 150)

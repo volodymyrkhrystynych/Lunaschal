@@ -33,6 +33,19 @@ final class WorkoutRouteTests: XCTestCase {
         XCTAssertNil(points[1].speed)
     }
 
+    func testAWalkLeftRunningOnATrainIsNotAWalk() {
+        func activities(_ activity: TrailPolicy.Activity) -> [TrailPolicy.Activity?] {
+            WorkoutRoute(uuid: uuid, fixes: [
+                fix(0, lat: 43.65, speed: 1.4), fix(10, lat: 43.652, speed: 25), fix(20, lat: 43.654, speed: 8),
+                fix(30, lat: 43.656, speed: nil),
+            ], activity: activity).points.map(\.activity)
+        }
+        XCTAssertEqual(activities(.walking), [.walking, nil, .walking, .walking])
+        XCTAssertEqual(activities(.running), [.running, nil, .running, .running])
+        // Downhill on a bike is still a bike.
+        XCTAssertEqual(activities(.cycling), [.cycling, .cycling, .cycling, .cycling])
+    }
+
     func testOnlyWorkoutsThatSayHowYouMovedCarryAnActivity() {
         XCTAssertEqual(WorkoutRoute.activity(forWorkout: "hiking"), .walking)
         XCTAssertEqual(WorkoutRoute.activity(forWorkout: "running"), .running)

@@ -47,9 +47,17 @@ public struct WorkoutRoute: Equatable {
             let point = TrailPoint(id: Self.pointID(route: uuid, index: index), ts: fix.ts,
                                    latitude: fix.latitude, longitude: fix.longitude, accuracy: fix.accuracy,
                                    altitude: fix.altitude, speed: fix.speed.flatMap { $0 >= 0 ? $0 : nil },
-                                   kind: .fine, activity: activity)
+                                   kind: .fine, activity: activity(at: fix))
             return filter.admit(point) ? point : nil
         }
+    }
+
+    /// The workout's activity, unless the fix is too fast for it: a walk left
+    /// running on the train home is not a walk, and says nothing about what it is.
+    private func activity(at fix: Fix) -> TrailPolicy.Activity? {
+        if activity == .walking || activity == .running,
+           let speed = fix.speed, speed > TrailPolicy.selfPropelled.upperBound { return nil }
+        return activity
     }
 
     /// A workout's activity (HealthKitSource's names) as one the server's
