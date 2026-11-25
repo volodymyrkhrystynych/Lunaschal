@@ -49,6 +49,19 @@ final class LocationTrailTests: XCTestCase {
         XCTAssertTrue(filter.admit(fix("f", 25, lat: 43.6517)))
     }
 
+    func testAFixTooBlurryForARideIsKeptAsCoarse() {
+        XCTAssertEqual(TrailFilter.kind(in: .transit, accuracy: 65), .transit)
+        XCTAssertEqual(TrailFilter.kind(in: .transit, accuracy: 200), .transit)
+        XCTAssertEqual(TrailFilter.kind(in: .transit, accuracy: 201), .coarse)
+        XCTAssertEqual(TrailFilter.kind(in: .coarse, accuracy: 10), .coarse)
+        // A blurry fix on a walk is still dropped, not turned into a coarse one.
+        XCTAssertEqual(TrailFilter.kind(in: .fine, accuracy: 300), .fine)
+        var filter = TrailFilter()
+        XCTAssertTrue(filter.admit(fix("a", 0, accuracy: 700, kind: TrailFilter.kind(in: .transit, accuracy: 700))))
+        // CoreLocation's "invalid" is still invalid.
+        XCTAssertFalse(filter.admit(fix("b", 1, accuracy: -1, kind: TrailFilter.kind(in: .transit, accuracy: -1))))
+    }
+
     func testAVisitKeepsOneIDAcrossArrivalAndDeparture() {
         XCTAssertEqual(TrailPoint.visitID(arrival: 1_783_000_000.6), "visit-1783000000")
     }

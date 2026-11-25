@@ -277,24 +277,19 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         Task { @MainActor in
-            let kind: TrailPoint.Kind
-            switch mode {
-            case .fine: kind = .fine
-            case .transit: kind = .transit
-            case .coarse: kind = .coarse
-            }
             let activity = currentActivity
             record(locations.map { loc in
                 TrailPoint(id: ULID.make(now: loc.timestamp), ts: loc.timestamp.timeIntervalSince1970,
                            latitude: loc.coordinate.latitude, longitude: loc.coordinate.longitude,
                            accuracy: loc.horizontalAccuracy,
                            altitude: loc.verticalAccuracy >= 0 ? loc.altitude : nil,
-                           speed: loc.speed >= 0 ? loc.speed : nil, kind: kind, activity: activity)
+                           speed: loc.speed >= 0 ? loc.speed : nil,
+                           kind: TrailFilter.kind(in: mode, accuracy: loc.horizontalAccuracy), activity: activity)
             })
             // A coarse wake is the moment to notice a walk or a ride has begun.
             // It also means the phone has moved a few hundred metres, which
             // ends a ride's auto-pause: the train is moving again.
-            if kind == .coarse {
+            if mode == .coarse {
                 pausedAt = nil
                 askMotionHistory()
                 reconsider(speed: locations.last.flatMap { $0.speed >= 0 ? $0.speed : nil })

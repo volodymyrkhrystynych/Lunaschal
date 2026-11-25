@@ -71,6 +71,17 @@ public struct TrailFilter {
     /// ...unless this long has passed, so a long pause still leaves a mark.
     public static let keepAliveInterval: Double = 120
 
+    /// What a fix delivered in `mode` is recorded as. One too blurry for a ride
+    /// (a tunnel, a cell-tower fix) is what a significant-change wake would
+    /// have given, and is kept as that rather than dropped.
+    public static func kind(in mode: TrailPolicy.Mode, accuracy: Double) -> TrailPoint.Kind {
+        switch mode {
+        case .fine: return .fine
+        case .transit: return accuracy > maxAccuracy[.transit] ?? 0 ? .coarse : .transit
+        case .coarse: return .coarse
+        }
+    }
+
     /// The last fix kept of each live kind. Separate, so stepping off a train
     /// and walking isn't measured against the last point the train left.
     private var last: [TrailPoint.Kind: TrailPoint] = [:]
