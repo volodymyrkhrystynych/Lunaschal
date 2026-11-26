@@ -1775,7 +1775,11 @@ final class OfflineCaptureTests: XCTestCase {
         filter.tap()
         XCTAssertTrue(app.buttons["Recently read"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Source"].exists)
-        app.tap()
+        // Dismiss the menu from the empty corner below it. The middle of the
+        // screen is under the menu, and where its rows fall changes with every
+        // row added: a tap there landed on a divider and left it open.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.8)).tap()
+        XCTAssertTrue(app.buttons["Recently read"].waitForNonExistence(timeout: 5), "the menu is dismissed")
         app.navigationBars["Unsorted"].buttons.firstMatch.tap()
         app.segmentedControls["library-mode"].buttons["Library"].tap()
     }
@@ -1851,10 +1855,21 @@ final class OfflineCaptureTests: XCTestCase {
         let chapters = app.buttons["Chapters"]
         XCTAssertTrue(chapters.waitForExistence(timeout: 10))
         chapters.tap()
-        // The resume link and the bookmark under it read the same.
+        // The resume link and the bookmark read the same. They no longer fit
+        // on one screen (the update section above the bookmarks has grown), so
+        // the bookmark is the "Continue: " row below the Bookmarks heading,
+        // found by scrolling to it rather than by counting what is on screen.
         let rows = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Continue: "))
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertEqual(rows.count, 2)
+        let resumeLabel = rows.firstMatch.label
+        let heading = app.staticTexts["Bookmarks"]
+        func bookmarkRows() -> [XCUIElement] {
+            for _ in 0..<4 where !heading.exists { app.swipeUp() }
+            guard heading.exists else { return [] }
+            return rows.allElementsBoundByIndex.filter { $0.frame.minY > heading.frame.maxY - 1 }
+        }
+        XCTAssertEqual(bookmarkRows().map(\.label), [resumeLabel], "the bookmark reads like the resume link")
+        for _ in 0..<5 { app.swipeDown() }
         rows.firstMatch.tap()
 
         let next = app.buttons["chapter-next-top"]
@@ -1869,7 +1884,8 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(removed.exists)
         chapters.tap()
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertEqual(rows.count, 1, "only the resume link is left")
+        XCTAssertEqual(rows.firstMatch.label, resumeLabel, "the resume link is still there")
+        XCTAssertEqual(bookmarkRows().count, 0, "only the resume link is left")
         // Below the bookmarks, where the list hasn't built it yet.
         let queued = app.staticTexts["Bookmark removed on device · Waiting to sync"]
         for _ in 0..<3 where !queued.exists { app.swipeUp() }
