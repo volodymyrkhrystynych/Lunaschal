@@ -5,14 +5,38 @@ import PhotosUI
 import UniformTypeIdentifiers
 import LunaschalCore
 
+/// Models this root owns but must not observe. A `@StateObject` subscribes
+/// its view to every change, and this view's body rebuilds every tab: Chat
+/// publishes per streamed piece of a reply and per keystroke, the coding agent
+/// per event, and re-rendering the whole app for each of those kept the main
+/// thread busy until iOS killed it as frozen, on whatever tab was showing.
+/// Email publishes per search keystroke and per page load, so it is here too.
+/// Their own screens observe them; the root takes only Code's badge count and
+/// whether a mail account needs signing in again.
+/// Publishes nothing itself, so owning it costs the root nothing.
+final class UnwatchedModels: ObservableObject {
+    let chat: ChatModel
+    let code: CodeModel
+    let email: EmailModel
+
+    @MainActor init(capture: CaptureModel) {
+        chat = ChatModel(capture: capture)
+        code = CodeModel(capture: capture)
+        email = EmailModel(capture: capture)
+    }
+}
+
 struct CaptureRoot: View {
     @ObservedObject var model: CaptureModel
-    @StateObject private var chat: ChatModel
+    @StateObject private var unwatched: UnwatchedModels
     @StateObject private var todo: TodoModel
     @StateObject private var learning: LearningModel
     @StateObject private var context: JournalContextModel
-    @StateObject private var code: CodeModel
-    @StateObject private var email: EmailModel
+    private var chat: ChatModel { unwatched.chat }
+    private var code: CodeModel { unwatched.code }
+    private var email: EmailModel { unwatched.email }
+    @State private var codeWaiting = 0
+    @State private var emailNeedsReconnect = false
     @ObservedObject private var quickPhoto = QuickPhoto.shared
     @ObservedObject private var push = PushRouter.shared
     @State private var chatPage = ChatPage.chat
@@ -48,16 +72,27 @@ struct CaptureRoot: View {
     }
 
     init(model: CaptureModel) {
+        self.init(model: model, unwatched: UnwatchedModels(capture: model))
+    }
+
+    init(model: CaptureModel, unwatched: @autoclosure @escaping () -> UnwatchedModels) {
         self.model = model
-        _chat = StateObject(wrappedValue: ChatModel(capture: model))
+        _unwatched = StateObject(wrappedValue: unwatched())
         _todo = StateObject(wrappedValue: TodoModel(capture: model))
         _learning = StateObject(wrappedValue: LearningModel(capture: model))
         _context = StateObject(wrappedValue: JournalContextModel(capture: model))
-        _code = StateObject(wrappedValue: CodeModel(capture: model))
-        _email = StateObject(wrappedValue: EmailModel(capture: model))
     }
 
+    #if DEBUG
+    /// How many times `body` has run: the tests check that typing in Chat
+    /// doesn't re-render the whole app.
+    static var bodyEvaluations = 0
+    #endif
+
     var body: some View {
+        #if DEBUG
+        let _ = Self.bodyEvaluations += 1
+        #endif
         let contextToday = contextTodayItems()
         let dailyRemaining = dailyRemaining(contextToday)
         TabView(selection: $tab) {
@@ -74,7 +109,7 @@ struct CaptureRoot: View {
             NavigationStack(path: $chatPath) { ChatView(chat: chat, capture: model, code: code, page: $chatPage) }
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }.tag(Tab.chat)
                 // A plan to approve or a question from the coding agent.
-                .badge(code.waiting)
+                .badge(codeWaiting)
             NavigationStack { TodoView(todo: todo) }
                 .tabItem { Label("Todo", systemImage: "checklist") }.tag(Tab.todo)
                 // Red, like a notification: to-dos due today or overdue.
@@ -90,7 +125,7 @@ struct CaptureRoot: View {
                     .tabItem { Label("Jobs", systemImage: "briefcase") }.tag(Tab.jobs)
                 NavigationStack { EmailInboxView(email: email) }
                     .tabItem { Label("Email", systemImage: "envelope") }.tag(Tab.email)
-                    .badge(email.needsReconnect ? 1 : 0)
+                    .badge(emailNeedsReconnect ? 1 : 0)
                 NavigationStack { WritingRootView(capture: model) }
                     .tabItem { Label("Writing", systemImage: "text.book.closed") }.tag(Tab.writing)
                 NavigationStack { LearningView(learning: learning) }
@@ -105,8 +140,15 @@ struct CaptureRoot: View {
                 }
                     .tabItem { Label("More", systemImage: "line.3.horizontal") }.tag(Tab.more)
                 // The mail connection is down: only signing in again fixes it.
-                .badge(email.needsReconnect ? 1 : 0)
+                .badge(emailNeedsReconnect ? 1 : 0)
             }
+        }
+        // Only the count, and only when it changes: see `UnwatchedModels`.
+        .onReceive(code.$waiting.removeDuplicates()) { codeWaiting = $0 }
+        // Only whether an account is lost. `$accounts` fires on willSet, so
+        // read the value it sends rather than `email.needsReconnect`.
+        .onReceive(email.$accounts.map { $0.contains(where: \.needsReconnect) }.removeDuplicates()) {
+            emailNeedsReconnect = $0
         }
         .onChange(of: tab) { _, selected in
             if selected == .capture { capturePage = .entry }

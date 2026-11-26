@@ -87,7 +87,7 @@ final class ChatModel: NSObject, ObservableObject, AVAudioRecorderDelegate {
         do {
             let today = try await api.chatToday()
             apply(today)
-            loadProblem = nil
+            if loadProblem != nil { loadProblem = nil }
             if withTodos { await refreshTodos() }
             await refreshStaged(using: api)
         } catch {
@@ -98,6 +98,13 @@ final class ChatModel: NSObject, ObservableObject, AVAudioRecorderDelegate {
     }
 
     private func apply(_ today: ChatConversation?) {
+        // The poll asks every 1.5 s while a reply is being written; most
+        // answers are the conversation already shown, and an identical
+        // assignment still re-renders the whole transcript.
+        guard today != conversation else {
+            if !isStreaming, handedOff { clearLive() }
+            return
+        }
         let hadAddTodo = Self.todoWrites(conversation)
         conversation = today
         if let today, let data = try? JSONEncoder().encode(today) { try? data.write(to: cacheURL, options: .atomic) }
@@ -151,23 +158,37 @@ final class ChatModel: NSObject, ObservableObject, AVAudioRecorderDelegate {
             // Show the question straight away, as the desktop's refetch does.
             if let today = try? await api.chatToday() { apply(today) }
             var drafts: [String] = []
+            // Gathered, not published per token: each write re-renders the
+            // transcript, and a fast reply did that until iOS killed the app.
+            var thinking = StreamCoalescer(), content = StreamCoalescer()
+            func flushLive() {
+                if let rest = thinking.drain() { liveThinking += rest }
+                if let rest = content.drain() { liveContent += rest }
+            }
             do {
                 for try await event in api.streamChatReply(conversationID: conversationID, turns: turns) {
+                    let now = ProcessInfo.processInfo.systemUptime
                     switch event {
                     case let .messageID(id): liveID = id; liveMessageID = id
                     case let .step(step):
+                        flushLive()
                         liveSteps.append(step)
                         if step.writesChatTodo { Task { await refreshTodos() } }
-                    case let .thinking(text): liveThinking += text
-                    case let .content(text): liveContent += text
-                    case let .done(flashcardDrafts): drafts = flashcardDrafts
-                    case let .error(message): throw ChatError.server(message)
-                    case .end: break
+                    case let .thinking(text):
+                        if let piece = thinking.add(text, now: now) { liveThinking += piece }
+                    case let .content(text):
+                        if let rest = thinking.drain() { liveThinking += rest }
+                        if let piece = content.add(text, now: now) { liveContent += piece }
+                    case let .done(flashcardDrafts): flushLive(); drafts = flashcardDrafts
+                    case let .error(message): flushLive(); throw ChatError.server(message)
+                    case .end: flushLive()
                     }
                 }
+                flushLive()
             } catch where liveID != nil {
                 // The server has this reply and keeps writing it; the poll
                 // picks it up from the saved row.
+                flushLive()
             }
             isStreaming = false
             await refresh()
