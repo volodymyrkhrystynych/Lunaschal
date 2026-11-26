@@ -264,9 +264,11 @@ def test_list_accounts_reflects_each_provider_slot(client, monkeypatch):
     resp = client.get('/api/email/accounts')
     accounts = resp.get_json()
     assert len(accounts) == 1
+    assert accounts[0].pop('connectedAt')
     assert accounts[0] == {
         'provider': 'gmail', 'emailAddress': 'me@example.com', 'connected': True,
         'lastSyncedAt': None, 'lastSyncError': None, 'syncEnabled': True,
+        'needsReconnect': False, 'authErrorAt': None, 'refreshExpiresAt': None,
     }
 
 

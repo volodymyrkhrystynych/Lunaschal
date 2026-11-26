@@ -10,6 +10,8 @@ final class PushRouter: ObservableObject {
     static let shared = PushRouter()
     /// The task a notification was tapped for, until something opens it.
     @Published var openTaskID: String?
+    /// Where a tapped email notification or link leads, until it is shown.
+    @Published var emailRoute: EmailRoute?
     /// Hex APNs token, once iOS has handed one over.
     @Published var deviceToken: String?
 }

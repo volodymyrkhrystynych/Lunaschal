@@ -2023,7 +2023,11 @@ export interface EmailAccountStatus {
   lastSyncedAt: string | null;
   lastSyncError: string | null;
   syncEnabled: boolean;
+  needsReconnect: boolean;
 }
+
+export type EmailReason =
+  'job_next_step' | 'personal' | 'security' | 'deadline';
 
 export type EmailCategory =
   'job_application' | 'newsletter' | 'notification' | 'personal' | 'other';
@@ -2048,6 +2052,9 @@ export interface EmailMessage {
   receivedAt: string;
   category: EmailCategory | null;
   jobStatus: JobApplicationStatus | null;
+  importance: 'high' | 'normal' | 'low' | null;
+  importanceReason: EmailReason | null;
+  summary: string | null;
   classifiedAt: string | null;
   classificationError: string | null;
 }
@@ -5663,6 +5670,7 @@ export const api = {
     list: (
       params: {
         category?: EmailCategory;
+        importance?: 'high';
         jobStatus?: JobApplicationStatus;
         query?: string;
         limit?: number;
@@ -5671,6 +5679,7 @@ export const api = {
     ) => {
       const q = new URLSearchParams();
       if (params.category) q.set('category', params.category);
+      if (params.importance) q.set('importance', params.importance);
       if (params.jobStatus) q.set('jobStatus', params.jobStatus);
       if (params.query) q.set('query', params.query);
       if (params.limit != null) q.set('limit', String(params.limit));

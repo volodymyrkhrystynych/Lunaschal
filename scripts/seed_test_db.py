@@ -1406,7 +1406,7 @@ def seed_jobs(db, email_ids):
     )
 
 
-def seed_chat(db):
+def seed_chat(db, email_ids):
     from backend.chat.storage import attachment_path
 
     conv_id = new_id()
@@ -1427,6 +1427,17 @@ def seed_chat(db):
             'VALUES (?, ?, ?, ?, ?, ?, ?)',
             (message_id, conv_id, role, content, 'done', ts(2), ts(2)),
         )
+
+    # New mail the agent thought worth raising (backend/email/brief.py).
+    db.execute(
+        'INSERT INTO messages (id, conversation_id, role, content, metadata, status, created_at, finished_at) '
+        "VALUES (?, ?, 'assistant', ?, ?, 'done', ?, ?)",
+        (new_id(), conv_id, 'Dana at Globex wants to set up a technical interview next week.',
+         json.dumps({'email': {'kind': 'important', 'items': [
+             {'id': email_ids['interview'], 'sender': 'Dana Okafor', 'subject': 'Globex — next steps',
+              'summary': 'Dana asks whether Tuesday works for a technical interview.',
+              'reason': 'job_next_step'}]}}), ts(2), ts(2)),
+    )
 
     db.execute(
         'INSERT INTO chat_compactions (id, conversation_id, kind, source_message_ids, '
@@ -2174,11 +2185,14 @@ def seed_email(db):
     gmail_id = new_id()
     db.execute(
         'INSERT INTO email_accounts (id, provider, email_address, access_token, refresh_token, '
-        'token_expires_at, scope, sync_enabled, last_synced_at, created_at, updated_at) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)',
+        'token_expires_at, scope, sync_enabled, last_synced_at, created_at, updated_at, '
+        'connected_at, refresh_expires_at, auth_error, auth_error_at, auth_notified_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)',
+        # Disconnected, so the reconnect banner has something to show.
         (gmail_id, 'gmail', 'jordan.rivera@example.com', 'fake-not-a-real-access-token',
          'fake-not-a-real-refresh-token', ts(-1), 'https://www.googleapis.com/auth/gmail.readonly',
-         ts(0), ts(30), ts(0)),
+         ts(0), ts(30), ts(0), ts(7), ts(0), '400 invalid_grant: Token has been expired or revoked.',
+         ts(0), ts(0)),
     )
     imap_id = new_id()
     db.execute(
@@ -2219,6 +2233,9 @@ def seed_email(db):
              body[:80], body, f'<p>{body}</p>', '["INBOX"]', ts(days_ago), category, job_status,
              ts(days_ago), ts(days_ago)),
         )
+        high = role == 'interview'
+        db.execute('UPDATE emails SET importance=?, importance_reason=?, summary=?, briefed_at=? WHERE id=?',
+                   ('high' if high else 'low', 'job_next_step' if high else None, body[:120], ts(days_ago), email_id))
 
     # One remote image the fetcher stored, one it skipped — the two states the
     # Email view actually renders differently.
@@ -3152,7 +3169,7 @@ def main() -> None:
     seed_torrents(db)
     email_ids = seed_email(db)
     seed_jobs(db, email_ids)
-    seed_chat(db)
+    seed_chat(db, email_ids)
     seed_writing(db)
     page_id = seed_paper(db)
     seed_ideas(db, page_id)

@@ -4,6 +4,7 @@ import { api } from '../../hooks/api';
 import type { EmailMessage } from '../../hooks/api';
 import { EmailList } from './EmailList';
 import { EmailDetail } from './EmailDetail';
+import { ReconnectBanner } from './ReconnectBanner';
 import { JobDashboard } from './JobDashboard';
 
 export function Email() {
@@ -23,7 +24,7 @@ export function Email() {
     },
   });
 
-  if (!accounts?.some(a => a.connected)) {
+  if (!accounts?.some(a => a.connected || a.needsReconnect)) {
     return (
       <div className="flex-1 flex items-center justify-center p-4">
         <div className="text-center max-w-md">
@@ -41,6 +42,7 @@ export function Email() {
 
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
+      <ReconnectBanner accounts={accounts} />
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-4">
           <h1 className="text-2xl font-semibold text-[var(--color-text)]">

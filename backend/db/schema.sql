@@ -2244,6 +2244,15 @@ CREATE TABLE IF NOT EXISTS email_accounts (
     last_synced_at INTEGER,
     last_sync_error TEXT,
     sync_enabled INTEGER NOT NULL DEFAULT 1,
+    -- The provider refused the stored credential (a Google test app's refresh
+    -- token dies after 7 days): only the user signing in again fixes it, so
+    -- the scheduler stops retrying. notified_at is claimed once per outage.
+    auth_error TEXT,
+    auth_error_at INTEGER,
+    auth_notified_at INTEGER,
+    connected_at INTEGER,
+    -- Only when the provider said so (refresh_token_expires_in), never guessed.
+    refresh_expires_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     UNIQUE(provider, email_address)
@@ -2273,6 +2282,12 @@ CREATE TABLE IF NOT EXISTS emails (
     job_status TEXT CHECK(job_status IN ('sent','rejection','interview_next_step','other_update')),
     classified_at INTEGER,
     classification_error TEXT,
+    importance TEXT CHECK(importance IN ('high','normal','low')),
+    importance_reason TEXT CHECK(importance_reason IN ('job_next_step','personal','security','deadline')),
+    -- One line by the classifier, from the email's own words.
+    summary TEXT,
+    -- When the agent was shown this email (backend/email/brief.py).
+    briefed_at INTEGER,
     created_at INTEGER NOT NULL,
     UNIQUE(account_id, provider_message_id)
 );
@@ -3189,6 +3204,7 @@ CREATE TABLE IF NOT EXISTS push_devices (
     app_version TEXT,
     enabled INTEGER NOT NULL DEFAULT 1,
     coach INTEGER NOT NULL DEFAULT 0,
+    email INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
     last_sent_at INTEGER,
     created_at INTEGER NOT NULL,

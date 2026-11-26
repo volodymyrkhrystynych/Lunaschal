@@ -1265,6 +1265,48 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Remote first, then nearest."].waitForExistence(timeout: 5))
     }
 
+    // The cached inbox, offline: filters, and a message with its images held back.
+    func testEmailInboxFiltersAndOpensOffline() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-emailFixture")
+        app.launch()
+        openMore(app, "Email")
+        XCTAssertTrue(app.staticTexts["Globex — next steps"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["This week in backend engineering"].exists)
+        XCTAssertFalse(app.staticTexts["Gmail is disconnected"].exists)
+        app.buttons["email-filter-Important"].tap()
+        XCTAssertTrue(app.staticTexts["This week in backend engineering"].waitForNonExistence(timeout: 5))
+        app.staticTexts["Globex — next steps"].tap()
+        XCTAssertTrue(app.staticTexts["Dana Okafor <dana@globex.example.com>"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["email-load-images"].exists)
+        XCTAssertTrue(app.webViews.staticTexts["Tuesday"].waitForExistence(timeout: 10))
+    }
+
+    func testEmailSaysWhenTheConnectionIsLost() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-emailDisconnectedFixture")
+        app.launch()
+        openMore(app, "Email")
+        XCTAssertTrue(app.staticTexts["Gmail is disconnected"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["email-reconnect-gmail"].isHittable)
+    }
+
+    // The agent's messages about mail lead to the email and to the sign-in.
+    func testChatEmailCardsOpenTheEmailAndTheAccounts() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-emailChatFixture")
+        app.launch()
+        selectTab(app, "Chat")
+        let card = app.buttons["email-card-01K7ZZZZZZZZZZZZZZZZZZZZE1"]
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        card.tap()
+        XCTAssertTrue(app.staticTexts["Dana Okafor <dana@globex.example.com>"].waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["Done"].waitForNonExistence(timeout: 5))
+        app.buttons["email-card-reconnect"].tap()
+        XCTAssertTrue(app.navigationBars["Email accounts"].waitForExistence(timeout: 5))
+    }
+
     // The fixture's five postings: strong, possible and an untriaged one that
     // scores well above the line; two stretches below it. On iPad they are a
     // list; on iPhone a deck where right queues, left dismisses and Undo brings

@@ -327,6 +327,33 @@ def _gaming_lines(db, now: int) -> list[str]:
             'but never make the card conditional on it.', '']
 
 
+def format_email_context(now: int | None = None) -> str:
+    """How much important mail the last day brought, and a lost connection.
+
+    Nothing a sender wrote: this prompt is on every turn, before anything has
+    armed the email guard (backend/email/tools.py). The reasons are a closed
+    list and the address is the user's own.
+    """
+    from backend.db.connection import get_db
+    from backend.email.notices import REASONS
+    now = now if now is not None else int(time.time())
+    db = get_db()
+    lines = [f"- {r['email_address']} is disconnected; new mail is not arriving until they sign in again "
+             'in the Email tab.'
+             for r in db.execute('SELECT email_address FROM email_accounts '
+                                 'WHERE sync_enabled=1 AND auth_error_at IS NOT NULL')]
+    counts = {r['importance_reason']: r['n'] for r in db.execute(
+        "SELECT importance_reason, COUNT(*) AS n FROM emails WHERE importance='high' "
+        'AND received_at>=? GROUP BY importance_reason', (now - 86400,))}
+    if counts:
+        by_reason = ', '.join(f'{label}: {counts[key]}' for key, label in REASONS.items() if key in counts)
+        lines.append(f"- {sum(counts.values())} important email(s) in the last day"
+                     f"{f' ({by_reason})' if by_reason else ''}. Use list_emails to see them.")
+    if not lines:
+        return ''
+    return 'Their mail:\n\n' + '\n'.join(lines)
+
+
 def build_chat_system_prompt(now: int | None = None) -> str:
     from backend.memory import format_memory_context
     from backend.places import format_places_context
@@ -347,6 +374,7 @@ def build_chat_system_prompt(now: int | None = None) -> str:
         _coach_learned(),
         format_journal_context(get_recent_journal_entries(now), now),
         format_schedule_context(get_upcoming_schedule(now), now),
+        format_email_context(now),
         format_plate_context(now),
     ]
     parts = [SYSTEM_PROMPT] + [b for b in blocks if b]

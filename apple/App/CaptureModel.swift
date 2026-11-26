@@ -124,6 +124,7 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var jobQueue: [JobDecisionOp] = []
     @Published var jobRefusals: [String] = []
     let jobStore: JobStore
+    let emailStore: EmailStore
     private let jobSyncer: JobSync
     private let calendarOutbox: CalendarOutbox
     private let calendarSyncer: CalendarSyncer
@@ -241,6 +242,7 @@ final class CaptureModel: ObservableObject {
         writingClips = try WritingDictationStore(root: writingRoot.appendingPathComponent("clips", isDirectory: true))
         writingDictationSyncer = WritingDictationSync(clips: writingClips)
         jobStore = try JobStore(root: store.root.appendingPathComponent("jobs", isDirectory: true))
+        emailStore = try EmailStore(root: store.root.appendingPathComponent("email", isDirectory: true))
         jobSyncer = JobSync(store: jobStore)
         calendarOutbox = try CalendarOutbox(root: store.root.appendingPathComponent("calendar-outbox", isDirectory: true))
         calendarSyncer = CalendarSyncer(outbox: calendarOutbox)

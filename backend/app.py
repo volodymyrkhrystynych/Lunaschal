@@ -49,7 +49,10 @@ def _start_listener():
 
 DIST_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'dist'))
 
-_EXEMPT_PATHS = {'/api/health', '/api/auth/status', '/api/auth/login', '/api/auth/logout'}
+_EXEMPT_PATHS = {'/api/health', '/api/auth/status', '/api/auth/login', '/api/auth/logout',
+                 # The OAuth provider redirects a browser here that may hold no session
+                 # (the phone's sign-in sheet). Its single-use state is the guard.
+                 '/api/email/oauth/callback'}
 
 
 def create_app():

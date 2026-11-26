@@ -20,12 +20,13 @@ def _text(value) -> str | None:
 @bp.post('/devices')
 def register():
     body = request.get_json(silent=True) or {}
-    coach = body.get('coach')
+    coach, email = body.get('coach'), body.get('email')
     try:
         notify.register_device(_text(body.get('token')) or '', body.get('environment') or 'production',
                                _text(body.get('platform')) or 'ios', bundle_id=_text(body.get('bundleId')),
                                app_version=_text(body.get('appVersion')),
-                               coach=coach if isinstance(coach, bool) else None)
+                               coach=coach if isinstance(coach, bool) else None,
+                               email=email if isinstance(email, bool) else None)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     # Whether the server can actually send — so the app can say so, rather than

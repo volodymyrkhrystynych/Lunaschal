@@ -202,6 +202,12 @@ def _email_classify(target_id, payload):
     classify_email(target_id)
 
 
+@jobs.handler('email.brief')
+def _email_brief(target_id, payload):
+    from backend.email.brief import run
+    run()
+
+
 @jobs.handler('github_prs.summarize')
 def _github_prs_summarize(target_id, payload):
     from backend.github_prs.sync import summarize

@@ -6,6 +6,7 @@ import { useRecorder } from '../../hooks/useRecorder';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { BriefingContent } from './BriefingContent';
 import { CoachCards } from './CoachCards';
+import { EmailCards } from './EmailCards';
 import { AgentSteps } from './AgentSteps';
 import { DelegateProposals } from './DelegateProposals';
 import { JournalContextPrompts } from './JournalContextPrompts';
@@ -895,7 +896,13 @@ export function ChatPanel() {
                     backend now checkpoints steps into metadata as they happen
                     (backend/delegate/runs.py), not just once the run ends. */}
                 {message.role === 'assistant' && (
-                  <CoachCards metadata={message.metadata} onReply={setInput} />
+                  <>
+                    <CoachCards
+                      metadata={message.metadata}
+                      onReply={setInput}
+                    />
+                    <EmailCards metadata={message.metadata} />
+                  </>
                 )}
                 <AgentSteps
                   steps={steps}

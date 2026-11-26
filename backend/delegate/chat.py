@@ -42,6 +42,8 @@ from backend.lifewiki import tools as life_tools
 from backend.lifewiki.tools import LifeTools
 from backend.goals import tools as goal_tools
 from backend.coach import tools as coach_tools
+from backend.email import notices as email_notices
+from backend.email import tools as email_tools
 from backend.research import agent as tool_loop
 from backend.research import wiki as wiki_tools
 from backend.writing import canon_tools
@@ -68,7 +70,8 @@ _LIFE_WIKI_TOOLS = [t for t in wiki_tools.TOOLS
 _LIFE_WIKI_NAMES = {t['function']['name'] for t in _LIFE_WIKI_TOOLS}
 
 TOOLS = (research_tools.TOOLS + proposal_tools.TOOLS + life_tools.TOOLS
-         + _LIFE_WIKI_TOOLS + goal_tools.TOOLS + coach_tools.TOOLS)
+         + _LIFE_WIKI_TOOLS + goal_tools.TOOLS + coach_tools.TOOLS
+         + email_tools.TOOLS)
 
 DECISION_NOTE = """Right now your only job is to decide which of your tools this \
 message needs, if any — your reply comes afterwards, in a separate turn.
@@ -123,7 +126,7 @@ DECISION_NOTE += ('Save only goals the user asks to track. Check saved goals bef
                   'it includes today and can award immediately, even early in the day. '
                   'Never calculate an award from memory. Uncertain evidence is unresolved, not a missed day. '
                   'Only mark a reward redeemed when the user says they used it.')
-DECISION_NOTE += coach_tools.DECISION_NOTE
+DECISION_NOTE += coach_tools.DECISION_NOTE + email_tools.DECISION_NOTE
 
 # The Writing discussion's decision turn. Same research rule, none of the Chat
 # tab's paragraphs about staging, asking or remembering — it has no confirm
@@ -275,6 +278,13 @@ def _main_dispatch(*, life: LifeTools, life_wiki, checkpoint, deadline):
     dispatch.update({
         tool['function']['name']: proposal_dispatch for tool in proposal_tools.TOOLS
     })
+    # Anything that reaches the web or saves something stops once email has
+    # been read this turn (backend/email/tools.py).
+    mail = email_tools.EmailTools()
+    risky = ({'delegate'} | goal_tools.TOOL_NAMES | coach_tools.TOOL_NAMES
+             | {tool['function']['name'] for tool in proposal_tools.TOOLS}) - {'ask_user'}
+    dispatch.update({name: mail.guard(dispatch[name]) for name in risky})
+    dispatch.update({name: mail for name in email_tools.TOOL_NAMES})
     return dispatch
 
 
@@ -390,6 +400,8 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     # what this turn's message says, not what the transcript summarises.
     latest_user_text = next((m.get('content') for m in reversed(messages)
                              if m.get('role') == 'user'), None)
+    # Every caller's history passes here, before compaction can summarise it.
+    messages = email_notices.neutralize(messages)
     system = _system_prompt(messages, system_prompt)
     messages, rolling_context = compaction.compact_for_prompt(
         _with_saved_todos(messages), conversation_id,
