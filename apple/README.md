@@ -593,7 +593,7 @@ push` are in `tools/push-fixtures/`.
   which only starts the forums' alerts read and answers at once; the phone polls
   `GET …/refresh-alerts/status` for the summary, so leaving the screen or the app no longer times
   it out (`FicAlertRefresh.wait`). Long-pressing a site's fic calls
-  `POST /api/fanfic/<id>/check-updates` (shallow or deep). Both only queue work for the server,
+  `POST /api/fanfic/<id>/check-updates` (shallow, deep or forced). Both only queue work for the server,
   and new chapters arrive by sync; pull to refresh runs one (`CaptureModel.syncNow`). Opening a
   book that is short of chapters fetches only those after the last one on the device
   (`FicResume.key`), once more from the start if that still leaves it short, and the reader
@@ -652,7 +652,16 @@ push` are in `tools/push-fixtures/`.
   in the library. A chapter shows its pictures — the server's copies, saved with the fic
   (`fic-images/`, cleared by "Remove downloaded media") or fetched on first view — and
   the post's colours, fonts, sizes and centring, with colours lightened as needed to stay
-  legible in dark mode (passed in simulator). The reader's bottom-left menu has Text and
+  legible in dark mode (passed in simulator). A post's [SPOILER]s are closed until their
+  title is tapped (nested ones open one level at a time), its [ISPOILER]s are blacked out
+  until their line is tapped, and a quote keeps its "Name said:" (`ChapterText.swift`;
+  passed in simulator). "Re-download all chapters" on the book page, the reader's menu and
+  the library's long press asks the server to re-fetch every chapter in place
+  (`check-updates` with `force`), which is how chapters saved before the server kept
+  spoilers and colours get them. A forum fic whose every chapter has its original post on
+  the server carries a "Forum HTML" checkmark on its book page (all
+  or nothing: one chapter without it means no checkmark); the filter menu has "Forum HTML missing"
+  (passed in simulator). The reader's bottom-left menu has Text and
   Transcribe commentary (a journal capture carrying `ficID`/`chapterID`: typed text
   is posted as `raw_content` and then linked, a recording links in its upload),
   and Continue and Bookmark. User scrolling is logged as reading spans

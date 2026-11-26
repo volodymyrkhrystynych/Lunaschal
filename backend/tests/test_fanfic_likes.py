@@ -179,6 +179,17 @@ def test_recheck_queues_a_deep_check_of_forum_fics_with_a_session(client, forum,
     assert (row['update_pending'], row['deep_pending']) == (1, 1)
 
 
+def test_recheck_keeps_a_queued_forced_redownload(client, forum, monkeypatch):
+    from backend.routes import fanfic as fanfic_routes
+    monkeypatch.setattr(fanfic_routes, '_start_drain_bg', lambda: None)
+    client.put('/api/fanfic/cookies', json={'domain': 'forums.spacebattles.com', 'cookie': 'xf_user=u1'})
+    client.post(f'/api/fanfic/{forum.fic_id}/check-updates', json={'force': True})
+    assert client.post('/api/fanfic/reactions/recheck').get_json()['queued'] == 1
+    row = get_db().execute('SELECT update_pending, deep_pending FROM fics WHERE id=?',
+                           (forum.fic_id,)).fetchone()
+    assert (row['update_pending'], row['deep_pending']) == (1, 2)
+
+
 # --- re-getting a chapter ---
 
 def test_refetch_rewrites_one_chapter_in_place(client, forum):

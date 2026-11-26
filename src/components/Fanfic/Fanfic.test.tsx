@@ -446,12 +446,43 @@ describe('Library update buttons', () => {
 
     fireEvent.click(await screen.findByTitle(/Queue an update check/));
     await waitFor(() =>
-      expect(api.fanfic.checkUpdates).toHaveBeenLastCalledWith('fic1', false)
+      expect(api.fanfic.checkUpdates).toHaveBeenLastCalledWith(
+        'fic1',
+        false,
+        undefined
+      )
     );
 
     fireEvent.click(screen.getByTitle(/Re-read every saved chapter/));
     await waitFor(() =>
-      expect(api.fanfic.checkUpdates).toHaveBeenLastCalledWith('fic1', true)
+      expect(api.fanfic.checkUpdates).toHaveBeenLastCalledWith(
+        'fic1',
+        true,
+        undefined
+      )
+    );
+  });
+
+  it('checks off a fic whose forum HTML is all saved', async () => {
+    const { api } = await import('../../hooks/api');
+    vi.mocked(api.fanfic.list).mockResolvedValueOnce([
+      { ...FIC, hasSource: true },
+    ]);
+    renderFanfic();
+    await screen.findByTitle('Forum HTML saved');
+  });
+
+  it('re-downloads every chapter from All', async () => {
+    const { api } = await import('../../hooks/api');
+    renderFanfic();
+
+    fireEvent.click(await screen.findByTitle(/Re-download every chapter/));
+    await waitFor(() =>
+      expect(api.fanfic.checkUpdates).toHaveBeenLastCalledWith(
+        'fic1',
+        true,
+        true
+      )
     );
   });
 });

@@ -382,6 +382,69 @@ def test_deep_check_leaves_unedited_chapters_untouched(client, fake_net):
     assert remaining == 4
 
 
+def test_import_keeps_each_posts_source_html(client, fake_net):
+    """The post as served, images rewritten but unsanitized, is kept beside
+    the rendered chapter so a later sanitizer change can restyle it locally."""
+    from backend.db.connection import get_db
+    fic_id = _import_fic(client)
+    rows = get_db().execute(
+        'SELECT title, source_html FROM fic_chapters WHERE fic_id=? ORDER BY category, position',
+        (fic_id,)).fetchall()
+    assert rows and all(r['source_html'] for r in rows)
+    first = next(r for r in rows if r['title'] == 'Chapter One')
+    assert 'Tuesday' in first['source_html']
+    assert f'/api/fanfic/{fic_id}/images/' in first['source_html']
+    # never sent to clients
+    ch = _chapter_named(client, fic_id, 'Chapter One')
+    assert 'sourceHtml' not in ch
+
+
+def test_forced_check_rewrites_unedited_chapters(client, fake_net):
+    """"Re-download all chapters": every saved chapter is re-rendered, edited
+    or not — how a chapter stored before a sanitizer change gets restyled."""
+    from backend.db.connection import get_db
+    fic_id = _import_fic(client)
+    db = get_db()
+    ids_before = {r['id'] for r in db.execute(
+        'SELECT id FROM fic_chapters WHERE fic_id=?', (fic_id,))}
+    db.execute("UPDATE fic_chapters SET content_html='SENTINEL', source_html=NULL"
+               ' WHERE fic_id=?', (fic_id,))
+    db.commit()
+
+    resp = client.post(f'/api/fanfic/{fic_id}/check-updates', json={'force': True})
+    assert resp.status_code == 202
+    assert resp.get_json()['force'] is True
+
+    rows = db.execute('SELECT id, content_html, source_html FROM fic_chapters WHERE fic_id=?',
+                      (fic_id,)).fetchall()
+    assert {r['id'] for r in rows} == ids_before
+    assert not any(r['content_html'] == 'SENTINEL' for r in rows)
+    assert all(r['source_html'] for r in rows)
+    fic = client.get(f'/api/fanfic/{fic_id}').get_json()
+    assert fic['chapterCount'] == 4
+    assert fic['deepPending'] is False and fic['forcePending'] is False
+
+
+def test_force_upgrades_a_queued_deep_check_instead_of_cancelling(client, fake_net, monkeypatch):
+    from backend.routes import fanfic as fanfic_routes
+    from backend.db.connection import get_db
+    fic_id = _import_fic(client)
+    monkeypatch.setattr(fanfic_routes, '_start_drain_bg', lambda: None)
+
+    client.post(f'/api/fanfic/{fic_id}/check-updates', json={'deep': True})
+    resp = client.post(f'/api/fanfic/{fic_id}/check-updates', json={'force': True})
+    assert resp.get_json()['queued'] is True
+    row = get_db().execute('SELECT update_pending, deep_pending FROM fics WHERE id=?',
+                           (fic_id,)).fetchone()
+    assert (row['update_pending'], row['deep_pending']) == (1, 2)
+    fic = client.get(f'/api/fanfic/{fic_id}').get_json()
+    assert fic['forcePending'] is True and fic['deepPending'] is True
+
+    # a shallower request over a forced one toggles it off, like a second click
+    resp = client.post(f'/api/fanfic/{fic_id}/check-updates', json={'deep': True})
+    assert resp.get_json()['queued'] is False
+
+
 def _long_fic_pages(post_ids: list[str]) -> dict[str, str]:
     """A single-category thread of `post_ids` chapters, paginated 10 per reader
     page exactly as XenForo does, plus the matching threadmarks index."""

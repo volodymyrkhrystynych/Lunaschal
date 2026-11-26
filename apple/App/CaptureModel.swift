@@ -1928,9 +1928,9 @@ final class CaptureModel: ObservableObject {
         return true
     }
 
-    func checkFicForUpdates(_ book: SyncChange, deep: Bool) async {
+    func checkFicForUpdates(_ book: SyncChange, deep: Bool, force: Bool = false) async {
         guard let api = chatAPI() else { message = "Sign in to update fics on the server."; return }
-        do { message = try await api.checkFicForUpdates(book.id, deep: deep).summary(title: book.title) }
+        do { message = try await api.checkFicForUpdates(book.id, deep: deep, force: force).summary(title: book.title) }
         catch { message = error.localizedDescription }
     }
 

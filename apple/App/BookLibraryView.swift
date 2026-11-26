@@ -127,6 +127,9 @@ struct BookListView: View {
                             Button("Re-read edited chapters", systemImage: "arrow.triangle.2.circlepath") {
                                 Task { await model.checkFicForUpdates(book, deep: true) }
                             }
+                            Button("Re-download all chapters", systemImage: "arrow.down.circle") {
+                                Task { await model.checkFicForUpdates(book, deep: true, force: true) }
+                            }
                         }
                     }
             }
@@ -219,6 +222,8 @@ struct BookListView: View {
                     }
                     .pickerStyle(.menu)
                     Toggle("Unread chapters only", isOn: $filter.unreadOnly)
+                    Toggle("Forum HTML missing", isOn: $filter.missingHTMLOnly)
+                        .accessibilityIdentifier("filter-missing-html")
                     // Inside the Backlog folder this would say nothing new.
                     if folder != FicLibrary.backlogFolder {
                         Toggle("Backlog only", isOn: Binding(
