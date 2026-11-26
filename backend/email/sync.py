@@ -25,7 +25,7 @@ from ulid import ULID
 
 from backend.ai import jobs
 from backend.db.connection import get_db
-from backend.email import gmail_client, imap_client, images, media, outlook_client
+from backend.email import connection, gmail_client, imap_client, images, media, outlook_client
 from backend.email.sanitize import sanitize_email_html
 
 # One sync per account at a time. The scheduler treats an account as due for
@@ -377,8 +377,13 @@ def _sync_account_locked(account_row) -> dict:
             (now, now, account_row['id']),
         )
         db.commit()
+        connection.clear_auth_failure(db, account_row)
         return {'status': 'ok', 'newCount': len(new_ids)}
     except Exception as e:
+        if connection.is_auth_failure(e, provider):
+            connection.record_auth_failure(db, account_row, e)
+        elif connection.is_stale_access_token(e, provider):
+            connection.drop_access_token(db, account_row)
         now = int(time.time())
         db.execute(
             'UPDATE email_accounts SET last_sync_error=?, updated_at=? WHERE id=?',

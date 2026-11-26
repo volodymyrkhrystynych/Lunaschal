@@ -124,6 +124,7 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var jobQueue: [JobDecisionOp] = []
     @Published var jobRefusals: [String] = []
     let jobStore: JobStore
+    let emailStore: EmailStore
     private let jobSyncer: JobSync
     private let calendarOutbox: CalendarOutbox
     private let calendarSyncer: CalendarSyncer
@@ -241,6 +242,7 @@ final class CaptureModel: ObservableObject {
         writingClips = try WritingDictationStore(root: writingRoot.appendingPathComponent("clips", isDirectory: true))
         writingDictationSyncer = WritingDictationSync(clips: writingClips)
         jobStore = try JobStore(root: store.root.appendingPathComponent("jobs", isDirectory: true))
+        emailStore = try EmailStore(root: store.root.appendingPathComponent("email", isDirectory: true))
         jobSyncer = JobSync(store: jobStore)
         calendarOutbox = try CalendarOutbox(root: store.root.appendingPathComponent("calendar-outbox", isDirectory: true))
         calendarSyncer = CalendarSyncer(outbox: calendarOutbox)
@@ -384,8 +386,20 @@ final class CaptureModel: ObservableObject {
         guard healthSyncEnabled, let healthSource,
               force || HealthSync.isDue(healthState.status(), now: Date()) else { return }
         defer { healthStatus = healthState.status() }
+        // Workout routes are a Health type added after many installs turned
+        // Health on, so they need one more question -- asked only with the
+        // app on screen, and only once the trail is on to put them in.
+        if trail.enabled, UIApplication.shared.applicationState == .active, await healthSource.hasUnaskedTypes() {
+            try? await healthSource.requestAuthorization()
+        }
         do {
-            try await healthSyncer.run(source: healthSource, transport: api)
+            // A Watch workout's route joins the location trail while the trail
+            // is on; with it off, or routes not asked about yet, they stay
+            // unread for when it is.
+            let readsRoutes = trail.enabled ? await healthSource.routesAsked() : false
+            try await healthSyncer.run(source: healthSource, transport: api, routes: readsRoutes ? trail.outbox : nil)
+            trail.refreshStatus()
+            uploadTrailIfDue()
             await refreshDaily(using: api)
             await refreshWorkouts(using: api)
             await refreshSleep(using: api)
@@ -1924,9 +1938,9 @@ final class CaptureModel: ObservableObject {
         return true
     }
 
-    func checkFicForUpdates(_ book: SyncChange, deep: Bool) async {
+    func checkFicForUpdates(_ book: SyncChange, deep: Bool, force: Bool = false) async {
         guard let api = chatAPI() else { message = "Sign in to update fics on the server."; return }
-        do { message = try await api.checkFicForUpdates(book.id, deep: deep).summary(title: book.title) }
+        do { message = try await api.checkFicForUpdates(book.id, deep: deep, force: force).summary(title: book.title) }
         catch { message = error.localizedDescription }
     }
 

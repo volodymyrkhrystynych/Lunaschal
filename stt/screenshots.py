@@ -13,6 +13,18 @@ from ulid import ULID
 logger = logging.getLogger(__name__)
 
 
+def _pid_alive(pid):
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True  # running, but another user's
+    except (OSError, OverflowError):
+        return False
+    return True
+
+
 def _live_instance(hypr_dir, prefer=None):
     """Return (signature, wayland socket) of a running Hyprland, or None.
 
@@ -32,7 +44,7 @@ def _live_instance(hypr_dir, prefer=None):
         except OSError:
             continue
         if (len(lines) >= 2 and lines[0].isdigit()
-                and Path(f'/proc/{lines[0]}').exists()
+                and _pid_alive(int(lines[0]))
                 and (instance / '.socket.sock').exists()):
             return instance.name, lines[1]
     return None

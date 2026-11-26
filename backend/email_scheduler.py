@@ -28,7 +28,7 @@ def _accounts_due(db) -> list:
     return db.execute(
         """
         SELECT * FROM email_accounts
-        WHERE sync_enabled=1 AND (refresh_token IS NOT NULL OR imap_password IS NOT NULL)
+        WHERE sync_enabled=1 AND auth_error_at IS NULL AND (refresh_token IS NOT NULL OR imap_password IS NOT NULL)
           AND (last_synced_at IS NULL OR last_synced_at <= ?)
         """,
         (cutoff,),

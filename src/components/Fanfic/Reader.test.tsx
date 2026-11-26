@@ -717,3 +717,79 @@ describe('Reader commentary microphone', () => {
     );
   });
 });
+
+describe('Reader forum styling', () => {
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.scrollTo = vi.fn();
+  });
+  const defaultChapter = vi.mocked(api.fanfic.chapter).getMockImplementation()!;
+  afterEach(() => {
+    vi.mocked(api.fanfic.chapter).mockImplementation(defaultChapter);
+  });
+
+  // What the server stores for a post with a [SPOILER], an [ISPOILER] and a
+  // navy [COLOR] (backend/tests/test_fanfic_forum_styling.py).
+  const STYLED =
+    '<b>Bold opening.</b> <span style="color:#000080">navy voice</span><br>' +
+    '<details><summary>Status Sheet</summary><b>STR:</b> 12</details>' +
+    'The twist was <span class="spoiler">the butler</span>.';
+
+  function serveStyledChapter() {
+    vi.mocked(api.fanfic.chapter).mockImplementation((id: string) =>
+      Promise.resolve({
+        ...CHAPTERS.find(c => c.id === id)!,
+        contentHtml: STYLED,
+        contentText: '',
+        sourceUrl: null,
+        createdAt: '',
+      })
+    );
+  }
+
+  it('keeps a spoiler closed until its title is clicked', async () => {
+    serveStyledChapter();
+    renderReader();
+    const summary = await screen.findByText('Status Sheet');
+    const details = summary.closest('details')!;
+    expect(details.open).toBe(false);
+    fireEvent.click(summary);
+    expect(details.open).toBe(true);
+    expect(details.textContent).toContain('STR: 12');
+  });
+
+  it('reveals an inline spoiler when it is clicked', async () => {
+    serveStyledChapter();
+    renderReader();
+    const hidden = await screen.findByText('the butler');
+    expect(hidden.classList.contains('revealed')).toBe(false);
+    fireEvent.click(hidden);
+    expect(hidden.classList.contains('revealed')).toBe(true);
+  });
+
+  it('keeps open spoilers open when the reader re-renders or another is revealed', async () => {
+    serveStyledChapter();
+    renderReader();
+    await screen.findByText('Status Sheet');
+    const details = () => screen.getByText('Status Sheet').closest('details')!;
+    fireEvent.click(screen.getByText('Status Sheet'));
+    expect(details().open).toBe(true);
+    fireEvent.click(screen.getByText(/Commentary/));
+    expect(details().open).toBe(true);
+    fireEvent.click(screen.getByText('the butler'));
+    expect(details().open).toBe(true);
+    expect(screen.getByText('the butler').classList.contains('revealed')).toBe(
+      true
+    );
+  });
+
+  it('keeps bold and lightens a colour picked for the forum’s white page', async () => {
+    serveStyledChapter();
+    renderReader();
+    const bold = await screen.findByText('Bold opening.');
+    expect(bold.tagName).toBe('B');
+    const navy = screen.getByText('navy voice');
+    expect(navy.getAttribute('style')).toMatch(/^color:#[0-9a-f]{6}$/);
+    expect(navy.getAttribute('style')).not.toBe('color:#000080');
+  });
+});

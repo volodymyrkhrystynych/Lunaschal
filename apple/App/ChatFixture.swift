@@ -10,7 +10,8 @@ enum ChatFixture {
 
     static func ifAsked() -> ChatConversation? {
         #if DEBUG
-        ProcessInfo.processInfo.arguments.contains(argument) ? conversation : nil
+        if ProcessInfo.processInfo.arguments.contains(EmailFixture.chatArgument) { return EmailFixture.conversation }
+        return ProcessInfo.processInfo.arguments.contains(argument) ? conversation : nil
         #else
         nil
         #endif

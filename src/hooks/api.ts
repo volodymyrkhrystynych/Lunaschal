@@ -271,6 +271,9 @@ export interface Fic {
   downloadError: string | null;
   updatePending?: boolean;
   deepPending?: boolean;
+  forcePending?: boolean;
+  /** Every chapter has the forum's original post; null off-forum. */
+  hasSource?: boolean | null;
   lastReadChapterId: string | null;
   lastCheckedAt: string | null;
   rating: number | null;
@@ -2020,7 +2023,11 @@ export interface EmailAccountStatus {
   lastSyncedAt: string | null;
   lastSyncError: string | null;
   syncEnabled: boolean;
+  needsReconnect: boolean;
 }
+
+export type EmailReason =
+  'job_next_step' | 'personal' | 'security' | 'deadline';
 
 export type EmailCategory =
   'job_application' | 'newsletter' | 'notification' | 'personal' | 'other';
@@ -2045,6 +2052,9 @@ export interface EmailMessage {
   receivedAt: string;
   category: EmailCategory | null;
   jobStatus: JobApplicationStatus | null;
+  importance: 'high' | 'normal' | 'low' | null;
+  importanceReason: EmailReason | null;
+  summary: string | null;
   classifiedAt: string | null;
   classificationError: string | null;
 }
@@ -4309,11 +4319,13 @@ export const api = {
     status: (ficId: string) =>
       get<FicDownloadProgress | { done: true }>(`/api/fanfic/${ficId}/status`),
     // `deep` asks for the slow pass that re-reads every saved chapter and
-    // rewrites the ones the author edited since we downloaded them.
-    checkUpdates: (ficId: string, deep = false) =>
-      post<{ id: string; queued: boolean; deep: boolean }>(
+    // rewrites the ones the author edited since we downloaded them; `force`
+    // rewrites every one, edited or not ("Re-download all chapters"), which
+    // is how a chapter saved before colours and spoilers were kept gets them.
+    checkUpdates: (ficId: string, deep = false, force = false) =>
+      post<{ id: string; queued: boolean; deep: boolean; force?: boolean }>(
         `/api/fanfic/${ficId}/check-updates`,
-        deep ? { deep: true } : undefined
+        force ? { deep: true, force: true } : deep ? { deep: true } : undefined
       ),
     refreshAlerts: () =>
       runAlertRefresh(
@@ -5658,6 +5670,7 @@ export const api = {
     list: (
       params: {
         category?: EmailCategory;
+        importance?: 'high';
         jobStatus?: JobApplicationStatus;
         query?: string;
         limit?: number;
@@ -5666,6 +5679,7 @@ export const api = {
     ) => {
       const q = new URLSearchParams();
       if (params.category) q.set('category', params.category);
+      if (params.importance) q.set('importance', params.importance);
       if (params.jobStatus) q.set('jobStatus', params.jobStatus);
       if (params.query) q.set('query', params.query);
       if (params.limit != null) q.set('limit', String(params.limit));

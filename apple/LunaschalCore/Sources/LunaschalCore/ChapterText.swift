@@ -2,7 +2,8 @@ import Foundation
 
 /// A chapter's sanitized HTML (`backend/fanfic/sanitize.py`'s allowlist) as
 /// blocks a native reader can lay out: paragraphs with their italics and bold
-/// kept, headings, quotes, list items, scene breaks and pictures.
+/// kept, headings, quotes, list items, scene breaks, pictures and the
+/// forum's spoilers (`<details>`, from `xenforo.normalize_bbcode_html`).
 ///
 /// The chapter's `contentText` can't be read as written: the server makes it
 /// with BeautifulSoup's `get_text(' ')`, which puts a space around every tag
@@ -21,8 +22,12 @@ public struct ChapterBlock: Equatable, Sendable {
         /// An `<img>` with its `src`: the server's own copy
         /// (`/api/fanfic/<id>/images/<name>`, see `FicImages`) or, when the
         /// server couldn't download it, the original web address. Its runs
-        /// are the alt text.
+        /// are the alt text, marked `.spoiler` (and empty when there is no alt)
+        /// for a picture inside an [ISPOILER].
         case image(String)
+        /// A [SPOILER]'s title (`<summary>`), the button that opens spoiler
+        /// `id`. Its runs are the title.
+        case spoilerToggle(Int)
     }
 
     public var kind: Kind
@@ -31,8 +36,15 @@ public struct ChapterBlock: Equatable, Sendable {
     public var quoteDepth: Int
     /// `text-align`, from [CENTER] and [RIGHT].
     public var alignment: ChapterAlignment = .leading
+    /// The spoilers this block is hidden inside, outermost first: it shows
+    /// only once every one of them is open. A spoiler's own toggle sits in
+    /// its parents, not in itself.
+    public var spoilers: [Int] = []
 
     public var text: String { runs.map(\.text).joined() }
+
+    /// Whether the block shows with these spoilers open.
+    public func isShown(revealed: Set<Int>) -> Bool { spoilers.allSatisfy(revealed.contains) }
 }
 
 public struct ChapterRun: Equatable, Sendable {
@@ -45,6 +57,8 @@ public struct ChapterRun: Equatable, Sendable {
         public static let strikethrough = Style(rawValue: 8)
         public static let code = Style(rawValue: 16)
         public static let small = Style(rawValue: 32)
+        /// An [ISPOILER]: hidden in the line until the reader reveals it.
+        public static let spoiler = Style(rawValue: 64)
     }
 
     public var text: String
@@ -96,6 +110,19 @@ private struct HTMLBlocks {
     private var cellsInRow = 0
     /// The inline styles of the elements we're inside, innermost last.
     private var css: [(tag: String, css: ChapterCSS)] = []
+    /// Open `<details>`, outermost first, each with where its toggle is in
+    /// `blocks`, and the id the next one gets.
+    private var details: [(id: Int, toggle: Int, titled: Bool)] = []
+    private var spoilerStack: [Int] { details.map(\.id) }
+    private var nextSpoiler = 0
+    /// Inside the `<summary>` titling the innermost `<details>`: everything
+    /// up to its end is one line of title, whatever blocks it is written in.
+    private var inSummary = false
+    /// Just inside a `<blockquote>`, before any words: where a forum quote
+    /// has its "Name said:".
+    private var atQuoteStart = false
+    /// Open `<cite>`s, and whether each is such a title.
+    private var cites: [Bool] = []
 
     init(_ html: String) { bytes = Array(html.utf8) }
 
@@ -110,6 +137,7 @@ private struct HTMLBlocks {
             textStart = index
         }
         if textStart < bytes.count { addText(String(decoding: bytes[textStart...], as: UTF8.self)) }
+        endSummary()
         flush()
         return blocks
     }
@@ -160,7 +188,12 @@ private struct HTMLBlocks {
         if closing {
             if let open = css.lastIndex(where: { $0.tag == name }) { css.remove(at: open) }
         } else {
-            css.append((name, attribute("style", in: body).map { ChapterCSS(Self.decode($0)) } ?? ChapterCSS()))
+            var element = attribute("style", in: body).map { ChapterCSS(Self.decode($0)) } ?? ChapterCSS()
+            if name == "span", let classes = attribute("class", in: body),
+               classes.split(separator: " ").contains("spoiler") {
+                element.style.insert(.spoiler)
+            }
+            css.append((name, element))
         }
     }
 
@@ -168,11 +201,42 @@ private struct HTMLBlocks {
     private var currentAlignment: ChapterAlignment { css.last { $0.css.alignment != nil }?.css.alignment ?? .leading }
 
     private mutating func handleElement(_ name: String, closing: Bool, body: String) {
+        // Only a wrapper `<div>` may come between a quote and its title; a
+        // `<p>` or anything else there is the quote's own words.
+        defer { if name != "div" { atQuoteStart = name == "blockquote" && !closing } }
         if Self.styleTags[name] != nil {
+            // A quote's "Name said:" is a line of its own; any other cite is
+            // a title in the middle of a sentence.
+            if name == "cite" {
+                if closing { if cites.popLast() == true { flush() } }
+                else { cites.append(atQuoteStart && quoteDepth > 0) }
+            }
             styles[name] = max(0, styles[name, default: 0] + (closing ? -1 : 1))
             return
         }
         switch name {
+        case "details":
+            endSummary()
+            flush()
+            if closing {
+                if !details.isEmpty { details.removeLast() }
+            } else {
+                // The toggle comes with the spoiler, not with its title, so
+                // one with no title can still be opened.
+                blocks.append(ChapterBlock(kind: .spoilerToggle(nextSpoiler),
+                                           runs: [ChapterRun(text: "Spoiler", style: [], link: nil)],
+                                           quoteDepth: quoteDepth, alignment: currentAlignment, spoilers: spoilerStack))
+                details.append((nextSpoiler, blocks.count - 1, false))
+                nextSpoiler += 1
+            }
+        case "summary":
+            endSummary()
+            flush()
+            // A second one is only a line of the spoiler.
+            if !closing, let last = details.last, !last.titled {
+                details[details.count - 1].titled = true
+                inSummary = true
+            }
         case "br":
             breaks += 1
         case "a":
@@ -180,13 +244,18 @@ private struct HTMLBlocks {
             else { links.append(attribute("href", in: body)) }
         case "hr":
             flush()
-            blocks.append(ChapterBlock(kind: .rule, runs: [], quoteDepth: quoteDepth))
+            if inSummary { return }
+            blocks.append(ChapterBlock(kind: .rule, runs: [], quoteDepth: quoteDepth, spoilers: spoilerStack))
         case "img":
             let alt = attribute("alt", in: body).map(Self.decode)?.trimmingCharacters(in: .whitespaces) ?? ""
             if let src = attribute("src", in: body).map(Self.decode), Self.isPicture(src) {
                 flush()
-                blocks.append(ChapterBlock(kind: .image(src), runs: alt.isEmpty ? [] : [ChapterRun(text: alt, style: [], link: nil)],
-                                           quoteDepth: quoteDepth, alignment: currentAlignment))
+                let hidden = css.contains { $0.css.style.contains(.spoiler) }
+                // A picture in a spoiler's title shows with the title.
+                blocks.append(ChapterBlock(kind: .image(src),
+                                           runs: alt.isEmpty && !hidden ? [] : [ChapterRun(text: alt, style: hidden ? .spoiler : [], link: nil)],
+                                           quoteDepth: quoteDepth, alignment: currentAlignment,
+                                           spoilers: inSummary ? Array(spoilerStack.dropLast()) : spoilerStack))
             } else if !alt.isEmpty {
                 // A smilie inlined as `data:`, or no source at all: its words.
                 append("[\(alt)]", extra: .italic)
@@ -274,6 +343,7 @@ private struct HTMLBlocks {
 
     private mutating func append(_ text: String, extra: ChapterRun.Style) {
         guard !text.isEmpty else { return }
+        atQuoteStart = false
         var style = extra
         for (tag, depth) in styles where depth > 0 { style.insert(Self.styleTags[tag]!) }
         for (_, element) in css { style.formUnion(element.style) }
@@ -297,7 +367,27 @@ private struct HTMLBlocks {
         }
     }
 
+    /// Puts the words of a `<summary>` on its spoiler's toggle; one without
+    /// any leaves it saying "Spoiler".
+    private mutating func endSummary() {
+        guard inSummary else { return }
+        inSummary = false
+        breaks = 0
+        trimTrailingSpace()
+        if let toggle = details.last?.toggle,
+           runs.contains(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            blocks[toggle].runs = runs
+        }
+        runs = []
+        kind = preDepth > 0 ? .preformatted : .paragraph
+    }
+
     private mutating func flush() {
+        if inSummary {
+            breaks = 0
+            if let last = runs.last, !last.text.hasSuffix(" ") { append(" ", extra: []) }
+            return
+        }
         breaks = 0
         trimTrailingSpace()
         while let last = runs.last, last.text.hasSuffix("\n") {
@@ -310,7 +400,7 @@ private struct HTMLBlocks {
             if preDepth == 0 { kind = .paragraph }
         }
         guard runs.contains(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return }
-        var block = ChapterBlock(kind: kind, runs: runs, quoteDepth: quoteDepth, alignment: currentAlignment)
+        var block = ChapterBlock(kind: kind, runs: runs, quoteDepth: quoteDepth, alignment: currentAlignment, spoilers: spoilerStack)
         if block.kind == .paragraph, ChapterText.isSceneBreak(block.text) { block.kind = .sceneBreak }
         blocks.append(block)
     }

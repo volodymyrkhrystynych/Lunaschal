@@ -24,21 +24,28 @@ from backend.place_roles import list_periods, roles_for_day
 log = logging.getLogger(__name__)
 
 # Bump when the drawing changes, so every cached map is redrawn on next view.
-RENDER_VERSION = 2
+RENDER_VERSION = 3
 
 
-_FIX_COLUMNS = 'fix_ts, latitude, longitude, kind, accuracy_m, departed_ts, place_id, activity'
+_FIX_COLUMNS = 'id, fix_ts, latitude, longitude, kind, accuracy_m, departed_ts, place_id, activity'
+
+
+# WorkoutRoute.swift's point ids: wr-<route UUID>-<index>.
+_ROUTE_PREFIX = 'wr-'
 
 
 def to_fix(r) -> trail.Fix:
     return trail.Fix(r['fix_ts'], r['latitude'], r['longitude'], r['kind'], r['accuracy_m'],
-                     r['departed_ts'], r['place_id'], r['activity'])
+                     r['departed_ts'], r['place_id'], r['activity'],
+                     r['id'].rsplit('-', 1)[0] if r['id'].startswith(_ROUTE_PREFIX) else None)
 
 
 def fixes(day: str) -> list[trail.Fix]:
+    """The day's fixes as every reader sees them -- the map, the commutes, the
+    briefing -- with the phone's and a Watch route's tracks already reconciled."""
     rows = get_db().execute(
         f'SELECT {_FIX_COLUMNS} FROM location_points WHERE day_key=? ORDER BY fix_ts', (day,)).fetchall()
-    return [to_fix(r) for r in rows]
+    return trail.prefer_routes([to_fix(r) for r in rows])
 
 
 def _located_entries(start: int | None = None, end: int | None = None):

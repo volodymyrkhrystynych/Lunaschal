@@ -116,6 +116,7 @@ TIMESTAMP_COLS = frozenset({
     'scanned_at', 'queued_at', 'last_run_at', 'triage_at', 'occurred_at',
     'added_at', 'archived_at', 'archive_restored_at', 'ready_at',
     'captured_at', 'last_seen_at', 'digested_at',
+    'briefed_at', 'auth_error_at', 'connected_at', 'refresh_expires_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -346,6 +347,8 @@ def init_db() -> None:
     _ensure_email_body_html(db)
     _ensure_provider_message_id(db)
     _ensure_provider_outlook_imap(db)
+    # After it: the rebuild above copies only the columns it knows.
+    _ensure_email_connection(db)
     _ensure_microsoft_oauth_settings(db)
     _ensure_job_settings(db)
     _ensure_job_triage_columns(db)
@@ -390,6 +393,7 @@ def init_db() -> None:
     _ensure_fic_update_pending(db)
     _ensure_fic_deep_scan_columns(db)
     _ensure_fic_library_dates(db)
+    _ensure_fic_chapter_source_html(db)
     from backend.db.fic_sources_migration import ensure_fic_sources
     ensure_fic_sources(db)
     _ensure_fic_source_dates(db)
@@ -398,6 +402,7 @@ def init_db() -> None:
     _ensure_fic_like_push(db)
     _ensure_site_cookie_user_agent(db)
     _repair_escaped_image_fallbacks(db)
+    _restyle_fic_chapters(db)
     _ensure_paper_archive_requested(db)
     _ensure_paper_content_updated_at(db)
     _ensure_food_location(db)
@@ -895,6 +900,32 @@ def _ensure_fic_library_dates(db: sqlite3.Connection) -> None:
             'UPDATE fic_chapters SET updated_at=COALESCE(edited_at, created_at)'
             ' WHERE updated_at IS NULL'
         )
+    db.commit()
+
+
+def _ensure_fic_chapter_source_html(db: sqlite3.Connection) -> None:
+    chapter_cols = {r[1] for r in db.execute('PRAGMA table_info(fic_chapters)')}
+    if 'source_html' not in chapter_cols:
+        db.execute('ALTER TABLE fic_chapters ADD COLUMN source_html TEXT')
+        db.commit()
+
+
+def _restyle_fic_chapters(db: sqlite3.Connection) -> None:
+    """Re-derive stored forum chapters from their `source_html` once per
+    `CHAPTER_HTML_VERSION`, so a change to how posts are normalized or
+    sanitized reaches the library without a re-download. Chapters saved
+    before `source_html` existed have nothing to re-derive from; only
+    "Re-download all chapters" restyles those."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'fic_chapter_html_version' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN fic_chapter_html_version INTEGER NOT NULL DEFAULT 0')
+        db.commit()
+    from backend.fanfic.restyle import CHAPTER_HTML_VERSION, restyle_chapters
+    row = db.execute('SELECT fic_chapter_html_version FROM settings LIMIT 1').fetchone()
+    if row is not None and row[0] >= CHAPTER_HTML_VERSION:
+        return
+    restyle_chapters(db)
+    db.execute('UPDATE settings SET fic_chapter_html_version=?', (CHAPTER_HTML_VERSION,))
     db.commit()
 
 
@@ -2224,6 +2255,38 @@ def _ensure_provider_outlook_imap(db: sqlite3.Connection) -> None:
         db.execute('PRAGMA foreign_keys=ON')
 
 
+def _ensure_email_connection(db: sqlite3.Connection) -> None:
+    """Connection health, importance, and what the agent has been shown.
+
+    `email_brief_since` is stamped once and is what keeps the existing archive
+    out of the chat. Marking every old row instead would fire `emails_au` for
+    each, rewriting an 800 MB search index at boot.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(email_accounts)')}
+    for name in ('auth_error TEXT', 'auth_error_at INTEGER', 'auth_notified_at INTEGER',
+                 'connected_at INTEGER', 'refresh_expires_at INTEGER'):
+        if name.split()[0] not in cols:
+            db.execute(f'ALTER TABLE email_accounts ADD COLUMN {name}')
+    cols = {r[1] for r in db.execute('PRAGMA table_info(emails)')}
+    for name, ddl in (
+        ('importance', "TEXT CHECK(importance IN ('high','normal','low'))"),
+        ('importance_reason',
+         "TEXT CHECK(importance_reason IN ('job_next_step','personal','security','deadline'))"),
+        ('summary', 'TEXT'),
+        ('briefed_at', 'INTEGER'),
+    ):
+        if name not in cols:
+            db.execute(f'ALTER TABLE emails ADD COLUMN {name} {ddl}')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_emails_importance'
+               ' ON emails(received_at DESC) WHERE importance=\'high\'')
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'email_brief_since' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN email_brief_since INTEGER')
+    db.execute('UPDATE settings SET email_brief_since=? WHERE email_brief_since IS NULL',
+               (int(time.time()),))
+    db.commit()
+
+
 def _ensure_goal_horizons(db: sqlite3.Connection) -> None:
     """Goals grew horizons (overarching / year / quarter / month / week).
 
@@ -2316,6 +2379,7 @@ def _ensure_push_device_columns(db: sqlite3.Connection) -> None:
                       ('app_version', 'TEXT'),
                       ('enabled', 'INTEGER NOT NULL DEFAULT 1'),
                       ('coach', 'INTEGER NOT NULL DEFAULT 0'),
+                      ('email', 'INTEGER NOT NULL DEFAULT 0'),
                       ('last_error', 'TEXT'),
                       ('last_sent_at', 'INTEGER'),
                       ('updated_at', 'INTEGER NOT NULL DEFAULT 0')):

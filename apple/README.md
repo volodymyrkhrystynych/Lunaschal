@@ -203,7 +203,14 @@ what each device can currently do and which work remains device-only.
   and asks for; the section says what is missing (While Using, denied, Precise
   Location off) and links to iOS Settings. Adaptive: visits and
   significant-change monitoring all day, live GPS only while Core Motion says
-  walking, running or cycling (`TrailPolicy`, `LocationTracker`). Points queue
+  walking, running or cycling, and cheaper live updates (~100 m accuracy, a
+  point every 150 m) while it says automotive -- train, bus or car, which a
+  significant-change wake alone left as one point every twenty minutes
+  (`TrailPolicy`, `LocationTracker`). With Health
+  sync on as well, a workout's recorded route -- the Watch's own GPS, phone or
+  no phone -- joins the trail from the last 30 days on (`WorkoutRoute`,
+  `HealthKitSource.routeStream`), thinned like the phone's GPS and keyed by
+  route UUID so a resend upserts. Points queue
   in a JSON-lines outbox and post to `/api/location/points` in batches, on their
   own when enough piles up and inside every sync pass; the server draws a map of
   each day for the web Journal feed (`backend/location/`). Core logic tested in
@@ -448,6 +455,13 @@ push` are in `tools/push-fixtures/`.
   once, the shared queue's locks) are covered by Core tests; the extension
   builds in simulator, but an unsigned build has no App Group, so the widgets
   there only say to open the app. Not yet verified on device.
+- More → Email (a tab on iPad) is the server's mirrored mailbox: filters,
+  search, paging, and messages in a script-free, network-free web view whose
+  images load only when asked, from the server's copies. The last page and the
+  messages opened are kept for offline reading; the mailbox is not replicated.
+  When a provider refuses the sign-in (Google's test apps do after 7 days) a
+  banner and a badge appear, and Reconnect signs in again in a browser sheet.
+  Settings → Email notifications is this phone's own switch.
 - More → Jobs is the desktop Jobs tab's triage feed: the same postings in the
   same order, sortable Best match or Nearest. **On iPhone it is a deck**, one
   posting to the screen, "Worth a look" first: swipe right (or tap Queue) to
@@ -555,7 +569,7 @@ push` are in `tools/push-fixtures/`.
   simulator; the feed's UI test is not yet confirmed (its only run was on an
   overloaded simulator) and nothing here is verified on device.
 - Native Capture / Journal / Chat / Todo / More tabs on iPhone. iPad has
-  Capture, Journal, Chat, Todo, Study, Draw, Library, Jobs, Learning and Settings
+  Capture, Journal, Chat, Todo, Study, Draw, Library, Jobs, Email, Learning and Settings
   as individual tabs when the window is wide. A compact window (Split View,
   Slide Over) gets the iPhone's five tabs, with Study and Draw at the top of More:
   left to iPadOS, the overflow nested every tab inside its own More list and
@@ -586,7 +600,7 @@ push` are in `tools/push-fixtures/`.
   which only starts the forums' alerts read and answers at once; the phone polls
   `GET …/refresh-alerts/status` for the summary, so leaving the screen or the app no longer times
   it out (`FicAlertRefresh.wait`). Long-pressing a site's fic calls
-  `POST /api/fanfic/<id>/check-updates` (shallow or deep). Both only queue work for the server,
+  `POST /api/fanfic/<id>/check-updates` (shallow, deep or forced). Both only queue work for the server,
   and new chapters arrive by sync; pull to refresh runs one (`CaptureModel.syncNow`). Opening a
   book that is short of chapters fetches only those after the last one on the device
   (`FicResume.key`), once more from the start if that still leaves it short, and the reader
@@ -645,7 +659,16 @@ push` are in `tools/push-fixtures/`.
   in the library. A chapter shows its pictures — the server's copies, saved with the fic
   (`fic-images/`, cleared by "Remove downloaded media") or fetched on first view — and
   the post's colours, fonts, sizes and centring, with colours lightened as needed to stay
-  legible in dark mode (passed in simulator). The reader's bottom-left menu has Text and
+  legible in dark mode (passed in simulator). A post's [SPOILER]s are closed until their
+  title is tapped (nested ones open one level at a time), its [ISPOILER]s are blacked out
+  until their line is tapped, and a quote keeps its "Name said:" (`ChapterText.swift`;
+  passed in simulator). "Re-download all chapters" on the book page, the reader's menu and
+  the library's long press asks the server to re-fetch every chapter in place
+  (`check-updates` with `force`), which is how chapters saved before the server kept
+  spoilers and colours get them. A forum fic whose every chapter has its original post on
+  the server carries a "Forum HTML" checkmark in the library and on its book page (all
+  or nothing: one chapter without it means no checkmark); the filter menu has "Forum HTML missing"
+  (passed in simulator). The reader's bottom-left menu has Text and
   Transcribe commentary (a journal capture carrying `ficID`/`chapterID`: typed text
   is posted as `raw_content` and then linked, a recording links in its upload),
   and Continue and Bookmark. User scrolling is logged as reading spans

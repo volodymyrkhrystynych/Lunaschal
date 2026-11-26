@@ -8,12 +8,18 @@ import re
 import nh3
 from bs4 import BeautifulSoup
 
+# `details`/`summary`/`cite` are what `xenforo.normalize_bbcode_html` turns
+# a [SPOILER] and a quote's "Name said:" into.
 _ALLOWED_TAGS = {
-    'a', 'abbr', 'b', 'blockquote', 'br', 'code', 'dd', 'div', 'dl', 'dt',
-    'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'ins', 'li',
+    'a', 'abbr', 'b', 'blockquote', 'br', 'cite', 'code', 'dd', 'details', 'div',
+    'dl', 'dt', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'ins', 'li',
     'ol', 'p', 'pre', 's', 'small', 'span', 'strong', 'sub', 'sup', 'table',
-    'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'u', 'ul',
+    'summary', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'u', 'ul',
 }
+
+# The one class that survives: an [ISPOILER], hidden until tapped. Every
+# other forum class is dropped, so nothing can borrow the app's own styles.
+_ALLOWED_CLASSES = {'span': {'spoiler'}}
 
 # Inline style is how XenForo writes [COLOR], [FONT], [SIZE] and [CENTER],
 # and stories lean on them (a red voice, a monospaced system message). Only
@@ -48,6 +54,7 @@ def sanitize_chapter_html(html: str) -> str:
         html,
         tags=_ALLOWED_TAGS,
         attributes=_ALLOWED_ATTRS,
+        allowed_classes=_ALLOWED_CLASSES,
         clean_content_tags=_CLEAN_CONTENT_TAGS,
         url_schemes={'http', 'https'},
         link_rel='noopener noreferrer',

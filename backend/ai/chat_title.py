@@ -41,7 +41,9 @@ def _transcript(messages: list[dict]) -> str:
 
 def generate_conversation_title(messages: list[dict]) -> str | None:
     """Return a short title for the conversation, or None if unconfigured/empty/failed."""
-    transcript = _transcript(messages)
+    from backend.email.notices import neutralize
+    # The title comes back through search_conversations.
+    transcript = _transcript(neutralize(messages))
     if not transcript.strip():
         return None
     # Keep the tail: the latest exchanges best characterize the day.

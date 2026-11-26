@@ -36,14 +36,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject, UNUs
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         let result = Result {
-            let directory = try FileManager.default.url(for: .applicationSupportDirectory,
+            var directory = try FileManager.default.url(for: .applicationSupportDirectory,
                 in: .userDomainMask, appropriateFor: nil, create: true)
                 .appendingPathComponent("Captures", isDirectory: true)
+            #if DEBUG
+            directory = try JournalFixture.freshRootIfAsked(instead: directory)
+            #endif
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                 attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
             #if DEBUG
             try JournalFixture.seedIfAsked(root: directory)
             try JobsFixture.seedIfAsked(root: directory)
+            try EmailFixture.seedIfAsked(root: directory)
             try LibraryFixture.seedIfAsked(root: directory)
             #endif
             return try CaptureModel(store: CaptureStore(root: directory))
@@ -111,6 +115,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject, UNUs
                                             didReceive response: UNNotificationResponse) async {
         if let id = CodePushPayload.taskID(from: response.notification.request.content.userInfo) {
             await MainActor.run { PushRouter.shared.openTaskID = id }
+        } else if let route = EmailRoute(userInfo: response.notification.request.content.userInfo) {
+            await MainActor.run { PushRouter.shared.emailRoute = route }
         } else {
             await CoachReminders.shared.handle(response)
         }

@@ -34,6 +34,7 @@ final class RootRenderTests: XCTestCase {
         defer { watch.cancel() }
         for index in 0..<50 { owned.chat.input = "typing \(index)" }
         owned.code.notice = "agent event"
+        for index in 0..<50 { owned.email.search = "query \(index)" }
         XCTAssertEqual(published, 0)
     }
 
@@ -54,9 +55,68 @@ final class RootRenderTests: XCTestCase {
         settle()
         XCTAssertEqual(CaptureRoot.bodyEvaluations, before, "a keystroke in Chat re-rendered the root")
 
+        for index in 0..<50 {
+            owned.email.search = "query \(index)"
+            settle(0.01)
+        }
+        settle()
+        XCTAssertEqual(CaptureRoot.bodyEvaluations, before, "a keystroke in Email's search re-rendered the root")
+
         // The control: what the root does show still reaches it.
         capture.message = "Shown in the root's alert"
         settle()
         XCTAssertGreaterThan(CaptureRoot.bodyEvaluations, before)
+    }
+
+    /// The root no longer observes Email, so the badge for a lost mail account
+    /// arrives only through its bridge. An account cached as needing a new
+    /// sign-in has to badge Email (wide iPad) or More (everything else).
+    func testALostMailAccountStillBadgesTheRoot() throws {
+        let capture = try CaptureModel(store: CaptureStore(root: root))
+        try capture.emailStore.saveAccounts([
+            EmailAccount(provider: "gmail", emailAddress: "someone@example.com", connected: false,
+                         needsReconnect: true),
+        ])
+        let owned = UnwatchedModels(capture: capture)
+        XCTAssertTrue(owned.email.needsReconnect)
+        XCTAssertEqual(mailBadge(hosting: CaptureRoot(model: capture, unwatched: owned)), "1")
+    }
+
+    func testAConnectedMailAccountLeavesTheBadgeOff() throws {
+        let capture = try CaptureModel(store: CaptureStore(root: root))
+        try capture.emailStore.saveAccounts([
+            EmailAccount(provider: "gmail", emailAddress: "someone@example.com", connected: true),
+        ])
+        let owned = UnwatchedModels(capture: capture)
+        XCTAssertNil(mailBadge(hosting: CaptureRoot(model: capture, unwatched: owned)))
+    }
+
+    /// The badge on whichever tab carries mail: Email, or More. The window
+    /// needs the app's scene, or SwiftUI never lays the tab bar out.
+    private func mailBadge(hosting view: CaptureRoot) -> String? {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = UIHostingController(rootView: view)
+        window.makeKeyAndVisible()
+        self.window = window
+        settle(1)
+        guard let bar = tabBar(in: window) else {
+            XCTFail("no tab bar under the root")
+            return nil
+        }
+        let items = bar.items ?? []
+        guard let item = items.first(where: { $0.title == "Email" }) ?? items.first(where: { $0.title == "More" }) else {
+            XCTFail("no Email or More tab among \(items.map { $0.title ?? "" })")
+            return nil
+        }
+        return item.badgeValue
+    }
+
+    private func tabBar(in view: UIView) -> UITabBar? {
+        if let bar = view as? UITabBar { return bar }
+        for subview in view.subviews {
+            if let found = tabBar(in: subview) { return found }
+        }
+        return nil
     }
 }

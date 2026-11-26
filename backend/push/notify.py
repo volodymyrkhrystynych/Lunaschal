@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 TOKEN = re.compile(r'[0-9a-fA-F]{32,200}')
 
+_AUDIENCES = {None: '', 'coach': ' AND coach=1', 'email': ' AND email=1'}
+
 _MESSAGES = {
     'answered': ('Answer ready', 'The agent answered “{title}”.'),
     'awaiting_plan': ('Plan ready', 'The agent has a plan for “{title}”. Approve it to start.'),
@@ -43,9 +45,9 @@ _MESSAGES = {
 
 def register_device(token: str, environment: str = 'production', platform: str = 'ios', *,
                     bundle_id: str | None = None, app_version: str | None = None,
-                    coach: bool | None = None) -> None:
+                    coach: bool | None = None, email: bool | None = None) -> None:
     """Upsert a phone. Registering again re-enables a row Apple called dead;
-    `coach=None` means this caller has no opinion about reminders."""
+    `coach=None` (or `email=None`) means this caller has no opinion about that switch."""
     token = (token or '').strip()
     if not TOKEN.fullmatch(token):
         raise ValueError('That is not an APNs device token')
@@ -54,14 +56,16 @@ def register_device(token: str, environment: str = 'production', platform: str =
     now = int(time.time())
     db = get_db()
     db.execute(
-        'INSERT INTO push_devices (id, token, environment, platform, bundle_id, app_version, coach, '
-        'created_at, last_seen_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(token) DO UPDATE SET '
+        'INSERT INTO push_devices (id, token, environment, platform, bundle_id, app_version, coach, email, '
+        'created_at, last_seen_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(token) DO UPDATE SET '
         'environment=excluded.environment, platform=excluded.platform, '
         'bundle_id=COALESCE(excluded.bundle_id, bundle_id), '
         'app_version=COALESCE(excluded.app_version, app_version), coach=COALESCE(?, coach), '
+        'email=COALESCE(?, email), '
         'enabled=1, last_error=NULL, last_seen_at=excluded.last_seen_at, updated_at=excluded.updated_at',
         (str(ULID()), token.lower(), environment, platform, bundle_id, app_version, int(bool(coach)),
-         now, now, now, None if coach is None else int(coach)),
+         int(bool(email)), now, now, now, None if coach is None else int(coach),
+         None if email is None else int(email)),
     )
     db.commit()
 
@@ -86,9 +90,10 @@ def message_for(task: dict, status: str) -> tuple[str, str] | None:
     )
 
 
-def send(message: dict, *, collapse_id: str | None = None, coach_only: bool = False,
+def send(message: dict, *, collapse_id: str | None = None, audience: str | None = None,
          now: int | None = None, client=None) -> dict:
-    """Send one payload to every enabled device. A token Apple says is dead
+    """Send one payload to every enabled device, or to those whose `audience`
+    switch is on. A token Apple says is dead
     disables its row, and the error stays on it for Settings to show. Returns
     counts and errors; never raises for a refused push."""
     now = int(now if now is not None else time.time())
@@ -97,7 +102,7 @@ def send(message: dict, *, collapse_id: str | None = None, coach_only: bool = Fa
         return {'pushed': 0, 'errors': [], 'configured': False}
     db = get_db()
     pushed, errors = 0, []
-    query = 'SELECT * FROM push_devices WHERE enabled=1' + (' AND coach=1' if coach_only else '')
+    query = 'SELECT * FROM push_devices WHERE enabled=1' + _AUDIENCES[audience]
     for device in db.execute(query).fetchall():
         result = client.send(device['token'], device['environment'], message, collapse_id=collapse_id)
         if result.ok:

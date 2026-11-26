@@ -248,6 +248,7 @@ private struct MessageRow: View {
                     if let review = DayReview.parse(metadata: message.metadata) {
                         ReviewCard(review: review) { chat.input = review.explainPrompt }
                     }
+                    if let email = EmailNotice.parse(metadata: message.metadata) { EmailCard(notice: email) }
                     if let coach = CoachMessage.parse(metadata: message.metadata) {
                         CoachCard(message: coach) { chat.input = $0 }
                     }
