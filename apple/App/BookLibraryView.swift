@@ -365,17 +365,6 @@ struct BookRow: View {
                 Text("Updated \(updated.formatted(.relative(presentation: .named)))")
                     .font(.caption).foregroundStyle(.tint)
             }
-            if FicLibrary.hasForumHTML(book: book) == true {
-                // Not a Label: a list gives its icon a column and indents the divider.
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.seal.fill")
-                    Text("Forum HTML")
-                }
-                .font(.caption).foregroundStyle(.green)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Forum HTML saved")
-                .accessibilityIdentifier("book-forum-html")
-            }
             Text("\(Int(book.data?["chapterCount"]?.number ?? 0)) chapters · \(Int(book.data?["wordCount"]?.number ?? 0)) words")
                 .font(.caption).foregroundStyle(.secondary)
             organized

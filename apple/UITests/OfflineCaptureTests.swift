@@ -2364,10 +2364,6 @@ final class OfflineCaptureTests: XCTestCase {
         app.launch()
         openMore(app, "Library")
         XCTAssertTrue(app.staticTexts["The Long Way Round"].waitForExistence(timeout: 10))
-        let checks = app.descendants(matching: .any).matching(
-            NSPredicate(format: "label CONTAINS %@", "Forum HTML saved"))
-        XCTAssertTrue(checks.firstMatch.waitForExistence(timeout: 5))
-        attach(app, "library checkmark")
         app.staticTexts["The Long Way Round"].tap()
         let chapters = app.buttons["Chapters"]
         XCTAssertTrue(chapters.waitForExistence(timeout: 10))
