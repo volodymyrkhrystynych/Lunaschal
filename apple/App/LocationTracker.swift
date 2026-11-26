@@ -6,10 +6,12 @@ import LunaschalCore
 /// Records where the phone goes, all day, for the Journal's daily map
 /// (backend/location/). Off until turned on in Settings, and needs "Always".
 ///
-/// Two modes, chosen by `TrailPolicy` from Core Motion (see LocationTrail.swift):
+/// Three modes, chosen by `TrailPolicy` from Core Motion (see LocationTrail.swift):
 /// visits + significant-change monitoring all the time, which costs almost
-/// nothing and relaunches the app after it was killed; and live GPS only while
-/// walking, running or cycling. Each relaunch lands in `init`, which is why
+/// nothing and relaunches the app after it was killed; live GPS while walking,
+/// running or cycling; and cheaper live updates (about 100 m, a point every
+/// 150 m) while in a vehicle, since significant-change alone left a train ride
+/// as one point every twenty minutes. Each relaunch lands in `init`, which is why
 /// this is built during app launch (CaptureModel's init) and restarts
 /// monitoring there: iOS delivers the event to whichever manager has a
 /// delegate by the time launch finishes.
@@ -46,6 +48,8 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     private var filter = TrailFilter()
     private var motionSamples: [TrailPolicy.Motion] = []
     private var monitoring = false
+    /// When iOS last auto-paused a ride; see `TrailPolicy.next`.
+    private var pausedAt: Date?
     private var placeMonitor: CLMonitor?
     private var placeEvents: Task<Void, Never>?
     /// What is being watched, and the stays still open, on disk: an exit may
@@ -67,11 +71,9 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         reducedAccuracy = manager.accuracyAuthorization == .reducedAccuracy
         super.init()
         manager.delegate = self
-        manager.activityType = .fitness
-        manager.desiredAccuracy = kCLLocationAccuracyBest
-        manager.distanceFilter = TrailFilter.minStep
-        // iOS stops the GPS on its own when a walk stops moving, and says so
-        // through didPauseLocationUpdates -- the safety net under the policy.
+        configure(for: .fine)
+        // iOS stops the GPS on its own when a walk or a ride stops moving, and
+        // says so through didPauseLocationUpdates -- the safety net under the policy.
         manager.pausesLocationUpdatesAutomatically = true
         manager.showsBackgroundLocationIndicator = false
         startIfAllowed()
@@ -129,6 +131,7 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         manager.stopMonitoringSignificantLocationChanges()
         manager.stopUpdatingLocation()
         motion.stopActivityUpdates()
+        pausedAt = nil
         placeEvents?.cancel()
         placeEvents = nil
         if let monitor = placeMonitor {
@@ -225,10 +228,31 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     private func reconsider(speed: Double?) {
         guard monitoring else { return }
-        let next = TrailPolicy.next(current: mode, motion: motionSamples, speed: speed, now: Date())
+        let next = TrailPolicy.next(current: mode, motion: motionSamples, speed: speed, pausedAt: pausedAt, now: Date())
         guard next != mode else { return }
         mode = next
-        if next == .fine { manager.startUpdatingLocation() } else { manager.stopUpdatingLocation() }
+        if next == .coarse {
+            manager.stopUpdatingLocation()
+        } else {
+            configure(for: next)
+            manager.startUpdatingLocation()
+        }
+    }
+
+    /// How hard to look in each live mode. The activity type is also what iOS
+    /// reads to decide when to auto-pause: `.fitness` pauses quickly once a
+    /// walk stops, `.otherNavigation` sits out a station stop.
+    private func configure(for mode: TrailPolicy.Mode) {
+        switch mode {
+        case .fine, .coarse:
+            manager.activityType = .fitness
+            manager.desiredAccuracy = kCLLocationAccuracyBest
+            manager.distanceFilter = TrailFilter.minStep
+        case .transit:
+            manager.activityType = .otherNavigation
+            manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+            manager.distanceFilter = TrailFilter.transitStep
+        }
     }
 
     private func record(_ points: [TrailPoint]) {
@@ -253,17 +277,20 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         Task { @MainActor in
-            let kind: TrailPoint.Kind = mode == .fine ? .fine : .coarse
             let activity = currentActivity
             record(locations.map { loc in
                 TrailPoint(id: ULID.make(now: loc.timestamp), ts: loc.timestamp.timeIntervalSince1970,
                            latitude: loc.coordinate.latitude, longitude: loc.coordinate.longitude,
                            accuracy: loc.horizontalAccuracy,
                            altitude: loc.verticalAccuracy >= 0 ? loc.altitude : nil,
-                           speed: loc.speed >= 0 ? loc.speed : nil, kind: kind, activity: activity)
+                           speed: loc.speed >= 0 ? loc.speed : nil,
+                           kind: TrailFilter.kind(in: mode, accuracy: loc.horizontalAccuracy), activity: activity)
             })
-            // A coarse wake is the moment to notice a walk has begun.
-            if kind == .coarse {
+            // A coarse wake is the moment to notice a walk or a ride has begun.
+            // It also means the phone has moved a few hundred metres, which
+            // ends a ride's auto-pause: the train is moving again.
+            if mode == .coarse {
+                pausedAt = nil
                 askMotionHistory()
                 reconsider(speed: locations.last.flatMap { $0.speed >= 0 ? $0.speed : nil })
             }
@@ -286,10 +313,18 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
 
     nonisolated func locationManagerDidPauseLocationUpdates(_ manager: CLLocationManager) {
         Task { @MainActor in
-            // iOS saw no movement. Recorded as a stationary reading so the
-            // policy doesn't switch straight back on the strength of a walking
-            // sample Core Motion hasn't superseded yet; a new walk is a new one.
-            motionSamples.append(.init(.stationary, at: Date()))
+            // iOS saw no movement. After a walk, that is recorded as a
+            // stationary reading so the policy doesn't switch straight back on
+            // the strength of a walking sample Core Motion hasn't superseded
+            // yet; a new walk is a new one. After a ride it is only a pause:
+            // a train held at a platform is still on the train, and a
+            // stationary reading would outlast it and keep the rest of the ride
+            // coarse. The next significant-change wake lifts it.
+            if mode == .transit {
+                pausedAt = Date()
+            } else {
+                motionSamples.append(.init(.stationary, at: Date()))
+            }
             mode = .coarse
             manager.stopUpdatingLocation()
         }

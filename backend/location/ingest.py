@@ -22,7 +22,7 @@ from backend.db.connection import get_db
 
 MAX_POINTS = 5000
 MAX_REPORTED_REJECTIONS = 50
-KINDS = ('fine', 'coarse', 'visit', 'region')
+KINDS = ('fine', 'transit', 'coarse', 'visit', 'region')
 # Core Motion's activity when the fix was taken (LocationTrail.swift's
 # TrailPolicy.Activity). Optional; anything else is dropped, not rejected.
 ACTIVITIES = ('stationary', 'walking', 'running', 'cycling', 'automotive')
