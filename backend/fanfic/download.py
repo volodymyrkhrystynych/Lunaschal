@@ -14,7 +14,8 @@ from ulid import ULID
 
 from backend.db.connection import get_db
 from backend.fanfic import personal_tags, source_lists, storage, xenforo
-from backend.fanfic.sanitize import count_words, html_to_text, sanitize_chapter_html
+from backend.fanfic.restyle import render_forum_post
+from backend.fanfic.sanitize import count_words, html_to_text
 
 # Fallback UA for a domain with no stored cookie yet (or one saved before UA
 # capture existed — see _extract_user_agent in routes/fanfic.py). Once a
@@ -701,26 +702,29 @@ def download_images(fic_id: str, sources: list[xenforo.ImageSource]) -> dict[str
     return mapping
 
 
-def process_post_html(fic_id: str, content_html: str, base_url: str) -> tuple[str, str, str | None]:
+def process_post_html(fic_id: str, content_html: str,
+                      base_url: str) -> tuple[str, str, str | None, str]:
     """Download images, rewrite srcs, sanitize. Returns (clean_html, text,
-    first local image filename or None)."""
+    first local image filename or None, source_html) — the last is the post
+    with its images rewritten but not yet sanitized, stored so a later
+    sanitizer change can restyle the chapter without a re-download."""
     sources = xenforo.extract_image_sources(content_html, base_url)
     mapping = download_images(fic_id, sources)
     html = xenforo.rewrite_image_srcs(content_html, base_url, mapping)
-    clean = sanitize_chapter_html(html)
+    clean = render_forum_post(html)
     first_image = None
     for source in sources:
         if source.url in mapping:
             first_image = mapping[source.url].rsplit('/', 1)[-1]
             break
-    return clean, html_to_text(clean), first_image
+    return clean, html_to_text(clean), first_image, html
 
 
 # --- import / update jobs ---
 
 def _insert_chapter(db, fic_id: str, category: str, position: int,
                     post: xenforo.ReaderPost, source_url: str,
-                    clean_html: str, text: str) -> str | None:
+                    clean_html: str, text: str, source_html: str | None = None) -> str | None:
     """Insert a chapter, or return None when this post is already stored."""
     from ulid import ULID
     chapter_id = str(ULID())
@@ -728,10 +732,11 @@ def _insert_chapter(db, fic_id: str, category: str, position: int,
     cur = db.execute(
         'INSERT OR IGNORE INTO fic_chapters'
         '(id, fic_id, position, title, category, content_html, content_text,'
-        ' source_url, source_post_id, word_count, posted_at, edited_at, created_at, updated_at)'
-        ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        ' source_html, source_url, source_post_id, word_count, posted_at, edited_at,'
+        ' created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         (chapter_id, fic_id, position, post.threadmark_title or f'Chapter {position}',
-         category, clean_html, text, source_url, post.post_id,
+         category, clean_html, text, source_html, source_url, post.post_id,
          count_words(text), post.posted_at, post.edited_at, now, now),
     )
     return chapter_id if cur.rowcount > 0 else None
@@ -754,7 +759,7 @@ def _chapter_changed(stored, post: xenforo.ReaderPost) -> bool:
 
 
 def _update_chapter(db, chapter_id: str, post: xenforo.ReaderPost,
-                    clean_html: str, text: str) -> None:
+                    clean_html: str, text: str, source_html: str | None = None) -> None:
     """Rewrite a saved chapter in place after the author edited it.
 
     `position` is untouched on purpose — reading order and the fic's
@@ -762,9 +767,9 @@ def _update_chapter(db, chapter_id: str, post: xenforo.ReaderPost,
     fic_chapters_fts _au trigger re-indexes content_text for free."""
     db.execute(
         "UPDATE fic_chapters SET title=COALESCE(NULLIF(?, ''), title),"
-        ' content_html=?, content_text=?, word_count=?,'
+        ' content_html=?, content_text=?, source_html=?, word_count=?,'
         ' posted_at=COALESCE(?, posted_at), edited_at=?, updated_at=? WHERE id=?',
-        (post.threadmark_title or '', clean_html, text, count_words(text),
+        (post.threadmark_title or '', clean_html, text, source_html, count_words(text),
          post.posted_at, post.edited_at, int(time.time()), chapter_id),
     )
 
@@ -849,31 +854,32 @@ def _stored_entry(post: xenforo.ReaderPost, chapter_id: str | None) -> dict:
 def _walk_category(db, fic_id: str, ref: xenforo.ThreadRef,
                    cat: xenforo.ThreadmarkCategory, start_position: int,
                    start_page: int = 1, stored: dict[str, dict] | None = None,
-                   update_existing: bool = False) -> WalkResult:
+                   update_existing: bool = False, force: bool = False) -> WalkResult:
     """Download one threadmark category's chapters. Tries the reader view
     (~10 chapters per request); when the reader is unavailable (QQ forbids
     it) falls back to harvesting posts from the thread pages themselves.
 
     `stored` maps an already-saved post id to its comparable fields; with
     `update_existing` those posts are re-checked for edits instead of being
-    skipped outright."""
+    skipped outright; with `force` as well, every one of them is rewritten
+    whether it changed or not."""
     stored = stored if stored is not None else {}
     result = _walk_category_reader(
-        db, fic_id, ref, cat, start_position, start_page, stored, update_existing)
+        db, fic_id, ref, cat, start_position, start_page, stored, update_existing, force)
     # Fall back only when the reader gave us nothing at all — a walk that saw
     # posts but changed none is the normal up-to-date outcome, and retrying it
     # through the thread pages would re-fetch the whole threadmarks index for
     # no reason on every check.
     if not result.saw_posts and not _cancelled(fic_id):
         result = _walk_category_via_thread(
-            db, fic_id, ref, cat, start_position, stored, update_existing)
+            db, fic_id, ref, cat, start_position, stored, update_existing, force)
     return result
 
 
 def _walk_category_reader(db, fic_id: str, ref: xenforo.ThreadRef,
                           cat: xenforo.ThreadmarkCategory, start_position: int,
                           start_page: int, stored: dict[str, dict],
-                          update_existing: bool) -> WalkResult:
+                          update_existing: bool, force: bool = False) -> WalkResult:
     """Page through one threadmark category's reader, inserting new chapters
     and rewriting edited ones. Committed per reader page."""
     position = start_position
@@ -906,18 +912,18 @@ def _walk_category_reader(db, fic_id: str, ref: xenforo.ThreadRef,
         for post in reader.posts:
             existing = stored.get(post.post_id)
             if existing is not None:
-                if not update_existing or not _chapter_changed(existing, post):
+                if not update_existing or not (force or _chapter_changed(existing, post)):
                     continue
-                clean, text, _ = process_post_html(fic_id, post.content_html, str(resp.url))
-                _update_chapter(db, existing['id'], post, clean, text)
+                clean, text, _, source = process_post_html(fic_id, post.content_html, str(resp.url))
+                _update_chapter(db, existing['id'], post, clean, text, source)
                 stored[post.post_id] = _stored_entry(post, existing['id'])
                 updated += 1
                 continue
-            clean, text, _ = process_post_html(fic_id, post.content_html, str(resp.url))
+            clean, text, _, source = process_post_html(fic_id, post.content_html, str(resp.url))
             position += 1
             source_url = f'{ref.thread_url}post-{post.post_id}'
             chapter_id = _insert_chapter(
-                db, fic_id, cat.name, position, post, source_url, clean, text)
+                db, fic_id, cat.name, position, post, source_url, clean, text, source)
             if chapter_id:
                 inserted += 1
                 stored[post.post_id] = _stored_entry(post, chapter_id)
@@ -958,7 +964,7 @@ def _collect_threadmark_items(fic_id: str, ref: xenforo.ThreadRef,
 def _walk_category_via_thread(db, fic_id: str, ref: xenforo.ThreadRef,
                               cat: xenforo.ThreadmarkCategory, start_position: int,
                               stored: dict[str, dict],
-                              update_existing: bool) -> WalkResult:
+                              update_existing: bool, force: bool = False) -> WalkResult:
     """Reader-less fallback: list the category's chapters from the
     threadmarks index, then walk the thread pages that contain them. Each
     post URL redirects to its thread page, whose parsed posts are cached so
@@ -1007,22 +1013,22 @@ def _walk_category_via_thread(db, fic_id: str, ref: xenforo.ThreadRef,
         existing = stored.get(item.post_id)
         if existing is not None:
             _record_reaction(db, fic_id, existing['id'], post, harvested_logged_in[item.post_id])
-            if not update_existing or not _chapter_changed(existing, post):
+            if not update_existing or not (force or _chapter_changed(existing, post)):
                 db.commit()
                 continue
-            clean, text, _ = process_post_html(
+            clean, text, _, source = process_post_html(
                 fic_id, post.content_html, harvested_meta[item.post_id])
-            _update_chapter(db, existing['id'], post, clean, text)
+            _update_chapter(db, existing['id'], post, clean, text, source)
             stored[item.post_id] = _stored_entry(post, existing['id'])
             updated += 1
             db.commit()
             continue
 
-        clean, text, _ = process_post_html(fic_id, post.content_html, harvested_meta[item.post_id])
+        clean, text, _, source = process_post_html(fic_id, post.content_html, harvested_meta[item.post_id])
         position += 1
         source_url = f'{ref.thread_url}post-{post.post_id}'
         chapter_id = _insert_chapter(
-            db, fic_id, cat.name, position, post, source_url, clean, text)
+            db, fic_id, cat.name, position, post, source_url, clean, text, source)
         if chapter_id:
             inserted += 1
             stored[post.post_id] = _stored_entry(post, chapter_id)
@@ -1133,7 +1139,7 @@ def _first_missing_page(fic_id: str, ref: xenforo.ThreadRef,
     return None
 
 
-def run_check_updates(fic_id: str, deep: bool = False) -> None:
+def run_check_updates(fic_id: str, deep: bool = False, force: bool = False) -> None:
     """Check one fic against the site.
 
     A cheap check looks for chapters we don't have. A deep check re-reads
@@ -1143,7 +1149,12 @@ def run_check_updates(fic_id: str, deep: bool = False) -> None:
 
     Deep only ever runs when explicitly asked for. Authors revising published
     chapters is rare enough that paying a full re-walk on a timer would cost
-    far more requests than it recovers."""
+    far more requests than it recovers.
+
+    `force` is a deep check that rewrites every saved chapter, edited or not
+    ("Re-download all chapters"): how a chapter stored before a sanitizer
+    change, with no `source_html` to restyle from, gets re-rendered."""
+    deep = deep or force
     # Only commit this boundary on success. Completion time would swallow an
     # alert arriving after the index was fetched, during a long download.
     checked_at = int(time.time())
@@ -1203,7 +1214,7 @@ def run_check_updates(fic_id: str, deep: bool = False) -> None:
 
             result = _walk_category(
                 db, fic_id, ref, cat, start_position=maxpos,
-                start_page=start_page, stored=stored, update_existing=deep)
+                start_page=start_page, stored=stored, update_existing=deep, force=force)
             if author is None and result.first_author:
                 author = result.first_author
             if _cancelled(fic_id):
@@ -1277,6 +1288,7 @@ def run_drain_pending() -> None:
             return
         fic_id = row['id']
         deep = bool(row['deep_pending'])
+        force = row['deep_pending'] == 2
         db.execute(
             'UPDATE fics SET update_pending=0,'
             " download_status='downloading' WHERE id=?",
@@ -1284,7 +1296,7 @@ def run_drain_pending() -> None:
         db.commit()
         start_progress(fic_id, 'updating')
         try:
-            run_check_updates(fic_id, deep=deep)
+            run_check_updates(fic_id, deep=deep, force=force)
         except Exception as e:
             # run_check_updates handles its own errors; this guards the queue
             # against anything that escapes so one bad fic can't stop the rest.
@@ -1330,12 +1342,12 @@ def _repair_remote_images(db, fic_id: str, ref: xenforo.ThreadRef) -> int:
         post = harvested.get(post_id)
         if post is None:
             continue
-        clean, text, _ = process_post_html(fic_id, post.content_html, harvested_meta[post_id])
+        clean, text, _, source = process_post_html(fic_id, post.content_html, harvested_meta[post_id])
         if len(_REMOTE_IMG.findall(clean)) < len(_REMOTE_IMG.findall(row['content_html'])):
             db.execute(
-                'UPDATE fic_chapters SET content_html=?, content_text=?, word_count=?, updated_at=?'
-                ' WHERE id=?',
-                (clean, text, count_words(text), int(time.time()), row['id']))
+                'UPDATE fic_chapters SET content_html=?, content_text=?, source_html=?,'
+                ' word_count=?, updated_at=? WHERE id=?',
+                (clean, text, source, count_words(text), int(time.time()), row['id']))
             db.commit()
             repaired += 1
     return repaired

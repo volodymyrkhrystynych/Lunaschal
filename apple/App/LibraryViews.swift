@@ -337,9 +337,19 @@ struct BookView: View {
                         .accessibilityIdentifier("fic-check-updates")
                     Button("Re-read edited chapters", systemImage: "arrow.triangle.2.circlepath") { askForUpdate(deep: true) }
                         .accessibilityIdentifier("fic-reread-chapters")
+                    Button("Re-download all chapters", systemImage: "arrow.down.circle") { askForUpdate(deep: true, force: true) }
+                        .accessibilityIdentifier("fic-redownload-chapters")
+                    if let saved = FicLibrary.hasForumHTML(book: shown) {
+                        Label(saved ? "Forum HTML saved" : "Forum HTML not saved", systemImage: saved ? "checkmark.seal.fill" : "seal")
+                            .foregroundStyle(saved ? Color.green : Color.secondary)
+                            .accessibilityIdentifier("fic-forum-html")
+                    }
                 } footer: {
                     if askingForUpdate { ProgressView() }
-                    else { Text("The server fetches them from the site; they arrive with the next sync.") }
+                    else {
+                        Text("The server fetches them from the site; they arrive with the next sync. "
+                             + "Re-downloading every chapter brings back colours and spoilers on chapters saved before the app kept them.")
+                    }
                 }
                 .disabled(askingForUpdate)
             }
@@ -417,10 +427,10 @@ struct BookView: View {
         }
     }
 
-    private func askForUpdate(deep: Bool) {
+    private func askForUpdate(deep: Bool, force: Bool = false) {
         askingForUpdate = true
         Task {
-            await model.checkFicForUpdates(book, deep: deep)
+            await model.checkFicForUpdates(book, deep: deep, force: force)
             askingForUpdate = false
         }
     }

@@ -438,7 +438,7 @@ CREATE TABLE IF NOT EXISTS location_points (
     accuracy_m REAL,
     altitude_m REAL,
     speed_mps REAL,
-    kind TEXT NOT NULL,                   -- 'fine' | 'coarse' | 'visit'
+    kind TEXT NOT NULL,                   -- 'fine' | 'transit' | 'coarse' | 'visit' | 'region'
     departed_ts REAL,                     -- a visit's departure; NULL while still there
     received_at INTEGER NOT NULL
 );
@@ -1252,6 +1252,10 @@ CREATE TABLE IF NOT EXISTS fic_chapters (
     category TEXT NOT NULL DEFAULT 'threadmarks',
     content_html TEXT NOT NULL,
     content_text TEXT NOT NULL,
+    -- The forum post as served (images already rewritten), before
+    -- normalizing and sanitizing; NULL for uploads. Lets a sanitizer change
+    -- reach stored chapters without a re-download (fanfic.restyle).
+    source_html TEXT,
     source_url TEXT,
     source_post_id TEXT,
     word_count INTEGER NOT NULL DEFAULT 0,

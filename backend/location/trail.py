@@ -1,19 +1,25 @@
 """What a day's raw fixes mean as a drawing: pure, DB-free, model-free.
 
-The phone records in two modes (apple/LunaschalCore's LocationTrail.swift):
-**fine** -- live GPS while walking, running or cycling -- and **coarse** -- iOS
-visits and significant-change wakes the rest of the time. So a day's trail is a
-few dense, trustworthy stretches joined by sparse points hundreds of metres
-apart, and drawing it honestly means telling the two apart: a fine stretch is
-a route, the line between two coarse points is only "got from here to there".
+The phone records in three modes (apple/LunaschalCore's LocationTrail.swift):
+**fine** -- live GPS while walking, running or cycling -- **transit** -- live
+updates at about 100 m, a point every 150 m, while in a train, bus or car --
+and **coarse** -- iOS visits and significant-change wakes the rest of the time.
+So a day's trail is a few dense, trustworthy stretches joined by sparse points
+hundreds of metres apart, and drawing it honestly means telling the two apart:
+a fine or transit stretch is a route, the line between two coarse points is
+only "got from here to there".
 """
 import math
-from dataclasses import dataclass
+from bisect import bisect_left
+from dataclasses import dataclass, replace
 
 # Past these, a fix says less about where you were than the map's own detail.
-MAX_ACCURACY_M = {'fine': 75.0, 'coarse': 1000.0, 'visit': 1000.0, 'region': 5000.0}
-# Two fine fixes further apart in time than this weren't one continuous walk:
-# the phone went coarse, or lost the sky, in between.
+MAX_ACCURACY_M = {'fine': 75.0, 'transit': 200.0, 'coarse': 1000.0, 'visit': 1000.0, 'region': 5000.0}
+# The live kinds: consecutive fixes of these are a recorded route. Mixed, too --
+# stepping off a train and walking on is one journey.
+TRACK_KINDS = ('fine', 'transit')
+# Two live fixes further apart in time than this weren't one continuous trip:
+# the phone went coarse, lost the sky, or went underground in between.
 TRACK_GAP_S = 5 * 60
 # Faster than this between neighbours is a bad fix rather than a journey --
 # 250 km/h is past anything on the ground, and a plane trip is a jump anyway.
@@ -36,6 +42,8 @@ class Fix:
     # activity rides on any fix the phone took while it knew one.
     place_id: str | None = None
     activity: str | None = None
+    # Which workout route a fix came from; None for the phone's own.
+    route: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,51 @@ def distance_m(a: Fix, b: Fix) -> float:
 
 def _speed(a: Fix, b: Fix) -> float:
     return distance_m(a, b) / max(abs(b.ts - a.ts), 1.0)
+
+
+def prefer_routes(fixes: list[Fix]) -> list[Fix]:
+    """One live track at a time: the phone's own live fixes are dropped while a
+    workout route covers the same moments.
+
+    The phone and the Watch are in the same place, but each with its own error,
+    so a line through both zigzags between them and measures nearly twice the
+    distance. Stays and coarse points are kept. What the dropped fixes knew is
+    kept too: a route has one activity for the whole workout, the phone's
+    changes as you do, so each route fix takes the nearest one when it has none
+    of its own, or when the phone says it was really in a vehicle.
+    """
+    routes: dict[str, list[float]] = {}
+    for f in sorted(fixes, key=lambda f: f.ts):
+        if f.route is not None:
+            routes.setdefault(f.route, []).append(f.ts)
+    spans: list[list[float]] = []
+    for times in routes.values():
+        spans.append([times[0], times[0]])
+        for ts in times[1:]:
+            if ts - spans[-1][1] > TRACK_GAP_S:
+                spans.append([ts, ts])
+            spans[-1][1] = ts
+    if not spans:
+        return fixes
+
+    def covered(f: Fix) -> bool:
+        return any(start <= f.ts <= end for start, end in spans)
+
+    said = sorted((f for f in fixes if f.route is None and f.kind not in STAY_KINDS
+                   and f.activity is not None and covered(f)), key=lambda f: f.ts)
+    said_ts = [f.ts for f in said]
+
+    def activity(f: Fix) -> str | None:
+        i = bisect_left(said_ts, f.ts)
+        near = min(said[max(0, i - 1):i + 1], key=lambda s: abs(s.ts - f.ts), default=None)
+        if near is None or abs(near.ts - f.ts) > TRACK_GAP_S:
+            return f.activity
+        if f.activity is None or (near.activity == 'automotive' and f.activity in ('walking', 'running')):
+            return near.activity
+        return f.activity
+
+    return [replace(f, activity=activity(f)) if f.route is not None else f for f in fixes
+            if f.route is not None or f.kind not in TRACK_KINDS or not covered(f)]
 
 
 def clean(fixes: list[Fix]) -> list[Fix]:
@@ -83,7 +136,7 @@ def segments(fixes: list[Fix]) -> list[Segment]:
     """Each consecutive pair of cleaned fixes, labelled track or jump."""
     out = []
     for a, b in zip(fixes, fixes[1:]):
-        track = a.kind == 'fine' and b.kind == 'fine' and b.ts - a.ts <= TRACK_GAP_S
+        track = a.kind in TRACK_KINDS and b.kind in TRACK_KINDS and b.ts - a.ts <= TRACK_GAP_S
         out.append(Segment(a, b, 'track' if track else 'jump'))
     return out
 

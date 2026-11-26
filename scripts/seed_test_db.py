@@ -2032,6 +2032,13 @@ def seed_location(db):
         for i, (lat, lon) in enumerate(((43.6600, -79.3790), (43.6650, -79.3900))):
             rows.append((f'sig-{start}-{i}', arrive + 3 * 3600 + (i + 1) * 900, today_key(days_ago),
                          lat, lon, 300.0, None, None, 'coarse', None, received, 'automotive'))
+        # The ride home, recorded in transit mode: a solid line, not a jump.
+        ride_start = arrive + 3 * 3600 + 2400
+        for i in range(8):
+            f = (i + 1) / 9
+            rows.append((f'ride-{start}-{i}', ride_start + i * 90, today_key(days_ago),
+                         43.6650 + (home[0] - 43.6650) * f, -79.3900 + (home[1] + 79.3900) * f,
+                         45.0, None, 11.0, 'transit', None, received, 'automotive'))
         # Home again for the evening, so the day has a commute each way.
         rows.append((f'visit-{start}-evening', arrive + 4 * 3600, today_key(days_ago), *home, 25.0,
                      None, None, 'visit', None if days_ago == 0 else arrive + 9 * 3600, received, None))

@@ -219,8 +219,9 @@ def refetch_chapter(chapter_id: str) -> None:
         row = _chapter(db, chapter_id)
         ref, post_id = _forum_post(row)
         resp, page, post = _post_page(ref, post_id)
-        clean, text, _ = download.process_post_html(row['fic_id'], post.content_html, str(resp.url))
-        download._update_chapter(db, chapter_id, post, clean, text)
+        clean, text, _, source = download.process_post_html(
+            row['fic_id'], post.content_html, str(resp.url))
+        download._update_chapter(db, chapter_id, post, clean, text, source)
         download._record_reaction(db, row['fic_id'], chapter_id, post, page.logged_in)
         db.commit()
         result = {'done': True, 'error': None}

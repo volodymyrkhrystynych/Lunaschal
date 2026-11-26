@@ -41,6 +41,15 @@ def test_a_replayed_batch_changes_nothing():
     assert count() == 2
 
 
+def test_a_watch_workout_route_point_is_an_ordinary_fine_fix():
+    # The phone's id for a Health workout route's fix (WorkoutRoute.swift):
+    # the route's HealthKit UUID and the fix's place in it.
+    pid = 'wr-6F9619FF-8B86-D011-B42D-00C04FC964FF-1234'
+    result = ingest.ingest({'points': [point(pid, at(DAY, '07:00'), activity='running')]})
+    assert result['points'] == 1 and result['rejectedCount'] == 0
+    assert count() == 1
+
+
 def test_a_visit_departure_overwrites_its_arrival():
     arrive = at(DAY, '10:00')
     ingest.ingest({'points': [point('visit-1783000000', arrive, kind='visit')]})
@@ -99,6 +108,59 @@ def test_only_consecutive_fine_fixes_are_a_track():
     coarse = Fix(gap.ts + 60, 43.66, -79.38, 'coarse')
     assert [s.style for s in trail.segments([a, b, gap, coarse])] == ['track', 'jump', 'jump']
     assert trail.tracked_m([a, b, gap]) == pytest.approx(trail.distance_m(a, b))
+
+
+def test_a_train_ride_is_a_track_and_so_is_walking_off_it():
+    ride = [Fix(i * 15, 43.65 + i * 0.0015, -79.38, 'transit', accuracy=65) for i in range(4)]
+    walk = Fix(ride[-1].ts + 60, ride[-1].lat + 0.0002, -79.38, 'fine', accuracy=8)
+    assert [s.style for s in trail.segments(trail.clean([*ride, walk]))] == ['track'] * 4
+    # Looser than a walk's ceiling, tighter than a significant-change wake's.
+    blurry = Fix(1000, 43.65, -79.38, 'transit', accuracy=300)
+    assert trail.clean([Fix(999, 43.65, -79.38, 'transit', accuracy=150), blurry]) == [
+        Fix(999, 43.65, -79.38, 'transit', accuracy=150)]
+
+
+def test_transit_points_are_accepted():
+    result = ingest.ingest({'points': [point('fix-transit1', at(DAY, '08:30'), kind='transit', activity='automotive')]})
+    assert result['points'] == 1 and result['rejectedCount'] == 0
+    assert get_db().execute('SELECT kind FROM location_points').fetchone()['kind'] == 'transit'
+
+
+def test_a_watch_route_replaces_the_phones_own_track():
+    # One 2 km run, recorded by both: the phone's fixes 30 m to the side.
+    run = [Fix(i * 10, 43.65 + i * 0.0003, -79.38, activity='running', route='wr-A') for i in range(61)]
+    phone = [Fix(i * 10 + 5, 43.65 + i * 0.0003, -79.3804, activity='running') for i in range(60)]
+    before = Fix(-60, 43.649, -79.38, activity='walking')
+    after = Fix(660, 43.669, -79.38, 'transit')
+    coarse = Fix(300, 43.66, -79.38, 'coarse')
+    stay = Fix(200, 43.656, -79.38, 'visit', departed=400)
+    both = sorted([*run, *phone, before, after, coarse, stay], key=lambda f: f.ts)
+    assert trail.tracked_m(both) > 1.5 * trail.tracked_m(run)
+    kept = trail.prefer_routes(both)
+    assert kept == sorted([*run, before, after, coarse, stay], key=lambda f: f.ts)
+    assert trail.prefer_routes(phone) == phone
+
+
+def test_a_gap_in_a_route_is_the_phones_again():
+    route = [Fix(ts, 43.65, -79.38, route='wr-A') for ts in (0, 60, 1000, 1060)]
+    inside, between = Fix(30, 43.65, -79.38), Fix(500, 43.66, -79.38)
+    assert trail.prefer_routes([*route, inside, between]) == [*route, between]
+    # Two routes near each other are two spans, not one.
+    other = Fix(200, 43.65, -79.38, route='wr-B')
+    assert between in trail.prefer_routes([*route, other, between])
+
+
+def test_a_route_fix_takes_the_phones_activity_when_it_knows_better():
+    def said(route_activity, phone_activity):
+        fixes = [Fix(0, 43.65, -79.38, activity=route_activity, route='wr-A'),
+                 Fix(10, 43.65, -79.38, 'transit', activity=phone_activity),
+                 Fix(20, 43.65, -79.38, activity=route_activity, route='wr-A')]
+        return [f.activity for f in trail.prefer_routes(fixes)]
+    assert said(None, 'automotive') == ['automotive'] * 2
+    assert said('running', 'automotive') == ['automotive'] * 2
+    assert said('running', 'walking') == ['running'] * 2
+    assert said('cycling', 'automotive') == ['cycling'] * 2  # Core Motion often mistakes a bike for a car
+    assert said('running', None) == ['running'] * 2
 
 
 def test_places_need_a_real_dwell_and_count_an_ongoing_visit():

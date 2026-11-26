@@ -393,6 +393,7 @@ def init_db() -> None:
     _ensure_fic_update_pending(db)
     _ensure_fic_deep_scan_columns(db)
     _ensure_fic_library_dates(db)
+    _ensure_fic_chapter_source_html(db)
     from backend.db.fic_sources_migration import ensure_fic_sources
     ensure_fic_sources(db)
     _ensure_fic_source_dates(db)
@@ -401,6 +402,7 @@ def init_db() -> None:
     _ensure_fic_like_push(db)
     _ensure_site_cookie_user_agent(db)
     _repair_escaped_image_fallbacks(db)
+    _restyle_fic_chapters(db)
     _ensure_paper_archive_requested(db)
     _ensure_paper_content_updated_at(db)
     _ensure_food_location(db)
@@ -898,6 +900,32 @@ def _ensure_fic_library_dates(db: sqlite3.Connection) -> None:
             'UPDATE fic_chapters SET updated_at=COALESCE(edited_at, created_at)'
             ' WHERE updated_at IS NULL'
         )
+    db.commit()
+
+
+def _ensure_fic_chapter_source_html(db: sqlite3.Connection) -> None:
+    chapter_cols = {r[1] for r in db.execute('PRAGMA table_info(fic_chapters)')}
+    if 'source_html' not in chapter_cols:
+        db.execute('ALTER TABLE fic_chapters ADD COLUMN source_html TEXT')
+        db.commit()
+
+
+def _restyle_fic_chapters(db: sqlite3.Connection) -> None:
+    """Re-derive stored forum chapters from their `source_html` once per
+    `CHAPTER_HTML_VERSION`, so a change to how posts are normalized or
+    sanitized reaches the library without a re-download. Chapters saved
+    before `source_html` existed have nothing to re-derive from; only
+    "Re-download all chapters" restyles those."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'fic_chapter_html_version' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN fic_chapter_html_version INTEGER NOT NULL DEFAULT 0')
+        db.commit()
+    from backend.fanfic.restyle import CHAPTER_HTML_VERSION, restyle_chapters
+    row = db.execute('SELECT fic_chapter_html_version FROM settings LIMIT 1').fetchone()
+    if row is not None and row[0] >= CHAPTER_HTML_VERSION:
+        return
+    restyle_chapters(db)
+    db.execute('UPDATE settings SET fic_chapter_html_version=?', (CHAPTER_HTML_VERSION,))
     db.commit()
 
 

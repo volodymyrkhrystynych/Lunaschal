@@ -8,7 +8,7 @@ import pytest
 
 from backend import place_roles
 from backend.db.connection import get_db
-from backend.location import commute, days, ingest, lookup, patterns, whereabouts, work_calendar
+from backend.location import commute, days, ingest, lookup, patterns, trail, whereabouts, work_calendar
 from backend.location.trail import Fix
 from backend.place_roles import RolePlace
 
@@ -144,6 +144,63 @@ def test_without_motion_the_mode_comes_from_speed(client, places):
     trip = days.day_summary(DAY, None, roles, at('23:00'))['commutes'][0]
     # ~2 km in 30 minutes is a walk.
     assert (trip['mode'], trip['modeSource']) == ('walking', 'speed')
+
+
+def test_a_commute_by_train_is_tracked():
+    home = RolePlace('home', 'PLACE-HOME', 'Home', *HOME, 150)
+    office = RolePlace('work', 'PLACE-OFFICE', 'Office', *OFFICE, 150)
+    ride = [Fix(at('08:05') + i * 120, HOME[0] + (OFFICE[0] - HOME[0]) * (i + 1) / 6,
+                HOME[1] + (OFFICE[1] - HOME[1]) * (i + 1) / 6, 'transit', 60, activity='automotive')
+            for i in range(5)]
+    fixes = [
+        Fix(at('04:00'), *HOME, 'region', None, at('08:00'), 'PLACE-HOME'),
+        *ride,
+        Fix(at('08:20'), *OFFICE, 'region', None, at('17:00'), 'PLACE-OFFICE'),
+    ]
+    [trip] = commute.commutes(whereabouts.stays(fixes, [home, office], at('23:00')), fixes)
+    assert trip['tracked'] and trip['mode'] == 'automotive'
+
+
+def route_point(i, ts, lat, lon, activity=None):
+    return {**fine(f'wr-6F9619FF-8B86-D011-B42D-00C04FC964FF-{i}', ts, lat, lon, activity), 'accuracy': 4}
+
+
+def test_a_run_to_work_recorded_by_phone_and_watch_is_measured_once(client, places):
+    workday(client)
+    def meters():
+        roles = place_roles.roles_for_day(place_roles.list_periods(get_db()), DAY)
+        return days.day_summary(DAY, None, roles, at('23:00'))['commutes'][0]['meters']
+    plain = meters()
+    points = []
+    for i in range(101):
+        f, t = i / 100, at('08:30') + 18 * i
+        lat, lon = HOME[0] + (OFFICE[0] - HOME[0]) * f, HOME[1] + (OFFICE[1] - HOME[1]) * f
+        points.append(route_point(i, t, lat, lon, 'running'))
+        points.append(fine(f'fix-run-{i:04d}', t + 7, lat, lon + 0.0004, 'running'))
+    assert client.post('/api/location/points', json={'points': points}).status_code == 200
+    assert meters() == pytest.approx(plain, rel=0.02)
+    # The map reads the same fixes.
+    assert trail.tracked_m(trail.clean([f for f in days.fixes(DAY) if f.ts <= at('09:00') and f.kind == 'fine'])) \
+        == pytest.approx(plain, rel=0.02)
+
+
+@pytest.mark.parametrize('kind', ['transit', 'coarse'])
+def test_a_train_ride_with_a_workout_left_running_stays_automotive(client, places, kind):
+    workday(client)
+    get_db().execute("DELETE FROM location_points WHERE id LIKE 'fix-am-%'")
+    points = []
+    for i in range(61):
+        f, t = i / 60, at('08:30') + 30 * i
+        lat, lon = HOME[0] + (OFFICE[0] - HOME[0]) * f, HOME[1] + (OFFICE[1] - HOME[1]) * f
+        # The phone drops the tag at train speed; pulling in and out of
+        # stations is slow enough to keep it.
+        points.append(route_point(i, t, lat, lon, 'walking' if i % 4 == 0 else None))
+        if i % 8 == 4:
+            points.append({**fine(f'fix-ride-{i:04d}', t + 3, lat, lon, 'automotive'), 'kind': kind})
+    assert client.post('/api/location/points', json={'points': points}).status_code == 200
+    roles = place_roles.roles_for_day(place_roles.list_periods(get_db()), DAY)
+    trip = days.day_summary(DAY, None, roles, at('23:00'))['commutes'][0]
+    assert (trip['mode'], trip['modeSource'], trip['tracked']) == ('automotive', 'motion', True)
 
 
 def test_a_stop_somewhere_else_on_the_way_is_not_a_commute():
