@@ -1,0 +1,632 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wall Dashboard</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #1e1e2e;
+        --line: #3b3c50;
+        --text: #cdd6f4;
+        --muted: #a6adc8;
+        --temp: #d95926;
+        --rain: #3987e5;
+        --done: #199e70;
+        --bad: #f38ba8;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+      }
+      /* Every size below is in rem, so this one number scales the whole screen. */
+      html {
+        font-size: 20px;
+      }
+      body {
+        height: 100vh;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, 'Noto Sans', sans-serif;
+        line-height: 1.3;
+      }
+      #shift {
+        height: 100vh;
+        padding: 1.2rem 1.4rem 0.7rem;
+      }
+      #app {
+        height: 100%;
+        display: grid;
+        gap: 1rem 2rem;
+        grid-template: minmax(0, 1fr) auto auto / minmax(0, 2fr) minmax(0, 1fr);
+      }
+      [hidden] {
+        display: none !important;
+      }
+      h2 {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--muted);
+        margin-bottom: 0.35rem;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .small {
+        font-size: 0.8rem;
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+      }
+
+      #weather {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      #clockrow {
+        display: flex;
+        align-items: baseline;
+        gap: 1rem;
+        white-space: nowrap;
+      }
+      #clock {
+        font-size: 2.4rem;
+        font-weight: 300;
+        font-variant-numeric: tabular-nums;
+      }
+      #now {
+        display: flex;
+        align-items: center;
+        gap: 1.6rem;
+      }
+      #now .t {
+        font-size: 6rem;
+        font-weight: 200;
+        line-height: 1.1;
+      }
+      #now .say {
+        font-size: 1.7rem;
+        line-height: 1.2;
+      }
+      #hours {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        margin-top: 0.4rem;
+      }
+      #hours svg,
+      #sleep svg,
+      #heat svg {
+        display: block;
+        width: 100%;
+      }
+      #days {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        margin-top: 0.5rem;
+        border-top: 1px solid var(--line);
+        padding-top: 0.5rem;
+      }
+      #days b {
+        font-weight: 600;
+      }
+      #days .hi {
+        font-size: 1.3rem;
+      }
+
+      #side {
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+        min-height: 0;
+        overflow: hidden;
+        border-left: 1px solid var(--line);
+        padding-left: 1.5rem;
+      }
+      #side section {
+        flex: none;
+      }
+      #side #todobox {
+        flex: 0 1 auto;
+        min-height: 0;
+      }
+      li {
+        display: flex;
+        gap: 0.6rem;
+        padding: 0.12rem 0;
+      }
+      li .n {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .tm {
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+      }
+      .box {
+        flex: none;
+        align-self: center;
+        width: 0.8rem;
+        height: 0.8rem;
+        border: 2px solid var(--muted);
+        border-radius: 0.2rem;
+      }
+      .dot {
+        border-radius: 50%;
+      }
+      .dot.on {
+        background: var(--done);
+        border-color: var(--done);
+      }
+
+      #perf {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: 1.5fr 1fr 1fr;
+        gap: 2rem;
+        border-top: 1px solid var(--line);
+        padding-top: 0.8rem;
+      }
+      #week div {
+        white-space: nowrap;
+        display: flex;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.1rem 0;
+      }
+      #week b {
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      #status {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.2rem 1.6rem;
+        align-items: center;
+        border-top: 1px solid var(--line);
+        padding-top: 0.45rem;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+      #size {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      button {
+        font: inherit;
+        color: var(--text);
+        background: none;
+        border: 1px solid var(--line);
+        border-radius: 0.3rem;
+        width: 1.8rem;
+      }
+      button:focus-visible {
+        outline: 2px solid var(--rain);
+      }
+      #night {
+        position: fixed;
+        inset: 0;
+        background: #000;
+        color: #55586b;
+        display: grid;
+        place-content: center;
+        text-align: center;
+      }
+      #night div:first-child {
+        font-size: 9rem;
+        font-weight: 200;
+        line-height: 1;
+      }
+      text {
+        fill: var(--muted);
+        font-size: 0.75rem;
+        font-family: inherit;
+      }
+      text.v {
+        fill: var(--text);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="shift">
+      <main id="app">
+        <section id="weather">
+          <div id="clockrow">
+            <span id="clock"></span><span id="date" class="muted"></span>
+          </div>
+          <div id="now">
+            <span class="t">4°</span>
+            <div>
+              <div class="say" id="say"></div>
+              <div class="muted" data-drop="4">
+                Feels like 1°. High 6°, low −1°. Sunset 16:46
+              </div>
+            </div>
+          </div>
+          <div id="hours"></div>
+          <div id="days" data-drop="5"></div>
+        </section>
+        <aside id="side">
+          <section id="brief" data-drop="1"></section>
+          <section>
+            <h2 id="evh"></h2>
+            <ul id="events"></ul>
+          </section>
+          <section id="todobox">
+            <h2>To do</h2>
+            <ul id="todos"></ul>
+          </section>
+          <section id="habitbox" data-drop="3">
+            <h2>Habits</h2>
+            <ul id="habits"></ul>
+          </section>
+        </aside>
+        <section id="perf" data-drop="6">
+          <div>
+            <h2>Activity minutes, last 26 weeks</h2>
+            <div id="heat"></div>
+          </div>
+          <div>
+            <h2>Sleep hours, last 7 nights</h2>
+            <div id="sleep"></div>
+          </div>
+          <div id="week"><h2>This week vs last, same days</h2></div>
+        </section>
+        <footer id="status">
+          <span>Luna up</span><span>Desktop asleep</span
+          ><span>3 jobs queued</span><span>Backup 4 h ago</span>
+          <span id="sample">Sample data</span>
+          <span id="size"
+            >Text size <button id="minus" aria-label="Smaller text">−</button
+            ><output id="sz"></output
+            ><button id="plus" aria-label="Larger text">+</button></span
+          >
+        </footer>
+      </main>
+    </div>
+    <div id="night" hidden>
+      <div id="nclock"></div>
+      <div id="nsub"></div>
+    </div>
+    <script>
+      // ---- settings: ?text=24 wins, then the remembered size, then the default
+      const DEFAULT = 20,
+        MIN = 12,
+        MAX = 40,
+        KEY = 'dashboard-text-size';
+      const q = new URLSearchParams(location.search);
+      const $ = id => document.getElementById(id);
+      const clamp = n => Math.min(MAX, Math.max(MIN, Math.round(n)));
+      let saved = null;
+      try {
+        saved = localStorage.getItem(KEY);
+      } catch {}
+      const first = q.get('text') ?? saved;
+      let size = clamp(first && Number.isFinite(+first) ? +first : DEFAULT);
+      let mode = q.get('mode');
+
+      // ---- sample data
+      const hours = [
+        [8, 1, 10],
+        [9, 2, 60],
+        [10, 3, 75],
+        [11, 4, 40],
+        [12, 5, 15],
+        [13, 6, 5],
+        [14, 6, 0],
+        [15, 5, 0],
+        [16, 4, 5],
+        [17, 3, 10],
+        [18, 2, 10],
+        [19, 1, 20],
+        [20, 0, 25],
+        [21, -1, 20],
+      ];
+      const events = [
+        ['10:00', 'Dentist'],
+        ['14:30', 'Call with landlord'],
+      ];
+      const tomorrow = [
+        ['09:00', 'Standup'],
+        ['18:00', 'Climbing'],
+      ];
+      const todos = [
+        'Renew passport',
+        'Order furnace filter',
+        'Reply to Sam',
+        'Book winter tires',
+        'Return library books',
+        'Back up photos',
+        'Fix bike light',
+        'Clean desk',
+      ];
+      const habits = [
+        ['Walk', '12 days', 1],
+        ['Read', '3 days', 0],
+        ['Stretch', '7 days', 1],
+      ];
+      const sleep = [7.2, 6.5, 7.8, 8.1, 6.9, 7.4, 7.6];
+      const week = [
+        ['Workouts', '3', '2'],
+        ['Journal entries', '9', '11'],
+        ['Focus', '6.5 h', '5 h'],
+        ['Sleep/night', '7.4 h', '7.0 h'],
+      ];
+      let seed = 7;
+      const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      const heat = Array.from({ length: 26 * 7 }, () =>
+        rnd() < 0.45 ? 0 : Math.ceil(rnd() * 90)
+      );
+
+      const esc = s =>
+        s.replace(
+          /[&<>]/g,
+          c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]
+        );
+      const day = off => {
+        const d = new Date();
+        d.setDate(d.getDate() + off);
+        return d;
+      };
+      const wd = d => d.toLocaleDateString('en', { weekday: 'short' });
+      const rem = () =>
+        parseFloat(getComputedStyle(document.documentElement).fontSize);
+      const svg = (w, h, body, label) =>
+        `<svg viewBox="0 0 ${w} ${h}" height="${h}" role="img" aria-label="${label}">${body}</svg>`;
+      // Labels are thinned to fit: every nth one, so they never collide.
+      const every = (n, w, lab) => Math.max(1, Math.ceil((n * lab) / w));
+
+      function drawHours() {
+        const el = $('hours');
+        el.innerHTML = '';
+        const w = el.clientWidth,
+          h = el.clientHeight,
+          r = rem();
+        if (h < r * 5) return;
+        const px = r * 1.2,
+          step = (w - 2 * px) / (hours.length - 1),
+          x = i => px + i * step;
+        const rainH = h > r * 8 ? Math.min(h * 0.3, r * 4) : 0,
+          axis = r * 1.2;
+        const top = r * 1.6,
+          bot = h - axis - (rainH ? rainH + r * 1.6 : r * 0.4);
+        const ts = hours.map(d => d[1]),
+          lo = Math.min(...ts),
+          hi = Math.max(...ts);
+        const y = t => bot - ((t - lo) / (hi - lo || 1)) * (bot - top),
+          k = every(hours.length, w, r * 2.6);
+        let s = `<polyline points="${hours.map((d, i) => x(i) + ',' + y(d[1])).join(' ')}" fill="none" stroke="var(--temp)" stroke-width="2.5" stroke-linejoin="round"/>`;
+        const base = h - axis - r * 0.2;
+        hours.forEach(([hr, t, p], i) => {
+          if (i % k === 0) {
+            s += `<circle cx="${x(i)}" cy="${y(t)}" r="4" fill="var(--temp)" stroke="var(--bg)" stroke-width="2"/>`;
+            s += `<text class="v" x="${x(i)}" y="${y(t) - r * 0.5}" text-anchor="middle">${String(t).replace('-', '−')}°</text>`;
+            s += `<text x="${x(i)}" y="${h - r * 0.25}" text-anchor="middle">${hr}:00</text>`;
+          }
+          if (rainH && p) {
+            const bh = (p / 100) * (rainH - r),
+              bw = Math.min(step - 4, r * 1.2);
+            s += `<rect x="${x(i) - bw / 2}" y="${base - bh}" width="${bw}" height="${bh}" rx="3" fill="var(--rain)"/>`;
+            if (p >= 40)
+              s += `<text class="v" x="${x(i)}" y="${base - bh - r * 0.2}" text-anchor="middle">${p}%</text>`;
+          }
+        });
+        if (rainH)
+          s += `<text x="${w}" y="${base - rainH + r}" text-anchor="end">Chance of rain</text><line x1="0" x2="${w}" y1="${base}" y2="${base}" stroke="var(--line)"/>`;
+        el.innerHTML = svg(w, h, s, 'Hourly temperature and chance of rain');
+      }
+      function drawHeat() {
+        const el = $('heat'),
+          w = el.clientWidth;
+        if (!w) return;
+        const r = rem(),
+          gap = 2,
+          cols = 26,
+          c = Math.min((w - gap * (cols - 1)) / cols, r * 0.95);
+        let s = '';
+        const offset = (new Date().getDay() + 6) % 7; // Monday-first; the last column is this week
+        heat.forEach((v, i) => {
+          const row = i % 7,
+            col = Math.floor(i / 7);
+          if (col === cols - 1 && row > offset) return;
+          const o = v ? 0.3 + 0.7 * Math.min(1, v / 90) : 0;
+          s += `<rect x="${col * (c + gap)}" y="${row * (c + gap)}" width="${c}" height="${c}" rx="2" fill="${v ? 'var(--done)' : 'var(--line)'}" opacity="${v ? o : 0.55}"/>`;
+        });
+        el.innerHTML = svg(
+          w,
+          7 * (c + gap),
+          s,
+          'Activity per day for 26 weeks; brighter is more minutes'
+        );
+      }
+      function drawSleep() {
+        const el = $('sleep'),
+          w = el.clientWidth;
+        if (!w) return;
+        const r = rem(),
+          h = r * 7,
+          n = sleep.length,
+          step = w / n,
+          base = h - r * 1.2,
+          bw = Math.min(step - 4, r * 1.2);
+        let s = `<line x1="0" x2="${w}" y1="${base}" y2="${base}" stroke="var(--line)"/>`;
+        sleep.forEach((v, i) => {
+          const bh = (v / 10) * (base - r),
+            cx = step * (i + 0.5);
+          s += `<rect x="${cx - bw / 2}" y="${base - bh}" width="${bw}" height="${bh}" rx="3" fill="var(--rain)"/>`;
+          s += `<text class="v" x="${cx}" y="${base - bh - r * 0.25}" text-anchor="middle">${v}</text>`;
+          s += `<text x="${cx}" y="${h - r * 0.2}" text-anchor="middle">${wd(day(i - n + 1)).slice(0, 2)}</text>`;
+        });
+        el.innerHTML = svg(w, h, s, 'Hours slept per night');
+      }
+
+      const autoMode = h =>
+        h < 6 || h >= 22
+          ? 'night'
+          : h < 11
+            ? 'morning'
+            : h >= 17
+              ? 'evening'
+              : 'day';
+      const row = (a, b, c = '') =>
+        `<li>${a}<span class="n">${esc(b)}</span>${c}</li>`;
+      function fillTodos(n) {
+        const left = todos.length - n;
+        $('todos').innerHTML =
+          todos
+            .slice(0, n)
+            .map(t => row('<span class="box"></span>', t))
+            .join('') + (left ? `<li class="muted">+${left} more</li>` : '');
+      }
+      const side = () => {
+        const s = $('side');
+        return s.scrollHeight > s.clientHeight + 1;
+      };
+      const crowded = () => {
+        const w = $('weather');
+        return (
+          side() ||
+          w.scrollHeight > w.clientHeight + 1 ||
+          $('hours').clientHeight < rem() * 5 ||
+          $('week').scrollWidth > $('week').clientWidth + 1 ||
+          document.documentElement.scrollHeight > innerHeight + 1
+        );
+      };
+
+      function render() {
+        document.documentElement.style.fontSize = size + 'px';
+        $('sz').textContent = size;
+        const d = new Date(),
+          m = mode || autoMode(d.getHours());
+        const time = d.toLocaleTimeString('en-GB', {
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        $('clock').textContent = $('nclock').textContent = time;
+        $('date').textContent = d.toLocaleDateString('en-GB', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+        });
+        $('night').hidden = m !== 'night';
+        $('nsub').textContent = '4°, light rain';
+        const eve = m === 'evening';
+        $('say').textContent = eve
+          ? 'Tomorrow: dry, high 5°'
+          : 'Light rain until about 11';
+        $('evh').textContent = eve ? 'Tomorrow' : 'Today';
+        $('events').innerHTML = (eve ? tomorrow : events)
+          .map(e => row(`<span class="tm">${e[0]}</span>`, e[1]))
+          .join('');
+        $('brief').innerHTML =
+          m === 'morning'
+            ? '<h2>Briefing</h2><p class="small">Slept 7.6 h. Dentist at 10, leave by 9:30. Two habits are one day from a new best.</p>'
+            : '';
+        $('habits').innerHTML = habits
+          .filter(h => !eve || !h[2])
+          .map(h =>
+            row(
+              `<span class="box dot ${h[2] ? 'on' : ''}" role="img" aria-label="${h[2] ? 'done' : 'not done'}"></span>`,
+              h[0],
+              `<span class="muted">${h[1]}</span>`
+            )
+          )
+          .join('');
+        document.querySelector('#habitbox h2').textContent = eve
+          ? 'Habits left today'
+          : 'Habits';
+        $('days').innerHTML = [
+          [5, 'Cloud'],
+          [2, 'Snow'],
+          [-3, 'Clear'],
+          [0, 'Cloud'],
+          [3, 'Rain'],
+        ]
+          .map(
+            ([t, c], i) =>
+              `<div><b>${wd(day(i + 1))}</b><div class="hi">${String(t).replace('-', '−')}°</div><div class="muted small">${c}</div></div>`
+          )
+          .join('');
+        $('week').innerHTML =
+          '<h2>This week vs last, same days</h2>' +
+          week
+            .map(
+              w =>
+                `<div><span>${w[0]}</span><span><b>${w[1]}</b> <span class="muted">vs ${w[2]}</span></span></div>`
+            )
+            .join('');
+
+        // Nothing can scroll, so shrink the to-do list first, then drop the least important blocks.
+        const drops = [...document.querySelectorAll('[data-drop]')].sort(
+          (a, b) => a.dataset.drop - b.dataset.drop
+        );
+        drops.forEach(e => (e.hidden = e.id === 'brief' && m !== 'morning'));
+        $('hours').innerHTML = '';
+        drawHeat();
+        drawSleep();
+        let n = Math.min(5, todos.length);
+        fillTodos(n);
+        const trim = () => {
+          while (n > 2 && side()) fillTodos(--n);
+        };
+        trim();
+        for (const e of drops) {
+          if (!crowded()) break;
+          if (!e.hidden) {
+            e.hidden = true;
+            trim();
+          }
+        }
+        while (n > 0 && side()) fillTodos(--n);
+        drawHours();
+      }
+      function setSize(n) {
+        size = clamp(n);
+        try {
+          localStorage.setItem(KEY, size);
+        } catch {}
+        render();
+      }
+      $('minus').onclick = () => setSize(size - 1);
+      $('plus').onclick = () => setSize(size + 1);
+      addEventListener('keydown', e => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.key === '+' || e.key === '=') setSize(size + 1);
+        else if (e.key === '-') setSize(size - 1);
+        else if (e.key === '0') setSize(DEFAULT);
+        else if (e.key === 'm') {
+          const a = ['morning', 'day', 'evening', 'night'];
+          mode =
+            a[(a.indexOf(mode || autoMode(new Date().getHours())) + 1) % 4];
+          render();
+        }
+      });
+      addEventListener('resize', render);
+      // Move everything a few pixels each minute so nothing burns in; refresh the clock too.
+      let tick = 0;
+      setInterval(() => {
+        render();
+        if (new Date().getSeconds() < 10) {
+          const p = [
+            [0, 0],
+            [3, 0],
+            [3, 3],
+            [0, 3],
+          ][++tick % 4];
+          $('shift').style.transform = `translate(${p[0]}px,${p[1]}px)`;
+        }
+      }, 10000);
+      render();
+    </script>
+  </body>
+</html>
