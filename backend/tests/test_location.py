@@ -101,6 +101,22 @@ def test_only_consecutive_fine_fixes_are_a_track():
     assert trail.tracked_m([a, b, gap]) == pytest.approx(trail.distance_m(a, b))
 
 
+def test_a_train_ride_is_a_track_and_so_is_walking_off_it():
+    ride = [Fix(i * 15, 43.65 + i * 0.0015, -79.38, 'transit', accuracy=65) for i in range(4)]
+    walk = Fix(ride[-1].ts + 60, ride[-1].lat + 0.0002, -79.38, 'fine', accuracy=8)
+    assert [s.style for s in trail.segments(trail.clean([*ride, walk]))] == ['track'] * 4
+    # Looser than a walk's ceiling, tighter than a significant-change wake's.
+    blurry = Fix(1000, 43.65, -79.38, 'transit', accuracy=300)
+    assert trail.clean([Fix(999, 43.65, -79.38, 'transit', accuracy=150), blurry]) == [
+        Fix(999, 43.65, -79.38, 'transit', accuracy=150)]
+
+
+def test_transit_points_are_accepted():
+    result = ingest.ingest({'points': [point('fix-transit1', at(DAY, '08:30'), kind='transit', activity='automotive')]})
+    assert result['points'] == 1 and result['rejectedCount'] == 0
+    assert get_db().execute('SELECT kind FROM location_points').fetchone()['kind'] == 'transit'
+
+
 def test_places_need_a_real_dwell_and_count_an_ongoing_visit():
     short = Fix(0, 1, 1, 'visit', departed=60)
     long = Fix(100, 1, 1, 'visit', departed=100 + trail.MIN_DWELL_S)
