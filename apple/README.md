@@ -666,7 +666,7 @@ push` are in `tools/push-fixtures/`.
   the library's long press asks the server to re-fetch every chapter in place
   (`check-updates` with `force`), which is how chapters saved before the server kept
   spoilers and colours get them. A forum fic whose every chapter has its original post on
-  the server carries a "Forum HTML" checkmark in the library and on its book page (all
+  the server carries a "Forum HTML" checkmark on its book page (all
   or nothing: one chapter without it means no checkmark); the filter menu has "Forum HTML missing"
   (passed in simulator). The reader's bottom-left menu has Text and
   Transcribe commentary (a journal capture carrying `ficID`/`chapterID`: typed text
