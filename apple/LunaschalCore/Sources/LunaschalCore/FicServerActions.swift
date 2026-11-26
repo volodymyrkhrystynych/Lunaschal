@@ -19,17 +19,26 @@ public enum FicSources {
 
 /// `POST /api/fanfic/<id>/check-updates` toggles the fic's place in that
 /// queue, so asking twice before the worker reaches it cancels the request.
+///
+/// `force` ("Re-download all chapters") rewrites every saved chapter, edited
+/// or not: how a chapter saved before the server understood a forum's
+/// colours and spoilers gets them back.
 public struct FicUpdateReply: Decodable, Equatable {
     public let queued: Bool
     public let deep: Bool?
+    public let force: Bool?
 
-    public init(queued: Bool, deep: Bool? = nil) {
+    public init(queued: Bool, deep: Bool? = nil, force: Bool? = nil) {
         self.queued = queued
         self.deep = deep
+        self.force = force
     }
 
     public func summary(title: String) -> String {
         guard queued else { return "Stopped waiting for an update to “\(title)”." }
+        if force == true {
+            return "Every chapter of “\(title)” will be downloaded again on the server. They arrive with the next sync."
+        }
         return deep == true
             ? "“\(title)” will be re-read in full on the server. Edited chapters arrive with the next sync."
             : "“\(title)” is queued for an update on the server. New chapters arrive with the next sync."
@@ -154,10 +163,11 @@ public struct FicServerFailure: LocalizedError, Equatable {
 }
 
 extension JournalAPI {
-    public func checkFicForUpdates(_ ficID: String, deep: Bool = false) async throws -> FicUpdateReply {
+    public func checkFicForUpdates(_ ficID: String, deep: Bool = false, force: Bool = false) async throws -> FicUpdateReply {
         guard ULID.isValid(ficID) else { throw CaptureError.invalidID }
         return try JSONDecoder().decode(FicUpdateReply.self,
-                                        from: await postFanfic("api/fanfic/\(ficID)/check-updates", ["deep": deep]))
+                                        from: await postFanfic("api/fanfic/\(ficID)/check-updates",
+                                                               ["deep": deep || force, "force": force]))
     }
 
     public func refreshFicAlerts() async throws -> FicRefreshSummary {

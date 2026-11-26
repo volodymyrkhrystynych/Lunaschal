@@ -477,6 +477,7 @@ public final class ReplicaStore {
             args.append(String(filter.minRating))
         }
         if filter.unreadOnly { clauses.append("COALESCE(json_extract(payload,'$.unreadCount'),0)>0") }
+        if filter.missingHTMLOnly { clauses.append("json_extract(payload,'$.hasSource')=0") }
         if !filter.tag.isEmpty {
             clauses.append("EXISTS (SELECT 1 FROM json_each(payload,'$.tags') WHERE value=?)")
             args.append(filter.tag)

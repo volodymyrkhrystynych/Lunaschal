@@ -13,6 +13,8 @@ public struct BookFilter: Equatable {
     /// 0 for any rating, unrated included.
     public var minRating = 0
     public var unreadOnly = false
+    /// Forum fics with any chapter saved without its original post.
+    public var missingHTMLOnly = false
     /// The Backlog as a filter over the whole library, rather than its folder.
     public private(set) var backlogOnly = false
     /// The sort is one the Backlog toggle put there, not one the user picked.

@@ -7,6 +7,7 @@ import hashlib
 import json
 
 from backend import authorship
+from backend.fanfic.restyle import has_source_sql
 from backend.fanfic.source_lists import backlog_sql
 
 COLLECTIONS = {
@@ -56,7 +57,7 @@ AUTHORED = ('journal_entries', 'food_entries', 'spending_logs', 'messages', 'cal
 
 def key(table: str) -> str:
     return KEYS.get(table, 'id')
-SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, KEYS, 'book-metadata-v4', 'authorship-v2'], sort_keys=True).encode()).hexdigest()
+SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, KEYS, 'book-metadata-v5', 'authorship-v2'], sort_keys=True).encode()).hexdigest()
 
 
 def payload(table: str, prefix: str) -> str:
@@ -76,6 +77,7 @@ def payload(table: str, prefix: str) -> str:
             'source_lists',json((SELECT json_group_array(list) FROM
                 (SELECT list FROM fic_source_lists WHERE fic_id={prefix}.id ORDER BY list))),
             'backlog',{backlog_sql(prefix)},
+            'has_source',{has_source_sql(prefix)},
             'latest_activity',COALESCE(
                 (SELECT MAX(posted_at) FROM fic_chapters WHERE fic_id={prefix}.id),
                 (SELECT MAX(created_at) FROM fic_chapters WHERE fic_id={prefix}.id),{prefix}.created_at)

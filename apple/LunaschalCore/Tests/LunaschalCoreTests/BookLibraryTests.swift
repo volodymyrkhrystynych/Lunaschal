@@ -38,6 +38,21 @@ final class BookLibraryTests: XCTestCase {
                    data: (record.data ?? [:]).merging(changes) { $1 })
     }
 
+    func testForumHTMLIsAllOrNothingAndFilters() throws {
+        let (store, _) = try store()
+        let saved = revised(book(1), ["hasSource": .number(1)])
+        let lacking = revised(book(2), ["hasSource": .number(0)])
+        let upload = revised(book(3), ["hasSource": .null])
+        try apply([saved, lacking, upload, book(4)], to: store)
+        XCTAssertEqual(FicLibrary.hasForumHTML(book: saved), true)
+        XCTAssertEqual(FicLibrary.hasForumHTML(book: lacking), false)
+        XCTAssertNil(FicLibrary.hasForumHTML(book: upload))
+        XCTAssertNil(FicLibrary.hasForumHTML(book: book(4)), "a server that doesn't report it")
+        var filter = BookFilter()
+        filter.missingHTMLOnly = true
+        XCTAssertEqual(try store.books(filter: filter).records.map(\.id), [lacking.id])
+    }
+
     func testResumePointFollowsTheDesktopsOrder() throws {
         let (store, _) = try store()
         let book = book(1)

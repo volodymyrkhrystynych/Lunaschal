@@ -1775,7 +1775,11 @@ final class OfflineCaptureTests: XCTestCase {
         filter.tap()
         XCTAssertTrue(app.buttons["Recently read"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Source"].exists)
-        app.tap()
+        // Dismiss the menu from the empty corner below it. The middle of the
+        // screen is under the menu, and where its rows fall changes with every
+        // row added: a tap there landed on a divider and left it open.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.8)).tap()
+        XCTAssertTrue(app.buttons["Recently read"].waitForNonExistence(timeout: 5), "the menu is dismissed")
         app.navigationBars["Unsorted"].buttons.firstMatch.tap()
         app.segmentedControls["library-mode"].buttons["Library"].tap()
     }
@@ -1851,10 +1855,21 @@ final class OfflineCaptureTests: XCTestCase {
         let chapters = app.buttons["Chapters"]
         XCTAssertTrue(chapters.waitForExistence(timeout: 10))
         chapters.tap()
-        // The resume link and the bookmark under it read the same.
+        // The resume link and the bookmark read the same. They no longer fit
+        // on one screen (the update section above the bookmarks has grown), so
+        // the bookmark is the "Continue: " row below the Bookmarks heading,
+        // found by scrolling to it rather than by counting what is on screen.
         let rows = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Continue: "))
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertEqual(rows.count, 2)
+        let resumeLabel = rows.firstMatch.label
+        let heading = app.staticTexts["Bookmarks"]
+        func bookmarkRows() -> [XCUIElement] {
+            for _ in 0..<4 where !heading.exists { app.swipeUp() }
+            guard heading.exists else { return [] }
+            return rows.allElementsBoundByIndex.filter { $0.frame.minY > heading.frame.maxY - 1 }
+        }
+        XCTAssertEqual(bookmarkRows().map(\.label), [resumeLabel], "the bookmark reads like the resume link")
+        for _ in 0..<5 { app.swipeDown() }
         rows.firstMatch.tap()
 
         let next = app.buttons["chapter-next-top"]
@@ -1869,7 +1884,8 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(removed.exists)
         chapters.tap()
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertEqual(rows.count, 1, "only the resume link is left")
+        XCTAssertEqual(rows.firstMatch.label, resumeLabel, "the resume link is still there")
+        XCTAssertEqual(bookmarkRows().count, 0, "only the resume link is left")
         // Below the bookmarks, where the list hasn't built it yet.
         let queued = app.staticTexts["Bookmark removed on device · Waiting to sync"]
         for _ in 0..<3 where !queued.exists { app.swipeUp() }
@@ -2298,6 +2314,71 @@ final class OfflineCaptureTests: XCTestCase {
         attach(app, "picture and styled text")
     }
 
+    /// A forum book whose original posts are all on the server has a
+    /// checkmark; one without doesn't.
+    func testForumHTMLCheckmark() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        XCTAssertTrue(app.staticTexts["The Long Way Round"].waitForExistence(timeout: 10))
+        let checks = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", "Forum HTML saved"))
+        XCTAssertTrue(checks.firstMatch.waitForExistence(timeout: 5))
+        attach(app, "library checkmark")
+        app.staticTexts["The Long Way Round"].tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        let saved = app.staticTexts["Forum HTML saved"]
+        for _ in 0..<6 where !saved.exists { app.swipeDown() }
+        for _ in 0..<4 where !saved.exists { app.swipeUp() }
+        XCTAssertTrue(saved.exists)
+        attach(app, "book checkmark")
+
+        app.terminate()
+        app.launch()
+        openMore(app, "Library")
+        let other = app.staticTexts["Ashes of the Old Guard"]
+        XCTAssertTrue(other.waitForExistence(timeout: 10))
+        other.tap()
+        let missing = app.staticTexts["Forum HTML not saved"]
+        for _ in 0..<4 where !missing.waitForExistence(timeout: 3) { app.swipeUp() }
+        XCTAssertTrue(missing.exists)
+    }
+
+    /// A forum post's [SPOILER] reads as on the forum: its title is a button,
+    /// and what it hides isn't drawn until that is tapped.
+    func testChapterSpoilerStaysClosedUntilTapped() {
+        let app = XCUIApplication()
+        app.launchArguments.append("-libraryFixture")
+        app.launch()
+        openMore(app, "Library")
+        let book = app.staticTexts["The Long Way Round"]
+        XCTAssertTrue(book.waitForExistence(timeout: 10))
+        book.tap()
+        let chapters = app.buttons["Chapters"]
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        let third = app.staticTexts["Chapter 3"]
+        for _ in 0..<6 where !(third.exists && third.isHittable) { app.swipeUp() }
+        third.tap()
+        XCTAssertTrue(app.navigationBars["Chapter 3"].waitForExistence(timeout: 10))
+
+        let toggle = app.buttons.matching(identifier: "chapter-spoiler").firstMatch
+        for _ in 0..<6 where !(toggle.exists && toggle.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(toggle.isHittable)
+        XCTAssertTrue(toggle.label.contains("Status Sheet"))
+        let hidden = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Strength 12")).firstMatch
+        XCTAssertFalse(hidden.exists, "closed, as on the forum")
+
+        toggle.tap()
+        XCTAssertTrue(hidden.waitForExistence(timeout: 5))
+        attach(app, "spoiler open")
+        toggle.tap()
+        XCTAssertFalse(hidden.waitForExistence(timeout: 1))
+    }
+
     /// A forum fic can be asked for its latest chapters from inside it — the
     /// reader's menu and the book page — not only from the library's long
     /// press. With no server, asking says to sign in. An EPUB has no source.
@@ -2315,6 +2396,7 @@ final class OfflineCaptureTests: XCTestCase {
         menu.tap()
         let fromReader = app.buttons["reader-check-updates"]
         XCTAssertTrue(fromReader.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["reader-redownload-chapters"].exists)
         fromReader.tap()
         let signIn = app.staticTexts["Sign in to update fics on the server."]
         XCTAssertTrue(signIn.waitForExistence(timeout: 5))
@@ -2324,6 +2406,7 @@ final class OfflineCaptureTests: XCTestCase {
         let fromBook = app.buttons["fic-check-updates"]
         XCTAssertTrue(fromBook.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["fic-reread-chapters"].exists)
+        XCTAssertTrue(app.buttons["fic-redownload-chapters"].exists)
         attach(app, "book page")
         fromBook.tap()
         XCTAssertTrue(signIn.waitForExistence(timeout: 5))

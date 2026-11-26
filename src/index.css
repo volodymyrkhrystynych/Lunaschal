@@ -162,6 +162,59 @@ body {
   margin: 0.9em 0;
   color: var(--color-text-muted);
 }
+/* What the forum's BBCode leaves (xenforo.normalize_bbcode_html). Bold and
+   italics are stated outright rather than left to `bolder`, which depends
+   on the weights the font happens to have. */
+.fanfic-prose b,
+.fanfic-prose strong {
+  font-weight: 700;
+}
+.fanfic-prose i,
+.fanfic-prose em,
+.fanfic-prose cite {
+  font-style: italic;
+}
+.fanfic-prose blockquote > cite {
+  display: block;
+  font-size: 0.9em;
+  font-weight: 600;
+  margin-bottom: 0.3em;
+}
+/* [SPOILER]: closed until its title is clicked, like the forum's button. */
+.fanfic-prose details {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  margin: 0.9em 0;
+  padding: 0 0.9em;
+}
+.fanfic-prose details[open] {
+  padding-bottom: 0.6em;
+}
+.fanfic-prose summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9em;
+  padding: 0.45em 0;
+  color: var(--color-primary);
+  user-select: none;
+}
+.fanfic-prose details[open] > summary {
+  margin-bottom: 0.4em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+/* [ISPOILER]: blacked out in the line until clicked. */
+.fanfic-prose .spoiler:not(.revealed) {
+  background: var(--color-text);
+  color: transparent;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.fanfic-prose .spoiler:not(.revealed) * {
+  color: transparent !important;
+}
+.fanfic-prose .spoiler:not(.revealed) img {
+  visibility: hidden;
+}
 .fanfic-prose table {
   border-collapse: collapse;
   margin: 0.9em 0;

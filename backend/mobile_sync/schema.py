@@ -55,7 +55,7 @@ def ensure(db):
         for event in ('INSERT', 'UPDATE', 'DELETE'):
             prefixes = ('OLD', 'NEW') if event == 'UPDATE' else ('OLD',) if event == 'DELETE' else ('NEW',)
             ids = ','.join(f'{prefix}.fic_id' for prefix in prefixes)
-            update = 'UPDATE OF fic_id,posted_at,created_at,category' if table == 'fic_chapters' and event == 'UPDATE' else event
+            update = 'UPDATE OF fic_id,posted_at,created_at,category,source_html' if table == 'fic_chapters' and event == 'UPDATE' else event
             db.execute(f"""
                 CREATE TRIGGER IF NOT EXISTS mobile_sync_book_meta_{table}_{event.lower()}
                 AFTER {update} ON "{table}"
