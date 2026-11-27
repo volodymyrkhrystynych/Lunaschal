@@ -667,8 +667,9 @@ push` are in `tools/push-fixtures/`.
   (`check-updates` with `force`), which is how chapters saved before the server kept
   spoilers and colours get them. A forum fic whose every chapter has its original post on
   the server carries a "Forum HTML" checkmark on its book page (all
-  or nothing: one chapter without it means no checkmark); the filter menu has "Forum HTML missing"
-  (passed in simulator). The reader's bottom-left menu has Text and
+  or nothing: one chapter without it means no checkmark), and until then each chapter that has
+  it carries its own; the filter menu has "Forum HTML missing"
+  (passed in simulator). The reader's bottom-left menu (no fic-wide updates; those are on the book page) has Text and
   Transcribe commentary (a journal capture carrying `ficID`/`chapterID`: typed text
   is posted as `raw_content` and then linked, a recording links in its upload),
   and Continue and Bookmark. User scrolling is logged as reading spans

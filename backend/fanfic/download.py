@@ -910,7 +910,7 @@ def _walk_category_reader(db, fic_id: str, ref: xenforo.ThreadRef,
         if first_author is None:
             first_author = reader.posts[0].author
         for post in reader.posts:
-            existing = stored.get(post.post_id)
+            existing = stored.get(post.post_id) or _stored_elsewhere(db, fic_id, post.post_id)
             if existing is not None:
                 if not update_existing or not (force or _chapter_changed(existing, post)):
                     continue
@@ -1010,7 +1010,7 @@ def _walk_category_via_thread(db, fic_id: str, ref: xenforo.ThreadRef,
         if post.posted_at is None:
             post.posted_at = item.posted_at
 
-        existing = stored.get(item.post_id)
+        existing = stored.get(item.post_id) or _stored_elsewhere(db, fic_id, item.post_id)
         if existing is not None:
             _record_reaction(db, fic_id, existing['id'], post, harvested_logged_in[item.post_id])
             if not update_existing or not (force or _chapter_changed(existing, post)):
@@ -1106,6 +1106,18 @@ def _stored_chapters(db, fic_id: str, category: str) -> dict[str, dict]:
         ' FROM fic_chapters WHERE fic_id=? AND category=?',
         (fic_id, category)).fetchall()
     return {r['source_post_id']: dict(r) for r in rows if r['source_post_id']}
+
+
+def _stored_elsewhere(db, fic_id: str, post_id: str) -> dict | None:
+    """A post saved under another category: the site recategorised its
+    threadmark after it was saved. Without this the walk tried to insert it,
+    the unique (fic_id, source_post_id) dropped the insert, and the chapter was
+    never rewritten, not even by a forced re-download."""
+    row = db.execute(
+        'SELECT id, source_post_id, title, posted_at, edited_at'
+        ' FROM fic_chapters WHERE fic_id=? AND source_post_id=?',
+        (fic_id, post_id)).fetchone()
+    return dict(row) if row else None
 
 
 def _first_missing_page(fic_id: str, ref: xenforo.ThreadRef,

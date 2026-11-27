@@ -57,7 +57,7 @@ AUTHORED = ('journal_entries', 'food_entries', 'spending_logs', 'messages', 'cal
 
 def key(table: str) -> str:
     return KEYS.get(table, 'id')
-SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, KEYS, 'book-metadata-v5', 'authorship-v2'], sort_keys=True).encode()).hexdigest()
+SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, KEYS, 'book-metadata-v6', 'authorship-v2'], sort_keys=True).encode()).hexdigest()
 
 
 def payload(table: str, prefix: str) -> str:
@@ -82,6 +82,10 @@ def payload(table: str, prefix: str) -> str:
                 (SELECT MAX(posted_at) FROM fic_chapters WHERE fic_id={prefix}.id),
                 (SELECT MAX(created_at) FROM fic_chapters WHERE fic_id={prefix}.id),{prefix}.created_at)
         """
+    if table == 'fic_chapters':
+        # Whether the forum post as served is kept, so the phone can mark
+        # chapters still missing it; the post itself never leaves the server.
+        fields += f",'has_source',({prefix}.source_html IS NOT NULL)"
     if table == 'journal_attachments':
         fields += f""",
             'has_thumb',({prefix}.thumb_path IS NOT NULL AND {prefix}.thumb_path != ''),

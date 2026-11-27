@@ -425,6 +425,26 @@ def test_forced_check_rewrites_unedited_chapters(client, fake_net):
     assert fic['deepPending'] is False and fic['forcePending'] is False
 
 
+def test_forced_check_rewrites_a_chapter_the_site_recategorised(client, fake_net):
+    """A threadmark moved to another category after it was saved is still the
+    same post: the forced walk rewrites the saved row instead of dropping it on
+    the unique post id, so the fic can reach full forum-HTML coverage."""
+    from backend.db.connection import get_db
+    fic_id = _import_fic(client)
+    db = get_db()
+    db.execute("UPDATE fic_chapters SET content_html='SENTINEL', source_html=NULL,"
+               " category='Old category' WHERE fic_id=? AND title='Chapter One'", (fic_id,))
+    db.commit()
+
+    resp = client.post(f'/api/fanfic/{fic_id}/check-updates', json={'force': True})
+    assert resp.status_code == 202
+
+    row = db.execute("SELECT content_html, source_html FROM fic_chapters"
+                     " WHERE fic_id=? AND title='Chapter One'", (fic_id,)).fetchone()
+    assert row['content_html'] != 'SENTINEL' and row['source_html']
+    assert client.get(f'/api/fanfic/{fic_id}').get_json()['hasSource'] is True
+
+
 def test_force_upgrades_a_queued_deep_check_instead_of_cancelling(client, fake_net, monkeypatch):
     from backend.routes import fanfic as fanfic_routes
     from backend.db.connection import get_db

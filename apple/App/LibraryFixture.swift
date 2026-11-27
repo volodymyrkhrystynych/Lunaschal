@@ -175,7 +175,7 @@ enum LibraryFixture {
     /// The replica keeps a record it already holds at the same revision, so
     /// a simulator that ran an older fixture would keep its old chapters:
     /// bump this whenever a chapter's content changes.
-    static let chapterRevision = 4
+    static let chapterRevision = 5
     /// The same for a book's own fields (its shelf, rating and unread count).
     static let bookRevision = 4
 
@@ -246,6 +246,9 @@ enum LibraryFixture {
             data["category"] = sidestory ? "Sidestory" : "Threadmarks"
             // A post URL, which is what makes a forum chapter likeable.
             data["sourceUrl"] = "https://\(book.site ?? "forums.example.com")/threads/fixture.1/post-\(1000 + index)"
+            // The book that has every original post has them all; the others
+            // have the first chapter's only.
+            data["hasSource"] = book.id == downloaded || index == 0 ? 1 : 0
         }
         return change("fic_chapters", chapterID(book, index), data, revision: chapterRevision)
     }

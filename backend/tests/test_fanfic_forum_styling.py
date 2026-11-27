@@ -153,3 +153,27 @@ def test_a_fic_has_its_source_only_when_every_chapter_does(client):
     db.execute("DELETE FROM fic_chapters WHERE fic_id='f1'")
     db.commit()
     assert (synced('f1'), rest('f1')) == (0, False)
+
+
+def test_each_chapter_tells_the_phone_whether_its_source_is_kept(client):
+    """Filling `source_html` alone re-sends the chapter, so the phone's
+    per-chapter mark clears without any rendered change."""
+    import json
+    from backend.db.connection import get_db
+    db = get_db()
+    db.execute("INSERT INTO fics(id, title, source_type, created_at, updated_at)"
+               " VALUES ('f1', 'Fic', 'xenforo', 1, 1)")
+    db.execute('INSERT INTO fic_chapters(id, fic_id, position, title, content_html, content_text,'
+               " source_post_id, created_at, updated_at) VALUES ('c1','f1',1,'C','x','x','1',1,1)")
+    db.commit()
+
+    def synced():
+        return json.loads(db.execute(
+            "SELECT payload FROM mobile_sync_changes WHERE collection='fic_chapters'"
+            " AND record_id='c1' ORDER BY sequence DESC LIMIT 1").fetchone()[0])
+
+    assert synced()['has_source'] == 0
+    assert 'source_html' not in synced()
+    db.execute("UPDATE fic_chapters SET source_html='<b>x</b>' WHERE id='c1'")
+    db.commit()
+    assert synced()['has_source'] == 1
