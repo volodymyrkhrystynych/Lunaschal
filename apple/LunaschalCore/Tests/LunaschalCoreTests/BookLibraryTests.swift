@@ -53,6 +53,22 @@ final class BookLibraryTests: XCTestCase {
         XCTAssertEqual(try store.books(filter: filter).records.map(\.id), [lacking.id])
     }
 
+    func testChaptersAreMarkedOnlyWhileTheirBookLacksSome() throws {
+        let (store, _) = try store()
+        let lacking = revised(book(1), ["hasSource": .number(0)])
+        let saved = revised(book(2), ["hasSource": .number(1)])
+        try apply([lacking,
+                   revised(chapter(lacking, position: 0), ["hasSource": .number(1)]),
+                   revised(chapter(lacking, position: 1), ["hasSource": .number(0)])], to: store)
+        // The chapter list reads the outline, which has to carry the flag.
+        let outline = try store.chapterOutline(bookID: lacking.id)
+        let (has, hasNot) = (outline[0], outline[1])
+        XCTAssertTrue(FicLibrary.marksForumHTML(book: lacking, chapter: has))
+        XCTAssertFalse(FicLibrary.marksForumHTML(book: lacking, chapter: hasNot))
+        XCTAssertFalse(FicLibrary.marksForumHTML(book: saved, chapter: has), "the book page says it instead")
+        XCTAssertFalse(FicLibrary.marksForumHTML(book: book(3), chapter: has), "not a forum book")
+    }
+
     func testResumePointFollowsTheDesktopsOrder() throws {
         let (store, _) = try store()
         let book = book(1)

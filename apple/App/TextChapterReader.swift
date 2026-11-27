@@ -324,16 +324,6 @@ struct TextChapterReader: View {
                 }
                 .accessibilityIdentifier("reader-refetch-chapter")
             }
-            if let book, FicSources.isUpdatable(book.data?["sourceType"]?.string) {
-                Button("Get latest chapters", systemImage: "arrow.clockwise") {
-                    Task { await owner.checkFicForUpdates(book, deep: false) }
-                }
-                .accessibilityIdentifier("reader-check-updates")
-                Button("Re-download all chapters", systemImage: "arrow.down.circle") {
-                    Task { await owner.checkFicForUpdates(book, deep: true, force: true) }
-                }
-                .accessibilityIdentifier("reader-redownload-chapters")
-            }
         } label: {
             Image(systemName: "line.3.horizontal")
                 .font(.title3.weight(.semibold))

@@ -35,6 +35,13 @@ public enum FicLibrary {
         book.data?["hasSource"]?.int.map { $0 == 1 }
     }
 
+    /// Whether a chapter row carries its own forum-HTML checkmark: only while
+    /// its book is missing some, so the chapters that still need re-getting
+    /// stand out. Once every chapter has it, the book page says so instead.
+    public static func marksForumHTML(book: SyncChange, chapter: SyncChange) -> Bool {
+        hasForumHTML(book: book) == false && chapter.data?["hasSource"]?.int == 1
+    }
+
     /// Whether the server can like this chapter on its forum: a forum book,
     /// and a chapter that came from a post.
     public static func isLikeable(book: SyncChange?, chapter: SyncChange) -> Bool {

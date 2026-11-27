@@ -464,6 +464,16 @@ struct BookView: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(chapter.title).foregroundStyle(isRead ? .secondary : .primary)
+                    if FicLibrary.marksForumHTML(book: shown, chapter: chapter) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.seal.fill")
+                            Text("Forum HTML")
+                        }
+                        .font(.caption).foregroundStyle(.green)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Forum HTML saved")
+                        .accessibilityIdentifier("chapter-forum-html-\(chapter.id)")
+                    }
                     reactionLine(reactions[chapter.id])
                 }
             }

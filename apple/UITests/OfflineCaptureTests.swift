@@ -2372,6 +2372,8 @@ final class OfflineCaptureTests: XCTestCase {
         for _ in 0..<6 where !saved.exists { app.swipeDown() }
         for _ in 0..<4 where !saved.exists { app.swipeUp() }
         XCTAssertTrue(saved.exists)
+        let chapterMarks = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Forum HTML saved"))
+        XCTAssertEqual(chapterMarks.count, 0, "a book with every post has no per-chapter marks")
         attach(app, "book checkmark")
 
         app.terminate()
@@ -2383,6 +2385,24 @@ final class OfflineCaptureTests: XCTestCase {
         let missing = app.staticTexts["Forum HTML not saved"]
         for _ in 0..<4 where !missing.waitForExistence(timeout: 3) { app.swipeUp() }
         XCTAssertTrue(missing.exists)
+
+        // A book missing some posts marks the chapters that have theirs:
+        // here only the first of two.
+        app.terminate()
+        app.launchArguments.append("-libraryLongBook")
+        app.launch()
+        openMore(app, "Library")
+        let long = app.staticTexts["A Very Long Road"]
+        XCTAssertTrue(long.waitForExistence(timeout: 10))
+        long.tap()
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        // A row reads as one element, so its mark is part of its label.
+        let marks = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Forum HTML saved"))
+        for _ in 0..<4 where !marks.firstMatch.exists { app.swipeUp() }
+        XCTAssertTrue(marks.firstMatch.exists)
+        XCTAssertEqual(marks.count, 1)
+        attach(app, "chapter checkmarks")
     }
 
     /// A forum post's [SPOILER] reads as on the forum: its title is a button,
@@ -2417,10 +2437,9 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(hidden.waitForExistence(timeout: 1))
     }
 
-    /// A forum fic can be asked for its latest chapters from inside it — the
-    /// reader's menu and the book page — not only from the library's long
-    /// press. With no server, asking says to sign in. An EPUB has no source.
-    func testLatestChaptersCanBeAskedForFromInsideTheFic() {
+    /// A forum fic can be asked for its latest chapters from its book page,
+    /// not only from the library's long press, and not from the reader's menu. With no server, asking says to sign in. An EPUB has no source.
+    func testLatestChaptersCanBeAskedForFromTheBookPage() {
         let app = XCUIApplication()
         app.launchArguments.append("-libraryFixture")
         app.launch()
@@ -2432,13 +2451,13 @@ final class OfflineCaptureTests: XCTestCase {
         let menu = app.buttons["reader-menu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 10))
         menu.tap()
-        let fromReader = app.buttons["reader-check-updates"]
-        XCTAssertTrue(fromReader.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["reader-redownload-chapters"].exists)
-        fromReader.tap()
+        // The reader's menu is about the chapter open in it; updating the
+        // whole fic is the book page's.
+        XCTAssertTrue(app.buttons["reader-refetch-chapter"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Get latest chapters"].exists)
+        XCTAssertFalse(app.buttons["Re-download all chapters"].exists)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
         let signIn = app.staticTexts["Sign in to update fics on the server."]
-        XCTAssertTrue(signIn.waitForExistence(timeout: 5))
-        app.alerts.buttons.firstMatch.tap()
 
         app.buttons["Chapters"].tap()
         let fromBook = app.buttons["fic-check-updates"]

@@ -30,7 +30,12 @@ def ensure(db):
             prefix = 'OLD' if event == 'DELETE' else 'NEW'
             condition = '1' if event == 'DELETE' else included(table, prefix)
             if event == 'UPDATE':
-                condition += ' AND (' + ' OR '.join(f'OLD."{c}" IS NOT NEW."{c}"' for c in columns) + ')'
+                changed = [f'OLD."{c}" IS NOT NEW."{c}"' for c in columns]
+                if table == 'fic_chapters':
+                    # `has_source` is derived: a forced re-download that only
+                    # fills `source_html` still changes what the phone shows.
+                    changed.append('(OLD.source_html IS NULL) IS NOT (NEW.source_html IS NULL)')
+                condition += ' AND (' + ' OR '.join(changed) + ')'
             value = 'NULL' if event == 'DELETE' else payload(table, 'NEW')
             db.execute(f'''
                 CREATE TRIGGER IF NOT EXISTS mobile_sync_{table}_{event.lower()}
